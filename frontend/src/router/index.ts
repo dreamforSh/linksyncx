@@ -397,6 +397,19 @@ const routes: RouteRecordRaw[] = [
     }
   },
 
+  {
+    path: '/group-management',
+    name: 'GroupManagement',
+    component: () => import('@/views/GroupManagementView.vue'),
+    meta: {
+      requiresAuth: true,
+      requiresAdmin: false,
+      title: 'Group Access',
+      titleKey: 'groupManagement.title',
+      descriptionKey: 'groupManagement.description'
+    }
+  },
+
   // ==================== Admin Routes ====================
   {
     path: '/admin',

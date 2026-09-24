@@ -860,6 +860,7 @@ var ProviderSet = wire.NewSet(
 	NewGroupService,
 	NewCompositeRouteResolver,
 	NewAccountService,
+	NewGroupManagementService,
 	NewProxyService,
 	NewRedeemService,
 	NewPromoService,

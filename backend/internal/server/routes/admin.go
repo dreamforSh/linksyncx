@@ -42,6 +42,7 @@ func RegisterAdminRoutes(
 
 		// 分组管理
 		registerGroupRoutes(admin, h)
+		registerGroupManagementRoutes(admin, h)
 
 		// 账号管理
 		registerAccountRoutes(admin, h, stepUpAuth)
@@ -131,6 +132,14 @@ func RegisterAdminRoutes(
 		// 操作审计日志
 		registerAuditLogRoutes(admin, h, stepUpAuth)
 	}
+}
+
+func registerGroupManagementRoutes(admin *gin.RouterGroup, h *handler.Handlers) {
+	management := admin.Group("/group-management")
+	management.GET("/groups", h.GroupManagement.AdminGroups)
+	management.GET("/users", h.GroupManagement.AdminUsers)
+	management.PUT("/groups/:group_id/managers/:user_id", h.GroupManagement.AdminAddManager)
+	management.DELETE("/groups/:group_id/managers/:user_id", h.GroupManagement.AdminRemoveManager)
 }
 
 func registerPromptAuditRoutes(admin *gin.RouterGroup, h *handler.Handlers) {
