@@ -1,0 +1,108 @@
+<template>
+  <section class="card overflow-hidden" :aria-labelledby="headingId">
+    <div class="flex items-start gap-3 p-5 sm:gap-4 sm:p-6">
+      <div
+        class="flex h-12 w-12 shrink-0 items-center justify-center rounded-2xl bg-gradient-to-br from-primary-500 to-primary-600 text-lg font-semibold text-white shadow-md shadow-primary-500/20"
+        aria-hidden="true"
+      >
+        {{ initialOf(group.name) }}
+      </div>
+      <div class="min-w-0 flex-1">
+        <h2 :id="headingId" class="truncate text-lg font-semibold text-gray-900 dark:text-white">
+          {{ group.name }}
+        </h2>
+        <div class="mt-2 flex flex-wrap items-center gap-2">
+          <span class="badge" :class="group.enabled ? 'badge-success' : 'badge-gray'">
+            <span
+              class="h-1.5 w-1.5 rounded-full"
+              :class="group.enabled ? 'bg-emerald-500' : 'bg-gray-400 dark:bg-dark-400'"
+              aria-hidden="true"
+            />
+            {{ group.enabled ? t('groupManagement.state.enabled') : t('groupManagement.state.disabled') }}
+          </span>
+          <span class="badge badge-gray">
+            <Icon :name="group.allocation_mode === 'manual' ? 'link' : 'sync'" size="xs" />
+            {{ group.allocation_mode === 'manual' ? t('groupManagement.settings.manual') : t('groupManagement.settings.auto') }}
+          </span>
+          <span class="badge" :class="group.manager ? 'badge-primary' : 'badge-gray'">
+            <Icon :name="group.manager ? 'shield' : 'eye'" size="xs" />
+            {{ group.manager ? t('groupManagement.state.manager') : t('groupManagement.state.member') }}
+          </span>
+        </div>
+      </div>
+      <button
+        type="button"
+        class="btn btn-secondary btn-sm"
+        :disabled="refreshing"
+        :title="t('common.refresh')"
+        :aria-label="t('common.refresh')"
+        @click="emit('refresh')"
+      >
+        <Icon
+          name="refresh"
+          size="sm"
+          :class="refreshing && 'animate-spin motion-reduce:animate-none'"
+        />
+        <span class="hidden sm:inline">{{ t('common.refresh') }}</span>
+      </button>
+    </div>
+
+    <dl
+      class="grid grid-cols-2 divide-gray-100 border-t border-gray-100 dark:divide-dark-700 dark:border-dark-700 sm:grid-cols-4 sm:divide-x"
+    >
+      <div v-for="stat in stats" :key="stat.key" class="px-5 py-4 sm:px-6">
+        <dt class="text-xs font-medium text-gray-500 dark:text-dark-400">{{ stat.label }}</dt>
+        <dd class="mt-1 truncate text-xl font-semibold tabular-nums text-gray-900 dark:text-white">
+          {{ stat.value }}
+        </dd>
+      </div>
+    </dl>
+
+    <div
+      v-if="!group.enabled"
+      class="flex flex-wrap items-center gap-x-3 gap-y-2 border-t border-amber-200/70 bg-amber-50 px-5 py-3 text-sm text-amber-800 dark:border-amber-500/20 dark:bg-amber-500/10 dark:text-amber-200 sm:px-6"
+    >
+      <Icon name="exclamationTriangle" size="sm" class="shrink-0" />
+      <p class="min-w-0 flex-1">
+        {{ group.manager ? t('groupManagement.summary.disabledManager') : t('groupManagement.summary.disabledMember') }}
+      </p>
+      <button
+        v-if="group.manager"
+        type="button"
+        class="rounded font-medium underline-offset-2 hover:underline focus:outline-none focus-visible:ring-2 focus-visible:ring-amber-500/50"
+        @click="emit('open-settings')"
+      >
+        {{ t('groupManagement.summary.openSettings') }}
+      </button>
+    </div>
+  </section>
+</template>
+
+<script setup lang="ts">
+import { computed } from 'vue'
+import { useI18n } from 'vue-i18n'
+import Icon from '@/components/icons/Icon.vue'
+import type { GroupManagementGroup } from '@/api/groupManagement'
+import { initialOf } from './helpers'
+
+export interface SummaryStat {
+  key: string
+  label: string
+  value: string | number
+}
+
+const props = defineProps<{
+  group: GroupManagementGroup
+  stats: SummaryStat[]
+  refreshing: boolean
+}>()
+
+const emit = defineEmits<{
+  (e: 'refresh'): void
+  (e: 'open-settings'): void
+}>()
+
+const { t } = useI18n()
+
+const headingId = computed(() => `group-summary-${props.group.id}`)
+</script>
