@@ -45,6 +45,36 @@
       @submit.prevent="handleSubmit"
       class="space-y-5"
     >
+      <!-- 目标分组：先选分组再建号，分组决定平台 -->
+      <div
+        v-if="presetGroup"
+        class="flex items-center gap-3 rounded-xl border border-primary-200 bg-primary-50/60 px-4 py-3 dark:border-primary-800/60 dark:bg-primary-900/10"
+        data-testid="create-account-target-group"
+        :data-tour="presetPlatformLocked ? 'account-form-platform' : undefined"
+      >
+        <span class="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-white text-gray-700 shadow-sm dark:bg-dark-700 dark:text-dark-100">
+          <PlatformIcon :platform="presetGroup.platform" size="sm" />
+        </span>
+        <div class="min-w-0 flex-1">
+          <p class="text-xs text-gray-500 dark:text-dark-400">{{ t('admin.accounts.targetGroup.selected') }}</p>
+          <p class="flex flex-wrap items-center gap-2 text-sm font-semibold text-gray-900 dark:text-white">
+            <span class="truncate">{{ presetGroup.name }}</span>
+            <GroupKindBadge :kind="groupKindOf(presetGroup)" :category="presetGroup.category" />
+          </p>
+          <p v-if="presetPlatformLocked" class="mt-0.5 text-xs text-gray-500 dark:text-dark-400">
+            {{ t('admin.accounts.targetGroup.platformLocked', { name: presetGroup.name }) }}
+          </p>
+        </div>
+        <button
+          type="button"
+          class="btn btn-secondary btn-sm shrink-0"
+          data-testid="create-account-change-group"
+          @click="emit('change-group')"
+        >
+          {{ t('admin.accounts.targetGroup.change') }}
+        </button>
+      </div>
+
       <div>
         <label class="input-label">{{ t('admin.accounts.accountName') }}</label>
         <input
@@ -67,8 +97,8 @@
         <p class="input-hint">{{ t('admin.accounts.notesHint') }}</p>
       </div>
 
-      <!-- Platform Selection - Segmented Control Style -->
-      <div>
+      <!-- Platform Selection - Segmented Control Style（目标分组锁定平台时隐藏） -->
+      <div v-if="!presetPlatformLocked">
         <label class="input-label">{{ t('admin.accounts.platform') }}</label>
         <div class="mt-2 flex flex-wrap rounded-lg bg-gray-100 p-1 dark:bg-dark-700" data-tour="account-form-platform">
           <button
@@ -3522,14 +3552,26 @@
           </div>
         </div>
 
-        <!-- Group Selection - 仅标准模式显示 -->
+        <!-- Group Selection：管理分组的账号独占，只读展示 -->
+        <div v-if="presetIsManaged && presetGroup" data-tour="account-form-groups" data-testid="create-account-managed-group">
+          <label class="input-label">{{ t('admin.users.groups') }}</label>
+          <div class="flex flex-wrap items-center gap-2 rounded-lg border border-gray-200 bg-gray-50 px-3 py-2 dark:border-dark-600 dark:bg-dark-800">
+            <GroupBadge :name="presetGroup.name" :platform="presetGroup.platform" :show-rate="false" />
+            <GroupKindBadge :kind="groupKindOf(presetGroup)" :category="presetGroup.category" />
+          </div>
+          <p class="input-hint">{{ t('admin.accounts.targetGroup.managedLocked') }}</p>
+        </div>
         <GroupSelector
+          v-else
           v-model="form.group_ids"
-          :groups="groups"
+          :groups="selectableGroups"
           :platform="form.platform"
           :mixed-scheduling="mixedScheduling"
           data-tour="account-form-groups"
         />
+        <p v-if="!presetGroup && hasManagedGroupSelected" class="input-hint">
+          {{ t('admin.accounts.managedGroupHint') }}
+        </p>
       </div>
 
     </form>
@@ -3886,7 +3928,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, reactive, computed, watch } from 'vue'
+import { ref, reactive, computed, watch, onMounted } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useAppStore } from '@/stores/app'
 
@@ -3932,6 +3974,9 @@ import Icon from '@/components/icons/Icon.vue'
 import ProxySelector from '@/components/common/ProxySelector.vue'
 import ProxyAdBanner from '@/components/common/ProxyAdBanner.vue'
 import GroupSelector from '@/components/common/GroupSelector.vue'
+import GroupBadge from '@/components/common/GroupBadge.vue'
+import GroupKindBadge from '@/components/admin/group/GroupKindBadge.vue'
+import { groupKindOf, isManagedGroup, violatesManagedExclusivity } from '@/utils/groupKind'
 import ModelWhitelistSelector from '@/components/account/ModelWhitelistSelector.vue'
 import QuotaLimitCard from '@/components/account/QuotaLimitCard.vue'
 import Toggle from '@/components/common/Toggle.vue'
@@ -4074,13 +4119,28 @@ interface Props {
   show: boolean
   proxies: Proxy[]
   groups: AdminGroup[]
+  // 先选分组再建号：目标分组决定平台（composite 除外），管理分组的账号只能属于该分组
+  presetGroup?: AdminGroup | null
 }
 
-const props = defineProps<Props>()
+const props = withDefaults(defineProps<Props>(), {
+  presetGroup: null
+})
 const emit = defineEmits<{
   close: []
   created: []
+  'change-group': []
 }>()
+
+const presetPlatformLocked = computed(() => Boolean(props.presetGroup && props.presetGroup.platform !== 'composite'))
+const presetIsManaged = computed(() => isManagedGroup(props.presetGroup))
+// 目标是渠道分组时，追加的分组也只能是渠道分组（管理分组独占）
+const selectableGroups = computed(() =>
+  props.presetGroup ? props.groups.filter(group => !isManagedGroup(group)) : props.groups
+)
+const hasManagedGroupSelected = computed(() =>
+  props.groups.some(group => form.group_ids.includes(group.id) && isManagedGroup(group))
+)
 
 const appStore = useAppStore()
 
@@ -4774,11 +4834,38 @@ const canExchangeCode = computed(() => {
   return authCode.trim() && oauth.sessionId.value && !oauth.loading.value
 })
 
+function selectPlatformForGroup(platform: string) {
+  if (isCNProviderPlatform(platform)) selectCNPlatform(platform)
+  else if (platform === 'opencode_go') selectOpenCodeGoPlatform()
+  else form.platform = platform as AccountPlatform
+}
+
+function applyPresetGroup(group: AdminGroup | null | undefined) {
+  if (!group) return
+  if (group.platform !== 'composite' && form.platform !== group.platform) {
+    selectPlatformForGroup(group.platform)
+  }
+  form.group_ids = [group.id]
+}
+
+watch(
+  () => props.presetGroup,
+  (group) => {
+    if (props.show) applyPresetGroup(group)
+  }
+)
+
+// 直接以打开状态挂载时 show 监听不会触发；放到挂载后应用，确保平台联动监听已注册
+onMounted(() => {
+  if (props.show) applyPresetGroup(props.presetGroup)
+})
+
 // Watchers
 watch(
   () => props.show,
   (newVal) => {
     if (newVal) {
+      applyPresetGroup(props.presetGroup)
       // Load TLS fingerprint profiles
       adminAPI.tlsFingerprintProfiles.list()
         .then(profiles => { tlsFingerprintProfiles.value = profiles.map(p => ({ id: p.id, name: p.name })) })
@@ -5618,7 +5705,20 @@ const handleVertexServiceAccountDrop = async (event: DragEvent) => {
   applyVertexServiceAccountJson(await file.text())
 }
 
+const validateGroupSelection = (): boolean => {
+  if (!form.group_ids.length) {
+    appStore.showError(t('admin.accounts.groupRequired'))
+    return false
+  }
+  if (violatesManagedExclusivity(form.group_ids, props.groups)) {
+    appStore.showError(t('admin.accounts.managedGroupExclusive'))
+    return false
+  }
+  return true
+}
+
 const handleSubmit = async () => {
+  if (!validateGroupSelection()) return
   // For OAuth-based type, handle OAuth flow (goes to step 2)
   if (isOAuthFlow.value) {
     if (!isGrokSSOInputMethod.value && !form.name.trim()) {

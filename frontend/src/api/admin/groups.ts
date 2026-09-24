@@ -6,6 +6,7 @@
 import { apiClient } from '../client'
 import type {
   AdminGroup,
+  GroupKind,
   GroupPlatform,
   CompositeModelRoute,
   CompositeModelRouteInput,
@@ -25,7 +26,7 @@ export interface LiveCapability {
  * List all groups with pagination
  * @param page - Page number (default: 1)
  * @param pageSize - Items per page (default: 20)
- * @param filters - Optional filters (platform, status, is_exclusive, search)
+ * @param filters - Optional filters (platform, status, is_exclusive, kind, search)
  * @returns Paginated list of groups
  */
 export async function list(
@@ -35,6 +36,8 @@ export async function list(
     platform?: GroupPlatform
     status?: 'active' | 'inactive'
     is_exclusive?: boolean
+    // 分组类型：channel 渠道分组 / managed 管理分组
+    kind?: GroupKind
     search?: string
     sort_by?: string
     sort_order?: 'asc' | 'desc'

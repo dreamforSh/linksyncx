@@ -1491,6 +1491,7 @@ import ConfirmDialog from '@/components/common/ConfirmDialog.vue'
 import Select from '@/components/common/Select.vue'
 import ProxySelector from '@/components/common/ProxySelector.vue'
 import GroupSelector from '@/components/common/GroupSelector.vue'
+import { violatesManagedExclusivity } from '@/utils/groupKind'
 import ModelWhitelistSelector from '@/components/account/ModelWhitelistSelector.vue'
 import Icon from '@/components/icons/Icon.vue'
 import {
@@ -2254,6 +2255,18 @@ const handleSubmit = async () => {
     const headerError = validateHeaderOverrideRows(headerOverrideRows.value)
     if (headerError) {
       appStore.showError(t(`admin.accounts.headerOverride.${headerError}`))
+      return
+    }
+  }
+
+  // 批量改分组是整体替换：不允许替换成空，管理分组必须是唯一分组
+  if (enableGroups.value) {
+    if (!groupIds.value.length) {
+      appStore.showError(t('admin.accounts.groupRequired'))
+      return
+    }
+    if (violatesManagedExclusivity(groupIds.value, props.groups)) {
+      appStore.showError(t('admin.accounts.managedGroupExclusive'))
       return
     }
   }

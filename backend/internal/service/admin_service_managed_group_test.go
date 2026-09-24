@@ -6,6 +6,7 @@ import (
 	"context"
 	"testing"
 
+	"github.com/Wei-Shaw/sub2api/internal/pkg/pagination"
 	"github.com/stretchr/testify/require"
 )
 
@@ -252,4 +253,40 @@ func TestCreateCRSAccountInGroupsBindsPlatformTargets(t *testing.T) {
 	err = svc.createCRSAccountInGroups(ctx, &Account{Name: "claude", Platform: PlatformAnthropic}, targets)
 	require.NoError(t, err)
 	require.Equal(t, []int64{6, 8}, accountRepo.bindGroupsByAccount[31])
+}
+
+type groupKindListRepoStub struct {
+	groupRepoStubForAdmin
+	kind         string
+	bindableOnly bool
+	calls        int
+}
+
+func (s *groupKindListRepoStub) ListWithFiltersByKind(_ context.Context, params pagination.PaginationParams, _, _, _ string, _ *bool, kind string, bindableOnly bool) ([]Group, *pagination.PaginationResult, error) {
+	s.calls++
+	s.kind = kind
+	s.bindableOnly = bindableOnly
+	return []Group{*testManagedGroup(5, PlatformAnthropic)}, &pagination.PaginationResult{Total: 1, Page: params.Page, PageSize: params.PageSize}, nil
+}
+
+func TestListGroupsFiltersByKind(t *testing.T) {
+	repo := &groupKindListRepoStub{}
+	svc := &adminServiceImpl{groupRepo: repo}
+
+	groups, total, err := svc.ListGroups(context.Background(), 1, 20, "", "", "", nil, GroupKindManaged, "", "")
+	require.NoError(t, err)
+	require.Equal(t, int64(1), total)
+	require.Len(t, groups, 1)
+	require.Equal(t, GroupKindManaged, repo.kind)
+	require.False(t, repo.bindableOnly)
+	require.Zero(t, repo.listWithFiltersCalls)
+
+	_, _, err = svc.ListGroups(context.Background(), 1, 20, "", "", "", nil, "org", "", "")
+	require.ErrorIs(t, err, ErrInvalidGroupKind)
+	require.Equal(t, 1, repo.calls)
+
+	// 不带 kind 时仍走原有列表
+	_, _, err = svc.ListGroups(context.Background(), 1, 20, "", "", "", nil, "", "", "")
+	require.NoError(t, err)
+	require.Equal(t, 1, repo.listWithFiltersCalls)
 }

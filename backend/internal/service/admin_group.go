@@ -25,12 +25,28 @@ func (s *adminServiceImpl) ValidateSimpleModeGroupOperation(operation AdminGroup
 	return ValidateSimpleModeGroupOperation(s.cfg, operation)
 }
 
-func (s *adminServiceImpl) ListGroups(ctx context.Context, page, pageSize int, platform, status, search string, isExclusive *bool, sortBy, sortOrder string) ([]Group, int64, error) {
+// groupKindListRepository 是真实仓储提供的「按分组类型筛选」能力；做成可选接口，
+// 避免扩大 GroupRepository 及其众多测试替身。
+type groupKindListRepository interface {
+	ListWithFiltersByKind(ctx context.Context, params pagination.PaginationParams, platform, status, search string, isExclusive *bool, kind string, bindableOnly bool) ([]Group, *pagination.PaginationResult, error)
+}
+
+func (s *adminServiceImpl) ListGroups(ctx context.Context, page, pageSize int, platform, status, search string, isExclusive *bool, kind, sortBy, sortOrder string) ([]Group, int64, error) {
 	params := pagination.PaginationParams{Page: page, PageSize: pageSize, SortBy: sortBy, SortOrder: sortOrder}
 	var groups []Group
 	var result *pagination.PaginationResult
 	var err error
-	if s.cfg != nil && s.cfg.RunMode == config.RunModeSimple {
+	simpleMode := s.cfg != nil && s.cfg.RunMode == config.RunModeSimple
+	if kind != "" {
+		if err := ValidateGroupKind(kind); err != nil {
+			return nil, 0, err
+		}
+		repo, ok := s.groupRepo.(groupKindListRepository)
+		if !ok {
+			return nil, 0, errors.New("group repository does not support kind filtering")
+		}
+		groups, result, err = repo.ListWithFiltersByKind(ctx, params, platform, status, search, isExclusive, kind, simpleMode)
+	} else if simpleMode {
 		repo, ok := s.groupRepo.(interface {
 			ListBindableWithFilters(context.Context, pagination.PaginationParams, string, string, string, *bool) ([]Group, *pagination.PaginationResult, error)
 		})

@@ -511,6 +511,19 @@ func (r *groupRepository) ListBindableWithFilters(ctx context.Context, params pa
 	return r.listWithFiltersQuery(ctx, q, params, platform, status, search, isExclusive)
 }
 
+// ListWithFiltersByKind 在 ListWithFilters 基础上按分组类型（channel / managed）筛选；
+// bindableOnly 时与 ListBindableWithFilters 一致排除 composite 分组（精简模式）。
+func (r *groupRepository) ListWithFiltersByKind(ctx context.Context, params pagination.PaginationParams, platform, status, search string, isExclusive *bool, kind string, bindableOnly bool) ([]service.Group, *pagination.PaginationResult, error) {
+	q := r.client.Group.Query()
+	if bindableOnly {
+		q = q.Where(group.PlatformNEQ(service.PlatformComposite))
+	}
+	if kind != "" {
+		q = q.Where(group.KindEQ(kind))
+	}
+	return r.listWithFiltersQuery(ctx, q, params, platform, status, search, isExclusive)
+}
+
 func (r *groupRepository) listWithFiltersQuery(ctx context.Context, q *dbent.GroupQuery, params pagination.PaginationParams, platform, status, search string, isExclusive *bool) ([]service.Group, *pagination.PaginationResult, error) {
 
 	if platform != "" {

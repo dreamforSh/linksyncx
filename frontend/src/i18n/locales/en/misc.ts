@@ -204,6 +204,14 @@ export default {
         title: '➕ Add New Account',
         description: '<div style="line-height: 1.7;"><p style="margin-bottom: 12px;">Click the button to start adding your first upstream account.</p><p style="padding: 8px 12px; background: #f0fdf4; border-left: 3px solid #10b981; border-radius: 4px; font-size: 13px;"><b>💡 Tip:</b> Recommend using OAuth method - more secure and no manual key extraction needed</p><p style="margin-top: 12px; color: #10b981; font-weight: 600;">👉 Click "Add Account" button</p></div>'
       },
+      accountTargetGroup: {
+        title: '🗂️ Choose a Target Group',
+        description: '<div style="line-height: 1.7;"><p style="margin-bottom: 12px;">Every account must belong to a group. Pick the group you just created: the new account joins it directly and the platform follows the group.</p><p style="padding: 8px 12px; background: #eff6ff; border-left: 3px solid #3b82f6; border-radius: 4px; font-size: 13px;"><b>💡 Two kinds of groups:</b> channel groups are shared account pools; managed groups serve an enterprise or team and own their accounts exclusively.</p></div>'
+      },
+      accountTargetGroupNext: {
+        title: '👉 Continue to the Account Form',
+        description: '<div style="line-height: 1.7;"><p>After choosing a group, click "Next" to fill in the account details.</p></div>'
+      },
       accountName: {
         title: '✏️ 1. Account Name',
         description: '<div style="line-height: 1.7;"><p style="margin-bottom: 12px;">Set an easy-to-identify name for the account.</p><p style="padding: 8px 12px; background: #f0fdf4; border-left: 3px solid #10b981; border-radius: 4px; font-size: 13px;"><b>💡 Naming Suggestions:</b> "Claude Main", "GPT Backup 1", "Test Account", etc.</p></div>',

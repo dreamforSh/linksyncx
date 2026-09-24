@@ -652,6 +652,7 @@ import Toggle from '@/components/common/Toggle.vue'
 import PricingEntryCard from '@/components/admin/channel/PricingEntryCard.vue'
 import { getPersistedPageSize } from '@/composables/usePersistedPageSize'
 import { useKeyedDebouncedSearch } from '@/composables/useKeyedDebouncedSearch'
+import { isManagedGroup } from '@/utils/groupKind'
 
 const { t } = useI18n()
 const appStore = useAppStore()
@@ -804,8 +805,10 @@ function togglePlatform(platform: GroupPlatform) {
 }
 
 function getGroupsForPlatform(platform: GroupPlatform): AdminGroup[] {
+  // 管理分组不挂渠道（后端同样拒绝），不作为候选
   return allGroups.value.filter(
-    g => g.platform === platform || (g.platform === 'composite' && compositePlatforms.includes(platform))
+    g => !isManagedGroup(g) &&
+      (g.platform === platform || (g.platform === 'composite' && compositePlatforms.includes(platform)))
   )
 }
 

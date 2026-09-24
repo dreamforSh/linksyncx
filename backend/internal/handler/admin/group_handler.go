@@ -141,6 +141,8 @@ type simpleModeGroupResponse struct {
 	Description string `json:"description"`
 	Platform    string `json:"platform"`
 	Status      string `json:"status"`
+	Kind        string `json:"kind"`
+	Category    string `json:"category,omitempty"`
 
 	AccountCount            int64     `json:"account_count,omitempty"`
 	ActiveAccountCount      int64     `json:"active_account_count,omitempty"`
@@ -156,7 +158,7 @@ func groupForSimpleMode(group *service.Group) *simpleModeGroupResponse {
 	}
 	return &simpleModeGroupResponse{
 		ID: group.ID, Name: group.Name, Description: group.Description, Platform: group.Platform,
-		Status:             group.Status,
+		Status: group.Status, Kind: service.NormalizeGroupKind(group.Kind), Category: group.Category,
 		AccountCount:       group.AccountCount,
 		ActiveAccountCount: group.ActiveAccountCount, RateLimitedAccountCount: group.RateLimitedAccountCount,
 		SortOrder: group.SortOrder, CreatedAt: group.CreatedAt, UpdatedAt: group.UpdatedAt,
@@ -367,6 +369,7 @@ func (h *GroupHandler) List(c *gin.Context) {
 		search = search[:100]
 	}
 	isExclusiveStr := c.Query("is_exclusive")
+	kind := strings.TrimSpace(c.Query("kind"))
 	sortBy := c.DefaultQuery("sort_by", "sort_order")
 	sortOrder := c.DefaultQuery("sort_order", "asc")
 
@@ -376,7 +379,7 @@ func (h *GroupHandler) List(c *gin.Context) {
 		isExclusive = &val
 	}
 
-	groups, total, err := h.adminService.ListGroups(c.Request.Context(), page, pageSize, platform, status, search, isExclusive, sortBy, sortOrder)
+	groups, total, err := h.adminService.ListGroups(c.Request.Context(), page, pageSize, platform, status, search, isExclusive, kind, sortBy, sortOrder)
 	if err != nil {
 		response.ErrorFrom(c, err)
 		return
