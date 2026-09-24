@@ -11,6 +11,14 @@ export interface ReleaseInfo {
   html_url: string
 }
 
+export interface UpdateChannelInfo {
+  current_version: string
+  latest_version: string
+  has_update: boolean
+  release_info?: ReleaseInfo
+  warning?: string
+}
+
 export interface VersionInfo {
   current_version: string
   latest_version: string
@@ -19,6 +27,8 @@ export interface VersionInfo {
   cached: boolean
   warning?: string
   build_type: string // "source" for manual builds, "release" for CI builds
+  upstream?: UpdateChannelInfo
+  custom?: UpdateChannelInfo
 }
 
 /**
