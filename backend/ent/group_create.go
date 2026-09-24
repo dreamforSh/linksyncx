@@ -190,6 +190,34 @@ func (_c *GroupCreate) SetNillableStatus(v *string) *GroupCreate {
 	return _c
 }
 
+// SetKind sets the "kind" field.
+func (_c *GroupCreate) SetKind(v string) *GroupCreate {
+	_c.mutation.SetKind(v)
+	return _c
+}
+
+// SetNillableKind sets the "kind" field if the given value is not nil.
+func (_c *GroupCreate) SetNillableKind(v *string) *GroupCreate {
+	if v != nil {
+		_c.SetKind(*v)
+	}
+	return _c
+}
+
+// SetCategory sets the "category" field.
+func (_c *GroupCreate) SetCategory(v string) *GroupCreate {
+	_c.mutation.SetCategory(v)
+	return _c
+}
+
+// SetNillableCategory sets the "category" field if the given value is not nil.
+func (_c *GroupCreate) SetNillableCategory(v *string) *GroupCreate {
+	if v != nil {
+		_c.SetCategory(*v)
+	}
+	return _c
+}
+
 // SetDuplicateOperationID sets the "duplicate_operation_id" field.
 func (_c *GroupCreate) SetDuplicateOperationID(v string) *GroupCreate {
 	_c.mutation.SetDuplicateOperationID(v)
@@ -1075,6 +1103,10 @@ func (_c *GroupCreate) defaults() error {
 		v := group.DefaultStatus
 		_c.mutation.SetStatus(v)
 	}
+	if _, ok := _c.mutation.Kind(); !ok {
+		v := group.DefaultKind
+		_c.mutation.SetKind(v)
+	}
 	if _, ok := _c.mutation.Platform(); !ok {
 		v := group.DefaultPlatform
 		_c.mutation.SetPlatform(v)
@@ -1264,6 +1296,19 @@ func (_c *GroupCreate) check() error {
 	if v, ok := _c.mutation.Status(); ok {
 		if err := group.StatusValidator(v); err != nil {
 			return &ValidationError{Name: "status", err: fmt.Errorf(`ent: validator failed for field "Group.status": %w`, err)}
+		}
+	}
+	if _, ok := _c.mutation.Kind(); !ok {
+		return &ValidationError{Name: "kind", err: errors.New(`ent: missing required field "Group.kind"`)}
+	}
+	if v, ok := _c.mutation.Kind(); ok {
+		if err := group.KindValidator(v); err != nil {
+			return &ValidationError{Name: "kind", err: fmt.Errorf(`ent: validator failed for field "Group.kind": %w`, err)}
+		}
+	}
+	if v, ok := _c.mutation.Category(); ok {
+		if err := group.CategoryValidator(v); err != nil {
+			return &ValidationError{Name: "category", err: fmt.Errorf(`ent: validator failed for field "Group.category": %w`, err)}
 		}
 	}
 	if v, ok := _c.mutation.DuplicateOperationID(); ok {
@@ -1492,6 +1537,14 @@ func (_c *GroupCreate) createSpec() (*Group, *sqlgraph.CreateSpec) {
 	if value, ok := _c.mutation.Status(); ok {
 		_spec.SetField(group.FieldStatus, field.TypeString, value)
 		_node.Status = value
+	}
+	if value, ok := _c.mutation.Kind(); ok {
+		_spec.SetField(group.FieldKind, field.TypeString, value)
+		_node.Kind = value
+	}
+	if value, ok := _c.mutation.Category(); ok {
+		_spec.SetField(group.FieldCategory, field.TypeString, value)
+		_node.Category = &value
 	}
 	if value, ok := _c.mutation.DuplicateOperationID(); ok {
 		_spec.SetField(group.FieldDuplicateOperationID, field.TypeString, value)
@@ -2018,6 +2071,24 @@ func (u *GroupUpsert) SetStatus(v string) *GroupUpsert {
 // UpdateStatus sets the "status" field to the value that was provided on create.
 func (u *GroupUpsert) UpdateStatus() *GroupUpsert {
 	u.SetExcluded(group.FieldStatus)
+	return u
+}
+
+// SetCategory sets the "category" field.
+func (u *GroupUpsert) SetCategory(v string) *GroupUpsert {
+	u.Set(group.FieldCategory, v)
+	return u
+}
+
+// UpdateCategory sets the "category" field to the value that was provided on create.
+func (u *GroupUpsert) UpdateCategory() *GroupUpsert {
+	u.SetExcluded(group.FieldCategory)
+	return u
+}
+
+// ClearCategory clears the value of the "category" field.
+func (u *GroupUpsert) ClearCategory() *GroupUpsert {
+	u.SetNull(group.FieldCategory)
 	return u
 }
 
@@ -2935,6 +3006,9 @@ func (u *GroupUpsertOne) UpdateNewValues() *GroupUpsertOne {
 		if _, exists := u.create.mutation.CreatedAt(); exists {
 			s.SetIgnore(group.FieldCreatedAt)
 		}
+		if _, exists := u.create.mutation.Kind(); exists {
+			s.SetIgnore(group.FieldKind)
+		}
 		if _, exists := u.create.mutation.DuplicateOperationID(); exists {
 			s.SetIgnore(group.FieldDuplicateOperationID)
 		}
@@ -3148,6 +3222,27 @@ func (u *GroupUpsertOne) SetStatus(v string) *GroupUpsertOne {
 func (u *GroupUpsertOne) UpdateStatus() *GroupUpsertOne {
 	return u.Update(func(s *GroupUpsert) {
 		s.UpdateStatus()
+	})
+}
+
+// SetCategory sets the "category" field.
+func (u *GroupUpsertOne) SetCategory(v string) *GroupUpsertOne {
+	return u.Update(func(s *GroupUpsert) {
+		s.SetCategory(v)
+	})
+}
+
+// UpdateCategory sets the "category" field to the value that was provided on create.
+func (u *GroupUpsertOne) UpdateCategory() *GroupUpsertOne {
+	return u.Update(func(s *GroupUpsert) {
+		s.UpdateCategory()
+	})
+}
+
+// ClearCategory clears the value of the "category" field.
+func (u *GroupUpsertOne) ClearCategory() *GroupUpsertOne {
+	return u.Update(func(s *GroupUpsert) {
+		s.ClearCategory()
 	})
 }
 
@@ -4380,6 +4475,9 @@ func (u *GroupUpsertBulk) UpdateNewValues() *GroupUpsertBulk {
 			if _, exists := b.mutation.CreatedAt(); exists {
 				s.SetIgnore(group.FieldCreatedAt)
 			}
+			if _, exists := b.mutation.Kind(); exists {
+				s.SetIgnore(group.FieldKind)
+			}
 			if _, exists := b.mutation.DuplicateOperationID(); exists {
 				s.SetIgnore(group.FieldDuplicateOperationID)
 			}
@@ -4594,6 +4692,27 @@ func (u *GroupUpsertBulk) SetStatus(v string) *GroupUpsertBulk {
 func (u *GroupUpsertBulk) UpdateStatus() *GroupUpsertBulk {
 	return u.Update(func(s *GroupUpsert) {
 		s.UpdateStatus()
+	})
+}
+
+// SetCategory sets the "category" field.
+func (u *GroupUpsertBulk) SetCategory(v string) *GroupUpsertBulk {
+	return u.Update(func(s *GroupUpsert) {
+		s.SetCategory(v)
+	})
+}
+
+// UpdateCategory sets the "category" field to the value that was provided on create.
+func (u *GroupUpsertBulk) UpdateCategory() *GroupUpsertBulk {
+	return u.Update(func(s *GroupUpsert) {
+		s.UpdateCategory()
+	})
+}
+
+// ClearCategory clears the value of the "category" field.
+func (u *GroupUpsertBulk) ClearCategory() *GroupUpsertBulk {
+	return u.Update(func(s *GroupUpsert) {
+		s.ClearCategory()
 	})
 }
 

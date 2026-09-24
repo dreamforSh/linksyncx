@@ -90,6 +90,19 @@ const (
 	SubscriptionTypeSubscription = "subscription" // 订阅模式（按限额控制）
 )
 
+// Group kind constants：渠道分组承载公共账号池；管理分组不挂渠道，
+// 组账号独占于该分组，由组管理员分配给组成员。
+const (
+	GroupKindChannel = "channel"
+	GroupKindManaged = "managed"
+)
+
+// Managed group category constants（仅管理分组使用）
+const (
+	GroupCategoryEnterprise = "enterprise"
+	GroupCategoryTeam       = "team"
+)
+
 // Subscription status constants
 const (
 	SubscriptionStatusActive    = "active"

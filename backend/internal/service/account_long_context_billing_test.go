@@ -80,6 +80,11 @@ type longContextBillingRepoStub struct {
 	bulkUpdateCalls  int
 }
 
+// BindGroups 新建账号必须带分组，CreateAccount 总会绑定；这里只需吞掉调用。
+func (s *longContextBillingRepoStub) BindGroups(context.Context, int64, []int64) error {
+	return nil
+}
+
 func (r *longContextBillingRepoStub) Create(_ context.Context, account *Account) error {
 	account.ID = 1
 	r.account = account
@@ -121,11 +126,11 @@ func TestAdminServiceCreateAccountDefaultsOpenAILongContextBillingDisabled(t *te
 	svc := &adminServiceImpl{accountRepo: repo}
 
 	account, err := svc.CreateAccount(context.Background(), &CreateAccountInput{
-		Name:                 "openai-account",
-		Platform:             PlatformOpenAI,
-		Type:                 AccountTypeAPIKey,
-		Credentials:          map[string]any{"api_key": "test"},
-		SkipDefaultGroupBind: true,
+		Name:        "openai-account",
+		Platform:    PlatformOpenAI,
+		Type:        AccountTypeAPIKey,
+		Credentials: map[string]any{"api_key": "test"},
+		GroupIDs:    []int64{1},
 	})
 
 	require.NoError(t, err)

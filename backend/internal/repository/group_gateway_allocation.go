@@ -10,12 +10,16 @@ import (
 	"github.com/Wei-Shaw/sub2api/internal/service"
 )
 
+// gatewayAdmissionSettingsSQL 读取分组的有效管控设置：管理分组即使缺少设置行也强制开启，
+// 保证管理分组的准入失败即拒绝（fail-closed）。
+const gatewayAdmissionSettingsSQL = `SELECT ` + effectiveEnabledSQL + `, ` + effectiveModeSQL + ` FROM groups g LEFT JOIN group_management_settings s ON s.group_id=g.id WHERE g.id=$1 AND g.deleted_at IS NULL`
+
 func (r *groupManagementRepository) GatewayAdmission(ctx context.Context, userID, groupID int64, admin, consume bool) (service.GatewayAllocation, func(), error) {
 	policy := service.GatewayAllocation{GroupID: groupID}
 	noop := func() {}
 	var enabled bool
 	var mode string
-	err := r.db.QueryRowContext(ctx, `SELECT s.enabled, s.allocation_mode FROM group_management_settings s JOIN groups g ON g.id=s.group_id WHERE s.group_id=$1 AND g.deleted_at IS NULL`, groupID).Scan(&enabled, &mode)
+	err := r.db.QueryRowContext(ctx, gatewayAdmissionSettingsSQL, groupID).Scan(&enabled, &mode)
 	if errors.Is(err, sql.ErrNoRows) {
 		return policy, noop, nil
 	}
@@ -31,7 +35,7 @@ func (r *groupManagementRepository) GatewayAdmission(ctx context.Context, userID
 	if err != nil {
 		return policy, noop, err
 	}
-	defer tx.Rollback()
+	defer func() { _ = tx.Rollback() }()
 	var maxConcurrent int
 	var dailyLimit, dailyUsed int64
 	err = tx.QueryRowContext(ctx, `SELECT gm.max_concurrent, gm.daily_limit,
@@ -57,13 +61,13 @@ func (r *groupManagementRepository) GatewayAdmission(ctx context.Context, userID
 		for rows.Next() {
 			var id int64
 			if err := rows.Scan(&id); err != nil {
-				rows.Close()
+				_ = rows.Close()
 				return policy, noop, err
 			}
 			policy.AllowedIDs[id] = struct{}{}
 		}
 		err = rows.Err()
-		rows.Close()
+		_ = rows.Close()
 		if err != nil {
 			return policy, noop, err
 		}

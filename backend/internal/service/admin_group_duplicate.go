@@ -209,6 +209,10 @@ func (s *adminServiceImpl) DuplicateGroup(ctx context.Context, id int64, actorSc
 	if err != nil {
 		return nil, err
 	}
+	// 复制分组会连同账号绑定一起复制，管理分组的组账号独占，不允许复制。
+	if source.IsManaged() {
+		return nil, ErrManagedGroupDuplicate
+	}
 	if s.groupDuplicateRepo == nil {
 		return nil, errors.New("group duplicate repository is not configured")
 	}

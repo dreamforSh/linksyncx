@@ -73,8 +73,9 @@ type DataAccount struct {
 }
 
 type DataImportRequest struct {
-	Data                 DataPayload `json:"data"`
-	SkipDefaultGroupBind *bool       `json:"skip_default_group_bind"`
+	Data DataPayload `json:"data"`
+	// GroupIDs 导入目标分组：账号必须归属分组，每个账号只绑定与其平台相同的目标分组。
+	GroupIDs []int64 `json:"group_ids"`
 }
 
 type DataImportResult struct {
@@ -236,6 +237,10 @@ func (h *AccountHandler) ImportData(c *gin.Context) {
 		response.BadRequest(c, err.Error())
 		return
 	}
+	if len(req.Data.Accounts) > 0 && len(req.GroupIDs) == 0 {
+		response.ErrorFrom(c, service.ErrAccountGroupRequired)
+		return
+	}
 
 	executeAdminIdempotentJSON(c, "admin.accounts.import_data", req, service.DefaultWriteIdempotencyTTL(), func(ctx context.Context) (any, error) {
 		return h.importData(ctx, req)
@@ -243,13 +248,13 @@ func (h *AccountHandler) ImportData(c *gin.Context) {
 }
 
 func (h *AccountHandler) importData(ctx context.Context, req DataImportRequest) (DataImportResult, error) {
-	skipDefaultGroupBind := true
-	if req.SkipDefaultGroupBind != nil {
-		skipDefaultGroupBind = *req.SkipDefaultGroupBind
-	}
-
 	dataPayload := req.Data
 	result := DataImportResult{}
+
+	groupsByPlatform, err := h.resolveImportTargetGroups(ctx, req.GroupIDs)
+	if err != nil {
+		return result, err
+	}
 
 	existingProxies, err := h.listAllProxies(ctx)
 	if err != nil {
@@ -405,6 +410,16 @@ func (h *AccountHandler) importData(ctx context.Context, req DataImportRequest) 
 
 	for i := range dataPayload.Accounts {
 		item := dataPayload.Accounts[i]
+		targetGroupIDs := groupsByPlatform[item.Platform]
+		if len(targetGroupIDs) == 0 {
+			result.AccountFailed++
+			result.Errors = append(result.Errors, DataImportError{
+				Kind:    "account",
+				Name:    item.Name,
+				Message: fmt.Sprintf("no target group selected for platform %q", item.Platform),
+			})
+			continue
+		}
 		if err := validateDataAccount(item); err != nil {
 			result.AccountFailed++
 			result.Errors = append(result.Errors, DataImportError{
@@ -434,20 +449,19 @@ func (h *AccountHandler) importData(ctx context.Context, req DataImportRequest) 
 		enrichCredentialsFromIDToken(&item)
 
 		accountInput := &service.CreateAccountInput{
-			Name:                 item.Name,
-			Notes:                item.Notes,
-			Platform:             item.Platform,
-			Type:                 item.Type,
-			Credentials:          item.Credentials,
-			Extra:                item.Extra,
-			ProxyID:              proxyID,
-			Concurrency:          item.Concurrency,
-			Priority:             item.Priority,
-			RateMultiplier:       item.RateMultiplier,
-			GroupIDs:             nil,
-			ExpiresAt:            item.ExpiresAt,
-			AutoPauseOnExpired:   item.AutoPauseOnExpired,
-			SkipDefaultGroupBind: skipDefaultGroupBind,
+			Name:               item.Name,
+			Notes:              item.Notes,
+			Platform:           item.Platform,
+			Type:               item.Type,
+			Credentials:        item.Credentials,
+			Extra:              item.Extra,
+			ProxyID:            proxyID,
+			Concurrency:        item.Concurrency,
+			Priority:           item.Priority,
+			RateMultiplier:     item.RateMultiplier,
+			GroupIDs:           append([]int64(nil), targetGroupIDs...),
+			ExpiresAt:          item.ExpiresAt,
+			AutoPauseOnExpired: item.AutoPauseOnExpired,
 		}
 
 		created, err := h.adminService.CreateAccount(ctx, accountInput)
@@ -782,4 +796,18 @@ func normalizeProxyStatus(status string) string {
 	default:
 		return normalized
 	}
+}
+
+// resolveImportTargetGroups 加载多平台导入（JSON 导入、CRS 同步）的目标分组并按平台分桶：
+// 每个新建账号只绑定与其平台相同的目标分组；同平台含管理分组时它必须是唯一目标。
+func (h *AccountHandler) resolveImportTargetGroups(ctx context.Context, groupIDs []int64) (map[string][]int64, error) {
+	groups := make([]*service.Group, 0, len(groupIDs))
+	for _, groupID := range groupIDs {
+		group, err := h.adminService.GetGroup(ctx, groupID)
+		if err != nil {
+			return nil, err
+		}
+		groups = append(groups, group)
+	}
+	return service.GroupIDsByPlatform(groups)
 }

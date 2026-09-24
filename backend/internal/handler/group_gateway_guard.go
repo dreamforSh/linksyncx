@@ -42,7 +42,7 @@ func (h *GroupManagementHandler) GatewayGuard(writeError middleware.GatewayError
 			c.Abort()
 			return
 		}
-		if policy.Enabled && !consume && !(path == "/v1/usage" && c.Request.Method == http.MethodGet) {
+		if policy.Enabled && !consume && (path != "/v1/usage" || c.Request.Method != http.MethodGet) {
 			writeError(c, http.StatusForbidden, "This endpoint is not supported for managed groups")
 			c.Abort()
 			return

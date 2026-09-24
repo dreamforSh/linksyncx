@@ -37,7 +37,6 @@ type CodexSessionImportRequest struct {
 	CredentialExtras        map[string]any `json:"credential_extras"`
 	Extra                   map[string]any `json:"extra"`
 	UpdateExisting          *bool          `json:"update_existing"`
-	SkipDefaultGroupBind    *bool          `json:"skip_default_group_bind"`
 	ConfirmMixedChannelRisk *bool          `json:"confirm_mixed_channel_risk"`
 }
 
@@ -182,10 +181,6 @@ func (h *AccountHandler) importCodexSessions(ctx context.Context, req CodexSessi
 		priority = *req.Priority
 	}
 	credentialExtras := sanitizeCodexImportCredentialExtras(req.CredentialExtras)
-	skipDefaultGroupBind := false
-	if req.SkipDefaultGroupBind != nil {
-		skipDefaultGroupBind = *req.SkipDefaultGroupBind
-	}
 	skipMixedChannelCheck := req.ConfirmMixedChannelRisk != nil && *req.ConfirmMixedChannelRisk
 
 	seenIdentity := map[string]codexSeenIdentity{}
@@ -343,7 +338,6 @@ func (h *AccountHandler) importCodexSessions(ctx context.Context, req CodexSessi
 			GroupIDs:              req.GroupIDs,
 			ExpiresAt:             effectiveExpiresAt,
 			AutoPauseOnExpired:    autoPauseOnExpired,
-			SkipDefaultGroupBind:  skipDefaultGroupBind,
 			SkipMixedChannelCheck: skipMixedChannelCheck,
 		})
 		if createErr != nil {

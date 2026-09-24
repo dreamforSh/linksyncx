@@ -198,6 +198,14 @@ const (
 	SubscriptionTypeSubscription = domain.SubscriptionTypeSubscription // 订阅模式（按限额控制）
 )
 
+// Group kind / managed group category constants
+const (
+	GroupKindChannel        = domain.GroupKindChannel
+	GroupKindManaged        = domain.GroupKindManaged
+	GroupCategoryEnterprise = domain.GroupCategoryEnterprise
+	GroupCategoryTeam       = domain.GroupCategoryTeam
+)
+
 // Subscription status constants
 const (
 	SubscriptionStatusActive    = domain.SubscriptionStatusActive

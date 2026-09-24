@@ -22,7 +22,8 @@ import (
 
 // Account management implementations
 func (s *adminServiceImpl) ListAccounts(ctx context.Context, page, pageSize int, platform, accountType, status, search string, groupID int64, privacyMode string, sortBy, sortOrder string) ([]Account, int64, error) {
-	if groupID > 0 {
+	// 列表筛选只需精简模式的 composite 拦截；不因筛选一个已删除分组而报错。
+	if groupID > 0 && s.cfg != nil && s.cfg.RunMode == config.RunModeSimple {
 		if err := s.ValidateAccountGroupBindings(ctx, []int64{groupID}); err != nil {
 			return nil, 0, err
 		}
@@ -313,7 +314,6 @@ func (s *adminServiceImpl) DuplicateAccount(ctx context.Context, id int64, actor
 		GroupIDs:              groupIDs,
 		ExpiresAt:             expiresAt,
 		AutoPauseOnExpired:    &autoPauseOnExpired,
-		SkipDefaultGroupBind:  true,
 		SkipMixedChannelCheck: true,
 	}
 	accountExtra, err := normalizeOpenAILongContextBillingExtra(input.Platform, input.Extra)
@@ -492,20 +492,11 @@ func (s *adminServiceImpl) CreateAccount(ctx context.Context, input *CreateAccou
 		return nil, err
 	}
 
-	// 绑定分组
+	// 账号必须归属至少一个分组：先建渠道分组 / 管理分组，再在分组下添加账号。
+	// 不再隐式绑定 <platform>-default，未指定分组直接拒绝。
 	groupIDs := input.GroupIDs
-	// 如果没有指定分组,自动绑定对应平台的默认分组
-	if len(groupIDs) == 0 && !input.SkipDefaultGroupBind {
-		defaultGroupName := input.Platform + "-default"
-		groups, err := s.groupRepo.ListActiveByPlatform(ctx, input.Platform)
-		if err == nil {
-			for _, g := range groups {
-				if g.Name == defaultGroupName {
-					groupIDs = []int64{g.ID}
-					break
-				}
-			}
-		}
+	if len(groupIDs) == 0 {
+		return nil, ErrAccountGroupRequired
 	}
 
 	// 检查混合渠道风险（除非用户已确认）
@@ -529,7 +520,7 @@ func (s *adminServiceImpl) CreateAccount(ctx context.Context, input *CreateAccou
 	if err != nil {
 		return nil, err
 	}
-	if err := s.ValidateAccountGroupBindings(ctx, groupIDs); err != nil {
+	if err := s.validateAccountGroupPolicy(ctx, input.Platform, groupIDs); err != nil {
 		return nil, err
 	}
 	if err := s.accountRepo.Create(ctx, account); err != nil {
@@ -537,10 +528,8 @@ func (s *adminServiceImpl) CreateAccount(ctx context.Context, input *CreateAccou
 	}
 
 	// 绑定分组
-	if len(groupIDs) > 0 {
-		if err := s.accountRepo.BindGroups(ctx, account.ID, groupIDs); err != nil {
-			return nil, err
-		}
+	if err := s.accountRepo.BindGroups(ctx, account.ID, groupIDs); err != nil {
+		return nil, err
 	}
 
 	// OAuth 账号：创建后异步设置隐私。
@@ -840,10 +829,14 @@ func (s *adminServiceImpl) UpdateAccount(ctx context.Context, id int64, input *U
 
 	// 先验证分组是否存在（在任何写操作之前）
 	if input.GroupIDs != nil {
+		// 账号始终要归属至少一个分组，不允许通过编辑清空。
+		if len(*input.GroupIDs) == 0 {
+			return nil, ErrAccountGroupRequired
+		}
 		if err := s.validateGroupIDsExist(ctx, *input.GroupIDs); err != nil {
 			return nil, err
 		}
-		if err := s.ValidateAccountGroupBindings(ctx, *input.GroupIDs); err != nil {
+		if err := s.validateAccountGroupPolicy(ctx, account.Platform, *input.GroupIDs); err != nil {
 			return nil, err
 		}
 
@@ -977,12 +970,23 @@ func (s *adminServiceImpl) BulkUpdateAccounts(ctx context.Context, input *BulkUp
 	if len(input.AccountIDs) == 0 {
 		return result, nil
 	}
+	// 目标分组里的管理分组（若有，按独占规则它是唯一目标分组），供下方逐账号平台校验。
+	var managedTarget *Group
 	if input.GroupIDs != nil {
+		if len(*input.GroupIDs) == 0 {
+			return nil, ErrAccountGroupRequired
+		}
 		if err := s.validateGroupIDsExist(ctx, *input.GroupIDs); err != nil {
 			return nil, err
 		}
-		if err := s.ValidateAccountGroupBindings(ctx, *input.GroupIDs); err != nil {
+		targetGroups, err := s.validateAccountGroupBindings(ctx, *input.GroupIDs)
+		if err != nil {
 			return nil, err
+		}
+		for _, group := range targetGroups {
+			if group.IsManaged() {
+				managedTarget = group
+			}
 		}
 	}
 	openAISettings, err := normalizeBulkOpenAISettings(input)
@@ -992,9 +996,9 @@ func (s *adminServiceImpl) BulkUpdateAccounts(ctx context.Context, input *BulkUp
 
 	needMixedChannelCheck := input.GroupIDs != nil && !input.SkipMixedChannelCheck
 
-	// 预取所有目标账号，供凭据守卫/代理守卫/混合渠道检查共用，避免多次 DB 查询。
+	// 预取所有目标账号，供凭据守卫/代理守卫/混合渠道检查/管理分组平台校验共用，避免多次 DB 查询。
 	var cachedTargets []*Account
-	if len(input.Credentials) > 0 || input.ProxyID != nil || needMixedChannelCheck || openAISettings.any() || input.ProbeEnabled != nil || input.RateMultiplier != nil {
+	if len(input.Credentials) > 0 || input.ProxyID != nil || needMixedChannelCheck || managedTarget != nil || openAISettings.any() || input.ProbeEnabled != nil || input.RateMultiplier != nil {
 		loaded, err := s.accountRepo.GetByIDs(ctx, input.AccountIDs)
 		if err != nil {
 			return nil, err
@@ -1050,7 +1054,7 @@ func (s *adminServiceImpl) BulkUpdateAccounts(ctx context.Context, input *BulkUp
 
 	// 预加载账号平台信息（混合渠道检查需要）。
 	platformByID := map[int64]string{}
-	if needMixedChannelCheck {
+	if needMixedChannelCheck || managedTarget != nil {
 		for _, account := range cachedTargets {
 			if account != nil {
 				platformByID[account.ID] = account.Platform
@@ -1067,6 +1071,15 @@ func (s *adminServiceImpl) BulkUpdateAccounts(ctx context.Context, input *BulkUp
 			}
 			if err := s.checkMixedChannelRisk(ctx, accountID, platform, *input.GroupIDs); err != nil {
 				return nil, err
+			}
+		}
+	}
+
+	// 管理分组只接收同平台账号：在任何写操作之前整体拒绝。
+	if managedTarget != nil {
+		for _, accountID := range input.AccountIDs {
+			if platform := platformByID[accountID]; platform != "" && platform != managedTarget.Platform {
+				return nil, ErrManagedGroupPlatformMismatch
 			}
 		}
 	}
@@ -1380,8 +1393,9 @@ func (s *adminServiceImpl) CreateShadow(ctx context.Context, parentID int64, opt
 			"parent account already has a spark shadow account")
 	}
 
-	// 3. 解析分组。未指定 GroupIDs 时:优先**继承母账号当前分组**(影子与母同路由域,母在自定义
-	// 组时该组的 spark 请求也能选到影子;G1 决策);母无分组再回落 openai-default(F4)。
+	// 3. 解析分组。未指定 GroupIDs 时**继承母账号当前分组**(影子与母同路由域,母在自定义
+	// 组时该组的 spark 请求也能选到影子;G1 决策)。账号必须归属分组:母账号无分组(存量未分组
+	// 账号)时要求显式指定,不再隐式回落 openai-default。
 	// 显式指定 GroupIDs 时,与 UpdateAccount 对齐先校验存在性(创建前),避免建出影子后再因无效组
 	// 失败而留下孤儿影子(一母一影唯一索引会挡住重试)——外审 C/P1。
 	groupIDs := opts.GroupIDs
@@ -1393,18 +1407,11 @@ func (s *adminServiceImpl) CreateShadow(ctx context.Context, parentID int64, opt
 		}
 	} else if len(parent.GroupIDs) > 0 {
 		groupIDs = append([]int64(nil), parent.GroupIDs...)
-	} else if s.groupRepo != nil {
-		defaultGroupName := PlatformOpenAI + "-default"
-		if groups, gerr := s.groupRepo.ListActiveByPlatform(ctx, PlatformOpenAI); gerr == nil {
-			for _, g := range groups {
-				if g.Name == defaultGroupName {
-					groupIDs = []int64{g.ID}
-					break
-				}
-			}
-		}
 	}
-	if err := s.ValidateAccountGroupBindings(ctx, groupIDs); err != nil {
+	if len(groupIDs) == 0 {
+		return nil, ErrAccountGroupRequired
+	}
+	if err := s.validateAccountGroupPolicy(ctx, PlatformOpenAI, groupIDs); err != nil {
 		return nil, err
 	}
 
@@ -1582,16 +1589,30 @@ func (s *adminServiceImpl) validateGroupIDsExist(ctx context.Context, groupIDs [
 // ValidateAccountGroupBindings is the shared fail-closed policy boundary for
 // every account path that accepts explicit group bindings.
 func (s *adminServiceImpl) ValidateAccountGroupBindings(ctx context.Context, groupIDs []int64) error {
-	if len(groupIDs) == 0 || s.cfg == nil || s.cfg.RunMode != config.RunModeSimple {
-		return nil
+	_, err := s.validateAccountGroupBindings(ctx, groupIDs)
+	return err
+}
+
+// validateAccountGroupBindings 校验一组待绑定分组并返回已加载的分组：
+//   - 精简模式：拒绝 composite 分组；
+//   - 任意模式：包含管理分组时它必须是唯一分组（组账号独占）。
+func (s *adminServiceImpl) validateAccountGroupBindings(ctx context.Context, groupIDs []int64) ([]*Group, error) {
+	if len(groupIDs) == 0 {
+		return nil, nil
 	}
+	simpleMode := s.cfg != nil && s.cfg.RunMode == config.RunModeSimple
 	if s.groupRepo == nil {
-		return errors.New("group repository not configured")
+		if simpleMode {
+			return nil, errors.New("group repository not configured")
+		}
+		return nil, nil
 	}
 	seen := make(map[int64]struct{}, len(groupIDs))
+	groups := make([]*Group, 0, len(groupIDs))
+	hasManaged := false
 	for _, groupID := range groupIDs {
 		if groupID <= 0 {
-			return fmt.Errorf("get group: %w", ErrGroupNotFound)
+			return nil, fmt.Errorf("get group: %w", ErrGroupNotFound)
 		}
 		if _, ok := seen[groupID]; ok {
 			continue
@@ -1599,10 +1620,32 @@ func (s *adminServiceImpl) ValidateAccountGroupBindings(ctx context.Context, gro
 		seen[groupID] = struct{}{}
 		group, err := s.groupRepo.GetByIDLite(ctx, groupID)
 		if err != nil {
-			return fmt.Errorf("get group: %w", err)
+			return nil, fmt.Errorf("get group: %w", err)
 		}
-		if !IsGroupBindableInSimpleMode(group) {
-			return infraerrors.BadRequest("SIMPLE_MODE_GROUP_NOT_BINDABLE", "composite groups cannot be bound in simple mode")
+		if simpleMode && !IsGroupBindableInSimpleMode(group) {
+			return nil, infraerrors.BadRequest("SIMPLE_MODE_GROUP_NOT_BINDABLE", "composite groups cannot be bound in simple mode")
+		}
+		if group.IsManaged() {
+			hasManaged = true
+		}
+		groups = append(groups, group)
+	}
+	if hasManaged && len(groups) > 1 {
+		return nil, ErrManagedGroupAccountExclusive
+	}
+	return groups, nil
+}
+
+// validateAccountGroupPolicy 在通用分组绑定校验之上，要求绑定管理分组的账号与分组同平台
+// （管理分组按平台调度，异平台账号放进去永远不会被选中）。
+func (s *adminServiceImpl) validateAccountGroupPolicy(ctx context.Context, accountPlatform string, groupIDs []int64) error {
+	groups, err := s.validateAccountGroupBindings(ctx, groupIDs)
+	if err != nil {
+		return err
+	}
+	for _, group := range groups {
+		if group.IsManaged() && group.Platform != accountPlatform {
+			return ErrManagedGroupPlatformMismatch
 		}
 	}
 	return nil

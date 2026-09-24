@@ -25,6 +25,9 @@ type sparkShadowRepoStub struct {
 	groupsOf map[int64][]int64 // accountID → []groupIDs
 }
 
+// sparkShadowTestGroupID 母账号默认所在分组：账号必须归属分组，影子默认继承母账号分组。
+const sparkShadowTestGroupID int64 = 501
+
 func newSparkShadowRepoStub() *sparkShadowRepoStub {
 	return &sparkShadowRepoStub{
 		nextID:   0,
@@ -127,7 +130,7 @@ func TestCreateShadow(t *testing.T) {
 	svc := &adminServiceImpl{accountRepo: repo}
 
 	proxyID := int64(7)
-	parent := &Account{
+	parent := &Account{GroupIDs: []int64{sparkShadowTestGroupID},
 		Name:     "p",
 		Platform: PlatformOpenAI,
 		Type:     AccountTypeOAuth,
@@ -171,7 +174,7 @@ func TestCreateShadowInheritsParentEffectiveOpenAILongContextBillingValue(t *tes
 		t.Run(tt.name, func(t *testing.T) {
 			repo := newSparkShadowRepoStub()
 			svc := &adminServiceImpl{accountRepo: repo}
-			parent := &Account{
+			parent := &Account{GroupIDs: []int64{sparkShadowTestGroupID},
 				Name:        "parent",
 				Platform:    PlatformOpenAI,
 				Type:        AccountTypeOAuth,
@@ -197,7 +200,7 @@ func TestCreateShadow_BindGroups(t *testing.T) {
 	repo := newSparkShadowRepoStub()
 	svc := &adminServiceImpl{accountRepo: repo}
 
-	parent := &Account{
+	parent := &Account{GroupIDs: []int64{sparkShadowTestGroupID},
 		Name:     "parent",
 		Platform: PlatformOpenAI,
 		Type:     AccountTypeOAuth,
@@ -233,7 +236,7 @@ func TestCreateShadow_InheritsParentConcurrency(t *testing.T) {
 	t.Run("unspecified_inherits_parent", func(t *testing.T) {
 		repo := newSparkShadowRepoStub()
 		svc := &adminServiceImpl{accountRepo: repo}
-		parent := &Account{
+		parent := &Account{GroupIDs: []int64{sparkShadowTestGroupID},
 			Name: "conc-parent", Platform: PlatformOpenAI, Type: AccountTypeOAuth,
 			Status: StatusActive, Concurrency: 3,
 			Credentials: map[string]any{"chatgpt_account_id": "org-c"},
@@ -249,7 +252,7 @@ func TestCreateShadow_InheritsParentConcurrency(t *testing.T) {
 	t.Run("explicit_positive_kept", func(t *testing.T) {
 		repo := newSparkShadowRepoStub()
 		svc := &adminServiceImpl{accountRepo: repo}
-		parent := &Account{
+		parent := &Account{GroupIDs: []int64{sparkShadowTestGroupID},
 			Name: "conc-parent2", Platform: PlatformOpenAI, Type: AccountTypeOAuth,
 			Status: StatusActive, Concurrency: 3,
 			Credentials: map[string]any{"chatgpt_account_id": "org-c2"},
@@ -271,7 +274,7 @@ func TestCreateShadow_InheritsParentPriorityWhenOmitted(t *testing.T) {
 	t.Run("unspecified_inherits_parent", func(t *testing.T) {
 		repo := newSparkShadowRepoStub()
 		svc := &adminServiceImpl{accountRepo: repo}
-		parent := &Account{
+		parent := &Account{GroupIDs: []int64{sparkShadowTestGroupID},
 			Name: "prio-parent", Platform: PlatformOpenAI, Type: AccountTypeOAuth,
 			Status: StatusActive, Priority: 30,
 			Credentials: map[string]any{"chatgpt_account_id": "org-p"},
@@ -288,7 +291,7 @@ func TestCreateShadow_InheritsParentPriorityWhenOmitted(t *testing.T) {
 	t.Run("explicit_positive_kept", func(t *testing.T) {
 		repo := newSparkShadowRepoStub()
 		svc := &adminServiceImpl{accountRepo: repo}
-		parent := &Account{
+		parent := &Account{GroupIDs: []int64{sparkShadowTestGroupID},
 			Name: "prio-parent2", Platform: PlatformOpenAI, Type: AccountTypeOAuth,
 			Status: StatusActive, Priority: 30,
 			Credentials: map[string]any{"chatgpt_account_id": "org-p2"},
@@ -326,7 +329,7 @@ func TestResolveCredentialAccount_RejectsParentShadow(t *testing.T) {
 	ctx := context.Background()
 	repo := newSparkShadowRepoStub()
 
-	grandparent := &Account{
+	grandparent := &Account{GroupIDs: []int64{sparkShadowTestGroupID},
 		Name: "gp", Platform: PlatformOpenAI, Type: AccountTypeOAuth, Status: StatusActive,
 		Credentials: map[string]any{"refresh_token": "RT"},
 	}
@@ -410,7 +413,7 @@ func TestResetAccountQuota_RejectsShadow(t *testing.T) {
 	ctx := context.Background()
 	repo := newSparkShadowRepoStub()
 	svc := &adminServiceImpl{accountRepo: repo}
-	parent := &Account{
+	parent := &Account{GroupIDs: []int64{sparkShadowTestGroupID},
 		Name: "rq-parent", Platform: PlatformOpenAI, Type: AccountTypeOAuth, Status: StatusActive,
 		Credentials: map[string]any{"chatgpt_account_id": "o"},
 	}
@@ -436,17 +439,22 @@ func (s *sparkShadowGroupRepoStub) ListActiveByPlatform(_ context.Context, _ str
 	return s.groups, nil
 }
 
-// TestCreateShadow_DefaultGroupBinding 验证外审 F4:未指定 group_ids 时
-// 影子回落绑定 openai-default 组(否则无组、组内路由选不到)。
-func TestCreateShadow_DefaultGroupBinding(t *testing.T) {
+func (s *sparkShadowGroupRepoStub) GetByIDLite(_ context.Context, id int64) (*Group, error) {
+	for i := range s.groups {
+		if s.groups[i].ID == id {
+			group := s.groups[i]
+			return &group, nil
+		}
+	}
+	return &Group{ID: id, Platform: PlatformOpenAI, Kind: GroupKindChannel}, nil
+}
+
+// TestCreateShadow_RequiresGroupForUngroupedParent 验证账号必须归属分组:母账号无分组(存量
+// 未分组账号)且未显式指定 group_ids 时拒绝创建,不再隐式回落 openai-default。
+func TestCreateShadow_RequiresGroupForUngroupedParent(t *testing.T) {
 	ctx := context.Background()
 	repo := newSparkShadowRepoStub()
-	groupRepo := &sparkShadowGroupRepoStub{
-		groups: []Group{
-			{ID: 99, Name: PlatformOpenAI + "-default"},
-			{ID: 7, Name: "some-other-group"},
-		},
-	}
+	groupRepo := &sparkShadowGroupRepoStub{groups: []Group{{ID: 99, Name: PlatformOpenAI + "-default"}}}
 	svc := &adminServiceImpl{accountRepo: repo, groupRepo: groupRepo}
 
 	parent := &Account{
@@ -455,9 +463,8 @@ func TestCreateShadow_DefaultGroupBinding(t *testing.T) {
 	}
 	require.NoError(t, repo.Create(ctx, parent))
 
-	shadow, err := svc.CreateShadow(ctx, parent.ID, ShadowOptions{Name: "grp-shadow"})
-	require.NoError(t, err)
-	require.Equal(t, []int64{99}, repo.groupsOf[shadow.ID], "未指定分组应回落绑定 openai-default(id=99)")
+	_, err := svc.CreateShadow(ctx, parent.ID, ShadowOptions{Name: "grp-shadow"})
+	require.ErrorIs(t, err, ErrAccountGroupRequired)
 }
 
 // TestCreateShadow_InheritsParentGroups 验证外审 G1:未指定 group_ids 时
@@ -487,7 +494,7 @@ func TestCreateShadow_RejectsShadowAsParent(t *testing.T) {
 	repo := newSparkShadowRepoStub()
 	svc := &adminServiceImpl{accountRepo: repo}
 
-	parent := &Account{
+	parent := &Account{GroupIDs: []int64{sparkShadowTestGroupID},
 		Name: "real-parent", Platform: PlatformOpenAI, Type: AccountTypeOAuth,
 		Status: StatusActive, Credentials: map[string]any{"chatgpt_account_id": "org-x"},
 	}
@@ -508,7 +515,7 @@ func TestCreateShadow_StructuredErrors(t *testing.T) {
 	t.Run("non_oauth_parent_400", func(t *testing.T) {
 		repo := newSparkShadowRepoStub()
 		svc := &adminServiceImpl{accountRepo: repo}
-		parent := &Account{Name: "apikey-parent", Platform: PlatformOpenAI, Type: AccountTypeAPIKey, Status: StatusActive}
+		parent := &Account{GroupIDs: []int64{sparkShadowTestGroupID}, Name: "apikey-parent", Platform: PlatformOpenAI, Type: AccountTypeAPIKey, Status: StatusActive}
 		require.NoError(t, repo.Create(ctx, parent))
 		_, err := svc.CreateShadow(ctx, parent.ID, ShadowOptions{Name: "s"})
 		require.Error(t, err)
@@ -518,7 +525,7 @@ func TestCreateShadow_StructuredErrors(t *testing.T) {
 	t.Run("duplicate_409", func(t *testing.T) {
 		repo := newSparkShadowRepoStub()
 		svc := &adminServiceImpl{accountRepo: repo}
-		parent := &Account{Name: "p", Platform: PlatformOpenAI, Type: AccountTypeOAuth, Status: StatusActive, Credentials: map[string]any{"chatgpt_account_id": "o"}}
+		parent := &Account{GroupIDs: []int64{sparkShadowTestGroupID}, Name: "p", Platform: PlatformOpenAI, Type: AccountTypeOAuth, Status: StatusActive, Credentials: map[string]any{"chatgpt_account_id": "o"}}
 		require.NoError(t, repo.Create(ctx, parent))
 		_, err := svc.CreateShadow(ctx, parent.ID, ShadowOptions{Name: "s1"})
 		require.NoError(t, err)
@@ -533,7 +540,7 @@ func TestUpdateAccount_RejectsTypeChangeOnShadow(t *testing.T) {
 	ctx := context.Background()
 	repo := newSparkShadowRepoStub()
 	svc := &adminServiceImpl{accountRepo: repo}
-	parent := &Account{
+	parent := &Account{GroupIDs: []int64{sparkShadowTestGroupID},
 		Name: "type-parent", Platform: PlatformOpenAI, Type: AccountTypeOAuth,
 		Status: StatusActive, Credentials: map[string]any{"chatgpt_account_id": "org-t"},
 	}
@@ -558,7 +565,7 @@ func TestBulkUpdateAccounts_RejectsCredentialWriteToShadow(t *testing.T) {
 	ctx := context.Background()
 	repo := newSparkShadowRepoStub()
 	svc := &adminServiceImpl{accountRepo: repo}
-	parent := &Account{
+	parent := &Account{GroupIDs: []int64{sparkShadowTestGroupID},
 		Name: "bulk-parent", Platform: PlatformOpenAI, Type: AccountTypeOAuth,
 		Status: StatusActive, Credentials: map[string]any{"chatgpt_account_id": "org-b", "access_token": "t"},
 	}
@@ -582,7 +589,7 @@ func TestDeleteAccount_CascadeToShadow(t *testing.T) {
 	repo := newSparkShadowRepoStub()
 	svc := &adminServiceImpl{accountRepo: repo}
 
-	parent := &Account{
+	parent := &Account{GroupIDs: []int64{sparkShadowTestGroupID},
 		Name:        "cascade-parent",
 		Platform:    PlatformOpenAI,
 		Type:        AccountTypeOAuth,
@@ -619,7 +626,7 @@ func TestUpdateAccount_PropagatesProxyToShadow(t *testing.T) {
 	svc := &adminServiceImpl{accountRepo: repo}
 
 	oldProxy := int64(7)
-	parent := &Account{
+	parent := &Account{GroupIDs: []int64{sparkShadowTestGroupID},
 		Name:        "proxy-parent",
 		Platform:    PlatformOpenAI,
 		Type:        AccountTypeOAuth,
@@ -654,7 +661,7 @@ func TestUpdateAccount_RejectsCredentialWriteToShadow(t *testing.T) {
 	repo := newSparkShadowRepoStub()
 	svc := &adminServiceImpl{accountRepo: repo}
 
-	parent := &Account{
+	parent := &Account{GroupIDs: []int64{sparkShadowTestGroupID},
 		Name:        "cred-parent",
 		Platform:    PlatformOpenAI,
 		Type:        AccountTypeOAuth,
@@ -697,7 +704,7 @@ func TestBulkUpdateAccounts_PropagatesProxyToShadow(t *testing.T) {
 	svc := &adminServiceImpl{accountRepo: repo}
 
 	oldProxy := int64(7)
-	parent := &Account{
+	parent := &Account{GroupIDs: []int64{sparkShadowTestGroupID},
 		Name:        "bulk-parent",
 		Platform:    PlatformOpenAI,
 		Type:        AccountTypeOAuth,
@@ -770,13 +777,20 @@ func (s *sparkShadowValidatingGroupRepoStub) ExistsByIDs(_ context.Context, ids 
 	return out, nil
 }
 
+func (s *sparkShadowValidatingGroupRepoStub) GetByIDLite(_ context.Context, id int64) (*Group, error) {
+	if !s.existing[id] {
+		return nil, ErrGroupNotFound
+	}
+	return &Group{ID: id, Platform: PlatformOpenAI, Kind: GroupKindChannel}, nil
+}
+
 // TestCreateShadow_DefaultsNameFromParent 验证外审 E/P2:空 name 不应 500,
 // 而是默认 "<母账号名> (Spark)"。
 func TestCreateShadow_DefaultsNameFromParent(t *testing.T) {
 	ctx := context.Background()
 	repo := newSparkShadowRepoStub()
 	svc := &adminServiceImpl{accountRepo: repo}
-	parent := &Account{
+	parent := &Account{GroupIDs: []int64{sparkShadowTestGroupID},
 		Name: "mum", Platform: PlatformOpenAI, Type: AccountTypeOAuth,
 		Status: StatusActive, Credentials: map[string]any{"chatgpt_account_id": "o"},
 	}
@@ -794,7 +808,7 @@ func TestCreateShadow_ConcurrentCreateReturns409(t *testing.T) {
 	base := newSparkShadowRepoStub()
 	repo := &raceCreateRepoStub{sparkShadowRepoStub: base}
 	svc := &adminServiceImpl{accountRepo: repo}
-	parent := &Account{
+	parent := &Account{GroupIDs: []int64{sparkShadowTestGroupID},
 		Name: "p", Platform: PlatformOpenAI, Type: AccountTypeOAuth,
 		Status: StatusActive, Credentials: map[string]any{"chatgpt_account_id": "o"},
 	}
@@ -812,7 +826,7 @@ func TestCreateShadow_InvalidGroupRejectedNoOrphan(t *testing.T) {
 	repo := newSparkShadowRepoStub()
 	groupRepo := &sparkShadowValidatingGroupRepoStub{existing: map[int64]bool{7: true}}
 	svc := &adminServiceImpl{accountRepo: repo, groupRepo: groupRepo}
-	parent := &Account{
+	parent := &Account{GroupIDs: []int64{sparkShadowTestGroupID},
 		Name: "p", Platform: PlatformOpenAI, Type: AccountTypeOAuth,
 		Status: StatusActive, Credentials: map[string]any{"chatgpt_account_id": "o"},
 	}
@@ -834,7 +848,7 @@ func TestCreateShadow_BindFailureRollsBackShadow(t *testing.T) {
 	repo := &bindFailRepoStub{sparkShadowRepoStub: base}
 	groupRepo := &sparkShadowValidatingGroupRepoStub{existing: map[int64]bool{7: true}}
 	svc := &adminServiceImpl{accountRepo: repo, groupRepo: groupRepo}
-	parent := &Account{
+	parent := &Account{GroupIDs: []int64{sparkShadowTestGroupID},
 		Name: "p", Platform: PlatformOpenAI, Type: AccountTypeOAuth,
 		Status: StatusActive, Credentials: map[string]any{"chatgpt_account_id": "o"},
 	}
@@ -854,7 +868,7 @@ func TestUpdateAccount_RejectsParentTypeChangeWithShadow(t *testing.T) {
 	ctx := context.Background()
 	repo := newSparkShadowRepoStub()
 	svc := &adminServiceImpl{accountRepo: repo}
-	parent := &Account{
+	parent := &Account{GroupIDs: []int64{sparkShadowTestGroupID},
 		Name: "p", Platform: PlatformOpenAI, Type: AccountTypeOAuth,
 		Status: StatusActive, Credentials: map[string]any{"chatgpt_account_id": "o"},
 	}
@@ -879,7 +893,7 @@ func TestUpdateAccount_IgnoresProxyChangeOnShadow(t *testing.T) {
 	repo := newSparkShadowRepoStub()
 	svc := &adminServiceImpl{accountRepo: repo}
 	parentProxy := int64(7)
-	parent := &Account{
+	parent := &Account{GroupIDs: []int64{sparkShadowTestGroupID},
 		Name: "p", Platform: PlatformOpenAI, Type: AccountTypeOAuth,
 		Status: StatusActive, ProxyID: &parentProxy,
 		Credentials: map[string]any{"chatgpt_account_id": "o"},
@@ -903,7 +917,7 @@ func TestUpdateAccount_ShadowAllowsModelMappingAndGroupUpdate(t *testing.T) {
 	groupRepo := &sparkShadowValidatingGroupRepoStub{existing: map[int64]bool{7: true}}
 	svc := &adminServiceImpl{accountRepo: repo, groupRepo: groupRepo}
 	parentID := int64(1)
-	parent := &Account{
+	parent := &Account{GroupIDs: []int64{sparkShadowTestGroupID},
 		ID:       parentID,
 		Name:     "p",
 		Platform: PlatformOpenAI,
@@ -1003,7 +1017,7 @@ func TestBulkUpdateAccounts_RejectsProxyChangeOnShadow(t *testing.T) {
 	repo := newSparkShadowRepoStub()
 	svc := &adminServiceImpl{accountRepo: repo}
 	parentProxy := int64(7)
-	parent := &Account{
+	parent := &Account{GroupIDs: []int64{sparkShadowTestGroupID},
 		Name: "p", Platform: PlatformOpenAI, Type: AccountTypeOAuth,
 		Status: StatusActive, ProxyID: &parentProxy,
 		Credentials: map[string]any{"chatgpt_account_id": "o"},

@@ -20,6 +20,7 @@ var (
 	ErrGroupManagementBadInput  = infraerrors.BadRequest("GROUP_MANAGEMENT_BAD_INPUT", "invalid group management request")
 	ErrAccountNotInGroup        = infraerrors.BadRequest("ACCOUNT_NOT_IN_GROUP", "account does not belong to this group")
 	ErrCannotDemoteSelf         = infraerrors.BadRequest("CANNOT_DEMOTE_SELF", "cannot demote yourself from admin")
+	ErrManagedGroupEnforcement  = infraerrors.BadRequest("MANAGED_GROUP_ENFORCEMENT_REQUIRED", "managed groups must keep enforcement enabled")
 )
 
 type GroupManagementOverview struct {
@@ -31,7 +32,9 @@ type GroupManagementOverview struct {
 }
 
 type GroupSettings struct {
-	GroupID        int64  `json:"group_id"`
+	GroupID int64 `json:"group_id"`
+	// Managed 只读：管理分组永远开启管控，不能关闭。
+	Managed        bool   `json:"managed"`
 	Enabled        bool   `json:"enabled"`
 	AllocationMode string `json:"allocation_mode"`
 	MaxConcurrent  int    `json:"max_concurrent"`
@@ -39,8 +42,11 @@ type GroupSettings struct {
 }
 
 type ManagedGroup struct {
-	ID             int64   `json:"id"`
-	Name           string  `json:"name"`
+	ID   int64  `json:"id"`
+	Name string `json:"name"`
+	// Kind 分组类型（channel / managed）；Category 管理分组分类（enterprise / team）。
+	Kind           string  `json:"kind"`
+	Category       string  `json:"category,omitempty"`
 	MemberCount    int64   `json:"member_count"`
 	AccountCount   int64   `json:"account_count"`
 	Manager        bool    `json:"manager"`
@@ -155,6 +161,15 @@ func (s *GroupManagementService) UpdateSettings(ctx context.Context, actorID int
 	}
 	if settings.MaxConcurrent <= 0 || settings.DailyLimit < 0 || (settings.AllocationMode != GroupAssignmentModeAuto && settings.AllocationMode != GroupAssignmentModeManual) {
 		return nil, ErrGroupManagementBadInput
+	}
+	if !settings.Enabled {
+		current, err := s.repo.GetSettings(ctx, settings.GroupID)
+		if err != nil {
+			return nil, err
+		}
+		if current.Managed {
+			return nil, ErrManagedGroupEnforcement
+		}
 	}
 	return s.repo.UpdateSettings(ctx, settings)
 }

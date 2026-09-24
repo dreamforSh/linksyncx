@@ -60,6 +60,12 @@ func TestMigrationsRunner_IsIdempotent_AndSchemaIsUpToDate(t *testing.T) {
 	requireColumn(t, tx, "groups", "force_openai_fast", "boolean", 0, false)
 	requireColumn(t, tx, "groups", "free_openai_fast", "boolean", 0, false)
 
+	// groups: 分组类型（渠道分组 / 管理分组）与管理分组分类（migration 242）。
+	requireColumn(t, tx, "groups", "kind", "character varying", 20, false)
+	requireColumnDefaultContains(t, tx, "groups", "kind", "channel")
+	requireColumn(t, tx, "groups", "category", "character varying", 20, true)
+	requireIndex(t, tx, "groups", "idx_groups_kind")
+
 	// api_keys: key length should be 128
 	requireColumn(t, tx, "api_keys", "key", "character varying", 128, false)
 

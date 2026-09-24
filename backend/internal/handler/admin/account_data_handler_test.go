@@ -259,8 +259,12 @@ func TestExportDataSelectedIDsOverrideFilters(t *testing.T) {
 	require.Equal(t, 0, adminSvc.lastListAccounts.calls)
 }
 
-func TestImportDataReusesProxyAndSkipsDefaultGroup(t *testing.T) {
+func TestImportDataReusesProxyAndBindsTargetGroupByPlatform(t *testing.T) {
 	router, adminSvc := setupAccountDataRouter()
+	adminSvc.groups = []service.Group{
+		{ID: 7, Name: "openai-pool", Platform: service.PlatformOpenAI, Status: service.StatusActive},
+		{ID: 8, Name: "claude-pool", Platform: service.PlatformAnthropic, Status: service.StatusActive},
+	}
 
 	adminSvc.proxies = []service.Proxy{
 		{
@@ -303,7 +307,7 @@ func TestImportDataReusesProxyAndSkipsDefaultGroup(t *testing.T) {
 				},
 			},
 		},
-		"skip_default_group_bind": true,
+		"group_ids": []int64{7, 8},
 	}
 
 	body, _ := json.Marshal(dataPayload)
@@ -315,5 +319,54 @@ func TestImportDataReusesProxyAndSkipsDefaultGroup(t *testing.T) {
 
 	require.Len(t, adminSvc.createdProxies, 0)
 	require.Len(t, adminSvc.createdAccounts, 1)
-	require.True(t, adminSvc.createdAccounts[0].SkipDefaultGroupBind)
+	require.Equal(t, []int64{7}, adminSvc.createdAccounts[0].GroupIDs)
+}
+
+func TestImportDataRequiresTargetGroups(t *testing.T) {
+	router, adminSvc := setupAccountDataRouter()
+
+	body, _ := json.Marshal(map[string]any{
+		"data": map[string]any{
+			"type":    dataType,
+			"version": dataVersion,
+			"proxies": []map[string]any{},
+			"accounts": []map[string]any{
+				{"name": "acc", "platform": service.PlatformOpenAI, "type": service.AccountTypeOAuth, "credentials": map[string]any{"token": "x"}},
+			},
+		},
+	})
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/admin/accounts/data", bytes.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	router.ServeHTTP(rec, req)
+
+	require.Equal(t, http.StatusBadRequest, rec.Code)
+	require.Contains(t, rec.Body.String(), "ACCOUNT_GROUP_REQUIRED")
+	require.Empty(t, adminSvc.createdAccounts)
+}
+
+func TestImportDataSkipsAccountsWithoutMatchingPlatformGroup(t *testing.T) {
+	router, adminSvc := setupAccountDataRouter()
+	adminSvc.groups = []service.Group{{ID: 8, Name: "claude-pool", Platform: service.PlatformAnthropic, Status: service.StatusActive}}
+
+	body, _ := json.Marshal(map[string]any{
+		"data": map[string]any{
+			"type":    dataType,
+			"version": dataVersion,
+			"proxies": []map[string]any{},
+			"accounts": []map[string]any{
+				{"name": "acc", "platform": service.PlatformOpenAI, "type": service.AccountTypeOAuth, "credentials": map[string]any{"token": "x"}},
+			},
+		},
+		"group_ids": []int64{8},
+	})
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/admin/accounts/data", bytes.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	router.ServeHTTP(rec, req)
+
+	require.Equal(t, http.StatusOK, rec.Code)
+	require.Empty(t, adminSvc.createdAccounts)
+	require.Contains(t, rec.Body.String(), `"account_failed":1`)
+	require.Contains(t, rec.Body.String(), "no target group selected for platform")
 }

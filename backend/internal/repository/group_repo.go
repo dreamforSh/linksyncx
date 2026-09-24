@@ -77,11 +77,44 @@ func newGroupRepositoryWithSQL(client *dbent.Client, sqlq sqlExecutor) *groupRep
 }
 
 func (r *groupRepository) Create(ctx context.Context, groupIn *service.Group) error {
-	if err := createGroupRecord(ctx, r.client, groupIn); err != nil {
+	if groupIn.IsManaged() {
+		if err := r.createManagedGroup(ctx, groupIn); err != nil {
+			return err
+		}
+	} else if err := createGroupRecord(ctx, r.client, groupIn); err != nil {
 		return err
 	}
 	if err := enqueueSchedulerOutbox(ctx, r.sql, service.SchedulerOutboxEventGroupChanged, nil, &groupIn.ID, nil); err != nil {
 		logger.LegacyPrintf("repository.group", "[SchedulerOutbox] enqueue group create failed: group=%d err=%v", groupIn.ID, err)
+	}
+	return nil
+}
+
+// createManagedGroup 在同一事务里写入分组与强制开启的管控设置（默认手动分配），
+// 避免出现「管理分组已存在、网关却未按成员资格准入」的窗口。
+func (r *groupRepository) createManagedGroup(ctx context.Context, groupIn *service.Group) error {
+	tx, err := r.client.Tx(ctx)
+	if err != nil && !errors.Is(err, dbent.ErrTxStarted) {
+		return err
+	}
+	txClient := r.client
+	if err == nil {
+		defer func() { _ = tx.Rollback() }()
+		txClient = tx.Client()
+	}
+	if err := createGroupRecord(ctx, txClient, groupIn); err != nil {
+		return err
+	}
+	if _, err := txClient.ExecContext(ctx,
+		`INSERT INTO group_management_settings (group_id, enabled, allocation_mode)
+		 VALUES ($1, TRUE, 'manual')
+		 ON CONFLICT (group_id) DO UPDATE SET enabled = TRUE, updated_at = NOW()`,
+		groupIn.ID,
+	); err != nil {
+		return fmt.Errorf("init managed group settings: %w", err)
+	}
+	if tx != nil {
+		return tx.Commit()
 	}
 	return nil
 }
@@ -157,6 +190,10 @@ func createGroupRecord(ctx context.Context, client *dbent.Client, groupIn *servi
 		SetProfitSafetyBuffer(groupIn.ProfitSafetyBuffer)
 	if groupIn.DuplicateOperationID != "" {
 		builder = builder.SetDuplicateOperationID(groupIn.DuplicateOperationID)
+	}
+	builder = builder.SetKind(service.NormalizeGroupKind(groupIn.Kind))
+	if groupIn.Category != "" {
+		builder = builder.SetCategory(groupIn.Category)
 	}
 
 	// 设置模型路由配置
@@ -430,6 +467,13 @@ func (r *groupRepository) Update(ctx context.Context, groupIn *service.Group) er
 
 	// 处理 SupportedModelScopes（始终设置，空数组表示不限制）
 	builder = builder.SetSupportedModelScopes(groupIn.SupportedModelScopes)
+
+	// kind 在 schema 中不可变；分类只对管理分组有意义，渠道分组始终清空。
+	if groupIn.Category != "" {
+		builder = builder.SetCategory(groupIn.Category)
+	} else {
+		builder = builder.ClearCategory()
+	}
 
 	updated, err := builder.Save(ctx)
 	if err != nil {

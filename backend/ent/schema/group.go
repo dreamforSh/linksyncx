@@ -68,6 +68,17 @@ func (Group) Fields() []ent.Field {
 		field.String("status").
 			MaxLen(20).
 			Default(domain.StatusActive),
+		// 分组类型与分类（added by migration 242）
+		field.String("kind").
+			MaxLen(20).
+			Default(domain.GroupKindChannel).
+			Immutable().
+			Comment("分组类型：channel 渠道分组 / managed 管理分组；创建后不可修改"),
+		field.String("category").
+			MaxLen(20).
+			Optional().
+			Nillable().
+			Comment("管理分组分类：enterprise 企业 / team 团队；渠道分组为空"),
 		field.String("duplicate_operation_id").
 			MaxLen(64).
 			Optional().
@@ -330,6 +341,7 @@ func (Group) Indexes() []ent.Index {
 		index.Fields("platform"),
 		index.Fields("subscription_type"),
 		index.Fields("is_exclusive"),
+		index.Fields("kind"),
 		index.Fields("deleted_at"),
 		index.Fields("sort_order"),
 		index.Fields("duplicate_operation_id").

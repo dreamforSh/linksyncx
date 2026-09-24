@@ -48,6 +48,15 @@ func (r *crsLongContextAccountRepo) Create(_ context.Context, account *Account) 
 	return nil
 }
 
+func (r *crsLongContextAccountRepo) BindGroups(_ context.Context, accountID int64, groupIDs []int64) error {
+	for _, account := range r.accounts {
+		if account.ID == accountID {
+			account.GroupIDs = append([]int64(nil), groupIDs...)
+		}
+	}
+	return nil
+}
+
 func (r *crsLongContextAccountRepo) Update(_ context.Context, account *Account) error {
 	crsID, _ := account.Extra["crs_account_id"].(string)
 	r.accounts[crsID] = account
@@ -163,6 +172,8 @@ func runCRSOpenAILongContextSync(t *testing.T, repo AccountRepository, source cr
 		BaseURL:  server.URL,
 		Username: "admin",
 		Password: "password",
+		// 新建账号必须归属分组：为 OpenAI 账号提供目标分组。
+		GroupIDsByPlatform: map[string][]int64{PlatformOpenAI: {1}},
 	})
 	require.NoError(t, err)
 	return result
