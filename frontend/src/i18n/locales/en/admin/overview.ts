@@ -741,6 +741,7 @@ export default {
       totalRecharged: 'Total Recharged',
       roles: {
         admin: 'Admin',
+        group_manager: 'Group manager',
         user: 'User'
       },
       // Settings Dropdowns

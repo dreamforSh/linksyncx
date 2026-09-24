@@ -35,15 +35,17 @@ func newGatewayRoutesTestRouterWithConfig(cfg *config.Config, platform ...string
 	RegisterGatewayRoutes(
 		router,
 		&handler.Handlers{
-			Gateway:       &handler.GatewayHandler{},
-			OpenAIGateway: &handler.OpenAIGatewayHandler{},
-			AsyncImage:    handler.NewAsyncImageHandler(nil, nil),
+			Gateway:         &handler.GatewayHandler{},
+			GroupManagement: unmanagedGatewayTestHandler(),
+			OpenAIGateway:   &handler.OpenAIGatewayHandler{},
+			AsyncImage:      handler.NewAsyncImageHandler(nil, nil),
 		},
 		servermiddleware.APIKeyAuthMiddleware(func(c *gin.Context) {
 			groupID := int64(1)
 			c.Set(string(servermiddleware.ContextKeyAPIKey), &service.APIKey{
 				GroupID: &groupID,
 				Group:   &service.Group{Platform: groupPlatform},
+				User:    &service.User{ID: 1, Role: service.RoleUser},
 			})
 			c.Next()
 		}),

@@ -25,6 +25,21 @@ func RegisterUserRoutes(
 	// 用户管理面变更类操作入审计（含 TOTP 启用/禁用、step-up 验证、密码修改等安全事件）
 	authenticated.Use(gin.HandlerFunc(auditLog))
 	{
+		groupManagement := authenticated.Group("/group-management")
+		{
+			me := groupManagement.Group("/me")
+			me.GET("/overview", h.GroupManagement.Overview)
+			groups := groupManagement.Group("/groups/:id")
+			groups.GET("/members", h.GroupManagement.Members)
+			groups.GET("/accounts", h.GroupManagement.Accounts)
+			groups.POST("/members", h.GroupManagement.AddMember)
+			groups.DELETE("/members/:user_id", h.GroupManagement.RemoveMember)
+			groups.GET("/settings", h.GroupManagement.GetSettings)
+			groups.PUT("/settings", h.GroupManagement.Settings)
+			groups.PUT("/members/:user_id/limit", h.GroupManagement.MemberLimit)
+			groups.PUT("/members/:user_id/accounts", h.GroupManagement.MemberAccounts)
+			groups.DELETE("/members/:user_id/accounts/:account_id", h.GroupManagement.RevokeAccount)
+		}
 		// 用户接口
 		user := authenticated.Group("/user")
 		{
