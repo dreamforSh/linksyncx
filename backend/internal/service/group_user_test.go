@@ -16,9 +16,11 @@ const (
 type groupUserMgmtRepoStub struct {
 	GroupManagementRepository
 	managed       bool
+	managedType   string
 	allowed       bool
 	legacyAdded   []int64
 	legacyRemoved []int64
+	members       []GroupMembership
 }
 
 func (s *groupUserMgmtRepoStub) CanAccessGroup(context.Context, int64, string, int64) (bool, error) {
@@ -26,10 +28,13 @@ func (s *groupUserMgmtRepoStub) CanAccessGroup(context.Context, int64, string, i
 }
 
 func (s *groupUserMgmtRepoStub) GetSettings(_ context.Context, groupID int64) (*GroupSettings, error) {
-	return &GroupSettings{GroupID: groupID, Managed: s.managed, Enabled: true, AllocationMode: GroupAssignmentModeManual, MaxConcurrent: 1}, nil
+	return &GroupSettings{GroupID: groupID, Managed: s.managed, ManagedType: s.managedType, Enabled: true, AllocationMode: GroupAssignmentModeManual, MaxConcurrent: 1}, nil
 }
 
 func (s *groupUserMgmtRepoStub) ListMembers(_ context.Context, groupID int64, userID *int64) ([]GroupMembership, error) {
+	if userID == nil {
+		return append([]GroupMembership(nil), s.members...), nil
+	}
 	return []GroupMembership{{GroupID: groupID, UserID: *userID, Owned: true, Status: StatusActive}}, nil
 }
 
@@ -64,6 +69,10 @@ type groupUserRepoStub struct {
 	records         []RedeemCode
 	categories      map[int64]string
 	lockedUsers     [][]int64
+	// 邮箱邀请
+	invitees     map[string]*GroupInvitee
+	invitations  []*GroupInvitation
+	pendingCount int64
 }
 
 func newGroupUserRepoStub() *groupUserRepoStub {
@@ -72,6 +81,7 @@ func newGroupUserRepoStub() *groupUserRepoStub {
 		ownedByManager: map[int64]bool{},
 		statusChanges:  map[int64]string{},
 		categories:     map[int64]string{},
+		invitees:       map[string]*GroupInvitee{},
 	}
 }
 
@@ -467,7 +477,12 @@ func TestAddMemberManagedGroupSyncsAllowedGroups(t *testing.T) {
 
 func TestAddMemberChannelGroupKeepsLegacyBehavior(t *testing.T) {
 	f := newGroupUserFixture(false)
+	// 组管理员看不到用户 ID：渠道分组也只能按邮箱邀请
 	_, err := f.svc.AddMember(context.Background(), testManagerID, RoleGroupManager, testManagedGroupID, 11)
+	require.ErrorIs(t, err, ErrGroupInviteRequired)
+	require.Empty(t, f.mgmt.legacyAdded)
+
+	_, err = f.svc.AddMember(context.Background(), 1, RoleAdmin, testManagedGroupID, 11)
 	require.NoError(t, err)
 	require.Equal(t, []int64{11}, f.mgmt.legacyAdded)
 	require.Empty(t, f.repo.inserted)

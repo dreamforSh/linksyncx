@@ -218,6 +218,20 @@ func (_c *GroupCreate) SetNillableCategory(v *string) *GroupCreate {
 	return _c
 }
 
+// SetManagedType sets the "managed_type" field.
+func (_c *GroupCreate) SetManagedType(v string) *GroupCreate {
+	_c.mutation.SetManagedType(v)
+	return _c
+}
+
+// SetNillableManagedType sets the "managed_type" field if the given value is not nil.
+func (_c *GroupCreate) SetNillableManagedType(v *string) *GroupCreate {
+	if v != nil {
+		_c.SetManagedType(*v)
+	}
+	return _c
+}
+
 // SetDuplicateOperationID sets the "duplicate_operation_id" field.
 func (_c *GroupCreate) SetDuplicateOperationID(v string) *GroupCreate {
 	_c.mutation.SetDuplicateOperationID(v)
@@ -1311,6 +1325,11 @@ func (_c *GroupCreate) check() error {
 			return &ValidationError{Name: "category", err: fmt.Errorf(`ent: validator failed for field "Group.category": %w`, err)}
 		}
 	}
+	if v, ok := _c.mutation.ManagedType(); ok {
+		if err := group.ManagedTypeValidator(v); err != nil {
+			return &ValidationError{Name: "managed_type", err: fmt.Errorf(`ent: validator failed for field "Group.managed_type": %w`, err)}
+		}
+	}
 	if v, ok := _c.mutation.DuplicateOperationID(); ok {
 		if err := group.DuplicateOperationIDValidator(v); err != nil {
 			return &ValidationError{Name: "duplicate_operation_id", err: fmt.Errorf(`ent: validator failed for field "Group.duplicate_operation_id": %w`, err)}
@@ -1545,6 +1564,10 @@ func (_c *GroupCreate) createSpec() (*Group, *sqlgraph.CreateSpec) {
 	if value, ok := _c.mutation.Category(); ok {
 		_spec.SetField(group.FieldCategory, field.TypeString, value)
 		_node.Category = &value
+	}
+	if value, ok := _c.mutation.ManagedType(); ok {
+		_spec.SetField(group.FieldManagedType, field.TypeString, value)
+		_node.ManagedType = &value
 	}
 	if value, ok := _c.mutation.DuplicateOperationID(); ok {
 		_spec.SetField(group.FieldDuplicateOperationID, field.TypeString, value)
@@ -2089,6 +2112,24 @@ func (u *GroupUpsert) UpdateCategory() *GroupUpsert {
 // ClearCategory clears the value of the "category" field.
 func (u *GroupUpsert) ClearCategory() *GroupUpsert {
 	u.SetNull(group.FieldCategory)
+	return u
+}
+
+// SetManagedType sets the "managed_type" field.
+func (u *GroupUpsert) SetManagedType(v string) *GroupUpsert {
+	u.Set(group.FieldManagedType, v)
+	return u
+}
+
+// UpdateManagedType sets the "managed_type" field to the value that was provided on create.
+func (u *GroupUpsert) UpdateManagedType() *GroupUpsert {
+	u.SetExcluded(group.FieldManagedType)
+	return u
+}
+
+// ClearManagedType clears the value of the "managed_type" field.
+func (u *GroupUpsert) ClearManagedType() *GroupUpsert {
+	u.SetNull(group.FieldManagedType)
 	return u
 }
 
@@ -3243,6 +3284,27 @@ func (u *GroupUpsertOne) UpdateCategory() *GroupUpsertOne {
 func (u *GroupUpsertOne) ClearCategory() *GroupUpsertOne {
 	return u.Update(func(s *GroupUpsert) {
 		s.ClearCategory()
+	})
+}
+
+// SetManagedType sets the "managed_type" field.
+func (u *GroupUpsertOne) SetManagedType(v string) *GroupUpsertOne {
+	return u.Update(func(s *GroupUpsert) {
+		s.SetManagedType(v)
+	})
+}
+
+// UpdateManagedType sets the "managed_type" field to the value that was provided on create.
+func (u *GroupUpsertOne) UpdateManagedType() *GroupUpsertOne {
+	return u.Update(func(s *GroupUpsert) {
+		s.UpdateManagedType()
+	})
+}
+
+// ClearManagedType clears the value of the "managed_type" field.
+func (u *GroupUpsertOne) ClearManagedType() *GroupUpsertOne {
+	return u.Update(func(s *GroupUpsert) {
+		s.ClearManagedType()
 	})
 }
 
@@ -4713,6 +4775,27 @@ func (u *GroupUpsertBulk) UpdateCategory() *GroupUpsertBulk {
 func (u *GroupUpsertBulk) ClearCategory() *GroupUpsertBulk {
 	return u.Update(func(s *GroupUpsert) {
 		s.ClearCategory()
+	})
+}
+
+// SetManagedType sets the "managed_type" field.
+func (u *GroupUpsertBulk) SetManagedType(v string) *GroupUpsertBulk {
+	return u.Update(func(s *GroupUpsert) {
+		s.SetManagedType(v)
+	})
+}
+
+// UpdateManagedType sets the "managed_type" field to the value that was provided on create.
+func (u *GroupUpsertBulk) UpdateManagedType() *GroupUpsertBulk {
+	return u.Update(func(s *GroupUpsert) {
+		s.UpdateManagedType()
+	})
+}
+
+// ClearManagedType clears the value of the "managed_type" field.
+func (u *GroupUpsertBulk) ClearManagedType() *GroupUpsertBulk {
+	return u.Update(func(s *GroupUpsert) {
+		s.ClearManagedType()
 	})
 }
 

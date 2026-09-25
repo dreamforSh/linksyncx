@@ -31,6 +31,28 @@ describe('group management summary store', () => {
     expect(getSummary).toHaveBeenCalledTimes(3)
   })
 
+  it('refreshes the cached summary after it expires', async () => {
+    vi.useFakeTimers()
+    try {
+      getSummary.mockResolvedValue({ role: 'user', managed_group_count: 0, membership_count: 1 })
+      const store = useGroupManagementStore()
+      await store.ensureSummary(7)
+
+      // 分组被删除后，下一次切页超过有效期即重新拉取
+      getSummary.mockResolvedValue({ role: 'user', managed_group_count: 0, membership_count: 0 })
+      vi.advanceTimersByTime(30_000)
+      await store.ensureSummary(7)
+      expect(store.summary?.membership_count).toBe(1)
+
+      vi.advanceTimersByTime(31_000)
+      await store.ensureSummary(7)
+      expect(getSummary).toHaveBeenCalledTimes(2)
+      expect(store.summary?.membership_count).toBe(0)
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
   it('keeps the entry hidden when the summary cannot be loaded', async () => {
     getSummary.mockRejectedValue(new Error('offline'))
     const store = useGroupManagementStore()

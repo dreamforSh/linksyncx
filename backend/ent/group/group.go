@@ -44,6 +44,8 @@ const (
 	FieldKind = "kind"
 	// FieldCategory holds the string denoting the category field in the database.
 	FieldCategory = "category"
+	// FieldManagedType holds the string denoting the managed_type field in the database.
+	FieldManagedType = "managed_type"
 	// FieldDuplicateOperationID holds the string denoting the duplicate_operation_id field in the database.
 	FieldDuplicateOperationID = "duplicate_operation_id"
 	// FieldPlatform holds the string denoting the platform field in the database.
@@ -241,6 +243,7 @@ var Columns = []string{
 	FieldStatus,
 	FieldKind,
 	FieldCategory,
+	FieldManagedType,
 	FieldDuplicateOperationID,
 	FieldPlatform,
 	FieldSubscriptionType,
@@ -358,6 +361,8 @@ var (
 	KindValidator func(string) error
 	// CategoryValidator is a validator for the "category" field. It is called by the builders before save.
 	CategoryValidator func(string) error
+	// ManagedTypeValidator is a validator for the "managed_type" field. It is called by the builders before save.
+	ManagedTypeValidator func(string) error
 	// DuplicateOperationIDValidator is a validator for the "duplicate_operation_id" field. It is called by the builders before save.
 	DuplicateOperationIDValidator func(string) error
 	// DefaultPlatform holds the default value on creation for the "platform" field.
@@ -524,6 +529,11 @@ func ByKind(opts ...sql.OrderTermOption) OrderOption {
 // ByCategory orders the results by the category field.
 func ByCategory(opts ...sql.OrderTermOption) OrderOption {
 	return sql.OrderByField(FieldCategory, opts...).ToFunc()
+}
+
+// ByManagedType orders the results by the managed_type field.
+func ByManagedType(opts ...sql.OrderTermOption) OrderOption {
+	return sql.OrderByField(FieldManagedType, opts...).ToFunc()
 }
 
 // ByDuplicateOperationID orders the results by the duplicate_operation_id field.

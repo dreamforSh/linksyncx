@@ -79,6 +79,12 @@ func (Group) Fields() []ent.Field {
 			Optional().
 			Nillable().
 			Comment("管理分组分类：enterprise 企业 / team 团队；渠道分组为空"),
+		// 管理分组类型（added by migration 245）
+		field.String("managed_type").
+			MaxLen(20).
+			Optional().
+			Nillable().
+			Comment("管理分组类型：quota 额度组 / subscription 订阅组；渠道分组为空"),
 		field.String("duplicate_operation_id").
 			MaxLen(64).
 			Optional().

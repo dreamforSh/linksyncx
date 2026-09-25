@@ -229,6 +229,26 @@ func (_u *GroupUpdate) ClearCategory() *GroupUpdate {
 	return _u
 }
 
+// SetManagedType sets the "managed_type" field.
+func (_u *GroupUpdate) SetManagedType(v string) *GroupUpdate {
+	_u.mutation.SetManagedType(v)
+	return _u
+}
+
+// SetNillableManagedType sets the "managed_type" field if the given value is not nil.
+func (_u *GroupUpdate) SetNillableManagedType(v *string) *GroupUpdate {
+	if v != nil {
+		_u.SetManagedType(*v)
+	}
+	return _u
+}
+
+// ClearManagedType clears the value of the "managed_type" field.
+func (_u *GroupUpdate) ClearManagedType() *GroupUpdate {
+	_u.mutation.ClearManagedType()
+	return _u
+}
+
 // SetPlatform sets the "platform" field.
 func (_u *GroupUpdate) SetPlatform(v string) *GroupUpdate {
 	_u.mutation.SetPlatform(v)
@@ -1528,6 +1548,11 @@ func (_u *GroupUpdate) check() error {
 			return &ValidationError{Name: "category", err: fmt.Errorf(`ent: validator failed for field "Group.category": %w`, err)}
 		}
 	}
+	if v, ok := _u.mutation.ManagedType(); ok {
+		if err := group.ManagedTypeValidator(v); err != nil {
+			return &ValidationError{Name: "managed_type", err: fmt.Errorf(`ent: validator failed for field "Group.managed_type": %w`, err)}
+		}
+	}
 	if v, ok := _u.mutation.Platform(); ok {
 		if err := group.PlatformValidator(v); err != nil {
 			return &ValidationError{Name: "platform", err: fmt.Errorf(`ent: validator failed for field "Group.platform": %w`, err)}
@@ -1638,6 +1663,12 @@ func (_u *GroupUpdate) sqlSave(ctx context.Context) (_node int, err error) {
 	}
 	if _u.mutation.CategoryCleared() {
 		_spec.ClearField(group.FieldCategory, field.TypeString)
+	}
+	if value, ok := _u.mutation.ManagedType(); ok {
+		_spec.SetField(group.FieldManagedType, field.TypeString, value)
+	}
+	if _u.mutation.ManagedTypeCleared() {
+		_spec.ClearField(group.FieldManagedType, field.TypeString)
 	}
 	if _u.mutation.DuplicateOperationIDCleared() {
 		_spec.ClearField(group.FieldDuplicateOperationID, field.TypeString)
@@ -2451,6 +2482,26 @@ func (_u *GroupUpdateOne) SetNillableCategory(v *string) *GroupUpdateOne {
 // ClearCategory clears the value of the "category" field.
 func (_u *GroupUpdateOne) ClearCategory() *GroupUpdateOne {
 	_u.mutation.ClearCategory()
+	return _u
+}
+
+// SetManagedType sets the "managed_type" field.
+func (_u *GroupUpdateOne) SetManagedType(v string) *GroupUpdateOne {
+	_u.mutation.SetManagedType(v)
+	return _u
+}
+
+// SetNillableManagedType sets the "managed_type" field if the given value is not nil.
+func (_u *GroupUpdateOne) SetNillableManagedType(v *string) *GroupUpdateOne {
+	if v != nil {
+		_u.SetManagedType(*v)
+	}
+	return _u
+}
+
+// ClearManagedType clears the value of the "managed_type" field.
+func (_u *GroupUpdateOne) ClearManagedType() *GroupUpdateOne {
+	_u.mutation.ClearManagedType()
 	return _u
 }
 
@@ -3766,6 +3817,11 @@ func (_u *GroupUpdateOne) check() error {
 			return &ValidationError{Name: "category", err: fmt.Errorf(`ent: validator failed for field "Group.category": %w`, err)}
 		}
 	}
+	if v, ok := _u.mutation.ManagedType(); ok {
+		if err := group.ManagedTypeValidator(v); err != nil {
+			return &ValidationError{Name: "managed_type", err: fmt.Errorf(`ent: validator failed for field "Group.managed_type": %w`, err)}
+		}
+	}
 	if v, ok := _u.mutation.Platform(); ok {
 		if err := group.PlatformValidator(v); err != nil {
 			return &ValidationError{Name: "platform", err: fmt.Errorf(`ent: validator failed for field "Group.platform": %w`, err)}
@@ -3893,6 +3949,12 @@ func (_u *GroupUpdateOne) sqlSave(ctx context.Context) (_node *Group, err error)
 	}
 	if _u.mutation.CategoryCleared() {
 		_spec.ClearField(group.FieldCategory, field.TypeString)
+	}
+	if value, ok := _u.mutation.ManagedType(); ok {
+		_spec.SetField(group.FieldManagedType, field.TypeString, value)
+	}
+	if _u.mutation.ManagedTypeCleared() {
+		_spec.ClearField(group.FieldManagedType, field.TypeString)
 	}
 	if _u.mutation.DuplicateOperationIDCleared() {
 		_spec.ClearField(group.FieldDuplicateOperationID, field.TypeString)

@@ -48,6 +48,8 @@ type Group struct {
 	Kind string `json:"kind,omitempty"`
 	// 管理分组分类：enterprise 企业 / team 团队；渠道分组为空
 	Category *string `json:"category,omitempty"`
+	// 管理分组类型：quota 额度组 / subscription 订阅组；渠道分组为空
+	ManagedType *string `json:"managed_type,omitempty"`
 	// 内部幂等恢复标识，不对 API 暴露
 	DuplicateOperationID *string `json:"duplicate_operation_id,omitempty"`
 	// Platform holds the value of the "platform" field.
@@ -270,7 +272,7 @@ func (*Group) scanValues(columns []string) ([]any, error) {
 			values[i] = new(sql.NullFloat64)
 		case group.FieldID, group.FieldDefaultValidityDays, group.FieldFallbackGroupID, group.FieldFallbackGroupIDOnInvalidRequest, group.FieldSortOrder, group.FieldRpmLimit:
 			values[i] = new(sql.NullInt64)
-		case group.FieldName, group.FieldDescription, group.FieldPeakStart, group.FieldPeakEnd, group.FieldStatus, group.FieldKind, group.FieldCategory, group.FieldDuplicateOperationID, group.FieldPlatform, group.FieldSubscriptionType, group.FieldDefaultMappedModel, group.FieldMaxReasoningEffort, group.FieldMaxReasoningEffortOverLimit:
+		case group.FieldName, group.FieldDescription, group.FieldPeakStart, group.FieldPeakEnd, group.FieldStatus, group.FieldKind, group.FieldCategory, group.FieldManagedType, group.FieldDuplicateOperationID, group.FieldPlatform, group.FieldSubscriptionType, group.FieldDefaultMappedModel, group.FieldMaxReasoningEffort, group.FieldMaxReasoningEffortOverLimit:
 			values[i] = new(sql.NullString)
 		case group.FieldCreatedAt, group.FieldUpdatedAt, group.FieldDeletedAt:
 			values[i] = new(sql.NullTime)
@@ -381,6 +383,13 @@ func (_m *Group) assignValues(columns []string, values []any) error {
 			} else if value.Valid {
 				_m.Category = new(string)
 				*_m.Category = value.String
+			}
+		case group.FieldManagedType:
+			if value, ok := values[i].(*sql.NullString); !ok {
+				return fmt.Errorf("unexpected type %T for field managed_type", values[i])
+			} else if value.Valid {
+				_m.ManagedType = new(string)
+				*_m.ManagedType = value.String
 			}
 		case group.FieldDuplicateOperationID:
 			if value, ok := values[i].(*sql.NullString); !ok {
@@ -860,6 +869,11 @@ func (_m *Group) String() string {
 	builder.WriteString(", ")
 	if v := _m.Category; v != nil {
 		builder.WriteString("category=")
+		builder.WriteString(*v)
+	}
+	builder.WriteString(", ")
+	if v := _m.ManagedType; v != nil {
+		builder.WriteString("managed_type=")
 		builder.WriteString(*v)
 	}
 	builder.WriteString(", ")

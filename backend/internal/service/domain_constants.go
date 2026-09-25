@@ -205,6 +205,9 @@ const (
 	GroupKindManaged        = domain.GroupKindManaged
 	GroupCategoryEnterprise = domain.GroupCategoryEnterprise
 	GroupCategoryTeam       = domain.GroupCategoryTeam
+
+	ManagedGroupTypeQuota        = domain.ManagedGroupTypeQuota
+	ManagedGroupTypeSubscription = domain.ManagedGroupTypeSubscription
 )
 
 // Subscription status constants

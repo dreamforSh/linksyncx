@@ -239,6 +239,7 @@ type CreateGroupInput struct {
 	// Kind 分组类型：channel（默认）/ managed；Category 仅管理分组使用（enterprise / team，默认 team）。
 	Kind                      string
 	Category                  string
+	ManagedType               string // 管理分组类型：quota（默认）/ subscription
 	RateMultiplier            float64
 	IsExclusive               bool
 	SubscriptionType          string   // standard/subscription
@@ -322,6 +323,7 @@ type UpdateGroupInput struct {
 	// Kind 仅用于不可变校验：非空且与现值不同则拒绝。Category 为 nil 表示不修改。
 	Kind                      string
 	Category                  *string
+	ManagedType               *string  // 管理分组类型；nil 表示不修改
 	RateMultiplier            *float64 // 使用指针以支持设置为0
 	IsExclusive               *bool
 	Status                    string

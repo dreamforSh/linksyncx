@@ -215,6 +215,15 @@ export default {
     contentModeration: '内容审计',
     promptAudit: '提示词审计',
     auditLogs: '操作日志',
+    searchPlaceholder: '搜索菜单',
+    noMatches: '没有匹配的菜单',
+    sections: {
+      overview: '概览',
+      users: '用户与订阅',
+      resources: '渠道与资源',
+      operations: '运营',
+      system: '安全与系统'
+    },
   },
 
   // Auth

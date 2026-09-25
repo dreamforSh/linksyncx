@@ -748,19 +748,21 @@ func (s *BillingCacheService) CheckBillingEligibility(ctx context.Context, user 
 
 	// 判断计费模式
 	isSubscriptionMode := group != nil && group.IsSubscriptionType() && subscription != nil
+	// 管理分组的订阅组不扣余额，余额与平台配额门槛都不适用
+	managedSubscription := group.IsManagedSubscription()
 
 	if isSubscriptionMode {
 		if err := s.checkSubscriptionEligibility(ctx, user.ID, group, subscription); err != nil {
 			return err
 		}
-	} else {
+	} else if !managedSubscription {
 		if err := s.checkBalanceEligibility(ctx, user.ID); err != nil {
 			return err
 		}
 	}
 
 	// user × platform quota 仅在 standard（余额）模式生效；订阅模式豁免
-	if !isSubscriptionMode {
+	if !isSubscriptionMode && !managedSubscription {
 		if err := s.checkUserPlatformQuotaEligibility(ctx, user.ID, platform); err != nil {
 			return err
 		}

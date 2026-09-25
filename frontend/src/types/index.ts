@@ -547,6 +547,9 @@ export type SubscriptionType = 'standard' | 'subscription'
 export type GroupKind = 'channel' | 'managed'
 // 管理分组分类（仅 managed 使用）
 export type GroupCategory = 'enterprise' | 'team'
+// 管理分组类型（仅 managed 使用）：quota 额度组（分配余额与 5h / 7d 上限，按用量扣余额）/
+// subscription 订阅组（分配账号，只用被分配账号的订阅额度，不扣余额）
+export type ManagedGroupType = 'quota' | 'subscription'
 
 export interface OpenAIMessagesDispatchModelConfig {
   opus_mapped_model?: string
@@ -630,6 +633,7 @@ export interface AdminGroup extends Group {
   // 分组类型与管理分组分类；旧后端缺省视为渠道分组
   kind?: GroupKind
   category?: GroupCategory
+  managed_type?: ManagedGroupType
   force_openai_fast: boolean
   free_openai_fast: boolean
   model_pricing: import('@/api/admin/channels').ChannelModelPricing[]
@@ -799,6 +803,7 @@ export interface CreateGroupRequest {
   platform?: GroupPlatform
   kind?: GroupKind
   category?: GroupCategory
+  managed_type?: ManagedGroupType
   rate_multiplier?: number
   is_exclusive?: boolean
   subscription_type?: SubscriptionType
@@ -865,6 +870,7 @@ export interface UpdateGroupRequest {
   description?: string | null
   platform?: GroupPlatform
   category?: GroupCategory
+  managed_type?: ManagedGroupType
   rate_multiplier?: number
   is_exclusive?: boolean
   status?: 'active' | 'inactive'

@@ -10,6 +10,9 @@ var (
 	ErrGroupQuotaExceeded       = errors.New("group daily request quota exceeded")
 	ErrGroupConcurrencyExceeded = errors.New("group concurrent request limit exceeded")
 	ErrGroupAccountRequired     = errors.New("no accounts assigned to this member")
+	// 额度组成员的 5h / 7d 美元上限
+	ErrGroupMemberUsage5hExceeded = errors.New("group 5-hour usage limit exceeded")
+	ErrGroupMemberUsage7dExceeded = errors.New("group 7-day usage limit exceeded")
 )
 
 // GatewayAllocation is scoped to one authenticated request. A nil AllowedIDs

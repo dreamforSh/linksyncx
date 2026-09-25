@@ -169,6 +169,8 @@ type AdminGroup struct {
 	// Kind 分组类型（channel 渠道分组 / managed 管理分组）；Category 管理分组分类（enterprise / team）。
 	Kind     string `json:"kind"`
 	Category string `json:"category,omitempty"`
+	// ManagedType 管理分组类型（quota 额度组 / subscription 订阅组）。
+	ManagedType string `json:"managed_type,omitempty"`
 	// ForceOpenAIFast 是管理端请求策略，用户侧分组 DTO 无需暴露。
 	ForceOpenAIFast bool `json:"force_openai_fast"`
 	// FreeOpenAIFast 是管理端计费策略，用户侧分组 DTO 无需暴露。

@@ -259,8 +259,9 @@ func apiKeyAuthWithSubscription(apiKeyService *service.APIKeyService, subscripti
 					return
 				}
 			} else {
-				// 非订阅模式 或 订阅模式但 subscriptionService 未注入：回退到余额检查
-				if apiKeyBalanceBelowAuthThreshold(apiKey.User.Balance, cfg) {
+				// 非订阅模式 或 订阅模式但 subscriptionService 未注入：回退到余额检查；
+				// 管理分组的订阅组不扣余额，不设余额门槛
+				if !service.ManagedSubscriptionBilling(apiKey) && apiKeyBalanceBelowAuthThreshold(apiKey.User.Balance, cfg) {
 					AbortWithError(c, 403, "INSUFFICIENT_BALANCE", "Insufficient account balance")
 					return
 				}

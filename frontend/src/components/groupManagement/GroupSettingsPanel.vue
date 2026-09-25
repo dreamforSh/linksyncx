@@ -19,18 +19,26 @@
     </div>
 
     <div class="border-t border-gray-100 px-5 py-5 dark:border-dark-700 sm:px-6">
-      <fieldset>
+      <fieldset :disabled="modeLocked">
         <legend class="text-sm font-semibold text-gray-900 dark:text-white">
           {{ t('groupManagement.settings.mode') }}
         </legend>
+        <p v-if="modeLocked" class="mt-1 max-w-2xl text-sm leading-relaxed text-gray-500 dark:text-dark-400" data-testid="settings-mode-locked">
+          {{ t('groupManagement.settings.modeLockedByType', { type: managedTypeLabel }) }}
+        </p>
         <div class="mt-3 grid gap-3 sm:grid-cols-2">
           <label
             v-for="option in modeOptions"
             :key="option.value"
-            class="flex cursor-pointer items-start gap-3 rounded-xl border p-4 transition-colors duration-150 focus-within:ring-2 focus-within:ring-primary-500/40"
-            :class="draft.allocation_mode === option.value
-              ? 'border-primary-500 bg-primary-50/60 dark:border-primary-500/70 dark:bg-primary-900/15'
-              : 'border-gray-200 hover:border-gray-300 dark:border-dark-600 dark:hover:border-dark-500'"
+            class="flex items-start gap-3 rounded-xl border p-4 transition-colors duration-150 focus-within:ring-2 focus-within:ring-primary-500/40"
+            :class="[
+              draft.allocation_mode === option.value
+                ? 'border-primary-500 bg-primary-50/60 dark:border-primary-500/70 dark:bg-primary-900/15'
+                : 'border-gray-200 dark:border-dark-600',
+              modeLocked
+                ? (draft.allocation_mode === option.value ? 'cursor-default' : 'cursor-not-allowed opacity-50')
+                : (draft.allocation_mode === option.value ? 'cursor-pointer' : 'cursor-pointer hover:border-gray-300 dark:hover:border-dark-500')
+            ]"
           >
             <input
               v-model="draft.allocation_mode"
@@ -74,6 +82,50 @@
       <h3 class="text-sm font-semibold text-gray-900 dark:text-white">{{ t('groupManagement.settings.defaults') }}</h3>
       <p class="mt-1 text-sm text-gray-500 dark:text-dark-400">{{ t('groupManagement.settings.defaultsHint') }}</p>
       <div class="mt-4 grid gap-4 sm:max-w-xl sm:grid-cols-2">
+        <template v-if="quotaGroup">
+          <div>
+            <label :for="`${idPrefix}-limit-5h`" class="input-label">{{ t('groupManagement.settings.defaultLimit5h') }}</label>
+            <div class="relative">
+              <span class="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-sm text-gray-400 dark:text-dark-400">$</span>
+              <input
+                :id="`${idPrefix}-limit-5h`"
+                v-model.number="draft.default_limit_5h_usd"
+                type="number"
+                inputmode="decimal"
+                min="0"
+                step="0.01"
+                class="input pl-7"
+                :class="limit5hError && 'input-error'"
+                :aria-invalid="limit5hError ? 'true' : undefined"
+                :aria-describedby="`${idPrefix}-limit-5h-msg`"
+              />
+            </div>
+            <p :id="`${idPrefix}-limit-5h-msg`" :class="limit5hError ? 'input-error-text' : 'input-hint'">
+              {{ limit5hError || t('groupManagement.settings.usdLimitHint') }}
+            </p>
+          </div>
+          <div>
+            <label :for="`${idPrefix}-limit-7d`" class="input-label">{{ t('groupManagement.settings.defaultLimit7d') }}</label>
+            <div class="relative">
+              <span class="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-sm text-gray-400 dark:text-dark-400">$</span>
+              <input
+                :id="`${idPrefix}-limit-7d`"
+                v-model.number="draft.default_limit_7d_usd"
+                type="number"
+                inputmode="decimal"
+                min="0"
+                step="0.01"
+                class="input pl-7"
+                :class="limit7dError && 'input-error'"
+                :aria-invalid="limit7dError ? 'true' : undefined"
+                :aria-describedby="`${idPrefix}-limit-7d-msg`"
+              />
+            </div>
+            <p :id="`${idPrefix}-limit-7d-msg`" :class="limit7dError ? 'input-error-text' : 'input-hint'">
+              {{ limit7dError || t('groupManagement.settings.usdLimitHint') }}
+            </p>
+          </div>
+        </template>
         <div>
           <label :for="`${idPrefix}-concurrency`" class="input-label">{{ t('groupManagement.settings.maxConcurrent') }}</label>
           <input
@@ -147,7 +199,7 @@ import { useI18n } from 'vue-i18n'
 import Icon from '@/components/icons/Icon.vue'
 import Toggle from '@/components/common/Toggle.vue'
 import type { AllocationMode, GroupManagementSettings } from '@/api/groupManagement'
-import { isValidLimit } from './helpers'
+import { isValidLimit, isValidUSDLimit } from './helpers'
 
 const props = defineProps<{
   groupId: number
@@ -161,14 +213,27 @@ const emit = defineEmits<{
 
 const { t } = useI18n()
 
-const FIELDS = ['enabled', 'allocation_mode', 'max_concurrent', 'daily_limit'] as const
+const BASE_FIELDS = ['enabled', 'allocation_mode', 'max_concurrent', 'daily_limit'] as const
+const USD_FIELDS = ['default_limit_5h_usd', 'default_limit_7d_usd'] as const
 
 const idPrefix = computed(() => `group-settings-${props.groupId}`)
-const baseline = ref<GroupManagementSettings>({ ...props.settings })
-const draft = reactive<GroupManagementSettings>({ ...props.settings })
+const baseline = ref<GroupManagementSettings>(withDefaults(props.settings))
+const draft = reactive<GroupManagementSettings>(withDefaults(props.settings))
 let baselineGroupId = props.groupId
 
-const dirty = computed(() => FIELDS.some(field => draft[field] !== baseline.value[field]))
+// 管理分组的分配方式由类型决定（额度组自动、订阅组手动），不能在这里切换
+const modeLocked = computed(() => Boolean(props.settings.managed))
+const quotaGroup = computed(() => Boolean(props.settings.managed) && props.settings.managed_type === 'quota')
+const managedTypeLabel = computed(() => props.settings.managed_type === 'quota'
+  ? t('groupManagement.type.quota')
+  : t('groupManagement.type.subscription'))
+
+const fields = computed(() => quotaGroup.value ? [...BASE_FIELDS, ...USD_FIELDS] : [...BASE_FIELDS])
+const dirty = computed(() => fields.value.some(field => draft[field] !== baseline.value[field]))
+
+function withDefaults(settings: GroupManagementSettings): GroupManagementSettings {
+  return { ...settings, default_limit_5h_usd: settings.default_limit_5h_usd ?? 0, default_limit_7d_usd: settings.default_limit_7d_usd ?? 0 }
+}
 
 // Background refreshes (after member or assignment changes) must not wipe an
 // unsaved draft; switching to another group always starts from its settings.
@@ -176,9 +241,9 @@ watch(
   () => [props.groupId, props.settings] as const,
   ([groupId, next]) => {
     const keepDraft = groupId === baselineGroupId && dirty.value
-    baseline.value = { ...next }
+    baseline.value = withDefaults(next)
     baselineGroupId = groupId
-    if (!keepDraft) Object.assign(draft, next)
+    if (!keepDraft) Object.assign(draft, withDefaults(next))
   }
 )
 
@@ -188,7 +253,7 @@ const modeOptions = computed<Array<{ value: AllocationMode; label: string; descr
 ])
 
 const modeWarning = computed(() => {
-  if (draft.allocation_mode === baseline.value.allocation_mode) return ''
+  if (modeLocked.value || draft.allocation_mode === baseline.value.allocation_mode) return ''
   return draft.allocation_mode === 'auto'
     ? t('groupManagement.settings.toAutoWarning')
     : t('groupManagement.settings.toManualWarning')
@@ -198,7 +263,11 @@ const concurrencyError = computed(() =>
   isValidLimit(draft.max_concurrent, 1) ? '' : t('groupManagement.settings.invalidConcurrency'))
 const dailyError = computed(() =>
   isValidLimit(draft.daily_limit, 0) ? '' : t('groupManagement.settings.invalidDaily'))
-const valid = computed(() => !concurrencyError.value && !dailyError.value)
+const limit5hError = computed(() =>
+  !quotaGroup.value || isValidUSDLimit(draft.default_limit_5h_usd) ? '' : t('groupManagement.settings.invalidUsd'))
+const limit7dError = computed(() =>
+  !quotaGroup.value || isValidUSDLimit(draft.default_limit_7d_usd) ? '' : t('groupManagement.settings.invalidUsd'))
+const valid = computed(() => !concurrencyError.value && !dailyError.value && !limit5hError.value && !limit7dError.value)
 
 function reset() {
   Object.assign(draft, baseline.value)
@@ -206,11 +275,17 @@ function reset() {
 
 function submit() {
   if (!dirty.value || !valid.value || props.saving) return
-  emit('save', {
+  const next: GroupManagementSettings = {
     enabled: draft.enabled,
     allocation_mode: draft.allocation_mode,
     max_concurrent: draft.max_concurrent,
     daily_limit: draft.daily_limit
-  })
+  }
+  // 默认美元上限只对额度组生效；其他分组省略，后端保留原值
+  if (quotaGroup.value) {
+    next.default_limit_5h_usd = draft.default_limit_5h_usd
+    next.default_limit_7d_usd = draft.default_limit_7d_usd
+  }
+  emit('save', next)
 }
 </script>

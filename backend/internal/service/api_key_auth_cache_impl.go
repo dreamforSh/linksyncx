@@ -14,7 +14,7 @@ import (
 	"github.com/dgraph-io/ristretto"
 )
 
-const apiKeyAuthSnapshotVersion = 24 // v24: group model_allowlist field (renamed from models_list_config, enforcing semantics)
+const apiKeyAuthSnapshotVersion = 25 // v25: group kind / managed_type (managed quota & subscription billing)
 
 type apiKeyAuthCacheConfig struct {
 	l1Size        int
@@ -384,6 +384,8 @@ func (s *APIKeyService) snapshotFromAPIKey(ctx context.Context, apiKey *APIKey) 
 			Platform:                        apiKey.Group.Platform,
 			IsExclusive:                     apiKey.Group.IsExclusive,
 			Status:                          apiKey.Group.Status,
+			Kind:                            apiKey.Group.Kind,
+			ManagedType:                     apiKey.Group.ManagedType,
 			SubscriptionType:                apiKey.Group.SubscriptionType,
 			RateMultiplier:                  apiKey.Group.RateMultiplier,
 			DailyLimitUSD:                   apiKey.Group.DailyLimitUSD,
@@ -485,6 +487,8 @@ func (s *APIKeyService) snapshotToAPIKey(key string, snapshot *APIKeyAuthSnapsho
 			Platform:                        snapshot.Group.Platform,
 			IsExclusive:                     snapshot.Group.IsExclusive,
 			Status:                          snapshot.Group.Status,
+			Kind:                            NormalizeGroupKind(snapshot.Group.Kind),
+			ManagedType:                     snapshot.Group.ManagedType,
 			Hydrated:                        true,
 			SubscriptionType:                snapshot.Group.SubscriptionType,
 			RateMultiplier:                  snapshot.Group.RateMultiplier,

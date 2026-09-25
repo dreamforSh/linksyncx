@@ -345,6 +345,11 @@ func buildUsageBillingCommand(requestID string, usageLog *UsageLog, p *postUsage
 	if p.shouldUpdateAccountQuota() {
 		cmd.AccountQuotaCost = p.Cost.TotalCost * p.AccountRateMultiplier
 	}
+	// 额度组：同一笔实际扣费累加到成员的组内 5h / 7d 用量，网关准入据此执行美元上限
+	if p.APIKey.GroupID != nil && p.APIKey.Group.IsManagedQuota() && p.Cost.ActualCost > 0 {
+		cmd.GroupID = *p.APIKey.GroupID
+		cmd.GroupMemberCost = p.Cost.ActualCost
+	}
 
 	cmd.Normalize()
 	return cmd

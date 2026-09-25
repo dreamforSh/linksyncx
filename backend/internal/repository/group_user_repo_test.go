@@ -28,7 +28,9 @@ func newGroupUserRepoTest(t *testing.T) (*dbent.Client, sqlmock.Sqlmock, service
 func TestGroupUserRepoInsertMemberUsesGroupDefaults(t *testing.T) {
 	_, mock, repo := newGroupUserRepoTest(t)
 	concurrency := 3
-	mock.ExpectExec(regexp.QuoteMeta(`INSERT INTO group_members (user_id, group_id, max_concurrent, daily_limit, owned, created_by)`)).
+	// 未指定的额度（日请求数、5h / 7d 美元上限）套用分组设置里的默认值
+	mock.ExpectExec(regexp.QuoteMeta(`INSERT INTO group_members (user_id, group_id, max_concurrent, daily_limit, owned, created_by, limit_5h_usd, limit_7d_usd)`)+
+		`(?s).*COALESCE\(s\.default_limit_5h_usd, 0\), COALESCE\(s\.default_limit_7d_usd, 0\)`).
 		WithArgs(int64(11), int64(42), 3, nil, true, int64(7)).
 		WillReturnResult(sqlmock.NewResult(0, 1))
 

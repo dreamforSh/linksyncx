@@ -33,7 +33,9 @@ type Group struct {
 	Kind string
 	// Category 管理分组分类：enterprise / team；渠道分组为空。
 	Category string
-	Hydrated bool // indicates the group was loaded from a trusted repository source
+	// ManagedType 管理分组类型：quota 额度组 / subscription 订阅组；渠道分组为空。
+	ManagedType string
+	Hydrated    bool // indicates the group was loaded from a trusted repository source
 	// DuplicateOperationID is internal persistence metadata used only to recover
 	// an already committed one-click copy. It must never be mapped to API DTOs.
 	DuplicateOperationID string
@@ -395,6 +397,9 @@ func NormalizePeakRateConfig(subscriptionType string, enabled bool, start, end s
 // gateway_service.recordUsageCore 与 openai_gateway_service.RecordUsage 共用此函数，
 // 锁死"高峰因子只乘入 token 倍率、图片按次倍率不受影响"这一叠加顺序——任何调换都会被 group_peak_rate_test 覆盖。
 func computePeakAwareMultipliers(apiKey *APIKey, base float64, now time.Time) (text, image float64) {
+	if ManagedSubscriptionBilling(apiKey) {
+		return 0, 0
+	}
 	image = resolveImageRateMultiplier(apiKey, base)
 	peak := 1.0
 	if apiKey != nil && apiKey.Group != nil {

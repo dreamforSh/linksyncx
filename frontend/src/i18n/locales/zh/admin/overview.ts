@@ -77,7 +77,73 @@ export default {
       groupPricingDesc: '设置批量折扣和冻结比例',
       systemSettings: '系统设置',
       configureSystem: '配置系统设置',
-      failedToLoad: '加载仪表盘数据失败'
+      failedToLoad: '加载仪表盘数据失败',
+      greeting: {
+        morning: '早上好',
+        afternoon: '下午好',
+        evening: '晚上好',
+        withName: '{greeting}，{name}'
+      },
+      intro: '这是平台今天的运行概况',
+      updatedAt: '统计更新于 {time}',
+      statsStale: '统计数据有延迟',
+      kpi: {
+        cumulative: '累计 {value}',
+        tokensBreakdown: '输入 {input} · 输出 {output} · 缓存 {cache}',
+        accountCost: '账号成本',
+        standardCost: '标准计费',
+        activeUsersToday: '今日活跃用户',
+        newUsers: '今日新增 {count}',
+        hourlyActive: '本小时 {count}',
+        totalUsers: '共 {count} 位',
+        apiKeysSummary: '活跃 {active} / 共 {total}',
+        throughput: '实时吞吐',
+        throughputHint: '近 5 分钟平均',
+        trendHint: '所选时间范围内的趋势',
+        uptime: '服务已运行 {value}',
+        uptimeDays: '{days} 天 {hours} 小时',
+        uptimeHours: '{hours} 小时 {minutes} 分',
+        uptimeMinutes: '{minutes} 分钟'
+      },
+      health: {
+        title: '账号健康',
+        schedulable: '可调度',
+        ratelimited: '限流',
+        overloaded: '过载',
+        error: '异常'
+      },
+      analytics: {
+        title: '用量分析',
+        subtitle: '以下图表随所选时间范围联动'
+      },
+      topUsers: {
+        title: '用户用量排行',
+        subtitle: '按 Token 用量排序 · 所选时间范围',
+        trend: '用量趋势',
+        viewAll: '查看全部'
+      },
+      distribution: {
+        showAll: '显示全部 {count} 项',
+        summary: '共 {count} 项'
+      },
+      trend: {
+        title: '用量趋势',
+        metricTokens: 'Token',
+        metricRequests: '请求',
+        metricCost: '费用',
+        input: '输入',
+        output: '输出',
+        cacheCreation: '缓存写入',
+        cacheRead: '缓存读取',
+        requests: '请求数',
+        actualCost: '实际扣费',
+        standardCost: '标准计费',
+        cacheHitRate: '缓存命中率',
+        total: '合计',
+        viewChart: '图表',
+        viewTable: '数据表',
+        time: '时间'
+      }
     },
 
     backup: {
@@ -496,6 +562,13 @@ export default {
       title: '用户管理',
       description: '管理用户账户和权限',
       createUser: '创建用户',
+      moreFilters: '更多筛选',
+      clearFilters: '清除筛选',
+      clearSelection: '取消选择',
+      viewUsage: '查看使用记录',
+      statusAll: '全部',
+      statusActive: '正常',
+      statusDisabled: '已禁用',
       bulkDelete: {
         action: '批量删除（{count}）',
         title: '删除已选用户',
@@ -860,7 +933,15 @@ export default {
         category: '分组分类',
         enterprise: '企业',
         team: 'Team',
-        managedHint: '管理分组固定为专属、按余额计费，不能配置订阅、兜底分组或从其他分组复制账号。',
+        managedHint: '管理分组固定为专属、使用标准计费方式，不能配置订阅套餐、兜底分组或从其他分组复制账号。',
+        managedType: '管理分组类型',
+        quota: '额度组',
+        subscription: '订阅组',
+        quotaDesc: '组管理员只分配额度：给组用户划拨余额、设置 5 小时 / 7 天美元上限。组用户共用分组账号，按用量扣自己的余额。',
+        subscriptionDesc: '组管理员把账号分配给组用户。组用户只能使用分配到的账号的订阅额度，请求不扣余额，可以查看账号限额与重置卡。',
+        changeToQuota: '改为额度组后，现有的账号分配会被清空，组用户改为共用全部账号，并开始按用量扣余额。',
+        changeToSubscription: '改为订阅组后，请求不再扣余额；组用户需要组管理员分配账号后才能使用。',
+        notBilled: '不扣余额',
         viewAccounts: '查看账号',
         addAccount: '添加账号',
       },

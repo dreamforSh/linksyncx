@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 
-import { exceedsBalance, generatePassword, isValidEmail, isValidPassword } from '../helpers'
+import { exceedsBalance, formatUsdCompact, generatePassword, isValidEmail, isValidPassword, isValidUSDLimit, memberSubtitle } from '../helpers'
 
 describe('group management helpers', () => {
   it('generates readable random passwords that pass validation', () => {
@@ -31,5 +31,28 @@ describe('group management helpers', () => {
     expect(exceedsBalance(10, 10)).toBe(false)
     expect(exceedsBalance(0.1 + 0.2, 0.3)).toBe(false)
     expect(exceedsBalance(10.01, 10)).toBe(true)
+  })
+
+  it('hides user IDs unless requested', () => {
+    const member = { user_id: 7, email: 'kim@example.org' }
+    expect(memberSubtitle(member)).toBe('kim@example.org · #7')
+    expect(memberSubtitle(member, false)).toBe('kim@example.org')
+  })
+
+  it('formats USD amounts compactly for progress bars', () => {
+    expect(formatUsdCompact(5)).toBe('$5')
+    expect(formatUsdCompact(3.375)).toBe('$3.38')
+    expect(formatUsdCompact(1234.5)).toBe('$1,234.5')
+    expect(formatUsdCompact(0.000123)).toBe('$0.000123')
+    expect(formatUsdCompact(Number.NaN)).toBe('$0')
+  })
+
+  it('validates USD caps (0 means unlimited)', () => {
+    expect(isValidUSDLimit(0)).toBe(true)
+    expect(isValidUSDLimit(12.5)).toBe(true)
+    expect(isValidUSDLimit(-1)).toBe(false)
+    expect(isValidUSDLimit(Number.NaN)).toBe(false)
+    expect(isValidUSDLimit('5')).toBe(false)
+    expect(isValidUSDLimit(2_000_000_000)).toBe(false)
   })
 })

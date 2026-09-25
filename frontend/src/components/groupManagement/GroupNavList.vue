@@ -57,6 +57,7 @@
               />
               <span class="truncate">
                 <template v-if="group.kind === 'managed' && group.category">{{ categoryLabel(group.category) }} · </template>
+                <template v-if="group.kind === 'managed' && group.managed_type">{{ typeLabel(group.managed_type) }} · </template>
                 {{ group.enabled ? t('groupManagement.state.enabled') : t('groupManagement.state.disabled') }}
                 · {{ group.manager ? t('groupManagement.state.manager') : t('groupManagement.state.member') }}
               </span>
@@ -91,6 +92,10 @@ const { t } = useI18n()
 
 function categoryLabel(category: string) {
   return category === 'enterprise' ? t('groupManagement.category.enterprise') : t('groupManagement.category.team')
+}
+
+function typeLabel(managedType: string) {
+  return managedType === 'quota' ? t('groupManagement.type.quota') : t('groupManagement.type.subscription')
 }
 
 const SEARCH_THRESHOLD = 6

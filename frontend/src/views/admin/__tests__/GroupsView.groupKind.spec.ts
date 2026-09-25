@@ -114,7 +114,8 @@ const managedGroup = {
   platform: 'anthropic',
   is_exclusive: true,
   kind: 'managed',
-  category: 'team'
+  category: 'team',
+  managed_type: 'quota'
 } as unknown as AdminGroup
 
 const DataTableStub = defineComponent({
@@ -268,8 +269,30 @@ describe('GroupsView group kinds', () => {
       description: '',
       platform: 'anthropic',
       kind: 'managed',
-      category: 'enterprise'
+      category: 'enterprise',
+      managed_type: 'quota'
     })
+  })
+
+  it('creates a subscription group and hides the type for channel groups', async () => {
+    const wrapper = mountView()
+    await flushPromises()
+    await openCreateDialog(wrapper)
+
+    expect(wrapper.find('[data-testid="group-managed-type-field"]').exists()).toBe(false)
+    await wrapper.get('[data-testid="group-kind-managed"] input').setValue(true)
+    // 默认额度组
+    expect((wrapper.get('[data-testid="group-managed-type-quota"] input').element as HTMLInputElement).checked).toBe(true)
+    await wrapper.get('[data-testid="group-managed-type-subscription"] input').setValue(true)
+    await wrapper.get('[data-tour="group-form-name"]').setValue('acme-pool')
+    await wrapper.get('#create-group-form').trigger('submit')
+    await flushPromises()
+
+    expect(createGroup).toHaveBeenCalledWith(expect.objectContaining({
+      name: 'acme-pool',
+      kind: 'managed',
+      managed_type: 'subscription'
+    }))
   })
 
   it('marks managed rows and keeps them out of duplication', async () => {
@@ -279,6 +302,7 @@ describe('GroupsView group kinds', () => {
     const managedRow = wrapper.get('[data-row="43"]')
     expect(managedRow.text()).toContain('admin.groups.groupKind.managed')
     expect(managedRow.text()).toContain('admin.groups.groupKind.team')
+    expect(managedRow.text()).toContain('admin.groups.groupKind.quota')
     expect(managedRow.find('[data-testid="group-duplicate"]').exists()).toBe(false)
 
     const channelRow = wrapper.get('[data-row="42"]')
@@ -368,5 +392,24 @@ describe('GroupsView group kinds', () => {
     await flushPromises()
 
     expect(updateGroup.mock.calls[0]?.[1]).not.toHaveProperty('category')
+    expect(updateGroup.mock.calls[0]?.[1]).not.toHaveProperty('managed_type')
+  })
+
+  it('switches a managed group to a subscription group with a warning', async () => {
+    const wrapper = mountView()
+    await flushPromises()
+
+    const editButton = wrapper.get('[data-row="43"]').findAll('button').find(button => button.text() === 'common.edit')
+    await editButton!.trigger('click')
+    await flushPromises()
+
+    const field = wrapper.get('[data-testid="group-managed-type-field"]')
+    expect(field.find('[data-testid="group-managed-type-warning"]').exists()).toBe(false)
+    await field.get('[data-testid="group-managed-type-subscription"] input').setValue(true)
+    expect(wrapper.get('[data-testid="group-managed-type-warning"]').text()).toContain('admin.groups.groupKind.changeToSubscription')
+    await wrapper.get('#edit-group-form').trigger('submit')
+    await flushPromises()
+
+    expect(updateGroup).toHaveBeenCalledWith(43, expect.objectContaining({ managed_type: 'subscription' }))
   })
 })

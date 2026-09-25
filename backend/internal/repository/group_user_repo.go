@@ -88,8 +88,9 @@ func (r *groupUserRepository) InsertMember(ctx context.Context, groupID, userID 
 	if dailyLimit != nil {
 		daily = *dailyLimit
 	}
-	result, err := r.exec(ctx, `INSERT INTO group_members (user_id, group_id, max_concurrent, daily_limit, owned, created_by)
-		SELECT u.id, g.id, COALESCE($3::int, s.max_concurrent, 1), COALESCE($4::bigint, s.daily_limit, 0), $5, $6
+	result, err := r.exec(ctx, `INSERT INTO group_members (user_id, group_id, max_concurrent, daily_limit, owned, created_by, limit_5h_usd, limit_7d_usd)
+		SELECT u.id, g.id, COALESCE($3::int, s.max_concurrent, 1), COALESCE($4::bigint, s.daily_limit, 0), $5, $6,
+			COALESCE(s.default_limit_5h_usd, 0), COALESCE(s.default_limit_7d_usd, 0)
 		FROM users u
 		JOIN groups g ON g.id=$2 AND g.deleted_at IS NULL
 		LEFT JOIN group_management_settings s ON s.group_id=g.id
@@ -344,4 +345,130 @@ func (r *groupUserRepository) UserGroupSummaries(ctx context.Context, userIDs []
 		out = append(out, *byUser[id])
 	}
 	return out, nil
+}
+
+func (r *groupUserRepository) CountPendingInvitations(ctx context.Context, userID int64) (int64, error) {
+	var count int64
+	err := r.queryRow(ctx, `SELECT COUNT(*) FROM group_invitations i JOIN groups g ON g.id=i.group_id AND g.deleted_at IS NULL
+		WHERE i.user_id=$1 AND i.status='pending'`, []any{userID}, &count)
+	return count, err
+}
+
+func (r *groupUserRepository) FindInviteeByEmail(ctx context.Context, email string) (*service.GroupInvitee, error) {
+	var invitee service.GroupInvitee
+	err := r.queryRow(ctx, `SELECT id, email, role, status FROM users
+		WHERE LOWER(TRIM(email))=$1 AND deleted_at IS NULL ORDER BY id LIMIT 1`, []any{email},
+		&invitee.ID, &invitee.Email, &invitee.Role, &invitee.Status)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	return &invitee, nil
+}
+
+// groupInvitationColumns 邀请列表的公共投影：分组信息、邀请人显示名。
+const groupInvitationColumns = `i.id, i.group_id, g.name, COALESCE(g.category,''), COALESCE(g.managed_type,''), g.kind='managed',
+	i.email, COALESCE(NULLIF(inv.username,''), inv.email, ''), i.status, i.created_at, i.responded_at, i.user_id, COALESCE(i.invited_by,0)`
+
+func scanGroupInvitation(rows *sql.Rows) (service.GroupInvitation, error) {
+	var item service.GroupInvitation
+	var responded sql.NullTime
+	err := rows.Scan(&item.ID, &item.GroupID, &item.GroupName, &item.Category, &item.ManagedType, &item.Managed,
+		&item.Email, &item.InviterName, &item.Status, &item.CreatedAt, &responded, &item.UserID, &item.InvitedBy)
+	if responded.Valid {
+		item.RespondedAt = &responded.Time
+	}
+	return item, err
+}
+
+func (r *groupUserRepository) listInvitations(ctx context.Context, query string, args ...any) ([]service.GroupInvitation, error) {
+	rows, err := r.query(ctx, query, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = rows.Close() }()
+	out := make([]service.GroupInvitation, 0)
+	for rows.Next() {
+		item, err := scanGroupInvitation(rows)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, item)
+	}
+	return out, rows.Err()
+}
+
+func (r *groupUserRepository) CreateInvitation(ctx context.Context, groupID, userID int64, email string, invitedBy int64) (*service.GroupInvitation, bool, error) {
+	var inviter any
+	if invitedBy > 0 {
+		inviter = invitedBy
+	}
+	var id int64
+	err := r.queryRow(ctx, `INSERT INTO group_invitations (group_id, user_id, email, invited_by)
+		VALUES ($1, $2, $3, $4)
+		ON CONFLICT (group_id, user_id) WHERE status = 'pending' DO NOTHING
+		RETURNING id`, []any{groupID, userID, email, inviter}, &id)
+	created := err == nil
+	if err != nil && !errors.Is(err, sql.ErrNoRows) {
+		return nil, false, err
+	}
+	items, err := r.listInvitations(ctx, `SELECT `+groupInvitationColumns+`
+		FROM group_invitations i JOIN groups g ON g.id=i.group_id LEFT JOIN users inv ON inv.id=i.invited_by
+		WHERE i.group_id=$1 AND i.user_id=$2 AND i.status='pending'`, groupID, userID)
+	if err != nil {
+		return nil, false, err
+	}
+	if len(items) == 0 {
+		return nil, false, service.ErrGroupInvitationNotFound
+	}
+	return &items[0], created, nil
+}
+
+func (r *groupUserRepository) ListGroupInvitations(ctx context.Context, groupID int64, limit int) ([]service.GroupInvitation, error) {
+	return r.listInvitations(ctx, `SELECT `+groupInvitationColumns+`
+		FROM group_invitations i JOIN groups g ON g.id=i.group_id AND g.deleted_at IS NULL
+		LEFT JOIN users inv ON inv.id=i.invited_by
+		WHERE i.group_id=$1
+		ORDER BY (i.status='pending') DESC, i.created_at DESC, i.id DESC
+		LIMIT $2`, groupID, limit)
+}
+
+func (r *groupUserRepository) RevokeInvitation(ctx context.Context, groupID, invitationID int64) (bool, error) {
+	result, err := r.exec(ctx, `UPDATE group_invitations SET status='revoked', updated_at=NOW()
+		WHERE id=$1 AND group_id=$2 AND status='pending'`, invitationID, groupID)
+	if err != nil {
+		return false, err
+	}
+	n, err := result.RowsAffected()
+	return n > 0, err
+}
+
+func (r *groupUserRepository) ListUserInvitations(ctx context.Context, userID int64) ([]service.GroupInvitation, error) {
+	return r.listInvitations(ctx, `SELECT `+groupInvitationColumns+`
+		FROM group_invitations i JOIN groups g ON g.id=i.group_id AND g.deleted_at IS NULL
+		LEFT JOIN users inv ON inv.id=i.invited_by
+		WHERE i.user_id=$1 AND i.status='pending'
+		ORDER BY i.created_at DESC, i.id DESC`, userID)
+}
+
+func (r *groupUserRepository) LockUserInvitation(ctx context.Context, invitationID, userID int64) (*service.GroupInvitation, error) {
+	items, err := r.listInvitations(ctx, `SELECT `+groupInvitationColumns+`
+		FROM group_invitations i JOIN groups g ON g.id=i.group_id AND g.deleted_at IS NULL
+		LEFT JOIN users inv ON inv.id=i.invited_by
+		WHERE i.id=$1 AND i.user_id=$2 AND i.status='pending'
+		FOR UPDATE OF i`, invitationID, userID)
+	if err != nil {
+		return nil, err
+	}
+	if len(items) == 0 {
+		return nil, nil
+	}
+	return &items[0], nil
+}
+
+func (r *groupUserRepository) SetInvitationStatus(ctx context.Context, invitationID int64, status string) error {
+	_, err := r.exec(ctx, `UPDATE group_invitations SET status=$2, responded_at=NOW(), updated_at=NOW() WHERE id=$1`, invitationID, status)
+	return err
 }

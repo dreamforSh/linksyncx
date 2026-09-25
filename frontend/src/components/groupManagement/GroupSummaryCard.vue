@@ -39,6 +39,10 @@
               </button>
             </div>
             <GroupKindBadge v-else kind="managed" :category="group.category" />
+            <span v-if="group.managed_type" class="badge badge-primary" data-testid="group-managed-type">
+              <Icon :name="group.managed_type === 'quota' ? 'dollar' : 'server'" size="xs" />
+              {{ group.managed_type === 'quota' ? t('groupManagement.type.quota') : t('groupManagement.type.subscription') }}
+            </span>
           </template>
           <span class="badge" :class="group.enabled ? 'badge-success' : 'badge-gray'">
             <span

@@ -4,7 +4,7 @@
       class="flex items-baseline justify-between gap-2"
       :class="size === 'lg' ? 'text-sm' : 'text-xs'"
     >
-      <span class="tabular-nums text-gray-900 dark:text-gray-100">{{ used }} / {{ limitLabel }}</span>
+      <span class="tabular-nums text-gray-900 dark:text-gray-100">{{ usedLabel }} / {{ limitLabel }}</span>
       <span v-if="limited" class="font-medium tabular-nums" :class="toneText">{{ percent }}%</span>
     </div>
     <div
@@ -15,7 +15,7 @@
       aria-valuemin="0"
       :aria-valuemax="limited ? limit : undefined"
       :aria-valuenow="limited ? Math.min(used, limit) : undefined"
-      :aria-valuetext="`${used} / ${limitLabel}`"
+      :aria-valuetext="`${usedLabel} / ${limitLabel}`"
     >
       <div
         v-if="limited"
@@ -24,6 +24,7 @@
         :style="{ width: `${barWidth}%` }"
       />
     </div>
+    <p v-if="hint" class="mt-1 truncate text-[11px] text-gray-500 dark:text-dark-400">{{ hint }}</p>
   </div>
 </template>
 
@@ -37,14 +38,22 @@ const props = withDefaults(defineProps<{
   limit: number
   label: string
   size?: 'sm' | 'lg'
+  // 数值格式化（如美元金额）；缺省按原样显示
+  format?: (value: number) => string
+  // 条下方的补充说明（如窗口重置时间）
+  hint?: string
 }>(), {
-  size: 'sm'
+  size: 'sm',
+  format: undefined,
+  hint: ''
 })
 
 const { t } = useI18n()
 
+const display = (value: number) => props.format ? props.format(value) : String(value)
 const limited = computed(() => props.limit > 0)
-const limitLabel = computed(() => limited.value ? String(props.limit) : t('groupManagement.unlimited'))
+const usedLabel = computed(() => display(props.used))
+const limitLabel = computed(() => limited.value ? display(props.limit) : t('groupManagement.unlimited'))
 const percent = computed(() => quotaPercent(props.used, props.limit))
 // Keep a sliver visible once anything has been used, even when it rounds to 0%.
 const barWidth = computed(() => props.used > 0 ? Math.max(percent.value, 2) : 0)

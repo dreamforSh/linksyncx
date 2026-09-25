@@ -1,9 +1,10 @@
 import { apiClient } from './client'
-import type { GroupCategory, GroupKind } from '@/types'
+import type { GroupCategory, GroupKind, ManagedGroupType } from '@/types'
 
 export type AllocationMode = 'auto' | 'manual'
 export type GroupTransferDirection = 'grant' | 'reclaim'
 export type GroupUserStatus = 'active' | 'disabled'
+export type GroupInvitationStatus = 'pending' | 'accepted' | 'declined' | 'revoked'
 
 export interface GroupManagementSettings {
   enabled: boolean
@@ -12,6 +13,11 @@ export interface GroupManagementSettings {
   daily_limit: number
   // 管理分组始终启用管控（只读）
   managed?: boolean
+  // 管理分组类型（只读）：分配方式由类型决定
+  managed_type?: ManagedGroupType
+  // 新成员默认的组内 5h / 7d 美元上限（额度组使用，0 表示不限）
+  default_limit_5h_usd?: number
+  default_limit_7d_usd?: number
 }
 
 export interface GroupManagementGroup extends GroupManagementSettings {
@@ -19,6 +25,7 @@ export interface GroupManagementGroup extends GroupManagementSettings {
   name: string
   kind?: GroupKind
   category?: GroupCategory
+  managed_type?: ManagedGroupType
   member_count: number
   account_count: number
   manager: boolean
@@ -41,6 +48,13 @@ export interface GroupManagementMembership {
   daily_limit: number
   daily_used: number
   daily_window_start: string
+  // 额度组：组内 5h / 7d 美元上限（0 表示不限）与当前窗口用量；reset_* 为当前窗口结束时间
+  limit_5h_usd?: number
+  limit_7d_usd?: number
+  usage_5h_usd?: number
+  usage_7d_usd?: number
+  reset_5h_at?: string
+  reset_7d_at?: string
 }
 
 export interface GroupManagementAssignment {
@@ -77,12 +91,70 @@ export interface GroupManagementOverview {
 }
 
 export type GroupManagementMember = GroupManagementMembership
-export type MemberLimit = Pick<GroupManagementSettings, 'max_concurrent' | 'daily_limit'>
+
+export interface MemberLimit {
+  max_concurrent: number
+  daily_limit: number
+  // 额度组：组内 5h / 7d 美元上限，省略表示不修改
+  limit_5h_usd?: number
+  limit_7d_usd?: number
+}
 
 export interface GroupManagementSummary {
   role: string
   managed_group_count: number
   membership_count: number
+  pending_invitation_count?: number
+}
+
+// 分组邀请：组管理员与被邀请人看到的都是邮箱，不含用户 ID
+export interface GroupInvitation {
+  id: number
+  group_id: number
+  group_name: string
+  category?: GroupCategory
+  managed_type?: ManagedGroupType
+  email: string
+  inviter_name: string
+  status: GroupInvitationStatus
+  created_at: string
+  responded_at?: string
+}
+
+export interface GroupAccountWindow {
+  utilization: number
+  resets_at?: string
+  remaining_seconds: number
+}
+
+export interface GroupAccountResetCredits {
+  available_count: number
+  expires_at: string[]
+}
+
+// 订阅组账号的限额视图
+export interface GroupAccountUsage {
+  account_id: number
+  name: string
+  platform: string
+  status: string
+  rate_limited: boolean
+  rate_limit_reset_at?: string
+  five_hour?: GroupAccountWindow
+  seven_day?: GroupAccountWindow
+  usage_updated_at?: string
+  usage_unavailable: boolean
+  supports_reset_credit: boolean
+  reset_credits?: GroupAccountResetCredits
+  can_reset: boolean
+  assigned_user_count: number
+}
+
+export interface GroupAccountResetResult {
+  code: string
+  windows_reset: number
+  warning_code?: string
+  account?: GroupAccountUsage
 }
 
 export interface CreateGroupUserInput {
@@ -235,6 +307,50 @@ export const groupManagementAPI = {
 
   async setMemberAccounts(groupId: number, userId: number, input: { account_ids: number[]; mode: AllocationMode }): Promise<void> {
     await apiClient.put(`/group-management/groups/${groupId}/members/${userId}/accounts`, input)
+  },
+
+  async listInvitations(groupId: number): Promise<GroupInvitation[]> {
+    const { data } = await apiClient.get<GroupInvitation[]>(`/group-management/groups/${groupId}/invitations`)
+    return data
+  },
+
+  async inviteMember(groupId: number, email: string): Promise<GroupInvitation> {
+    const { data } = await apiClient.post<GroupInvitation>(`/group-management/groups/${groupId}/invitations`, { email })
+    return data
+  },
+
+  async revokeInvitation(groupId: number, invitationId: number): Promise<void> {
+    await apiClient.delete(`/group-management/groups/${groupId}/invitations/${invitationId}`)
+  },
+
+  async myInvitations(): Promise<GroupInvitation[]> {
+    const { data } = await apiClient.get<GroupInvitation[]>('/group-management/me/invitations')
+    return data
+  },
+
+  async acceptInvitation(invitationId: number): Promise<GroupInvitation> {
+    const { data } = await apiClient.post<GroupInvitation>(`/group-management/me/invitations/${invitationId}/accept`)
+    return data
+  },
+
+  async declineInvitation(invitationId: number): Promise<GroupInvitation> {
+    const { data } = await apiClient.post<GroupInvitation>(`/group-management/me/invitations/${invitationId}/decline`)
+    return data
+  },
+
+  async getAccountUsage(groupId: number): Promise<GroupAccountUsage[]> {
+    const { data } = await apiClient.get<GroupAccountUsage[]>(`/group-management/groups/${groupId}/account-usage`)
+    return data
+  },
+
+  async refreshAccountQuota(groupId: number, accountId: number): Promise<GroupAccountUsage> {
+    const { data } = await apiClient.post<GroupAccountUsage>(`/group-management/groups/${groupId}/accounts/${accountId}/quota-refresh`)
+    return data
+  },
+
+  async resetAccountCredit(groupId: number, accountId: number): Promise<GroupAccountResetResult> {
+    const { data } = await apiClient.post<GroupAccountResetResult>(`/group-management/groups/${groupId}/accounts/${accountId}/reset-credit`)
+    return data
   },
 
   async adminDirectory(): Promise<AdminGroupManagementDirectory> {

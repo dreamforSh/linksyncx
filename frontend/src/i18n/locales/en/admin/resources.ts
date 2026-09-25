@@ -571,6 +571,12 @@ export default {
           cost: 'Cost'
         }
       },
+      moreFilters: 'More filters',
+      detailsTitle: 'Details',
+      filterBar: {
+        title: 'Filters',
+        scopeHint: 'Filters apply to every stat, chart and table below'
+      },
       cleanup: {
         button: 'Cleanup',
         title: 'Cleanup Usage Records',

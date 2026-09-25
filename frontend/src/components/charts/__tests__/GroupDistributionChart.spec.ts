@@ -27,13 +27,6 @@ vi.mock('vue-i18n', async () => {
   }
 })
 
-vi.mock('vue-chartjs', () => ({
-  Doughnut: {
-    props: ['data'],
-    template: '<div class="chart-data">{{ JSON.stringify(data) }}</div>',
-  },
-}))
-
 describe('GroupDistributionChart', () => {
   const groupStats = [
     {
@@ -59,28 +52,14 @@ describe('GroupDistributionChart', () => {
       props: {
         groupStats,
       },
-      global: {
-        stubs: {
-          LoadingSpinner: true,
-        },
-      },
     })
-
-    const chartData = JSON.parse(wrapper.find('.chart-data').text())
-    expect(chartData.labels).toEqual(['group-a', 'group-b'])
-    expect(chartData.datasets[0].data).toEqual([1200, 600])
 
     const rows = wrapper.findAll('tbody tr')
     expect(rows[0].text()).toContain('group-a')
     expect(rows[1].text()).toContain('group-b')
-
-    const options = (wrapper.vm as any).$?.setupState.doughnutOptions
-    const label = options.plugins.tooltip.callbacks.label({
-      label: 'group-a',
-      raw: 1200,
-      dataset: { data: [1200, 600] },
-    })
-    expect(label).toBe('group-a: 1.20K (66.7%)')
+    // 占比以当前度量（token）计算：1200 / 1800
+    expect(rows[0].text()).toContain('66.7%')
+    expect(rows[0].text()).toContain('1,200')
   })
 
   it('uses actual_cost and reorders rows in actual cost mode', () => {
@@ -89,28 +68,24 @@ describe('GroupDistributionChart', () => {
         groupStats,
         metric: 'actual_cost',
       },
-      global: {
-        stubs: {
-          LoadingSpinner: true,
-        },
-      },
     })
-
-    const chartData = JSON.parse(wrapper.find('.chart-data').text())
-    expect(chartData.labels).toEqual(['group-b', 'group-a'])
-    expect(chartData.datasets[0].data).toEqual([0.9, 0.1])
 
     const rows = wrapper.findAll('tbody tr')
     expect(rows[0].text()).toContain('group-b')
     expect(rows[1].text()).toContain('group-a')
+    expect(rows[0].text()).toContain('90.0%')
+    expect(rows[0].text()).toContain('$0.900')
+  })
 
-    const options = (wrapper.vm as any).$?.setupState.doughnutOptions
-    const label = options.plugins.tooltip.callbacks.label({
-      label: 'group-b',
-      raw: 0.9,
-      dataset: { data: [0.9, 0.1] },
+  it('shows account cost by default for admin stats', () => {
+    const wrapper = mount(GroupDistributionChart, {
+      props: {
+        groupStats,
+      },
     })
-    expect(label).toBe('group-b: $0.900 (90.0%)')
+
+    expect(wrapper.text()).toContain('Account Cost')
+    expect(wrapper.findAll('thead th')).toHaveLength(6)
   })
 
   it('can hide account cost for user usage stats without account_cost', () => {
@@ -118,11 +93,6 @@ describe('GroupDistributionChart', () => {
       props: {
         groupStats,
         showAccountCost: false,
-      },
-      global: {
-        stubs: {
-          LoadingSpinner: true,
-        },
       },
     })
 

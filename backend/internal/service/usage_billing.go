@@ -42,6 +42,11 @@ type UsageBillingCommand struct {
 	APIKeyQuotaCost     float64
 	APIKeyRateLimitCost float64
 	AccountQuotaCost    float64
+
+	// GroupID / GroupMemberCost：额度组成员的组内 5h / 7d 用量累加（不参与幂等指纹，
+	// 由同一笔 ActualCost 派生，重试时取值一致）。
+	GroupID         int64
+	GroupMemberCost float64
 }
 
 func (c *UsageBillingCommand) Normalize() {
@@ -86,6 +91,7 @@ func (c *UsageBillingCommand) quantizeMonetaryFields() {
 	c.APIKeyQuotaCost = QuantizeUsageBillingAmount(c.APIKeyQuotaCost)
 	c.APIKeyRateLimitCost = QuantizeUsageBillingAmount(c.APIKeyRateLimitCost)
 	c.AccountQuotaCost = QuantizeUsageBillingAmount(c.AccountQuotaCost)
+	c.GroupMemberCost = QuantizeUsageBillingAmount(c.GroupMemberCost)
 }
 
 // QuantizeUsageBillingAmount 把金额舍入到 UsageBillingMonetaryScale 位小数，

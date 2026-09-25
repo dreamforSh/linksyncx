@@ -8,8 +8,9 @@ export function memberDisplayName(member: NamedMember): string {
   return member.username || member.email || `#${member.user_id}`
 }
 
-export function memberSubtitle(member: NamedMember): string {
-  return [member.email, `#${member.user_id}`].filter(Boolean).join(' · ')
+// 组管理员看不到用户 ID，只有超管的界面展示 #ID
+export function memberSubtitle(member: NamedMember, showId = true): string {
+  return [member.email, showId ? `#${member.user_id}` : ''].filter(Boolean).join(' · ')
 }
 
 // Array.from keeps surrogate pairs and CJK characters intact.
@@ -20,6 +21,20 @@ export function initialOf(name: string): string {
 
 export function isValidLimit(value: unknown, min: number): value is number {
   return typeof value === 'number' && Number.isSafeInteger(value) && value >= min
+}
+
+// 组内美元上限：非负、有限，0 表示不限；与后端上界一致
+export const MAX_GROUP_USD_LIMIT = 1_000_000_000
+
+export function isValidUSDLimit(value: unknown): value is number {
+  return typeof value === 'number' && Number.isFinite(value) && value >= 0 && value <= MAX_GROUP_USD_LIMIT
+}
+
+// 进度条里的美元金额：去掉多余的 0，避免窄列换行（$5、$3.37、$0.000123）
+export function formatUsdCompact(value: number): string {
+  if (!Number.isFinite(value)) return '$0'
+  const digits = value !== 0 && Math.abs(value) < 0.01 ? 6 : 2
+  return `$${value.toLocaleString('en-US', { maximumFractionDigits: digits })}`
 }
 
 export type QuotaTone = 'normal' | 'warning' | 'danger'

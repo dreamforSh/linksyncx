@@ -1,128 +1,182 @@
 <template>
   <AppLayout>
-    <div class="space-y-6">
-      <UsageStatsCards :stats="usageStats" />
-      <!-- Charts Section -->
-      <div class="space-y-4">
-        <div class="card p-4">
-          <div class="flex flex-wrap items-center gap-4">
-            <div class="flex items-center gap-2">
-              <span class="text-sm font-medium text-gray-700 dark:text-gray-300">{{ t('admin.dashboard.timeRange') }}:</span>
-              <DateRangePicker
-                v-model:start-date="startDate"
-                v-model:end-date="endDate"
-                @change="onDateRangeChange"
-              />
-            </div>
-            <div class="ml-auto flex items-center gap-2">
-              <span class="text-sm font-medium text-gray-700 dark:text-gray-300">{{ t('admin.dashboard.granularity') }}:</span>
-              <div class="w-28">
-                <Select v-model="granularity" :options="granularityOptions" @change="loadChartData" />
-              </div>
+    <div class="mx-auto max-w-[1600px] space-y-5">
+      <!-- 筛选栏：放在最上方，作用于下方全部统计、图表与明细 -->
+      <section class="card toolbar-compact p-4" :aria-label="t('admin.usage.filterBar.title')">
+        <div class="flex flex-wrap items-center justify-between gap-3">
+          <div class="flex flex-wrap items-center gap-2">
+            <DateRangePicker
+              v-model:start-date="startDate"
+              v-model:end-date="endDate"
+              @change="onDateRangeChange"
+            />
+            <SegmentedControl
+              v-model="granularity"
+              :options="granularityOptions"
+              :aria-label="t('admin.dashboard.granularity')"
+              @change="loadChartData"
+            />
+            <span class="hidden items-center gap-1.5 pl-1 text-xs text-gray-500 dark:text-dark-400 lg:inline-flex">
+              <Icon name="infoCircle" size="sm" />
+              {{ t('admin.usage.filterBar.scopeHint') }}
+            </span>
+          </div>
+          <!-- 页面级操作与时间范围同一行 -->
+          <div class="flex flex-wrap items-center gap-2">
+            <button
+              type="button"
+              class="btn btn-secondary px-2.5"
+              :title="t('common.refresh')"
+              :aria-label="t('common.refresh')"
+              @click="refreshData"
+            >
+              <Icon name="refresh" size="sm" />
+            </button>
+            <button type="button" class="btn btn-ghost" @click="resetFilters">
+              {{ t('common.reset') }}
+            </button>
+            <template v-if="activeTab === 'usage'">
+              <button
+                type="button"
+                class="btn btn-secondary text-red-600 hover:!border-red-200 hover:!bg-red-50 dark:text-red-400 dark:hover:!border-red-500/30 dark:hover:!bg-red-500/10"
+                @click="openCleanupDialog"
+              >
+                <Icon name="trash" size="sm" />
+                {{ t('admin.usage.cleanup.button') }}
+              </button>
+              <button type="button" class="btn btn-primary" :disabled="exporting" @click="exportToExcel">
+                <Icon name="download" size="sm" />
+                {{ t('usage.exportExcel') }}
+              </button>
+            </template>
+          </div>
+        </div>
+        <UsageFilters
+          v-model="filters"
+          ref="usageFiltersRef"
+          flat
+          collapsible
+          :show-actions="false"
+          :mode="activeTab"
+          class="mt-3 border-t border-gray-100 pt-3 dark:border-dark-700/60"
+          :start-date="startDate"
+          :end-date="endDate"
+          :exporting="exporting"
+          :model-options="modelNameOptions"
+          @change="applyFilters"
+          @refresh="refreshData"
+          @reset="resetFilters"
+          @cleanup="openCleanupDialog"
+          @export="exportToExcel"
+        />
+      </section>
+
+      <UsageStatsCards :stats="usageStats" :trend="trendData" :loading="endpointStatsLoading" />
+
+      <TokenUsageTrend :trend-data="trendData" :loading="chartsLoading" />
+
+      <div class="grid grid-cols-1 gap-4 xl:grid-cols-2 2xl:grid-cols-3">
+        <ModelDistributionChart
+          v-model:source="modelDistributionSource"
+          v-model:metric="modelDistributionMetric"
+          :model-stats="requestedModelStats"
+          :upstream-model-stats="upstreamModelStats"
+          :mapping-model-stats="mappingModelStats"
+          :loading="modelStatsLoading"
+          :show-source-toggle="true"
+          :show-metric-toggle="true"
+          :start-date="startDate"
+          :end-date="endDate"
+          :filters="breakdownFilters"
+        />
+        <GroupDistributionChart
+          v-model:metric="groupDistributionMetric"
+          :group-stats="groupStats"
+          :loading="chartsLoading"
+          :show-metric-toggle="true"
+          :start-date="startDate"
+          :end-date="endDate"
+          :filters="breakdownFilters"
+        />
+        <EndpointDistributionChart
+          v-model:source="endpointDistributionSource"
+          v-model:metric="endpointDistributionMetric"
+          class="xl:col-span-2 2xl:col-span-1"
+          :endpoint-stats="inboundEndpointStats"
+          :upstream-endpoint-stats="upstreamEndpointStats"
+          :endpoint-path-stats="endpointPathStats"
+          :loading="endpointStatsLoading"
+          :show-source-toggle="true"
+          :show-metric-toggle="true"
+          :title="t('usage.endpointDistribution')"
+          :start-date="startDate"
+          :end-date="endDate"
+          :filters="breakdownFilters"
+        />
+      </div>
+
+      <!-- 明细：tab 在左、列设置在右，筛选统一在页面顶部 -->
+      <section class="card" :aria-label="t('admin.usage.detailsTitle')">
+        <div class="flex flex-wrap items-center justify-between gap-2 border-b border-gray-200 px-2 dark:border-dark-700/60 sm:px-4">
+          <div class="-mb-px flex flex-wrap" role="tablist" :aria-label="t('admin.usage.detailsTitle')">
+            <button
+              v-for="tab in detailTabs"
+              :key="tab.key"
+              type="button"
+              role="tab"
+              :aria-selected="activeTab === tab.key"
+              data-testid="usage-detail-tab"
+              class="inline-flex items-center gap-1.5 border-b-2 px-3 py-3 text-sm font-medium transition-colors focus:outline-none focus-visible:bg-gray-50 dark:focus-visible:bg-dark-800 sm:px-4"
+              :class="activeTab === tab.key
+                ? 'border-primary-600 text-primary-700 dark:border-primary-400 dark:text-primary-300'
+                : 'border-transparent text-gray-500 hover:border-gray-300 hover:text-gray-800 dark:text-dark-400 dark:hover:border-dark-500 dark:hover:text-gray-200'"
+              @click="switchTab(tab.key)"
+            >
+              <Icon :name="tab.icon" size="sm" />
+              {{ tab.label }}
+            </button>
+          </div>
+
+          <div v-if="activeTab !== 'ranking'" class="relative py-2" ref="columnDropdownRef">
+            <button
+              type="button"
+              data-testid="usage-column-settings"
+              @click="showColumnDropdown = !showColumnDropdown"
+              class="btn btn-secondary btn-sm"
+              :title="t('admin.users.columnSettings')"
+              :aria-expanded="showColumnDropdown"
+              aria-haspopup="true"
+            >
+              <Icon name="viewColumns" size="sm" />
+              <span class="hidden md:inline">{{ t('admin.users.columnSettings') }}</span>
+            </button>
+            <div
+              v-if="showColumnDropdown"
+              class="dropdown-panel right-0 max-h-80 w-52 overflow-y-auto"
+            >
+              <button
+                v-for="col in currentToggleableColumns"
+                :key="col.key"
+                type="button"
+                :data-testid="`usage-column-toggle-${col.key}`"
+                :aria-pressed="isCurrentColumnVisible(col.key)"
+                @click="toggleCurrentColumn(col.key)"
+                class="dropdown-option"
+              >
+                <span>{{ col.label }}</span>
+                <Icon
+                  v-if="isCurrentColumnVisible(col.key)"
+                  name="check"
+                  size="sm"
+                  class="text-primary-600 dark:text-primary-400"
+                  :stroke-width="2"
+                />
+              </button>
             </div>
           </div>
         </div>
-        <div class="grid grid-cols-1 gap-6 lg:grid-cols-2">
-          <ModelDistributionChart
-            v-model:source="modelDistributionSource"
-            v-model:metric="modelDistributionMetric"
-            :model-stats="requestedModelStats"
-            :upstream-model-stats="upstreamModelStats"
-            :mapping-model-stats="mappingModelStats"
-            :loading="modelStatsLoading"
-            :show-source-toggle="true"
-            :show-metric-toggle="true"
-            :start-date="startDate"
-            :end-date="endDate"
-            :filters="breakdownFilters"
-          />
-          <GroupDistributionChart
-            v-model:metric="groupDistributionMetric"
-            :group-stats="groupStats"
-            :loading="chartsLoading"
-            :show-metric-toggle="true"
-            :start-date="startDate"
-            :end-date="endDate"
-            :filters="breakdownFilters"
-          />
-        </div>
-        <div class="grid grid-cols-1 gap-6 lg:grid-cols-2">
-          <EndpointDistributionChart
-            v-model:source="endpointDistributionSource"
-            v-model:metric="endpointDistributionMetric"
-            :endpoint-stats="inboundEndpointStats"
-            :upstream-endpoint-stats="upstreamEndpointStats"
-            :endpoint-path-stats="endpointPathStats"
-            :loading="endpointStatsLoading"
-            :show-source-toggle="true"
-            :show-metric-toggle="true"
-            :title="t('usage.endpointDistribution')"
-            :start-date="startDate"
-            :end-date="endDate"
-            :filters="breakdownFilters"
-          />
-          <TokenUsageTrend :trend-data="trendData" :loading="chartsLoading" />
-        </div>
-      </div>
-      <!-- 明细区：tab 栏 + 筛选 + 内容收进同一张卡片，消除割裂感 -->
-      <div class="card">
-        <div class="flex flex-wrap items-center border-b border-gray-200 px-2 dark:border-dark-700 sm:px-4">
-          <button
-            v-for="tab in detailTabs"
-            :key="tab.key"
-            type="button"
-            data-testid="usage-detail-tab"
-            class="-mb-px inline-flex items-center gap-1.5 border-b-2 px-3 py-3 text-sm font-medium transition-colors sm:px-4"
-            :class="activeTab === tab.key
-              ? 'border-primary-500 text-primary-600 dark:text-primary-400'
-              : 'border-transparent text-gray-500 hover:border-gray-300 hover:text-gray-700 dark:text-gray-400 dark:hover:border-dark-500 dark:hover:text-gray-200'"
-            @click="switchTab(tab.key)"
-          >
-            <Icon :name="tab.icon" size="sm" />
-            {{ tab.label }}
-          </button>
-        </div>
 
-        <UsageFilters v-model="filters" ref="usageFiltersRef" flat :mode="activeTab" class="border-b border-gray-100 dark:border-dark-700/50" :start-date="startDate" :end-date="endDate" :exporting="exporting" :model-options="modelNameOptions" @change="applyFilters" @refresh="refreshData" @reset="resetFilters" @cleanup="openCleanupDialog" @export="exportToExcel">
-          <template #after-reset>
-            <div v-if="activeTab !== 'ranking'" class="relative" ref="columnDropdownRef">
-              <button
-                data-testid="usage-column-settings"
-                @click="showColumnDropdown = !showColumnDropdown"
-                class="btn btn-secondary px-2 md:px-3"
-                :title="t('admin.users.columnSettings')"
-              >
-                <svg class="h-4 w-4 md:mr-1.5" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="1.5">
-                  <path stroke-linecap="round" stroke-linejoin="round" d="M9 4.5v15m6-15v15m-10.875 0h15.75c.621 0 1.125-.504 1.125-1.125V5.625c0-.621-.504-1.125-1.125-1.125H4.125C3.504 4.5 3 5.004 3 5.625v12.75c0 .621.504 1.125 1.125 1.125z" />
-                </svg>
-                <span class="hidden md:inline">{{ t('admin.users.columnSettings') }}</span>
-              </button>
-              <div
-                v-if="showColumnDropdown"
-                class="absolute right-0 top-full z-50 mt-1 max-h-80 w-48 overflow-y-auto rounded-lg border border-gray-200 bg-white py-1 shadow-lg dark:border-dark-600 dark:bg-dark-800"
-              >
-                <button
-                  v-for="col in currentToggleableColumns"
-                  :key="col.key"
-                  :data-testid="`usage-column-toggle-${col.key}`"
-                  @click="toggleCurrentColumn(col.key)"
-                  class="flex w-full items-center justify-between px-4 py-2 text-left text-sm text-gray-700 hover:bg-gray-100 dark:text-gray-300 dark:hover:bg-dark-700"
-                >
-                  <span>{{ col.label }}</span>
-                  <Icon
-                    v-if="isCurrentColumnVisible(col.key)"
-                    name="check"
-                    size="sm"
-                    class="text-primary-500"
-                    :stroke-width="2"
-                  />
-                </button>
-              </div>
-            </div>
-          </template>
-        </UsageFilters>
-
-        <div v-show="activeTab === 'usage'" class="overflow-hidden rounded-b-2xl">
+        <div v-show="activeTab === 'usage'" class="overflow-hidden rounded-b-xl">
           <UsageTable
             flat
             :data="usageLogs"
@@ -137,7 +191,7 @@
           />
           <Pagination v-if="pagination.total > 0" :page="pagination.page" :total="pagination.total" :page-size="pagination.page_size" @update:page="handlePageChange" @update:pageSize="handlePageSizeChange" />
         </div>
-        <div v-show="activeTab === 'errors'" class="overflow-hidden rounded-b-2xl">
+        <div v-show="activeTab === 'errors'" class="overflow-hidden rounded-b-xl">
           <OpsErrorLogTable
             flat
             :rows="errRows" :total="errTotal" :loading="errLoading"
@@ -152,7 +206,7 @@
             @ipGeoBatchFailed="handleIpGeoBatchFailed" />
         </div>
         <!-- 懒挂载：首次切到该 tab 才请求排行数据，之后随筛选自动刷新 -->
-        <div v-if="rankingMounted" v-show="activeTab === 'ranking'" class="overflow-hidden rounded-b-2xl">
+        <div v-if="rankingMounted" v-show="activeTab === 'ranking'" class="overflow-hidden rounded-b-xl">
           <UserTokenRanking
             ref="rankingRef"
             :start-date="startDate"
@@ -162,7 +216,7 @@
             @select-user="handleRankingSelectUser"
           />
         </div>
-      </div>
+      </section>
       <OpsErrorDetailModal v-model:show="showErrorModal" :error-id="selectedErrorId" :error-type="'request'" />
     </div>
   </AppLayout>
@@ -192,7 +246,8 @@ import { useAppStore } from '@/stores/app'; import { adminAPI } from '@/api/admi
 import { getPersistedPageSize } from '@/composables/usePersistedPageSize'
 import { formatReasoningEffort } from '@/utils/format'
 import { resolveUsageRequestType, requestTypeToLegacyStream } from '@/utils/usageRequestType'
-import AppLayout from '@/components/layout/AppLayout.vue'; import Pagination from '@/components/common/Pagination.vue'; import Select from '@/components/common/Select.vue'; import DateRangePicker from '@/components/common/DateRangePicker.vue'
+import AppLayout from '@/components/layout/AppLayout.vue'; import Pagination from '@/components/common/Pagination.vue'; import DateRangePicker from '@/components/common/DateRangePicker.vue'
+import SegmentedControl from '@/components/common/SegmentedControl.vue'
 import UsageStatsCards from '@/components/admin/usage/UsageStatsCards.vue'; import UsageFilters from '@/components/admin/usage/UsageFilters.vue'
 import UsageTable from '@/components/admin/usage/UsageTable.vue'; import UsageExportProgress from '@/components/admin/usage/UsageExportProgress.vue'
 import UserTokenRanking from '@/components/admin/usage/UserTokenRanking.vue'
@@ -274,7 +329,7 @@ const handleRankingSelectUser = (userId: number, email: string) => {
   applyFilters()
 }
 
-const granularityOptions = computed(() => [{ value: 'day', label: t('admin.dashboard.day') }, { value: 'hour', label: t('admin.dashboard.hour') }])
+const granularityOptions = computed(() => [{ value: 'hour' as const, label: t('admin.dashboard.hour') }, { value: 'day' as const, label: t('admin.dashboard.day') }])
 // Use local timezone to avoid UTC timezone issues
 const formatLD = (d: Date) => {
   const year = d.getFullYear()

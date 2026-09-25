@@ -30,6 +30,9 @@ func RegisterUserRoutes(
 			me := groupManagement.Group("/me")
 			me.GET("/overview", h.GroupManagement.Overview)
 			me.GET("/summary", h.GroupManagement.Summary)
+			me.GET("/invitations", h.GroupManagement.MyInvitations)
+			me.POST("/invitations/:invitation_id/accept", h.GroupManagement.AcceptInvitation)
+			me.POST("/invitations/:invitation_id/decline", h.GroupManagement.DeclineInvitation)
 			groups := groupManagement.Group("/groups/:id")
 			groups.GET("/members", h.GroupManagement.Members)
 			groups.GET("/accounts", h.GroupManagement.Accounts)
@@ -48,6 +51,12 @@ func RegisterUserRoutes(
 			groups.PUT("/users/:user_id/password", h.GroupManagement.GroupUserPassword)
 			groups.POST("/users/:user_id/balance-transfers", h.GroupManagement.TransferBalance)
 			groups.GET("/balance-transfers", h.GroupManagement.ListTransfers)
+			groups.GET("/invitations", h.GroupManagement.GroupInvitations)
+			groups.POST("/invitations", panelRateLimiter.Heavy(), h.GroupManagement.InviteMember)
+			groups.DELETE("/invitations/:invitation_id", h.GroupManagement.RevokeInvitation)
+			groups.GET("/account-usage", h.GroupManagement.AccountUsage)
+			groups.POST("/accounts/:account_id/quota-refresh", panelRateLimiter.Heavy(), h.GroupManagement.RefreshAccountQuota)
+			groups.POST("/accounts/:account_id/reset-credit", panelRateLimiter.Heavy(), h.GroupManagement.ResetAccountCredit)
 		}
 		// 用户接口
 		user := authenticated.Group("/user")

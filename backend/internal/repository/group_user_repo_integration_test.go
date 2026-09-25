@@ -117,3 +117,80 @@ func TestGroupUserLifecycleIntegration(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, int64(1), summary.ManagedGroupCount)
 }
+
+// 删除管理分组：软删除不会触发外键级联，组管理授权、成员、设置、专属倍率与兜底引用都要被清理，
+// 只属于该分组的组用户被停用。
+func TestDeleteManagedGroupCleansGroupManagementIntegration(t *testing.T) {
+	ctx := context.Background()
+	client := testEntClient(t)
+	suffix := time.Now().UnixNano()
+
+	manager := mustCreateUser(t, client, &service.User{
+		Email: fmt.Sprintf("gm-del-manager-%d@example.com", suffix),
+		Role:  service.RoleGroupManager,
+	})
+	group := mustCreateGroup(t, client, &service.Group{Name: fmt.Sprintf("gm-del-group-%d", suffix), RateMultiplier: 1, IsExclusive: true})
+	other := mustCreateGroup(t, client, &service.Group{Name: fmt.Sprintf("gm-del-other-%d", suffix), RateMultiplier: 1})
+	referrer := mustCreateGroup(t, client, &service.Group{Name: fmt.Sprintf("gm-del-referrer-%d", suffix), RateMultiplier: 1})
+	for _, stmt := range []struct {
+		query string
+		args  []any
+	}{
+		{`UPDATE groups SET kind='managed', category='enterprise' WHERE id=$1`, []any{group.ID}},
+		{`INSERT INTO group_managers(user_id, group_id) VALUES ($1, $2)`, []any{manager.ID, group.ID}},
+		{`INSERT INTO group_management_settings(group_id, enabled, allocation_mode) VALUES ($1, TRUE, 'manual')`, []any{group.ID}},
+		{`UPDATE groups SET fallback_group_id_on_invalid_request=$1 WHERE id=$2`, []any{group.ID, referrer.ID}},
+	} {
+		_, err := integrationDB.ExecContext(ctx, stmt.query, stmt.args...)
+		require.NoError(t, err)
+	}
+
+	svc := service.NewGroupManagementService(NewGroupManagementRepository(integrationDB)).
+		WithGroupUserDependencies(service.GroupUserDependencies{
+			GroupUsers: NewGroupUserRepository(client),
+			Users:      NewUserRepository(client, integrationDB),
+			EntClient:  client,
+		})
+	orphan, err := svc.CreateGroupUser(ctx, manager.ID, service.RoleGroupManager, group.ID, service.CreateGroupUserInput{
+		Email: fmt.Sprintf("gm-del-orphan-%d@example.com", suffix), Password: "secret-123",
+	})
+	require.NoError(t, err)
+	shared, err := svc.CreateGroupUser(ctx, manager.ID, service.RoleGroupManager, group.ID, service.CreateGroupUserInput{
+		Email: fmt.Sprintf("gm-del-shared-%d@example.com", suffix), Password: "secret-123",
+	})
+	require.NoError(t, err)
+	// shared 同时属于另一个分组，删除后应保持启用
+	_, err = integrationDB.ExecContext(ctx, `INSERT INTO group_members(user_id, group_id) VALUES ($1, $2)`, shared.UserID, other.ID)
+	require.NoError(t, err)
+	_, err = integrationDB.ExecContext(ctx, `INSERT INTO user_group_rate_multipliers(user_id, group_id, rate_multiplier) VALUES ($1, $2, 0.5)`, shared.UserID, group.ID)
+	require.NoError(t, err)
+
+	affected, err := NewGroupRepository(client, integrationDB).DeleteCascade(ctx, group.ID)
+	require.NoError(t, err)
+	require.Equal(t, []int64{orphan.UserID}, affected)
+
+	countRows := func(query string, args ...any) int {
+		var n int
+		require.NoError(t, integrationDB.QueryRowContext(ctx, query, args...).Scan(&n))
+		return n
+	}
+	for _, table := range []string{"group_managers", "group_members", "group_management_settings", "user_group_rate_multipliers", "user_allowed_groups"} {
+		require.Zero(t, countRows(`SELECT COUNT(*) FROM `+table+` WHERE group_id=$1`, group.ID), table)
+	}
+	statusOf := func(userID int64) string {
+		var status string
+		require.NoError(t, integrationDB.QueryRowContext(ctx, `SELECT status FROM users WHERE id=$1`, userID).Scan(&status))
+		return status
+	}
+	require.Equal(t, service.StatusDisabled, statusOf(orphan.UserID))
+	require.Equal(t, service.StatusActive, statusOf(shared.UserID))
+	require.Zero(t, countRows(`SELECT COUNT(*) FROM groups WHERE id=$1 AND fallback_group_id_on_invalid_request IS NOT NULL`, referrer.ID))
+
+	// 组管理控制台、侧栏概况都不再出现已删除的分组
+	overview, err := svc.Overview(ctx, manager.ID, service.RoleGroupManager)
+	require.NoError(t, err)
+	require.Empty(t, overview.Groups)
+	summary, err := svc.Summary(ctx, manager.ID, service.RoleGroupManager)
+	require.NoError(t, err)
+	require.Zero(t, summary.ManagedGroupCount)
+}

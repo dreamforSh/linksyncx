@@ -176,6 +176,9 @@ func (r *apiKeyRepository) GetByKeyForAuth(ctx context.Context, key string) (*se
 				group.FieldPlatform,
 				group.FieldIsExclusive,
 				group.FieldStatus,
+				// 分组类型：管理分组的订阅组免扣余额、额度组累计组内用量，都读认证快照。
+				group.FieldKind,
+				group.FieldManagedType,
 				group.FieldSubscriptionType,
 				group.FieldRateMultiplier,
 				group.FieldDailyLimitUsd,
@@ -974,6 +977,7 @@ func groupEntityToService(g *dbent.Group) *service.Group {
 		Status:                          g.Status,
 		Kind:                            service.NormalizeGroupKind(g.Kind),
 		Category:                        derefString(g.Category),
+		ManagedType:                     derefString(g.ManagedType),
 		Hydrated:                        true,
 		DuplicateOperationID:            derefString(g.DuplicateOperationID),
 		SubscriptionType:                g.SubscriptionType,
