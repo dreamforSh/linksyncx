@@ -22097,6 +22097,7 @@ type GroupMutation struct {
 	status                                  *string
 	kind                                    *string
 	category                                *string
+	managed_type                            *string
 	duplicate_operation_id                  *string
 	platform                                *string
 	subscription_type                       *string
@@ -22882,6 +22883,55 @@ func (m *GroupMutation) CategoryCleared() bool {
 func (m *GroupMutation) ResetCategory() {
 	m.category = nil
 	delete(m.clearedFields, group.FieldCategory)
+}
+
+// SetManagedType sets the "managed_type" field.
+func (m *GroupMutation) SetManagedType(s string) {
+	m.managed_type = &s
+}
+
+// ManagedType returns the value of the "managed_type" field in the mutation.
+func (m *GroupMutation) ManagedType() (r string, exists bool) {
+	v := m.managed_type
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldManagedType returns the old "managed_type" field's value of the Group entity.
+// If the Group object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *GroupMutation) OldManagedType(ctx context.Context) (v *string, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldManagedType is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldManagedType requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldManagedType: %w", err)
+	}
+	return oldValue.ManagedType, nil
+}
+
+// ClearManagedType clears the value of the "managed_type" field.
+func (m *GroupMutation) ClearManagedType() {
+	m.managed_type = nil
+	m.clearedFields[group.FieldManagedType] = struct{}{}
+}
+
+// ManagedTypeCleared returns if the "managed_type" field was cleared in this mutation.
+func (m *GroupMutation) ManagedTypeCleared() bool {
+	_, ok := m.clearedFields[group.FieldManagedType]
+	return ok
+}
+
+// ResetManagedType resets all changes to the "managed_type" field.
+func (m *GroupMutation) ResetManagedType() {
+	m.managed_type = nil
+	delete(m.clearedFields, group.FieldManagedType)
 }
 
 // SetDuplicateOperationID sets the "duplicate_operation_id" field.
@@ -26008,7 +26058,7 @@ func (m *GroupMutation) Type() string {
 // order to get all numeric fields that were incremented/decremented, call
 // AddedFields().
 func (m *GroupMutation) Fields() []string {
-	fields := make([]string, 0, 68)
+	fields := make([]string, 0, 69)
 	if m.created_at != nil {
 		fields = append(fields, group.FieldCreatedAt)
 	}
@@ -26050,6 +26100,9 @@ func (m *GroupMutation) Fields() []string {
 	}
 	if m.category != nil {
 		fields = append(fields, group.FieldCategory)
+	}
+	if m.managed_type != nil {
+		fields = append(fields, group.FieldManagedType)
 	}
 	if m.duplicate_operation_id != nil {
 		fields = append(fields, group.FieldDuplicateOperationID)
@@ -26249,6 +26302,8 @@ func (m *GroupMutation) Field(name string) (ent.Value, bool) {
 		return m.Kind()
 	case group.FieldCategory:
 		return m.Category()
+	case group.FieldManagedType:
+		return m.ManagedType()
 	case group.FieldDuplicateOperationID:
 		return m.DuplicateOperationID()
 	case group.FieldPlatform:
@@ -26394,6 +26449,8 @@ func (m *GroupMutation) OldField(ctx context.Context, name string) (ent.Value, e
 		return m.OldKind(ctx)
 	case group.FieldCategory:
 		return m.OldCategory(ctx)
+	case group.FieldManagedType:
+		return m.OldManagedType(ctx)
 	case group.FieldDuplicateOperationID:
 		return m.OldDuplicateOperationID(ctx)
 	case group.FieldPlatform:
@@ -26608,6 +26665,13 @@ func (m *GroupMutation) SetField(name string, value ent.Value) error {
 			return fmt.Errorf("unexpected type %T for field %s", value, name)
 		}
 		m.SetCategory(v)
+		return nil
+	case group.FieldManagedType:
+		v, ok := value.(string)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetManagedType(v)
 		return nil
 	case group.FieldDuplicateOperationID:
 		v, ok := value.(string)
@@ -27353,6 +27417,9 @@ func (m *GroupMutation) ClearedFields() []string {
 	if m.FieldCleared(group.FieldCategory) {
 		fields = append(fields, group.FieldCategory)
 	}
+	if m.FieldCleared(group.FieldManagedType) {
+		fields = append(fields, group.FieldManagedType)
+	}
 	if m.FieldCleared(group.FieldDuplicateOperationID) {
 		fields = append(fields, group.FieldDuplicateOperationID)
 	}
@@ -27435,6 +27502,9 @@ func (m *GroupMutation) ClearField(name string) error {
 		return nil
 	case group.FieldCategory:
 		m.ClearCategory()
+		return nil
+	case group.FieldManagedType:
+		m.ClearManagedType()
 		return nil
 	case group.FieldDuplicateOperationID:
 		m.ClearDuplicateOperationID()
@@ -27545,6 +27615,9 @@ func (m *GroupMutation) ResetField(name string) error {
 		return nil
 	case group.FieldCategory:
 		m.ResetCategory()
+		return nil
+	case group.FieldManagedType:
+		m.ResetManagedType()
 		return nil
 	case group.FieldDuplicateOperationID:
 		m.ResetDuplicateOperationID()

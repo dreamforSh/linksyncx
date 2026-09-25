@@ -756,9 +756,13 @@ const flagPluginManagement = makeSidebarFlag(FeatureFlags.pluginManagement)
 const flagOpsMonitoring = () => adminSettingsStore.opsMonitoringEnabled
 const flagAdminPayment = () => adminSettingsStore.paymentEnabled
 const flagBatchImageAccess = () => canUseBatchImage.value
-// 组管理入口：超管与组管理员始终可见；普通用户只有属于某个分组时才显示
-const flagGroupManagement = () =>
-  isAdmin.value || authStore.isGroupManager || (groupManagementStore.summary?.membership_count ?? 0) > 0
+// 组管理入口：超管始终可见；组管理员与普通用户只有实际管理、属于某个（未删除的）分组，
+// 或收到待处理的分组邀请时才显示
+const flagGroupManagement = () => {
+  if (isAdmin.value) return true
+  const summary = groupManagementStore.summary
+  return (summary?.managed_group_count ?? 0) + (summary?.membership_count ?? 0) + (summary?.pending_invitation_count ?? 0) > 0
+}
 
 // buildSelfNavItems 构造用户自己的导航项（用户端主菜单和管理员的"我的账户"子菜单共享这组声明）。
 // withDashboard=true 时包含仪表盘（用户端），false 时不含（管理员的个人区已经有独立仪表盘入口）。
@@ -1101,7 +1105,7 @@ watch(
 watch(
   () => authStore.user?.id,
   (userId) => {
-    if (userId && !isAdmin.value && !authStore.isGroupManager) {
+    if (userId && !isAdmin.value) {
       void groupManagementStore.ensureSummary(userId)
     }
   },

@@ -3,6 +3,7 @@ package service
 import (
 	"context"
 	"errors"
+	"math"
 	"time"
 
 	dbent "github.com/Wei-Shaw/sub2api/ent"
@@ -24,6 +25,9 @@ var (
 	ErrManagedGroupEnforcement  = infraerrors.BadRequest("MANAGED_GROUP_ENFORCEMENT_REQUIRED", "managed groups must keep enforcement enabled")
 )
 
+// maxGroupUSDLimit 组内 5h / 7d 美元上限的取值上界（0 表示不限）。
+const maxGroupUSDLimit = 1_000_000_000
+
 type GroupManagementOverview struct {
 	Role string `json:"role"`
 	// Balance 当前用户自己的余额（组管理员划拨时参考）。
@@ -37,19 +41,26 @@ type GroupManagementOverview struct {
 type GroupSettings struct {
 	GroupID int64 `json:"group_id"`
 	// Managed 只读：管理分组永远开启管控，不能关闭。
-	Managed        bool   `json:"managed"`
+	Managed bool `json:"managed"`
+	// ManagedType 只读：管理分组类型（quota / subscription），分配方式由类型决定。
+	ManagedType    string `json:"managed_type,omitempty"`
 	Enabled        bool   `json:"enabled"`
 	AllocationMode string `json:"allocation_mode"`
 	MaxConcurrent  int    `json:"max_concurrent"`
 	DailyLimit     int64  `json:"daily_limit"`
+	// DefaultLimit5hUSD / DefaultLimit7dUSD 新成员套用的组内 5h / 7d 美元上限（额度组使用，0 表示不限）。
+	DefaultLimit5hUSD float64 `json:"default_limit_5h_usd"`
+	DefaultLimit7dUSD float64 `json:"default_limit_7d_usd"`
 }
 
 type ManagedGroup struct {
 	ID   int64  `json:"id"`
 	Name string `json:"name"`
 	// Kind 分组类型（channel / managed）；Category 管理分组分类（enterprise / team）。
-	Kind           string  `json:"kind"`
-	Category       string  `json:"category,omitempty"`
+	Kind     string `json:"kind"`
+	Category string `json:"category,omitempty"`
+	// ManagedType 管理分组类型：quota 额度组 / subscription 订阅组。
+	ManagedType    string  `json:"managed_type,omitempty"`
 	MemberCount    int64   `json:"member_count"`
 	AccountCount   int64   `json:"account_count"`
 	Manager        bool    `json:"manager"`
@@ -77,6 +88,22 @@ type GroupMembership struct {
 	DailyLimit       int64     `json:"daily_limit"`
 	DailyUsed        int64     `json:"daily_used"`
 	DailyWindowStart time.Time `json:"daily_window_start"`
+	// 组内 5h / 7d 美元上限与当前窗口用量（额度组使用；上限 0 表示不限）。
+	// Reset5hAt / Reset7dAt 为当前窗口的结束时间，没有进行中的窗口时为空。
+	Limit5hUSD float64    `json:"limit_5h_usd"`
+	Limit7dUSD float64    `json:"limit_7d_usd"`
+	Usage5hUSD float64    `json:"usage_5h_usd"`
+	Usage7dUSD float64    `json:"usage_7d_usd"`
+	Reset5hAt  *time.Time `json:"reset_5h_at,omitempty"`
+	Reset7dAt  *time.Time `json:"reset_7d_at,omitempty"`
+}
+
+// GroupMemberLimitInput 成员额度；Limit5hUSD / Limit7dUSD 为 nil 表示不修改。
+type GroupMemberLimitInput struct {
+	MaxConcurrent int
+	DailyLimit    int64
+	Limit5hUSD    *float64
+	Limit7dUSD    *float64
 }
 
 type AssignedAccount struct {
@@ -111,7 +138,7 @@ type GroupManagementRepository interface {
 	UpdateSettings(context.Context, GroupSettings) (*GroupSettings, error)
 	AddMember(context.Context, int64, int64) (*GroupMembership, error)
 	RemoveMember(context.Context, int64, int64) error
-	UpdateMemberLimit(context.Context, int64, int64, int, int64) (*GroupMembership, error)
+	UpdateMemberLimit(context.Context, int64, int64, GroupMemberLimitInput) (*GroupMembership, error)
 	AssignAccounts(context.Context, int64, int64, []int64, string) error
 	RevokeAccount(context.Context, int64, int64, int64) error
 	AdminListGroups(context.Context) ([]ManagedGroup, error)
@@ -130,6 +157,9 @@ type GroupManagementService struct {
 	authCache    APIKeyAuthCacheInvalidator
 	balanceCache userBalanceCacheInvalidator
 	defaults     defaultUserConcurrencyProvider
+
+	// 订阅组账号限额与重置卡依赖，见 WithGroupAccountDependencies。
+	accountDeps GroupAccountDependencies
 }
 
 func NewGroupManagementService(repo GroupManagementRepository) *GroupManagementService {
@@ -152,7 +182,19 @@ func (s *GroupManagementService) Members(ctx context.Context, actorID int64, rol
 	if selfOnly {
 		userID = &actorID
 	}
-	return s.repo.ListMembers(ctx, groupID, userID)
+	items, err := s.repo.ListMembers(ctx, groupID, userID)
+	if err != nil {
+		return nil, err
+	}
+	// 组管理员只能看到本组创建的组用户的余额；受邀加入的成员余额属于其个人隐私
+	if role == RoleGroupManager {
+		for i := range items {
+			if !items[i].Owned {
+				items[i].Balance = nil
+			}
+		}
+	}
+	return items, nil
 }
 
 func (s *GroupManagementService) Accounts(ctx context.Context, actorID int64, role string, groupID int64) ([]AssignedAccount, error) {
@@ -180,16 +222,34 @@ func (s *GroupManagementService) UpdateSettings(ctx context.Context, actorID int
 	if settings.MaxConcurrent <= 0 || settings.DailyLimit < 0 || (settings.AllocationMode != GroupAssignmentModeAuto && settings.AllocationMode != GroupAssignmentModeManual) {
 		return nil, ErrGroupManagementBadInput
 	}
-	if !settings.Enabled {
-		current, err := s.repo.GetSettings(ctx, settings.GroupID)
-		if err != nil {
-			return nil, err
-		}
-		if current.Managed {
+	limit5h, ok5h := normalizeGroupUSDLimit(settings.DefaultLimit5hUSD)
+	limit7d, ok7d := normalizeGroupUSDLimit(settings.DefaultLimit7dUSD)
+	if !ok5h || !ok7d {
+		return nil, ErrGroupManagementBadInput
+	}
+	settings.DefaultLimit5hUSD, settings.DefaultLimit7dUSD = limit5h, limit7d
+	current, err := s.repo.GetSettings(ctx, settings.GroupID)
+	if err != nil {
+		return nil, err
+	}
+	settings.Managed = current.Managed
+	settings.ManagedType = current.ManagedType
+	if current.Managed {
+		if !settings.Enabled {
 			return nil, ErrManagedGroupEnforcement
 		}
+		// 管理分组的分配方式由类型决定：额度组自动调度，订阅组手动分配
+		settings.AllocationMode = ManagedGroupAllocationMode(current.ManagedType)
 	}
 	return s.repo.UpdateSettings(ctx, settings)
+}
+
+// normalizeGroupUSDLimit 校验并规整组内美元上限（0 表示不限），保留 8 位小数。
+func normalizeGroupUSDLimit(value float64) (float64, bool) {
+	if math.IsNaN(value) || math.IsInf(value, 0) || value < 0 || value > maxGroupUSDLimit {
+		return 0, false
+	}
+	return math.Round(value*1e8) / 1e8, true
 }
 
 func (s *GroupManagementService) AddMember(ctx context.Context, actorID int64, role string, groupID, userID int64) (*GroupMembership, error) {
@@ -198,6 +258,16 @@ func (s *GroupManagementService) AddMember(ctx context.Context, actorID int64, r
 	}
 	if userID <= 0 {
 		return nil, ErrGroupManagementBadInput
+	}
+	// 组管理员看不到用户 ID：渠道分组的成员改为按邮箱邀请、对方确认后加入
+	if role == RoleGroupManager {
+		settings, err := s.repo.GetSettings(ctx, groupID)
+		if err != nil {
+			return nil, err
+		}
+		if !settings.Managed {
+			return nil, ErrGroupInviteRequired
+		}
 	}
 	// 管理分组：成员资格与绑定资格联动；渠道分组保持原有行为
 	if s.requireGroupUserDeps() == nil {
@@ -231,14 +301,24 @@ func (s *GroupManagementService) RemoveMember(ctx context.Context, actorID int64
 	return s.repo.RemoveMember(ctx, groupID, userID)
 }
 
-func (s *GroupManagementService) UpdateMemberLimit(ctx context.Context, actorID int64, role string, groupID, userID int64, maxConcurrent int, dailyLimit int64) (*GroupMembership, error) {
+func (s *GroupManagementService) UpdateMemberLimit(ctx context.Context, actorID int64, role string, groupID, userID int64, input GroupMemberLimitInput) (*GroupMembership, error) {
 	if err := s.requireAccess(ctx, actorID, role, groupID); err != nil {
 		return nil, err
 	}
-	if userID <= 0 || maxConcurrent <= 0 || dailyLimit < 0 {
+	if userID <= 0 || input.MaxConcurrent <= 0 || input.DailyLimit < 0 {
 		return nil, ErrGroupManagementBadInput
 	}
-	return s.repo.UpdateMemberLimit(ctx, groupID, userID, maxConcurrent, dailyLimit)
+	for _, limit := range []*float64{input.Limit5hUSD, input.Limit7dUSD} {
+		if limit == nil {
+			continue
+		}
+		normalized, ok := normalizeGroupUSDLimit(*limit)
+		if !ok {
+			return nil, ErrGroupManagementBadInput
+		}
+		*limit = normalized
+	}
+	return s.repo.UpdateMemberLimit(ctx, groupID, userID, input)
 }
 
 func (s *GroupManagementService) AssignAccounts(ctx context.Context, actorID int64, role string, groupID, userID int64, accountIDs []int64, mode string) error {
@@ -333,5 +413,6 @@ func ResetDailyWindow(member *GroupMembership, now time.Time) bool {
 
 func IsGroupManagementError(err error) bool {
 	return errors.Is(err, ErrGroupManagementForbidden) || errors.Is(err, ErrGroupManagementBadInput) || errors.Is(err, ErrAccountNotInGroup) ||
-		errors.Is(err, ErrGroupNotManaged) || errors.Is(err, ErrGroupMemberNotFound) || errors.Is(err, ErrGroupUserNotOwned)
+		errors.Is(err, ErrGroupNotManaged) || errors.Is(err, ErrGroupMemberNotFound) || errors.Is(err, ErrGroupUserNotOwned) ||
+		errors.Is(err, ErrGroupInviteRequired) || errors.Is(err, ErrGroupInvitationNotFound)
 }

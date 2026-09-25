@@ -1,6 +1,14 @@
 <template>
   <AppLayout>
     <div class="mx-auto max-w-7xl space-y-6">
+      <MyInvitationsCard
+        v-if="myInvitations.length"
+        :invitations="myInvitations"
+        :busy-id="invitationBusyId"
+        @accept="respondInvitation($event, true)"
+        @decline="respondInvitation($event, false)"
+      />
+
       <div
         v-if="loadError"
         role="alert"
@@ -44,7 +52,7 @@
         </div>
       </div>
 
-      <div v-else-if="overview && !groups.length" class="card">
+      <div v-else-if="overview && !groups.length && !myInvitations.length" class="card">
         <EmptyState :title="t('groupManagement.empty.title')" :description="t('groupManagement.empty.description')">
           <template #icon>
             <Icon name="users" size="xl" class="text-gray-300 dark:text-dark-500" />
@@ -134,11 +142,16 @@
                   :mode="settings.allocation_mode"
                   :busy="mutating"
                   :managed="isManagedGroup"
+                  :managed-type="managedType"
                   :can-transfer="canTransfer"
                   :can-manage-users="canManageGroupUsers"
-                  :add-mode="isAdmin ? 'id' : 'owned'"
+                  :can-invite="canInvite"
+                  :can-add-owned="canAddOwned"
+                  :can-add-by-id="isAdmin"
+                  :show-ids="isAdmin"
                   @add="addMemberOpen = true"
                   @add-owned="openAddOwned"
+                  @invite="inviteOpen = true"
                   @create-user="openCreateUser"
                   @edit="openLimit"
                   @assign="openAssign"
@@ -149,7 +162,21 @@
                 />
               </div>
               <div v-show="activeTab === 'accounts'" id="gm-panel-accounts" role="tabpanel" aria-labelledby="gm-tab-accounts">
+                <SubscriptionAccountsPanel
+                  v-if="isSubscriptionGroup"
+                  :usage="visibleAccountUsage"
+                  :accounts="accounts"
+                  :members="members"
+                  :loading="accountUsageLoading"
+                  :busy="mutating"
+                  :action-account-id="accountActionId"
+                  @assign="openAssign()"
+                  @reload="loadAccountUsage"
+                  @refresh-quota="refreshAccountQuota"
+                  @reset-credit="requestResetCredit"
+                />
                 <GroupAccountsPanel
+                  v-else
                   :accounts="accounts"
                   :members="members"
                   :mode="settings.allocation_mode"
@@ -157,8 +184,17 @@
                   @assign="openAssign()"
                 />
               </div>
+              <div v-show="activeTab === 'invitations'" id="gm-panel-invitations" role="tabpanel" aria-labelledby="gm-tab-invitations">
+                <GroupInvitationsPanel
+                  :invitations="groupInvitations"
+                  :loading="detailsLoading"
+                  :busy="mutating"
+                  @invite="inviteOpen = true"
+                  @revoke="requestRevokeInvitation"
+                />
+              </div>
               <div
-                v-if="isManagedGroup && activeTab === 'transfers'"
+                v-if="isQuotaGroup && activeTab === 'transfers'"
                 id="gm-panel-transfers"
                 role="tabpanel"
                 aria-labelledby="gm-tab-transfers"
@@ -198,7 +234,45 @@
           </template>
 
           <template v-else>
-            <section class="card p-5 sm:p-6" aria-labelledby="gm-mine-quota">
+            <section v-if="isQuotaGroup" class="card p-5 sm:p-6" aria-labelledby="gm-mine-quota" data-testid="my-quota-usage">
+              <div class="flex flex-wrap items-baseline justify-between gap-2">
+                <h3 id="gm-mine-quota" class="text-sm font-semibold text-gray-900 dark:text-white">
+                  {{ t('groupManagement.mine.usdQuotaTitle') }}
+                </h3>
+                <span class="text-xs text-gray-500 dark:text-dark-400">{{ t('groupManagement.mine.usdResetHint') }}</span>
+              </div>
+              <template v-if="ownMembership">
+                <div class="mt-4 grid gap-5 sm:grid-cols-2">
+                  <QuotaBar
+                    size="lg"
+                    :used="ownMembership.usage_5h_usd ?? 0"
+                    :limit="ownMembership.limit_5h_usd ?? 0"
+                    :format="formatUsdCompact"
+                    :hint="resetHint(ownMembership.reset_5h_at)"
+                    :label="t('groupManagement.members.usage5h')"
+                  />
+                  <QuotaBar
+                    size="lg"
+                    :used="ownMembership.usage_7d_usd ?? 0"
+                    :limit="ownMembership.limit_7d_usd ?? 0"
+                    :format="formatUsdCompact"
+                    :hint="resetHint(ownMembership.reset_7d_at)"
+                    :label="t('groupManagement.members.usage7d')"
+                  />
+                </div>
+                <div class="mt-3 flex flex-wrap gap-x-6 gap-y-1 text-sm text-gray-600 dark:text-dark-300">
+                  <span>{{ t('groupManagement.mine.balance', { amount: formatCurrency(ownBalance) }) }}</span>
+                  <span>
+                    {{ ownMembership.daily_limit > 0
+                      ? t('groupManagement.mine.remaining', { count: ownRemaining })
+                      : t('groupManagement.mine.unlimited') }}
+                  </span>
+                  <span>{{ t('groupManagement.mine.concurrency', { count: ownMembership.max_concurrent }) }}</span>
+                </div>
+              </template>
+            </section>
+
+            <section v-else class="card p-5 sm:p-6" aria-labelledby="gm-mine-quota">
               <div class="flex flex-wrap items-baseline justify-between gap-2">
                 <h3 id="gm-mine-quota" class="text-sm font-semibold text-gray-900 dark:text-white">
                   {{ t('groupManagement.mine.quotaTitle') }}
@@ -225,7 +299,32 @@
               </template>
             </section>
 
-            <section class="card overflow-hidden" aria-labelledby="gm-mine-accounts">
+            <section v-if="isSubscriptionGroup" class="card overflow-hidden" aria-labelledby="gm-mine-accounts">
+              <header class="flex items-center justify-between gap-3 border-b border-gray-100 px-5 py-4 dark:border-dark-700">
+                <div class="min-w-0">
+                  <h3 id="gm-mine-accounts" class="text-sm font-semibold text-gray-900 dark:text-white">
+                    {{ t('groupManagement.mine.accountsTitle') }}
+                  </h3>
+                  <p class="mt-0.5 text-xs text-gray-500 dark:text-dark-400">{{ t('groupManagement.mine.subscriptionHint') }}</p>
+                </div>
+                <span class="badge badge-gray tabular-nums">{{ visibleAccountUsage.length }}</span>
+              </header>
+              <div v-if="accountUsageLoading && !visibleAccountUsage.length" class="grid gap-4 p-5 lg:grid-cols-2" role="status" :aria-label="t('common.loading')">
+                <div v-for="index in 2" :key="index" class="skeleton h-36 rounded-xl" />
+              </div>
+              <div v-else-if="visibleAccountUsage.length" class="grid gap-4 p-5 lg:grid-cols-2">
+                <AccountUsageCard v-for="item in visibleAccountUsage" :key="item.account_id" :usage="item" />
+              </div>
+              <div v-else class="empty-state py-10">
+                <div class="mb-4 flex h-14 w-14 items-center justify-center rounded-2xl bg-gray-100 dark:bg-dark-700">
+                  <Icon name="server" size="lg" class="text-gray-400 dark:text-dark-400" />
+                </div>
+                <h4 class="empty-state-title text-base">{{ t('groupManagement.mine.emptyAccounts') }}</h4>
+                <p class="empty-state-description">{{ t('groupManagement.mine.emptyManual') }}</p>
+              </div>
+            </section>
+
+            <section v-else class="card overflow-hidden" aria-labelledby="gm-mine-accounts">
               <header class="flex items-center justify-between gap-3 border-b border-gray-100 px-5 py-4 dark:border-dark-700">
                 <h3 id="gm-mine-accounts" class="text-sm font-semibold text-gray-900 dark:text-white">
                   {{ t('groupManagement.mine.accountsTitle') }}
@@ -262,6 +361,13 @@
       :existing-ids="memberIds"
       @close="addMemberOpen = false"
       @submit="submitAddMember"
+    />
+    <InviteMemberDialog
+      :show="inviteOpen"
+      :saving="mutating"
+      :member-emails="memberEmails"
+      @close="inviteOpen = false"
+      @submit="submitInvite"
     />
     <CreateGroupUserDialog
       :show="createUserOpen"
@@ -302,6 +408,7 @@
       :saving="mutating"
       :member="limitMember"
       :defaults="memberDefaults"
+      :usd-limits="isQuotaGroup"
       @close="limitOpen = false"
       @submit="submitLimit"
     />
@@ -338,30 +445,40 @@ import Icon from '@/components/icons/Icon.vue'
 import EmptyState from '@/components/common/EmptyState.vue'
 import ConfirmDialog from '@/components/common/ConfirmDialog.vue'
 import AccountStatus from '@/components/groupManagement/AccountStatus.vue'
+import AccountUsageCard from '@/components/groupManagement/AccountUsageCard.vue'
 import AddMemberDialog from '@/components/groupManagement/AddMemberDialog.vue'
 import AddOwnedMemberDialog from '@/components/groupManagement/AddOwnedMemberDialog.vue'
 import AssignAccountsDialog from '@/components/groupManagement/AssignAccountsDialog.vue'
 import CreateGroupUserDialog from '@/components/groupManagement/CreateGroupUserDialog.vue'
 import GroupAccountsPanel from '@/components/groupManagement/GroupAccountsPanel.vue'
+import GroupInvitationsPanel from '@/components/groupManagement/GroupInvitationsPanel.vue'
 import GroupManagersPanel from '@/components/groupManagement/GroupManagersPanel.vue'
 import GroupMembersPanel from '@/components/groupManagement/GroupMembersPanel.vue'
 import GroupNavList from '@/components/groupManagement/GroupNavList.vue'
 import GroupSettingsPanel from '@/components/groupManagement/GroupSettingsPanel.vue'
 import GroupSummaryCard, { type SummaryStat } from '@/components/groupManagement/GroupSummaryCard.vue'
 import GroupTransfersPanel from '@/components/groupManagement/GroupTransfersPanel.vue'
+import InviteMemberDialog from '@/components/groupManagement/InviteMemberDialog.vue'
 import MemberLimitDialog from '@/components/groupManagement/MemberLimitDialog.vue'
+import MyInvitationsCard from '@/components/groupManagement/MyInvitationsCard.vue'
 import PlatformChip from '@/components/groupManagement/PlatformChip.vue'
 import QuotaBar from '@/components/groupManagement/QuotaBar.vue'
 import ResetPasswordDialog from '@/components/groupManagement/ResetPasswordDialog.vue'
+import SubscriptionAccountsPanel from '@/components/groupManagement/SubscriptionAccountsPanel.vue'
 import TransferBalanceDialog from '@/components/groupManagement/TransferBalanceDialog.vue'
-import { memberDisplayName } from '@/components/groupManagement/helpers'
+import { formatUsdCompact, memberDisplayName } from '@/components/groupManagement/helpers'
 import { useAppStore } from '@/stores/app'
+import { useAuthStore } from '@/stores/auth'
+import { useGroupManagementStore } from '@/stores/groupManagement'
 import { extractI18nErrorMessage } from '@/utils/apiError'
+import { formatCountdown, formatCurrency } from '@/utils/format'
 import type { GroupCategory } from '@/types'
 import {
   groupManagementAPI,
   type AdminGroupManagementDirectory,
   type CreateGroupUserInput,
+  type GroupAccountUsage,
+  type GroupInvitation,
   type GroupManagementAccount,
   type GroupManagementMember,
   type GroupManagementOverview,
@@ -371,8 +488,8 @@ import {
   type MemberLimit
 } from '@/api/groupManagement'
 
-type TabKey = 'members' | 'accounts' | 'transfers' | 'settings' | 'managers'
-type TabIcon = 'users' | 'server' | 'dollar' | 'cog' | 'shield'
+type TabKey = 'members' | 'accounts' | 'invitations' | 'transfers' | 'settings' | 'managers'
+type TabIcon = 'users' | 'server' | 'mail' | 'dollar' | 'cog' | 'shield'
 
 interface ConfirmState {
   title: string
@@ -385,6 +502,8 @@ interface ConfirmState {
 
 const { t } = useI18n()
 const appStore = useAppStore()
+const authStore = useAuthStore()
+const groupManagementStore = useGroupManagementStore()
 
 const overview = ref<GroupManagementOverview | null>(null)
 const directory = ref<AdminGroupManagementDirectory | null>(null)
@@ -422,15 +541,36 @@ const ownedCandidates = ref<GroupOwnedUser[]>([])
 const categorySaving = ref(false)
 const transfersRefreshKey = ref(0)
 
+// 邮箱邀请：组管理员发出的邀请与当前用户收到的邀请
+const inviteOpen = ref(false)
+const groupInvitations = ref<GroupInvitation[]>([])
+const myInvitations = ref<GroupInvitation[]>([])
+const invitationBusyId = ref<number | null>(null)
+
+// 订阅组：账号限额与重置卡
+const accountUsage = ref<GroupAccountUsage[]>([])
+const accountUsageGroupId = ref<number | null>(null)
+const accountUsageLoading = ref(false)
+const accountActionId = ref<number | null>(null)
+
 const groups = computed(() => overview.value?.manageable_groups ?? [])
 const selectedGroup = computed(() => groups.value.find(group => group.id === selectedGroupId.value) ?? null)
 const isAdmin = computed(() => overview.value?.role === 'admin')
+const isGroupManagerRole = computed(() => overview.value?.role === 'group_manager')
 const isManagedGroup = computed(() => selectedGroup.value?.kind === 'managed')
-// 划拨从组管理员自己的余额出，超管不参与；停用 / 重置密码组管理员与超管都可以
-const canTransfer = computed(() => isManagedGroup.value && overview.value?.role === 'group_manager' && Boolean(selectedGroup.value?.manager))
+const managedType = computed(() => isManagedGroup.value ? (selectedGroup.value?.managed_type ?? null) : null)
+const isQuotaGroup = computed(() => managedType.value === 'quota')
+const isSubscriptionGroup = computed(() => managedType.value === 'subscription')
+// 划拨从组管理员自己的余额出，只在额度组可用（订阅组不扣余额），超管不参与；
+// 停用 / 重置密码组管理员与超管都可以
+const canTransfer = computed(() => isQuotaGroup.value && isGroupManagerRole.value && Boolean(selectedGroup.value?.manager))
 const canManageGroupUsers = computed(() => isManagedGroup.value && Boolean(selectedGroup.value?.manager))
+const canInvite = computed(() => Boolean(selectedGroup.value?.manager))
+const canAddOwned = computed(() => isManagedGroup.value && isGroupManagerRole.value)
 const ownBalance = computed(() => overview.value?.balance ?? 0)
 const detailsReady = computed(() => selectedGroupId.value !== null && detailsGroupId.value === selectedGroupId.value)
+const visibleAccountUsage = computed(() => accountUsageGroupId.value === selectedGroupId.value ? accountUsage.value : [])
+const pendingInvitationCount = computed(() => groupInvitations.value.filter(item => item.status === 'pending').length)
 
 const ownMembership = computed(() => overview.value?.memberships.find(member => member.group_id === selectedGroupId.value) ?? null)
 const ownAccounts = computed(() => overview.value?.assignments.filter(account => account.group_id === selectedGroupId.value) ?? [])
@@ -441,9 +581,12 @@ const ownEmptyHint = computed(() => {
 })
 
 const memberIds = computed(() => members.value.map(member => member.user_id))
+const memberEmails = computed(() => members.value.map(member => member.email ?? '').filter(Boolean))
 const memberDefaults = computed<MemberLimit>(() => ({
   max_concurrent: settings.value?.max_concurrent ?? 1,
-  daily_limit: settings.value?.daily_limit ?? 0
+  daily_limit: settings.value?.daily_limit ?? 0,
+  limit_5h_usd: settings.value?.default_limit_5h_usd ?? 0,
+  limit_7d_usd: settings.value?.default_limit_7d_usd ?? 0
 }))
 
 const currentManagerIds = computed(() => directory.value?.groups.find(group => group.id === selectedGroupId.value)?.manager_user_ids ?? [])
@@ -464,9 +607,10 @@ const tabs = computed(() => {
       icon: 'users',
       count: group?.member_count
     },
-    { key: 'accounts', label: t('groupManagement.tabs.accounts'), icon: 'server', count: group?.account_count }
+    { key: 'accounts', label: t('groupManagement.tabs.accounts'), icon: 'server', count: group?.account_count },
+    { key: 'invitations', label: t('groupManagement.tabs.invitations'), icon: 'mail', count: pendingInvitationCount.value || undefined }
   ]
-  if (isManagedGroup.value) {
+  if (isQuotaGroup.value) {
     list.push({ key: 'transfers', label: t('groupManagement.tabs.transfers'), icon: 'dollar' })
   }
   list.push({ key: 'settings', label: t('groupManagement.tabs.settings'), icon: 'cog' })
@@ -489,11 +633,23 @@ const summaryStats = computed<SummaryStat[]>(() => {
     ]
   }
   const membership = ownMembership.value
+  if (isQuotaGroup.value) {
+    return [
+      { key: 'usage5h', label: t('groupManagement.summary.usage5h'), value: formatCurrency(membership?.usage_5h_usd ?? 0) },
+      { key: 'usage7d', label: t('groupManagement.summary.usage7d'), value: formatCurrency(membership?.usage_7d_usd ?? 0) },
+      { key: 'used', label: t('groupManagement.summary.todayUsed'), value: membership?.daily_used ?? 0 },
+      { key: 'balance', label: t('groupManagement.summary.myBalance'), value: formatCurrency(ownBalance.value) }
+    ]
+  }
   return [
     { key: 'used', label: t('groupManagement.summary.todayUsed'), value: membership?.daily_used ?? 0 },
     { key: 'daily', label: t('groupManagement.summary.dailyLimit'), value: membership && membership.daily_limit > 0 ? membership.daily_limit : unlimited },
     { key: 'concurrency', label: t('groupManagement.summary.concurrency'), value: membership?.max_concurrent ?? '-' },
-    { key: 'accounts', label: t('groupManagement.summary.myAccounts'), value: ownAccounts.value.length }
+    {
+      key: 'accounts',
+      label: t('groupManagement.summary.myAccounts'),
+      value: isSubscriptionGroup.value ? visibleAccountUsage.value.length : ownAccounts.value.length
+    }
   ]
 })
 
@@ -505,12 +661,22 @@ function errorMessage(error: unknown, fallbackKey: string) {
   return extractI18nErrorMessage(error, t, 'groupManagement.errors', t(fallbackKey))
 }
 
+function resetHint(resetAt?: string) {
+  const countdown = formatCountdown(resetAt)
+  return countdown ? t('groupManagement.members.resetsIn', { time: countdown }) : ''
+}
+
 async function loadOverview() {
   loading.value = true
   loadError.value = ''
   try {
-    const data = await groupManagementAPI.getOverview()
+    // 收到的邀请不影响控制台其他部分：接口异常时按没有邀请处理
+    const [data, invitations] = await Promise.all([
+      groupManagementAPI.getOverview(),
+      groupManagementAPI.myInvitations().catch(() => [] as GroupInvitation[])
+    ])
     overview.value = data
+    myInvitations.value = invitations
     directory.value = data.role === 'admin' ? await groupManagementAPI.adminDirectory() : null
     if (!data.manageable_groups.some(group => group.id === selectedGroupId.value)) {
       selectedGroupId.value = data.manageable_groups[0]?.id ?? null
@@ -530,32 +696,64 @@ async function loadGroupDetails() {
     members.value = []
     accounts.value = []
     settings.value = null
+    groupInvitations.value = []
     detailsGroupId.value = null
     detailsLoading.value = false
+    void loadAccountUsage()
     return
   }
   detailsLoading.value = true
   try {
-    const [groupMembers, pool, groupSettings] = await Promise.all([
+    const [groupMembers, pool, groupSettings, invitations] = await Promise.all([
       groupManagementAPI.getMembers(id),
       groupManagementAPI.getAccounts(id),
-      groupManagementAPI.getSettings(id)
+      groupManagementAPI.getSettings(id),
+      groupManagementAPI.listInvitations(id)
     ])
     if (request !== detailsRequest) return
     members.value = groupMembers
     accounts.value = pool
+    groupInvitations.value = invitations
     settings.value = {
       enabled: groupSettings.enabled,
       allocation_mode: groupSettings.allocation_mode,
       max_concurrent: groupSettings.max_concurrent,
       daily_limit: groupSettings.daily_limit,
-      managed: groupSettings.managed ?? false
+      managed: groupSettings.managed ?? false,
+      managed_type: groupSettings.managed_type,
+      default_limit_5h_usd: groupSettings.default_limit_5h_usd ?? 0,
+      default_limit_7d_usd: groupSettings.default_limit_7d_usd ?? 0
     }
     detailsGroupId.value = id
+    void loadAccountUsage()
   } catch (error) {
     if (request === detailsRequest) loadError.value = errorMessage(error, 'groupManagement.loadFailed')
   } finally {
     if (request === detailsRequest) detailsLoading.value = false
+  }
+}
+
+// 订阅组的账号限额：组管理员看分组全部账号，组用户只看分配给自己的
+let usageRequest = 0
+async function loadAccountUsage() {
+  const id = selectedGroupId.value
+  const request = ++usageRequest
+  if (!id || !isSubscriptionGroup.value) {
+    accountUsage.value = []
+    accountUsageGroupId.value = null
+    accountUsageLoading.value = false
+    return
+  }
+  accountUsageLoading.value = true
+  try {
+    const items = await groupManagementAPI.getAccountUsage(id)
+    if (request !== usageRequest) return
+    accountUsage.value = items
+    accountUsageGroupId.value = id
+  } catch (error) {
+    if (request === usageRequest) appStore.showError(errorMessage(error, 'groupManagement.accountUsage.loadFailed'))
+  } finally {
+    if (request === usageRequest) accountUsageLoading.value = false
   }
 }
 
@@ -615,6 +813,44 @@ async function submitAddMember(userId: number) {
   if (!groupId) return
   if (await mutate(() => groupManagementAPI.addMember(groupId, userId), 'groupManagement.toast.memberAdded')) {
     addMemberOpen.value = false
+  }
+}
+
+async function submitInvite(email: string) {
+  const groupId = selectedGroupId.value
+  if (!groupId) return
+  if (await mutate(() => groupManagementAPI.inviteMember(groupId, email), 'groupManagement.toast.invitationSent')) {
+    inviteOpen.value = false
+  }
+}
+
+function requestRevokeInvitation(invitation: GroupInvitation) {
+  const groupId = selectedGroupId.value
+  if (!groupId) return
+  openConfirm({
+    title: t('groupManagement.invitations.revokeTitle'),
+    message: t('groupManagement.invitations.confirmRevoke', { email: invitation.email }),
+    confirmText: t('groupManagement.invitations.revoke'),
+    danger: true,
+    run: () => mutate(() => groupManagementAPI.revokeInvitation(groupId, invitation.id), 'groupManagement.toast.invitationRevoked')
+  })
+}
+
+async function respondInvitation(invitation: GroupInvitation, accept: boolean) {
+  if (invitationBusyId.value !== null) return
+  invitationBusyId.value = invitation.id
+  try {
+    if (accept) await groupManagementAPI.acceptInvitation(invitation.id)
+    else await groupManagementAPI.declineInvitation(invitation.id)
+    appStore.showSuccess(t(accept ? 'groupManagement.toast.invitationAccepted' : 'groupManagement.toast.invitationDeclined'))
+    if (accept) selectedGroupId.value = invitation.group_id
+    await refresh()
+    // 侧栏入口按所属分组与待处理邀请显示，处理完立即刷新
+    void groupManagementStore.ensureSummary(authStore.user?.id, true)
+  } catch (error) {
+    appStore.showError(errorMessage(error, 'groupManagement.saveFailed'))
+  } finally {
+    invitationBusyId.value = null
   }
 }
 
@@ -709,6 +945,52 @@ function requestRevokeManager(userId: number) {
 
 function onPanelError(error: unknown) {
   appStore.showError(errorMessage(error, 'groupManagement.loadFailed'))
+}
+
+function replaceAccountUsage(updated: GroupAccountUsage) {
+  accountUsage.value = accountUsage.value.map(item => item.account_id === updated.account_id ? updated : item)
+}
+
+async function refreshAccountQuota(item: GroupAccountUsage) {
+  const groupId = selectedGroupId.value
+  if (!groupId || accountActionId.value !== null) return
+  accountActionId.value = item.account_id
+  try {
+    replaceAccountUsage(await groupManagementAPI.refreshAccountQuota(groupId, item.account_id))
+    appStore.showSuccess(t('groupManagement.toast.quotaRefreshed'))
+  } catch (error) {
+    appStore.showError(errorMessage(error, 'groupManagement.accountUsage.refreshFailed'))
+  } finally {
+    accountActionId.value = null
+  }
+}
+
+function requestResetCredit(item: GroupAccountUsage) {
+  openConfirm({
+    title: t('groupManagement.accountUsage.resetTitle'),
+    message: t('groupManagement.accountUsage.confirmReset', { name: item.name, count: item.reset_credits?.available_count ?? 0 }),
+    details: [t('groupManagement.accountUsage.resetDetail')],
+    confirmText: t('groupManagement.accountUsage.useCredit'),
+    danger: false,
+    run: () => resetAccountCredit(item)
+  })
+}
+
+async function resetAccountCredit(item: GroupAccountUsage) {
+  const groupId = selectedGroupId.value
+  if (!groupId || accountActionId.value !== null) return
+  accountActionId.value = item.account_id
+  try {
+    const result = await groupManagementAPI.resetAccountCredit(groupId, item.account_id)
+    if (result.account) replaceAccountUsage(result.account)
+    if (result.warning_code) appStore.showWarning(t('groupManagement.toast.creditUsedWithWarning'))
+    else appStore.showSuccess(t('groupManagement.toast.creditUsed'))
+    if (!result.account) await loadAccountUsage()
+  } catch (error) {
+    appStore.showError(errorMessage(error, 'groupManagement.accountUsage.resetFailed'))
+  } finally {
+    accountActionId.value = null
+  }
 }
 
 async function updateCategory(category: GroupCategory) {

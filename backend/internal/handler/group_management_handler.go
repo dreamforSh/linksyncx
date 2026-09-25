@@ -22,12 +22,18 @@ func NewGroupManagementHandler(svc *service.GroupManagementService) *GroupManage
 type groupLimitRequest struct {
 	MaxConcurrent int   `json:"max_concurrent"`
 	DailyLimit    int64 `json:"daily_limit"`
+	// 组内 5h / 7d 美元上限（额度组），省略表示不修改，0 表示不限
+	Limit5hUSD *float64 `json:"limit_5h_usd" binding:"omitempty,gte=0"`
+	Limit7dUSD *float64 `json:"limit_7d_usd" binding:"omitempty,gte=0"`
 }
 type groupSettingsRequest struct {
 	Enabled        bool   `json:"enabled"`
 	AllocationMode string `json:"allocation_mode" binding:"required,oneof=manual auto"`
 	MaxConcurrent  int    `json:"max_concurrent"`
 	DailyLimit     int64  `json:"daily_limit"`
+	// 新成员默认的 5h / 7d 美元上限，省略表示不修改
+	DefaultLimit5hUSD *float64 `json:"default_limit_5h_usd" binding:"omitempty,gte=0"`
+	DefaultLimit7dUSD *float64 `json:"default_limit_7d_usd" binding:"omitempty,gte=0"`
 }
 type groupMemberRequest struct {
 	UserID int64 `json:"user_id" binding:"required,gt=0"`
@@ -199,7 +205,22 @@ func (h *GroupManagementHandler) Settings(c *gin.Context) {
 		response.BadRequest(c, "invalid request: "+err.Error())
 		return
 	}
-	out, err := h.service.UpdateSettings(c.Request.Context(), uid, role, service.GroupSettings{GroupID: gid, Enabled: req.Enabled, AllocationMode: req.AllocationMode, MaxConcurrent: req.MaxConcurrent, DailyLimit: req.DailyLimit})
+	settings := service.GroupSettings{GroupID: gid, Enabled: req.Enabled, AllocationMode: req.AllocationMode, MaxConcurrent: req.MaxConcurrent, DailyLimit: req.DailyLimit}
+	if req.DefaultLimit5hUSD == nil || req.DefaultLimit7dUSD == nil {
+		current, err := h.service.Settings(c.Request.Context(), uid, role, gid)
+		if err != nil {
+			handleGroupManagementError(c, err)
+			return
+		}
+		settings.DefaultLimit5hUSD, settings.DefaultLimit7dUSD = current.DefaultLimit5hUSD, current.DefaultLimit7dUSD
+	}
+	if req.DefaultLimit5hUSD != nil {
+		settings.DefaultLimit5hUSD = *req.DefaultLimit5hUSD
+	}
+	if req.DefaultLimit7dUSD != nil {
+		settings.DefaultLimit7dUSD = *req.DefaultLimit7dUSD
+	}
+	out, err := h.service.UpdateSettings(c.Request.Context(), uid, role, settings)
 	if err != nil {
 		handleGroupManagementError(c, err)
 		return
@@ -226,7 +247,12 @@ func (h *GroupManagementHandler) MemberLimit(c *gin.Context) {
 		response.BadRequest(c, "invalid request: "+err.Error())
 		return
 	}
-	out, err := h.service.UpdateMemberLimit(c.Request.Context(), uid, role, gid, target, req.MaxConcurrent, req.DailyLimit)
+	out, err := h.service.UpdateMemberLimit(c.Request.Context(), uid, role, gid, target, service.GroupMemberLimitInput{
+		MaxConcurrent: req.MaxConcurrent,
+		DailyLimit:    req.DailyLimit,
+		Limit5hUSD:    req.Limit5hUSD,
+		Limit7dUSD:    req.Limit7dUSD,
+	})
 	if err != nil {
 		handleGroupManagementError(c, err)
 		return
@@ -577,6 +603,175 @@ func (h *GroupManagementHandler) AdminUserGroups(c *gin.Context) {
 		ids = append(ids, id)
 	}
 	out, err := h.service.AdminUserGroupSummaries(c.Request.Context(), ids)
+	if err != nil {
+		handleGroupManagementError(c, err)
+		return
+	}
+	response.Success(c, out)
+}
+
+type groupInvitationRequest struct {
+	Email string `json:"email" binding:"required,max=255"`
+}
+
+// GET /api/v1/group-management/groups/:id/invitations
+func (h *GroupManagementHandler) GroupInvitations(c *gin.Context) {
+	uid, role, ok := h.actor(c)
+	if !ok {
+		return
+	}
+	gid, ok := parseGroupID(c)
+	if !ok {
+		return
+	}
+	out, err := h.service.GroupInvitations(c.Request.Context(), uid, role, gid)
+	if err != nil {
+		handleGroupManagementError(c, err)
+		return
+	}
+	response.Success(c, out)
+}
+
+// POST /api/v1/group-management/groups/:id/invitations
+func (h *GroupManagementHandler) InviteMember(c *gin.Context) {
+	uid, role, ok := h.actor(c)
+	if !ok {
+		return
+	}
+	gid, ok := parseGroupID(c)
+	if !ok {
+		return
+	}
+	var req groupInvitationRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		response.BadRequest(c, "invalid request: "+err.Error())
+		return
+	}
+	out, err := h.service.InviteMember(c.Request.Context(), uid, role, gid, req.Email)
+	if err != nil {
+		handleGroupManagementError(c, err)
+		return
+	}
+	response.Success(c, out)
+}
+
+// DELETE /api/v1/group-management/groups/:id/invitations/:invitation_id
+func (h *GroupManagementHandler) RevokeInvitation(c *gin.Context) {
+	uid, role, ok := h.actor(c)
+	if !ok {
+		return
+	}
+	gid, ok := parseGroupID(c)
+	if !ok {
+		return
+	}
+	invitationID, ok := parseParamID(c, "invitation_id")
+	if !ok {
+		return
+	}
+	if err := h.service.RevokeInvitation(c.Request.Context(), uid, role, gid, invitationID); err != nil {
+		handleGroupManagementError(c, err)
+		return
+	}
+	response.Success(c, gin.H{"status": service.GroupInvitationRevoked})
+}
+
+// GET /api/v1/group-management/me/invitations
+func (h *GroupManagementHandler) MyInvitations(c *gin.Context) {
+	uid, role, ok := h.actor(c)
+	if !ok {
+		return
+	}
+	out, err := h.service.MyInvitations(c.Request.Context(), uid, role)
+	if err != nil {
+		handleGroupManagementError(c, err)
+		return
+	}
+	response.Success(c, out)
+}
+
+// POST /api/v1/group-management/me/invitations/:invitation_id/accept
+func (h *GroupManagementHandler) AcceptInvitation(c *gin.Context) {
+	h.respondInvitation(c, true)
+}
+
+// POST /api/v1/group-management/me/invitations/:invitation_id/decline
+func (h *GroupManagementHandler) DeclineInvitation(c *gin.Context) {
+	h.respondInvitation(c, false)
+}
+
+func (h *GroupManagementHandler) respondInvitation(c *gin.Context, accept bool) {
+	uid, role, ok := h.actor(c)
+	if !ok {
+		return
+	}
+	invitationID, ok := parseParamID(c, "invitation_id")
+	if !ok {
+		return
+	}
+	out, err := h.service.RespondInvitation(c.Request.Context(), uid, role, invitationID, accept)
+	if err != nil {
+		handleGroupManagementError(c, err)
+		return
+	}
+	response.Success(c, out)
+}
+
+// GET /api/v1/group-management/groups/:id/account-usage
+func (h *GroupManagementHandler) AccountUsage(c *gin.Context) {
+	uid, role, ok := h.actor(c)
+	if !ok {
+		return
+	}
+	gid, ok := parseGroupID(c)
+	if !ok {
+		return
+	}
+	out, err := h.service.AccountUsage(c.Request.Context(), uid, role, gid)
+	if err != nil {
+		handleGroupManagementError(c, err)
+		return
+	}
+	response.Success(c, out)
+}
+
+// POST /api/v1/group-management/groups/:id/accounts/:account_id/quota-refresh
+func (h *GroupManagementHandler) RefreshAccountQuota(c *gin.Context) {
+	uid, role, ok := h.actor(c)
+	if !ok {
+		return
+	}
+	gid, ok := parseGroupID(c)
+	if !ok {
+		return
+	}
+	accountID, ok := parseParamID(c, "account_id")
+	if !ok {
+		return
+	}
+	out, err := h.service.RefreshAccountQuota(c.Request.Context(), uid, role, gid, accountID)
+	if err != nil {
+		handleGroupManagementError(c, err)
+		return
+	}
+	response.Success(c, out)
+}
+
+// POST /api/v1/group-management/groups/:id/accounts/:account_id/reset-credit
+func (h *GroupManagementHandler) ResetAccountCredit(c *gin.Context) {
+	uid, role, ok := h.actor(c)
+	if !ok {
+		return
+	}
+	gid, ok := parseGroupID(c)
+	if !ok {
+		return
+	}
+	accountID, ok := parseParamID(c, "account_id")
+	if !ok {
+		return
+	}
+	out, err := h.service.ResetAccountCredit(c.Request.Context(), uid, role, gid, accountID)
 	if err != nil {
 		handleGroupManagementError(c, err)
 		return

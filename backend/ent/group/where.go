@@ -125,6 +125,11 @@ func Category(v string) predicate.Group {
 	return predicate.Group(sql.FieldEQ(FieldCategory, v))
 }
 
+// ManagedType applies equality check predicate on the "managed_type" field. It's identical to ManagedTypeEQ.
+func ManagedType(v string) predicate.Group {
+	return predicate.Group(sql.FieldEQ(FieldManagedType, v))
+}
+
 // DuplicateOperationID applies equality check predicate on the "duplicate_operation_id" field. It's identical to DuplicateOperationIDEQ.
 func DuplicateOperationID(v string) predicate.Group {
 	return predicate.Group(sql.FieldEQ(FieldDuplicateOperationID, v))
@@ -1058,6 +1063,81 @@ func CategoryEqualFold(v string) predicate.Group {
 // CategoryContainsFold applies the ContainsFold predicate on the "category" field.
 func CategoryContainsFold(v string) predicate.Group {
 	return predicate.Group(sql.FieldContainsFold(FieldCategory, v))
+}
+
+// ManagedTypeEQ applies the EQ predicate on the "managed_type" field.
+func ManagedTypeEQ(v string) predicate.Group {
+	return predicate.Group(sql.FieldEQ(FieldManagedType, v))
+}
+
+// ManagedTypeNEQ applies the NEQ predicate on the "managed_type" field.
+func ManagedTypeNEQ(v string) predicate.Group {
+	return predicate.Group(sql.FieldNEQ(FieldManagedType, v))
+}
+
+// ManagedTypeIn applies the In predicate on the "managed_type" field.
+func ManagedTypeIn(vs ...string) predicate.Group {
+	return predicate.Group(sql.FieldIn(FieldManagedType, vs...))
+}
+
+// ManagedTypeNotIn applies the NotIn predicate on the "managed_type" field.
+func ManagedTypeNotIn(vs ...string) predicate.Group {
+	return predicate.Group(sql.FieldNotIn(FieldManagedType, vs...))
+}
+
+// ManagedTypeGT applies the GT predicate on the "managed_type" field.
+func ManagedTypeGT(v string) predicate.Group {
+	return predicate.Group(sql.FieldGT(FieldManagedType, v))
+}
+
+// ManagedTypeGTE applies the GTE predicate on the "managed_type" field.
+func ManagedTypeGTE(v string) predicate.Group {
+	return predicate.Group(sql.FieldGTE(FieldManagedType, v))
+}
+
+// ManagedTypeLT applies the LT predicate on the "managed_type" field.
+func ManagedTypeLT(v string) predicate.Group {
+	return predicate.Group(sql.FieldLT(FieldManagedType, v))
+}
+
+// ManagedTypeLTE applies the LTE predicate on the "managed_type" field.
+func ManagedTypeLTE(v string) predicate.Group {
+	return predicate.Group(sql.FieldLTE(FieldManagedType, v))
+}
+
+// ManagedTypeContains applies the Contains predicate on the "managed_type" field.
+func ManagedTypeContains(v string) predicate.Group {
+	return predicate.Group(sql.FieldContains(FieldManagedType, v))
+}
+
+// ManagedTypeHasPrefix applies the HasPrefix predicate on the "managed_type" field.
+func ManagedTypeHasPrefix(v string) predicate.Group {
+	return predicate.Group(sql.FieldHasPrefix(FieldManagedType, v))
+}
+
+// ManagedTypeHasSuffix applies the HasSuffix predicate on the "managed_type" field.
+func ManagedTypeHasSuffix(v string) predicate.Group {
+	return predicate.Group(sql.FieldHasSuffix(FieldManagedType, v))
+}
+
+// ManagedTypeIsNil applies the IsNil predicate on the "managed_type" field.
+func ManagedTypeIsNil() predicate.Group {
+	return predicate.Group(sql.FieldIsNull(FieldManagedType))
+}
+
+// ManagedTypeNotNil applies the NotNil predicate on the "managed_type" field.
+func ManagedTypeNotNil() predicate.Group {
+	return predicate.Group(sql.FieldNotNull(FieldManagedType))
+}
+
+// ManagedTypeEqualFold applies the EqualFold predicate on the "managed_type" field.
+func ManagedTypeEqualFold(v string) predicate.Group {
+	return predicate.Group(sql.FieldEqualFold(FieldManagedType, v))
+}
+
+// ManagedTypeContainsFold applies the ContainsFold predicate on the "managed_type" field.
+func ManagedTypeContainsFold(v string) predicate.Group {
+	return predicate.Group(sql.FieldContainsFold(FieldManagedType, v))
 }
 
 // DuplicateOperationIDEQ applies the EQ predicate on the "duplicate_operation_id" field.

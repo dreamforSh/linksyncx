@@ -10,6 +10,10 @@
       <span class="opacity-40" aria-hidden="true">·</span>
       <span>{{ categoryLabel }}</span>
     </template>
+    <template v-if="managed && managedTypeLabel">
+      <span class="opacity-40" aria-hidden="true">·</span>
+      <span data-testid="group-managed-type-label">{{ managedTypeLabel }}</span>
+    </template>
   </span>
 </template>
 
@@ -17,16 +21,19 @@
 import { computed } from 'vue'
 import { useI18n } from 'vue-i18n'
 import Icon from '@/components/icons/Icon.vue'
-import type { GroupCategory, GroupKind } from '@/types'
+import type { GroupCategory, GroupKind, ManagedGroupType } from '@/types'
 
 const props = withDefaults(defineProps<{
   kind?: GroupKind
   category?: GroupCategory | null
+  // 管理分组类型：额度组 / 订阅组
+  managedType?: ManagedGroupType | null
   // 渠道分组默认不显示徽章，避免列表里满屏「渠道分组」
   showChannel?: boolean
 }>(), {
   kind: 'channel',
   category: null,
+  managedType: null,
   showChannel: false
 })
 
@@ -37,6 +44,12 @@ const managed = computed(() => props.kind === 'managed')
 const categoryLabel = computed(() => {
   if (props.category === 'enterprise') return t('admin.groups.groupKind.enterprise')
   if (props.category === 'team') return t('admin.groups.groupKind.team')
+  return ''
+})
+
+const managedTypeLabel = computed(() => {
+  if (props.managedType === 'quota') return t('admin.groups.groupKind.quota')
+  if (props.managedType === 'subscription') return t('admin.groups.groupKind.subscription')
   return ''
 })
 

@@ -79,6 +79,10 @@ func (h *GatewayHandler) resolveKeyBillingRate(c *gin.Context, apiKey *service.A
 
 func buildKeyBillingInfo(apiKey *service.APIKey, resolvedRate float64, now time.Time) keyBillingInfoResponse {
 	groupRate := apiKey.Group.RateMultiplier
+	// 管理分组的订阅组不扣余额，实际生效倍率为 0
+	if service.ManagedSubscriptionBilling(apiKey) {
+		groupRate, resolvedRate = 0, 0
+	}
 	var userRate *float64
 	if resolvedRate != groupRate {
 		userRate = &resolvedRate

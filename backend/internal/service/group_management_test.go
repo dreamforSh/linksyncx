@@ -121,9 +121,24 @@ func TestGroupManagementManagedGroupKeepsEnforcement(t *testing.T) {
 		t.Fatalf("settings were persisted despite rejection: %+v", repo.updated)
 	}
 
-	switchMode := GroupSettings{GroupID: 42, Enabled: true, AllocationMode: GroupAssignmentModeAuto, MaxConcurrent: 2}
+	// 管理分组的分配方式由类型决定：订阅组固定手动分配，额度组固定自动调度
+	repo.current.ManagedType = ManagedGroupTypeSubscription
+	switchMode := GroupSettings{GroupID: 42, Enabled: true, AllocationMode: GroupAssignmentModeAuto, MaxConcurrent: 2, DefaultLimit5hUSD: 1.5}
 	if _, err := svc.UpdateSettings(ctx, 1, RoleAdmin, switchMode); err != nil {
-		t.Fatalf("switching managed allocation mode error = %v, want nil", err)
+		t.Fatalf("updating managed settings error = %v, want nil", err)
+	}
+	if repo.updated == nil || repo.updated.AllocationMode != GroupAssignmentModeManual || repo.updated.DefaultLimit5hUSD != 1.5 {
+		t.Fatalf("subscription group settings = %+v, want manual allocation and default 5h limit", repo.updated)
+	}
+	repo.current.ManagedType = ManagedGroupTypeQuota
+	switchMode.AllocationMode = GroupAssignmentModeManual
+	if _, err := svc.UpdateSettings(ctx, 1, RoleAdmin, switchMode); err != nil || repo.updated.AllocationMode != GroupAssignmentModeAuto {
+		t.Fatalf("quota group settings = %+v, error = %v, want auto allocation", repo.updated, err)
+	}
+	negative := switchMode
+	negative.DefaultLimit7dUSD = -1
+	if _, err := svc.UpdateSettings(ctx, 1, RoleAdmin, negative); !errors.Is(err, ErrGroupManagementBadInput) {
+		t.Fatalf("negative default limit error = %v, want bad input", err)
 	}
 
 	repo.current.Managed = false

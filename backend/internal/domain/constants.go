@@ -105,6 +105,13 @@ const (
 	GroupCategoryTeam       = "team"
 )
 
+// Managed group type constants（仅管理分组使用）：额度组由组管理员分配余额与 5h / 7d 上限，
+// 组用户共用分组账号并按用量扣余额；订阅组由组管理员分配账号，组用户只用被分配账号的订阅额度、不扣余额。
+const (
+	ManagedGroupTypeQuota        = "quota"
+	ManagedGroupTypeSubscription = "subscription"
+)
+
 // Subscription status constants
 const (
 	SubscriptionStatusActive    = "active"

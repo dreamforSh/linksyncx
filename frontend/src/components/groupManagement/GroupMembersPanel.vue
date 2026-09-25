@@ -15,28 +15,32 @@
           :aria-label="t('groupManagement.members.search')"
         />
       </div>
-      <p v-if="managed && !canTransfer" class="hidden text-xs text-gray-500 dark:text-dark-400 lg:block">
+      <p v-if="quotaGroup && !canTransfer" class="hidden text-xs text-gray-500 dark:text-dark-400 lg:block">
         {{ t('groupManagement.members.adminTransferHint') }}
       </p>
       <div class="ml-auto flex flex-wrap gap-2">
-        <template v-if="managed">
-          <button
-            type="button"
-            class="btn btn-secondary btn-md"
-            :disabled="busy"
-            @click="addMode === 'owned' ? emit('add-owned') : emit('add')"
-          >
-            <Icon name="userPlus" size="sm" />
-            {{ addMode === 'owned' ? t('groupManagement.members.addOwned') : t('groupManagement.members.addById') }}
-          </button>
-          <button type="button" class="btn btn-primary btn-md" :disabled="busy" @click="emit('create-user')">
-            <Icon name="plus" size="sm" />
-            {{ t('groupManagement.members.createUser') }}
-          </button>
-        </template>
-        <button v-else type="button" class="btn btn-primary btn-md" :disabled="busy" @click="emit('add')">
+        <button v-if="canInvite" type="button" class="btn btn-secondary btn-md" :disabled="busy" @click="emit('invite')">
+          <Icon name="mail" size="sm" />
+          {{ t('groupManagement.invitations.invite') }}
+        </button>
+        <button v-if="canAddOwned" type="button" class="btn btn-secondary btn-md" :disabled="busy" @click="emit('add-owned')">
           <Icon name="userPlus" size="sm" />
-          {{ t('groupManagement.members.add') }}
+          {{ t('groupManagement.members.addOwned') }}
+        </button>
+        <button
+          v-if="canAddById"
+          type="button"
+          class="btn btn-md"
+          :class="managed ? 'btn-secondary' : 'btn-primary'"
+          :disabled="busy"
+          @click="emit('add')"
+        >
+          <Icon name="userPlus" size="sm" />
+          {{ managed ? t('groupManagement.members.addById') : t('groupManagement.members.add') }}
+        </button>
+        <button v-if="managed" type="button" class="btn btn-primary btn-md" :disabled="busy" @click="emit('create-user')">
+          <Icon name="plus" size="sm" />
+          {{ t('groupManagement.members.createUser') }}
         </button>
       </div>
     </header>
@@ -58,11 +62,13 @@
     </p>
 
     <div v-else class="overflow-x-auto">
-      <table class="table" :class="managed ? 'min-w-[880px]' : 'min-w-[720px]'">
+      <table class="table" :class="tableWidth">
         <thead>
           <tr class="whitespace-nowrap">
             <th scope="col">{{ t('groupManagement.members.member') }}</th>
-            <th v-if="managed" scope="col" class="!text-right">{{ t('groupManagement.members.balance') }}</th>
+            <th v-if="quotaGroup" scope="col" class="!text-right">{{ t('groupManagement.members.balance') }}</th>
+            <th v-if="quotaGroup" scope="col">{{ t('groupManagement.members.usage5h') }}</th>
+            <th v-if="quotaGroup" scope="col">{{ t('groupManagement.members.usage7d') }}</th>
             <th scope="col">{{ t('groupManagement.members.todayUsage') }}</th>
             <th scope="col">{{ t('groupManagement.members.concurrency') }}</th>
             <th v-if="manualMode" scope="col">{{ t('groupManagement.members.assignedAccounts') }}</th>
@@ -84,14 +90,38 @@
                   <div class="flex min-w-0 items-center gap-1.5">
                     <span class="truncate font-medium text-gray-900 dark:text-white">{{ memberDisplayName(member) }}</span>
                     <span v-if="member.owned" class="badge badge-primary shrink-0">{{ t('groupManagement.members.owned') }}</span>
+                    <span v-else-if="managed" class="badge badge-gray shrink-0">{{ t('groupManagement.members.invited') }}</span>
                     <span v-if="isDisabled(member)" class="badge badge-gray shrink-0">{{ t('groupManagement.members.disabled') }}</span>
                   </div>
-                  <div class="truncate text-xs text-gray-500 dark:text-dark-400">{{ memberSubtitle(member) }}</div>
+                  <div class="truncate text-xs text-gray-500 dark:text-dark-400">{{ memberSubtitle(member, showIds) }}</div>
                 </div>
               </div>
             </td>
-            <td v-if="managed" class="whitespace-nowrap text-right font-medium tabular-nums text-gray-900 dark:text-white">
-              {{ formatCurrency(member.balance ?? 0) }}
+            <td v-if="quotaGroup" class="whitespace-nowrap text-right font-medium tabular-nums text-gray-900 dark:text-white">
+              <span v-if="member.balance !== undefined && member.balance !== null">{{ formatCurrency(member.balance) }}</span>
+              <span
+                v-else
+                class="text-gray-400 dark:text-dark-500"
+                :title="t('groupManagement.members.balanceHidden')"
+              >—<span class="sr-only">{{ t('groupManagement.members.balanceHidden') }}</span></span>
+            </td>
+            <td v-if="quotaGroup">
+              <QuotaBar
+                :used="member.usage_5h_usd ?? 0"
+                :limit="member.limit_5h_usd ?? 0"
+                :format="formatUsdCompact"
+                :hint="resetHint(member.reset_5h_at)"
+                :label="`${memberDisplayName(member)} · ${t('groupManagement.members.usage5h')}`"
+              />
+            </td>
+            <td v-if="quotaGroup">
+              <QuotaBar
+                :used="member.usage_7d_usd ?? 0"
+                :limit="member.limit_7d_usd ?? 0"
+                :format="formatUsdCompact"
+                :hint="resetHint(member.reset_7d_at)"
+                :label="`${memberDisplayName(member)} · ${t('groupManagement.members.usage7d')}`"
+              />
             </td>
             <td>
               <QuotaBar
@@ -191,33 +221,47 @@ import { computed, ref } from 'vue'
 import { useI18n } from 'vue-i18n'
 import Icon from '@/components/icons/Icon.vue'
 import type { AllocationMode, GroupManagementAccount, GroupManagementMember } from '@/api/groupManagement'
-import { formatCurrency } from '@/utils/format'
+import type { ManagedGroupType } from '@/types'
+import { formatCountdown, formatCurrency } from '@/utils/format'
 import QuotaBar from './QuotaBar.vue'
-import { initialOf, memberDisplayName, memberSubtitle } from './helpers'
+import { formatUsdCompact, initialOf, memberDisplayName, memberSubtitle } from './helpers'
 
 const props = withDefaults(defineProps<{
   members: GroupManagementMember[]
   accounts: GroupManagementAccount[]
   mode: AllocationMode
   busy: boolean
-  // 管理分组：显示余额列，建号 / 添加已有组用户
+  // 管理分组：可以新建组用户
   managed?: boolean
-  // 组管理员可以划拨余额
+  // 管理分组类型：额度组显示余额与 5h / 7d 用量，订阅组按账号分配
+  managedType?: ManagedGroupType | null
+  // 组管理员可以划拨余额（仅额度组）
   canTransfer?: boolean
   // 可以停用 / 重置密码本分组创建的组用户
   canManageUsers?: boolean
-  // 管理分组「添加已有用户」方式：超管按 ID，组管理员从名下组用户选择
-  addMode?: 'id' | 'owned'
+  // 按邮箱邀请（组管理员 / 超管）
+  canInvite?: boolean
+  // 组管理员从名下其他管理分组的组用户中添加
+  canAddOwned?: boolean
+  // 超管按用户 ID 直接添加
+  canAddById?: boolean
+  // 只有超管能看到用户 ID
+  showIds?: boolean
 }>(), {
   managed: false,
+  managedType: null,
   canTransfer: false,
   canManageUsers: false,
-  addMode: 'id'
+  canInvite: false,
+  canAddOwned: false,
+  canAddById: false,
+  showIds: false
 })
 
 const emit = defineEmits<{
   (e: 'add'): void
   (e: 'add-owned'): void
+  (e: 'invite'): void
   (e: 'create-user'): void
   (e: 'edit', member: GroupManagementMember): void
   (e: 'assign', member: GroupManagementMember): void
@@ -236,12 +280,17 @@ const dangerHover = 'hover:bg-red-50 hover:text-red-600 dark:hover:bg-red-500/10
 
 const query = ref('')
 const manualMode = computed(() => props.mode === 'manual')
+const quotaGroup = computed(() => props.managed && props.managedType === 'quota')
+const tableWidth = computed(() => {
+  if (quotaGroup.value) return 'min-w-[1120px]'
+  return props.managed ? 'min-w-[880px]' : 'min-w-[720px]'
+})
 
 const filteredMembers = computed(() => {
   const keyword = query.value.toLowerCase()
   if (!keyword) return props.members
   return props.members.filter(member =>
-    [member.username, member.email, String(member.user_id)]
+    [member.username, member.email, props.showIds ? String(member.user_id) : '']
       .some(value => value?.toLowerCase().includes(keyword))
   )
 })
@@ -262,5 +311,10 @@ function assignedCount(userId: number) {
 
 function isDisabled(member: GroupManagementMember) {
   return member.status === 'disabled'
+}
+
+function resetHint(resetAt?: string) {
+  const countdown = formatCountdown(resetAt)
+  return countdown ? t('groupManagement.members.resetsIn', { time: countdown }) : ''
 }
 </script>

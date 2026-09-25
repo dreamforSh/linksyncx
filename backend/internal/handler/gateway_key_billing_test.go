@@ -309,3 +309,20 @@ func TestGatewayHandlerKeyBillingInfoSharesBillingResolverCacheByPlatform(t *tes
 		})
 	}
 }
+
+// 管理分组的订阅组不扣余额，计费信息里的实际倍率为 0。
+func TestBuildKeyBillingInfoManagedSubscriptionGroupIsFree(t *testing.T) {
+	groupID := int64(9)
+	apiKey := &service.APIKey{
+		GroupID: &groupID,
+		Group: &service.Group{
+			ID: groupID, RateMultiplier: 1.5,
+			Kind: service.GroupKindManaged, ManagedType: service.ManagedGroupTypeSubscription,
+		},
+	}
+	got := buildKeyBillingInfo(apiKey, 1.5, time.Date(2026, time.July, 12, 10, 0, 0, 0, timezone.Location()))
+	require.Zero(t, got.GroupRateMultiplier)
+	require.Nil(t, got.UserRateMultiplier)
+	require.Zero(t, got.ResolvedRateMultiplier)
+	require.Zero(t, got.EffectiveRateMultiplier)
+}

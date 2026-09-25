@@ -137,7 +137,7 @@
               <span class="font-medium text-gray-900 dark:text-white">{{
                 value
               }}</span>
-              <GroupKindBadge :kind="groupKindOf(row)" :category="row.category" />
+              <GroupKindBadge :kind="groupKindOf(row)" :category="row.category" :managed-type="row.managed_type" />
             </span>
           </template>
 
@@ -179,8 +179,16 @@
 
           <template #cell-billing_type="{ row }">
             <div class="space-y-1">
-              <!-- Type Badge -->
+              <!-- Type Badge：管理分组的订阅组请求不扣余额 -->
               <span
+                v-if="groupKindOf(row) === 'managed' && row.managed_type === 'subscription'"
+                class="inline-block rounded-full bg-emerald-50 px-2 py-0.5 text-xs font-medium text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-400"
+                data-testid="group-billing-not-billed"
+              >
+                {{ t("admin.groups.groupKind.notBilled") }}
+              </span>
+              <span
+                v-else
                 :class="[
                   'inline-block rounded-full px-2 py-0.5 text-xs font-medium',
                   row.subscription_type === 'subscription'
@@ -523,6 +531,11 @@
         <GroupCategoryField
           v-if="createForm.kind === 'managed'"
           v-model="createForm.category"
+        />
+        <GroupManagedTypeField
+          v-if="createForm.kind === 'managed'"
+          v-model="createForm.managed_type"
+          name="create-group-managed-type"
         />
         <div>
           <label class="input-label">{{ t("admin.groups.form.name") }}</label>
@@ -2202,6 +2215,7 @@
             <GroupKindBadge
               :kind="groupKindOf(editingGroup)"
               :category="editingGroup.category"
+              :managed-type="editingGroup.managed_type"
               show-channel
             />
             <span class="text-xs text-gray-500 dark:text-dark-400">{{
@@ -2210,6 +2224,12 @@
           </div>
         </div>
         <GroupCategoryField v-if="editIsManaged" v-model="editForm.category" />
+        <GroupManagedTypeField
+          v-if="editIsManaged"
+          v-model="editForm.managed_type"
+          :original="editingGroup.managed_type ?? null"
+          name="edit-group-managed-type"
+        />
         <template v-if="!authStore.isSimpleMode">
         <!-- 从分组复制账号（编辑时） -->
         <div v-if="!editIsManaged && copyAccountsGroupOptionsForEdit.length > 0">
@@ -4334,6 +4354,7 @@ import type {
   CompositeRouteMatchType,
   GroupCategory,
   GroupKind,
+  ManagedGroupType,
   GroupPlatform,
   SubscriptionType,
 } from "@/types";
@@ -4361,6 +4382,7 @@ import CodexManifestAccountsField from "@/components/admin/group/CodexManifestAc
 import GroupKindBadge from "@/components/admin/group/GroupKindBadge.vue";
 import GroupKindField from "@/components/admin/group/GroupKindField.vue";
 import GroupCategoryField from "@/components/admin/group/GroupCategoryField.vue";
+import GroupManagedTypeField from "@/components/admin/group/GroupManagedTypeField.vue";
 import { groupKindOf, isGroupKind, isManagedGroup } from "@/utils/groupKind";
 import PricingEntryCard from "@/components/admin/channel/PricingEntryCard.vue";
 import type { PricingFormEntry } from "@/components/admin/channel/types";
@@ -5020,6 +5042,7 @@ const submitEditAllowlistCustomEntry = () => {
 const createForm = reactive({
   kind: "channel" as GroupKind,
   category: "enterprise" as GroupCategory,
+  managed_type: "quota" as ManagedGroupType,
   name: "",
   description: "",
   platform: "anthropic" as GroupPlatform,
@@ -5385,6 +5408,7 @@ const convertApiFormatToRoutingRules = async (
 
 const editForm = reactive({
   category: "enterprise" as GroupCategory,
+  managed_type: "quota" as ManagedGroupType,
   name: "",
   description: "",
   platform: "anthropic" as GroupPlatform,
@@ -5880,6 +5904,7 @@ const closeCreateModal = () => {
   showCreateModal.value = false;
   createForm.kind = "channel";
   createForm.category = "enterprise";
+  createForm.managed_type = "quota";
   createModelRoutingRules.value.forEach((rule) => {
     accountSearchRunner.clearKey(getCreateRuleSearchKey(rule));
   });
@@ -6142,6 +6167,7 @@ const handleCreateGroup = async () => {
       applyManagedGroupInvariants(requestData as Record<string, unknown>);
     } else {
       delete (requestData as Record<string, unknown>).category;
+      delete (requestData as Record<string, unknown>).managed_type;
     }
     const payload = authStore.isSimpleMode
       ? {
@@ -6149,7 +6175,7 @@ const handleCreateGroup = async () => {
           description: createForm.description,
           platform: createForm.platform,
           kind: createForm.kind,
-          ...(managed ? { category: createForm.category } : {}),
+          ...(managed ? { category: createForm.category, managed_type: createForm.managed_type } : {}),
         }
       : requestData;
     await adminAPI.groups.create(payload);
@@ -6174,6 +6200,7 @@ const handleCreateGroup = async () => {
 const handleEdit = async (group: AdminGroup) => {
   editingGroup.value = group;
   editForm.category = group.category ?? "enterprise";
+  editForm.managed_type = group.managed_type ?? "quota";
   editForm.name = group.name;
   editForm.description = group.description || "";
   editForm.platform = group.platform;
@@ -6502,12 +6529,13 @@ const handleUpdateGroup = async () => {
       applyManagedGroupInvariants(payload as Record<string, unknown>);
     } else {
       delete (payload as Record<string, unknown>).category;
+      delete (payload as Record<string, unknown>).managed_type;
     }
     const requestData = authStore.isSimpleMode
       ? {
           name: editForm.name,
           description: editForm.description,
-          ...(managed ? { category: editForm.category } : {}),
+          ...(managed ? { category: editForm.category, managed_type: editForm.managed_type } : {}),
         }
       : payload;
     await adminAPI.groups.update(editingGroup.value.id, requestData);

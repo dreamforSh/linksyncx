@@ -379,7 +379,7 @@ func normalizeCreateGroupInputForSimpleMode(input *CreateGroupInput) {
 	}
 	*input = CreateGroupInput{
 		Name: input.Name, Description: input.Description, Platform: input.Platform,
-		Kind: input.Kind, Category: input.Category,
+		Kind: input.Kind, Category: input.Category, ManagedType: input.ManagedType,
 		RateMultiplier: 1, SubscriptionType: SubscriptionTypeStandard,
 	}
 }
@@ -388,7 +388,7 @@ func normalizeUpdateGroupInputForSimpleMode(input *UpdateGroupInput) {
 	if input == nil {
 		return
 	}
-	*input = UpdateGroupInput{Name: input.Name, Description: input.Description, Kind: input.Kind, Category: input.Category}
+	*input = UpdateGroupInput{Name: input.Name, Description: input.Description, Kind: input.Kind, Category: input.Category, ManagedType: input.ManagedType}
 }
 
 func (s *adminServiceImpl) CreateGroup(ctx context.Context, input *CreateGroupInput) (*Group, error) {
@@ -409,6 +409,10 @@ func (s *adminServiceImpl) CreateGroup(ctx context.Context, input *CreateGroupIn
 	}
 	category := NormalizeGroupCategory(kind, input.Category)
 	if err := ValidateGroupCategory(kind, category); err != nil {
+		return nil, err
+	}
+	managedType := NormalizeManagedGroupType(kind, input.ManagedType)
+	if err := ValidateManagedGroupType(kind, managedType); err != nil {
 		return nil, err
 	}
 	isExclusive := input.IsExclusive
@@ -594,6 +598,7 @@ func (s *adminServiceImpl) CreateGroup(ctx context.Context, input *CreateGroupIn
 		Platform:                        platform,
 		Kind:                            kind,
 		Category:                        category,
+		ManagedType:                     managedType,
 		RateMultiplier:                  input.RateMultiplier,
 		IsExclusive:                     isExclusive,
 		Status:                          StatusActive,
@@ -822,6 +827,13 @@ func (s *adminServiceImpl) UpdateGroup(ctx context.Context, id int64, input *Upd
 			return nil, err
 		}
 		group.Category = category
+	}
+	if input.ManagedType != nil {
+		managedType := NormalizeManagedGroupType(group.Kind, *input.ManagedType)
+		if err := ValidateManagedGroupType(group.Kind, managedType); err != nil {
+			return nil, err
+		}
+		group.ManagedType = managedType
 	}
 
 	// 渠道缓存里存了 groupID → platform 的映射，改了平台要让它失效（见函数末尾）
@@ -1270,17 +1282,23 @@ func (s *adminServiceImpl) deleteGroup(ctx context.Context, id int64, requireEmp
 	if err != nil {
 		return err
 	}
-	// 注意：user_group_rate_multipliers 表通过外键 ON DELETE CASCADE 自动清理
+	// 分组是软删除，外键级联不会触发：组管理授权 / 成员、渠道关联、专属倍率、
+	// 兜底引用都已在 DeleteCascade 的事务里显式清理。
 
-	// 事务成功后，异步失效受影响用户的订阅缓存
-	if len(affectedUserIDs) > 0 && s.billingCacheService != nil {
+	// 事务成功后，异步失效受影响用户（订阅用户、被停用的组用户）的订阅与认证缓存
+	if len(affectedUserIDs) > 0 && (s.billingCacheService != nil || s.authCacheInvalidator != nil) {
 		groupID := id
 		go func() {
 			cacheCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 			defer cancel()
 			for _, userID := range affectedUserIDs {
-				if err := s.billingCacheService.InvalidateSubscription(cacheCtx, userID, groupID); err != nil {
-					logger.LegacyPrintf("service.admin", "invalidate subscription cache failed: user_id=%d group_id=%d err=%v", userID, groupID, err)
+				if s.billingCacheService != nil {
+					if err := s.billingCacheService.InvalidateSubscription(cacheCtx, userID, groupID); err != nil {
+						logger.LegacyPrintf("service.admin", "invalidate subscription cache failed: user_id=%d group_id=%d err=%v", userID, groupID, err)
+					}
+				}
+				if s.authCacheInvalidator != nil {
+					s.authCacheInvalidator.InvalidateAuthCacheByUserID(cacheCtx, userID)
 				}
 			}
 		}()
@@ -1289,6 +1307,10 @@ func (s *adminServiceImpl) deleteGroup(ctx context.Context, id int64, requireEmp
 		for _, key := range groupKeys {
 			s.authCacheInvalidator.InvalidateAuthCacheByKey(ctx, key)
 		}
+	}
+	// 渠道缓存持有 groupID → 渠道的映射，分组已从渠道移除，立即重建
+	if s.channelCacheInvalidator != nil {
+		s.channelCacheInvalidator.InvalidateCache()
 	}
 
 	return nil

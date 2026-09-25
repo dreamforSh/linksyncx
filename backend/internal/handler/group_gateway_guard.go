@@ -35,7 +35,8 @@ func (h *GroupManagementHandler) GatewayGuard(writeError middleware.GatewayError
 			status := http.StatusServiceUnavailable
 			if errors.Is(err, service.ErrGroupMemberRequired) || errors.Is(err, service.ErrGroupAccountRequired) {
 				status = http.StatusForbidden
-			} else if errors.Is(err, service.ErrGroupQuotaExceeded) || errors.Is(err, service.ErrGroupConcurrencyExceeded) {
+			} else if errors.Is(err, service.ErrGroupQuotaExceeded) || errors.Is(err, service.ErrGroupConcurrencyExceeded) ||
+				errors.Is(err, service.ErrGroupMemberUsage5hExceeded) || errors.Is(err, service.ErrGroupMemberUsage7dExceeded) {
 				status = http.StatusTooManyRequests
 			}
 			writeError(c, status, err.Error())

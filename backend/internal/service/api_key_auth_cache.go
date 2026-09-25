@@ -57,11 +57,14 @@ type APIKeyAuthUserSnapshot struct {
 
 // APIKeyAuthGroupSnapshot 分组快照
 type APIKeyAuthGroupSnapshot struct {
-	ID                              int64                         `json:"id"`
-	Name                            string                        `json:"name"`
-	Platform                        string                        `json:"platform"`
-	IsExclusive                     bool                          `json:"is_exclusive"`
-	Status                          string                        `json:"status"`
+	ID          int64  `json:"id"`
+	Name        string `json:"name"`
+	Platform    string `json:"platform"`
+	IsExclusive bool   `json:"is_exclusive"`
+	Status      string `json:"status"`
+	// Kind / ManagedType 决定计费方式：管理分组的订阅组不扣余额，额度组累计组内 5h / 7d 用量。
+	Kind                            string                        `json:"kind,omitempty"`
+	ManagedType                     string                        `json:"managed_type,omitempty"`
 	SubscriptionType                string                        `json:"subscription_type"`
 	RateMultiplier                  float64                       `json:"rate_multiplier"`
 	DailyLimitUSD                   *float64                      `json:"daily_limit_usd,omitempty"`

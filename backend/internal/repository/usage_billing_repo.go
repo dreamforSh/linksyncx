@@ -201,6 +201,12 @@ func (r *usageBillingRepository) applyUsageBillingEffects(ctx context.Context, t
 		}
 	}
 
+	if cmd.GroupMemberCost > 0 && cmd.GroupID > 0 {
+		if err := incrementUsageBillingGroupMemberUsage(ctx, tx, cmd.GroupID, cmd.UserID, cmd.GroupMemberCost); err != nil {
+			return err
+		}
+	}
+
 	if cmd.AccountQuotaCost > 0 && (strings.EqualFold(cmd.AccountType, service.AccountTypeAPIKey) || strings.EqualFold(cmd.AccountType, service.AccountTypeBedrock)) {
 		quotaState, err := incrementUsageBillingAccountQuota(ctx, tx, cmd.AccountID, cmd.AccountQuotaCost)
 		if err != nil {
@@ -462,6 +468,22 @@ func incrementUsageBillingAPIKeyRateLimit(ctx context.Context, tx *sql.Tx, apiKe
 		return service.ErrAPIKeyNotFound
 	}
 	return nil
+}
+
+// incrementUsageBillingGroupMemberUsage 累加额度组成员的组内 5h / 7d 用量，窗口规则与 API Key 限额一致：
+// 5h 窗口从首笔用量开始，7d 窗口从当天零点开始，到期后本笔用量开启新窗口。
+// 成员已被移出分组时没有可更新的行，直接跳过（余额照常扣）。
+func incrementUsageBillingGroupMemberUsage(ctx context.Context, tx *sql.Tx, groupID, userID int64, cost float64) error {
+	_, err := tx.ExecContext(ctx, `
+		UPDATE group_members SET
+			usage_5h_usd = CASE WHEN window_5h_start IS NOT NULL AND window_5h_start + INTERVAL '5 hours' <= NOW() THEN $1 ELSE usage_5h_usd + $1 END,
+			usage_7d_usd = CASE WHEN window_7d_start IS NOT NULL AND window_7d_start + INTERVAL '7 days' <= NOW() THEN $1 ELSE usage_7d_usd + $1 END,
+			window_5h_start = CASE WHEN window_5h_start IS NULL OR window_5h_start + INTERVAL '5 hours' <= NOW() THEN NOW() ELSE window_5h_start END,
+			window_7d_start = CASE WHEN window_7d_start IS NULL OR window_7d_start + INTERVAL '7 days' <= NOW() THEN date_trunc('day', NOW()) ELSE window_7d_start END,
+			updated_at = NOW()
+		WHERE group_id = $2 AND user_id = $3
+	`, cost, groupID, userID)
+	return err
 }
 
 func incrementUsageBillingAccountQuota(ctx context.Context, tx *sql.Tx, accountID int64, amount float64) (*service.AccountQuotaState, error) {

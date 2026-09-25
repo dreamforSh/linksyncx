@@ -1031,7 +1031,8 @@ func (s *BatchImagePublicService) resolvePricingSnapshot(ctx context.Context, ow
 		if group.ImageRateIndependent {
 			groupMultiplier = group.ImageRateMultiplier
 		}
-		if groupMultiplier < 0 {
+		if groupMultiplier < 0 || group.IsManagedSubscription() {
+			// 订阅组不扣余额，批量图片同样按 0 倍率冻结与结算
 			groupMultiplier = 0
 		}
 		discountMultiplier = group.BatchImageDiscountMultiplier

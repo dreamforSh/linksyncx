@@ -143,6 +143,7 @@ type simpleModeGroupResponse struct {
 	Status      string `json:"status"`
 	Kind        string `json:"kind"`
 	Category    string `json:"category,omitempty"`
+	ManagedType string `json:"managed_type,omitempty"`
 
 	AccountCount            int64     `json:"account_count,omitempty"`
 	ActiveAccountCount      int64     `json:"active_account_count,omitempty"`
@@ -158,7 +159,7 @@ func groupForSimpleMode(group *service.Group) *simpleModeGroupResponse {
 	}
 	return &simpleModeGroupResponse{
 		ID: group.ID, Name: group.Name, Description: group.Description, Platform: group.Platform,
-		Status: group.Status, Kind: service.NormalizeGroupKind(group.Kind), Category: group.Category,
+		Status: group.Status, Kind: service.NormalizeGroupKind(group.Kind), Category: group.Category, ManagedType: group.ManagedType,
 		AccountCount:       group.AccountCount,
 		ActiveAccountCount: group.ActiveAccountCount, RateLimitedAccountCount: group.RateLimitedAccountCount,
 		SortOrder: group.SortOrder, CreatedAt: group.CreatedAt, UpdatedAt: group.UpdatedAt,
@@ -169,7 +170,7 @@ func sanitizeCreateGroupRequestForSimpleMode(req *CreateGroupRequest) {
 	if req == nil {
 		return
 	}
-	allowed := CreateGroupRequest{Name: req.Name, Description: req.Description, Platform: req.Platform, Kind: req.Kind, Category: req.Category}
+	allowed := CreateGroupRequest{Name: req.Name, Description: req.Description, Platform: req.Platform, Kind: req.Kind, Category: req.Category, ManagedType: req.ManagedType}
 	allowed.RateMultiplier = 1
 	allowed.SubscriptionType = service.SubscriptionTypeStandard
 	*req = allowed
@@ -179,7 +180,7 @@ func sanitizeUpdateGroupRequestForSimpleMode(req *UpdateGroupRequest) {
 	if req == nil {
 		return
 	}
-	*req = UpdateGroupRequest{Name: req.Name, Description: req.Description, Kind: req.Kind, Category: req.Category}
+	*req = UpdateGroupRequest{Name: req.Name, Description: req.Description, Kind: req.Kind, Category: req.Category, ManagedType: req.ManagedType}
 }
 
 // CreateGroupRequest represents create group request
@@ -188,8 +189,10 @@ type CreateGroupRequest struct {
 	Description string `json:"description"`
 	Platform    string `json:"platform" binding:"omitempty,oneof=anthropic openai gemini antigravity grok kimi zhipu deepseek minimax opencode_go composite"`
 	// Kind 分组类型：channel（默认）渠道分组 / managed 管理分组；Category 仅管理分组使用。
-	Kind                      string                        `json:"kind" binding:"omitempty,oneof=channel managed"`
-	Category                  string                        `json:"category" binding:"omitempty,oneof=enterprise team"`
+	Kind     string `json:"kind" binding:"omitempty,oneof=channel managed"`
+	Category string `json:"category" binding:"omitempty,oneof=enterprise team"`
+	// ManagedType 管理分组类型：quota（默认）额度组 / subscription 订阅组。
+	ManagedType               string                        `json:"managed_type" binding:"omitempty,oneof=quota subscription"`
 	RateMultiplier            float64                       `json:"rate_multiplier"`
 	IsExclusive               bool                          `json:"is_exclusive"`
 	SubscriptionType          string                        `json:"subscription_type" binding:"omitempty,oneof=standard subscription"`
@@ -267,6 +270,7 @@ type UpdateGroupRequest struct {
 	// Kind 创建后不可修改，仅用于校验；Category 为 nil 表示不修改（由服务层校验取值）。
 	Kind                      string                         `json:"kind" binding:"omitempty,oneof=channel managed"`
 	Category                  *string                        `json:"category"`
+	ManagedType               *string                        `json:"managed_type"`
 	RateMultiplier            *float64                       `json:"rate_multiplier"`
 	IsExclusive               *bool                          `json:"is_exclusive"`
 	Status                    string                         `json:"status" binding:"omitempty,oneof=active inactive"`
@@ -676,6 +680,7 @@ func (h *GroupHandler) Create(c *gin.Context) {
 		Platform:                        req.Platform,
 		Kind:                            req.Kind,
 		Category:                        req.Category,
+		ManagedType:                     req.ManagedType,
 		RateMultiplier:                  req.RateMultiplier,
 		IsExclusive:                     req.IsExclusive,
 		SubscriptionType:                req.SubscriptionType,
@@ -823,6 +828,7 @@ func (h *GroupHandler) Update(c *gin.Context) {
 		Platform:                        req.Platform,
 		Kind:                            req.Kind,
 		Category:                        req.Category,
+		ManagedType:                     req.ManagedType,
 		RateMultiplier:                  req.RateMultiplier,
 		IsExclusive:                     req.IsExclusive,
 		Status:                          req.Status,

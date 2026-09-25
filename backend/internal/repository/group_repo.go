@@ -107,9 +107,9 @@ func (r *groupRepository) createManagedGroup(ctx context.Context, groupIn *servi
 	}
 	if _, err := txClient.ExecContext(ctx,
 		`INSERT INTO group_management_settings (group_id, enabled, allocation_mode)
-		 VALUES ($1, TRUE, 'manual')
-		 ON CONFLICT (group_id) DO UPDATE SET enabled = TRUE, updated_at = NOW()`,
-		groupIn.ID,
+		 VALUES ($1, TRUE, $2)
+		 ON CONFLICT (group_id) DO UPDATE SET enabled = TRUE, allocation_mode = EXCLUDED.allocation_mode, updated_at = NOW()`,
+		groupIn.ID, service.ManagedGroupAllocationMode(groupIn.ManagedType),
 	); err != nil {
 		return fmt.Errorf("init managed group settings: %w", err)
 	}
@@ -194,6 +194,9 @@ func createGroupRecord(ctx context.Context, client *dbent.Client, groupIn *servi
 	builder = builder.SetKind(service.NormalizeGroupKind(groupIn.Kind))
 	if groupIn.Category != "" {
 		builder = builder.SetCategory(groupIn.Category)
+	}
+	if groupIn.ManagedType != "" {
+		builder = builder.SetManagedType(groupIn.ManagedType)
 	}
 
 	// 设置模型路由配置
@@ -468,11 +471,16 @@ func (r *groupRepository) Update(ctx context.Context, groupIn *service.Group) er
 	// 处理 SupportedModelScopes（始终设置，空数组表示不限制）
 	builder = builder.SetSupportedModelScopes(groupIn.SupportedModelScopes)
 
-	// kind 在 schema 中不可变；分类只对管理分组有意义，渠道分组始终清空。
+	// kind 在 schema 中不可变；分类与类型只对管理分组有意义，渠道分组始终清空。
 	if groupIn.Category != "" {
 		builder = builder.SetCategory(groupIn.Category)
 	} else {
 		builder = builder.ClearCategory()
+	}
+	if groupIn.ManagedType != "" {
+		builder = builder.SetManagedType(groupIn.ManagedType)
+	} else {
+		builder = builder.ClearManagedType()
 	}
 
 	updated, err := builder.Save(ctx)
@@ -480,8 +488,33 @@ func (r *groupRepository) Update(ctx context.Context, groupIn *service.Group) er
 		return translatePersistenceError(err, service.ErrGroupNotFound, service.ErrGroupExists)
 	}
 	groupIn.UpdatedAt = updated.UpdatedAt
+	if groupIn.IsManaged() {
+		if err := syncManagedGroupAllocation(ctx, r.client, groupIn.ID, groupIn.ManagedType); err != nil {
+			return err
+		}
+	}
 	if err := enqueueSchedulerOutbox(ctx, r.sql, service.SchedulerOutboxEventGroupChanged, nil, &groupIn.ID, nil); err != nil {
 		logger.LegacyPrintf("repository.group", "[SchedulerOutbox] enqueue group update failed: group=%d err=%v", groupIn.ID, err)
+	}
+	return nil
+}
+
+// syncManagedGroupAllocation 让管控设置里的分配方式与管理分组类型一致（网关准入按类型推导，
+// 这里保持设置表可读性）；额度组不按账号分配，清空遗留的账号分配。
+func syncManagedGroupAllocation(ctx context.Context, client *dbent.Client, groupID int64, managedType string) error {
+	mode := service.ManagedGroupAllocationMode(managedType)
+	if _, err := client.ExecContext(ctx,
+		`UPDATE group_management_settings SET allocation_mode = $2, updated_at = NOW()
+		 WHERE group_id = $1 AND allocation_mode <> $2`,
+		groupID, mode,
+	); err != nil {
+		return fmt.Errorf("sync managed group allocation: %w", err)
+	}
+	if mode != service.GroupAssignmentModeAuto {
+		return nil
+	}
+	if _, err := client.ExecContext(ctx, `DELETE FROM group_account_assignments WHERE group_id = $1`, groupID); err != nil {
+		return fmt.Errorf("clear managed group assignments: %w", err)
 	}
 	return nil
 }
@@ -1005,6 +1038,54 @@ func (r *groupRepository) deleteCascade(ctx context.Context, id int64, requireEm
 		return nil, err
 	}
 
+	// 3b. 分组是软删除，各表外键上的 ON DELETE CASCADE / SET NULL 都不会触发，
+	//     引用本分组的权限与关联必须在这里显式清理。
+	ownedUserIDs, err := queryInt64Column(ctx, exec, "SELECT user_id FROM group_members WHERE group_id = $1 AND owned", id)
+	if err != nil {
+		return nil, err
+	}
+	for _, stmt := range []string{
+		// 组管理：组管理员授权、成员资格（连带账号分配与并发租约）、管控设置
+		"DELETE FROM group_managers WHERE group_id = $1",
+		"DELETE FROM group_members WHERE group_id = $1",
+		"DELETE FROM group_management_settings WHERE group_id = $1",
+		"DELETE FROM group_invitations WHERE group_id = $1",
+		// 渠道不再挂着已删除的分组
+		"DELETE FROM channel_groups WHERE group_id = $1",
+		// 用户在本分组的专属倍率
+		"DELETE FROM user_group_rate_multipliers WHERE group_id = $1",
+	} {
+		if _, err := exec.ExecContext(ctx, stmt, id); err != nil {
+			return nil, err
+		}
+	}
+	// 本分组创建的组用户不再属于任何分组时停用账号，与移除成员的规则一致
+	if len(ownedUserIDs) > 0 {
+		disabledUserIDs, err := queryInt64Column(ctx, exec, `UPDATE users u SET status = 'disabled', updated_at = NOW()
+			WHERE u.id = ANY($1) AND u.role = 'user' AND u.status = 'active' AND u.deleted_at IS NULL
+			AND NOT EXISTS (
+				SELECT 1 FROM group_members gm JOIN groups g ON g.id = gm.group_id AND g.deleted_at IS NULL
+				WHERE gm.user_id = u.id
+			)
+			RETURNING u.id`, pq.Array(ownedUserIDs))
+		if err != nil {
+			return nil, err
+		}
+		affectedUserIDs = appendUniqueInt64s(affectedUserIDs, disabledUserIDs...)
+	}
+	// 其他分组把它设为兜底分组的，清掉引用，避免请求回落到已删除的分组
+	fallbackReferrers, err := queryInt64Column(ctx, exec, `UPDATE groups SET fallback_group_id = NULL, updated_at = NOW()
+		WHERE fallback_group_id = $1 AND id <> $1 AND deleted_at IS NULL RETURNING id`, id)
+	if err != nil {
+		return nil, err
+	}
+	invalidRequestReferrers, err := queryInt64Column(ctx, exec, `UPDATE groups SET fallback_group_id_on_invalid_request = NULL, updated_at = NOW()
+		WHERE fallback_group_id_on_invalid_request = $1 AND id <> $1 AND deleted_at IS NULL RETURNING id`, id)
+	if err != nil {
+		return nil, err
+	}
+	changedGroupIDs := appendUniqueInt64s(fallbackReferrers, invalidRequestReferrers...)
+
 	// 4. Soft-delete composite model routes owned by this group.
 	if _, err := exec.ExecContext(ctx, "UPDATE composite_model_routes SET deleted_at = NOW() WHERE group_id = $1 AND deleted_at IS NULL", id); err != nil {
 		return nil, err
@@ -1023,8 +1104,48 @@ func (r *groupRepository) deleteCascade(ctx context.Context, id int64, requireEm
 	if err := enqueueSchedulerOutbox(ctx, r.sql, service.SchedulerOutboxEventGroupChanged, nil, &id, nil); err != nil {
 		logger.LegacyPrintf("repository.group", "[SchedulerOutbox] enqueue group cascade delete failed: group=%d err=%v", id, err)
 	}
+	// 兜底引用被清掉的分组配置变了，同样通知调度快照刷新
+	for _, groupID := range changedGroupIDs {
+		groupID := groupID
+		if err := enqueueSchedulerOutbox(ctx, r.sql, service.SchedulerOutboxEventGroupChanged, nil, &groupID, nil); err != nil {
+			logger.LegacyPrintf("repository.group", "[SchedulerOutbox] enqueue fallback referrer change failed: group=%d err=%v", groupID, err)
+		}
+	}
 
 	return affectedUserIDs, nil
+}
+
+// queryInt64Column 执行只返回一列 BIGINT 的查询（含 UPDATE ... RETURNING），收集全部结果。
+func queryInt64Column(ctx context.Context, q sqlQueryer, query string, args ...any) ([]int64, error) {
+	rows, err := q.QueryContext(ctx, query, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = rows.Close() }()
+	var out []int64
+	for rows.Next() {
+		var value int64
+		if err := rows.Scan(&value); err != nil {
+			return nil, err
+		}
+		out = append(out, value)
+	}
+	return out, rows.Err()
+}
+
+func appendUniqueInt64s(dst []int64, values ...int64) []int64 {
+	seen := make(map[int64]struct{}, len(dst)+len(values))
+	for _, value := range dst {
+		seen[value] = struct{}{}
+	}
+	for _, value := range values {
+		if _, ok := seen[value]; ok {
+			continue
+		}
+		seen[value] = struct{}{}
+		dst = append(dst, value)
+	}
+	return dst
 }
 
 type groupAccountCounts struct {

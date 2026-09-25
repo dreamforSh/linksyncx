@@ -10,6 +10,12 @@ import (
 	"github.com/Wei-Shaw/sub2api/internal/service"
 )
 
+// 成员组内 5h / 7d 用量的有效值：窗口已过期视为 0（下一笔用量才会重开窗口）。
+const (
+	groupMemberUsage5hSQL = `CASE WHEN gm.window_5h_start IS NOT NULL AND gm.window_5h_start + INTERVAL '5 hours' <= NOW() THEN 0 ELSE gm.usage_5h_usd END`
+	groupMemberUsage7dSQL = `CASE WHEN gm.window_7d_start IS NOT NULL AND gm.window_7d_start + INTERVAL '7 days' <= NOW() THEN 0 ELSE gm.usage_7d_usd END`
+)
+
 // gatewayAdmissionSettingsSQL 读取分组的有效管控设置：管理分组即使缺少设置行也强制开启，
 // 保证管理分组的准入失败即拒绝（fail-closed）。
 const gatewayAdmissionSettingsSQL = `SELECT ` + effectiveEnabledSQL + `, ` + effectiveModeSQL + ` FROM groups g LEFT JOIN group_management_settings s ON s.group_id=g.id WHERE g.id=$1 AND g.deleted_at IS NULL`
@@ -38,11 +44,13 @@ func (r *groupManagementRepository) GatewayAdmission(ctx context.Context, userID
 	defer func() { _ = tx.Rollback() }()
 	var maxConcurrent int
 	var dailyLimit, dailyUsed int64
+	var limit5h, limit7d, usage5h, usage7d float64
 	err = tx.QueryRowContext(ctx, `SELECT gm.max_concurrent, gm.daily_limit,
-		CASE WHEN gm.daily_window_start < CURRENT_DATE THEN 0 ELSE gm.daily_used END
+		CASE WHEN gm.daily_window_start < CURRENT_DATE THEN 0 ELSE gm.daily_used END,
+		gm.limit_5h_usd, gm.limit_7d_usd, `+groupMemberUsage5hSQL+`, `+groupMemberUsage7dSQL+`
 		FROM group_members gm JOIN users u ON u.id=gm.user_id JOIN groups g ON g.id=gm.group_id
 		WHERE gm.user_id=$1 AND gm.group_id=$2 AND u.status='active' AND u.deleted_at IS NULL AND g.deleted_at IS NULL FOR UPDATE OF gm`, userID, groupID).
-		Scan(&maxConcurrent, &dailyLimit, &dailyUsed)
+		Scan(&maxConcurrent, &dailyLimit, &dailyUsed, &limit5h, &limit7d, &usage5h, &usage7d)
 	if errors.Is(err, sql.ErrNoRows) {
 		return policy, noop, service.ErrGroupMemberRequired
 	}
@@ -80,6 +88,12 @@ func (r *groupManagementRepository) GatewayAdmission(ctx context.Context, userID
 	}
 	if dailyLimit > 0 && dailyUsed >= dailyLimit {
 		return policy, noop, service.ErrGroupQuotaExceeded
+	}
+	if limit5h > 0 && usage5h >= limit5h {
+		return policy, noop, service.ErrGroupMemberUsage5hExceeded
+	}
+	if limit7d > 0 && usage7d >= limit7d {
+		return policy, noop, service.ErrGroupMemberUsage7dExceeded
 	}
 	var active int
 	if err := tx.QueryRowContext(ctx, `SELECT COUNT(*) FROM group_member_leases WHERE user_id=$1 AND group_id=$2 AND expires_at>NOW()`, userID, groupID).Scan(&active); err != nil {

@@ -38,6 +38,8 @@ var (
 	ErrGroupMemberNotFound         = infraerrors.NotFound("GROUP_MEMBER_NOT_FOUND", "the user is not a member of this group")
 	ErrGroupMemberNotEligible      = infraerrors.Forbidden("GROUP_MEMBER_NOT_ELIGIBLE", "group managers can only add group users created in groups they manage")
 	ErrGroupUserPasswordInvalid    = infraerrors.BadRequest("GROUP_USER_PASSWORD_INVALID", "password must be 6-72 bytes long")
+	// 订阅组不扣余额，划拨没有意义；回收仍允许，便于类型变更后收回之前划拨的余额
+	ErrGroupTransferNotSupported = infraerrors.BadRequest("GROUP_TRANSFER_NOT_SUPPORTED", "subscription groups do not bill balance, so balance cannot be granted")
 
 	errGroupUserDepsMissing = errors.New("group user management is not configured")
 )
@@ -73,11 +75,12 @@ type GroupBalanceTransfer struct {
 	CreatedAt   time.Time `json:"created_at"`
 }
 
-// GroupManagementSummary 侧栏用：当前用户管理的分组数与所属分组数。
+// GroupManagementSummary 侧栏用：当前用户管理的分组数、所属分组数与待处理的邀请数。
 type GroupManagementSummary struct {
-	Role              string `json:"role"`
-	ManagedGroupCount int64  `json:"managed_group_count"`
-	MembershipCount   int64  `json:"membership_count"`
+	Role                   string `json:"role"`
+	ManagedGroupCount      int64  `json:"managed_group_count"`
+	MembershipCount        int64  `json:"membership_count"`
+	PendingInvitationCount int64  `json:"pending_invitation_count"`
 }
 
 // GroupRef 分组的最小引用。
@@ -129,6 +132,19 @@ type GroupUserRepository interface {
 	InsertAdjustmentRecord(ctx context.Context, record *RedeemCode) error
 	ListTransfers(ctx context.Context, groupID, memberID int64, page, pageSize int) ([]GroupBalanceTransfer, int64, error)
 	UserGroupSummaries(ctx context.Context, userIDs []int64) ([]UserGroupSummary, error)
+
+	// 邮箱邀请
+	CountPendingInvitations(ctx context.Context, userID int64) (int64, error)
+	// FindInviteeByEmail 按规范化邮箱查找未删除的用户，找不到返回 nil。
+	FindInviteeByEmail(ctx context.Context, email string) (*GroupInvitee, error)
+	// CreateInvitation 创建待处理邀请；已有待处理邀请时返回那条且 created=false。
+	CreateInvitation(ctx context.Context, groupID, userID int64, email string, invitedBy int64) (*GroupInvitation, bool, error)
+	ListGroupInvitations(ctx context.Context, groupID int64, limit int) ([]GroupInvitation, error)
+	RevokeInvitation(ctx context.Context, groupID, invitationID int64) (bool, error)
+	ListUserInvitations(ctx context.Context, userID int64) ([]GroupInvitation, error)
+	// LockUserInvitation 锁定属于该用户、仍待处理且分组未删除的邀请，找不到返回 nil。
+	LockUserInvitation(ctx context.Context, invitationID, userID int64) (*GroupInvitation, error)
+	SetInvitationStatus(ctx context.Context, invitationID int64, status string) error
 }
 
 // groupUserAccountStore 组用户写路径需要的用户仓储能力（UserRepository 的子集）。
@@ -160,7 +176,7 @@ type GroupUserDependencies struct {
 	Defaults     defaultUserConcurrencyProvider
 }
 
-// ProvideGroupManagementService 注入组用户相关依赖的构造函数（wire 使用）。
+// ProvideGroupManagementService 注入组用户、账号限额与重置卡依赖的构造函数（wire 使用）。
 func ProvideGroupManagementService(
 	repo GroupManagementRepository,
 	groupUsers GroupUserRepository,
@@ -169,6 +185,10 @@ func ProvideGroupManagementService(
 	authCache APIKeyAuthCacheInvalidator,
 	billingCache *BillingCacheService,
 	settingService *SettingService,
+	accountRepo AccountRepository,
+	accountUsage *AccountUsageService,
+	openAIQuota *OpenAIQuotaService,
+	rateLimit *RateLimitService,
 ) *GroupManagementService {
 	deps := GroupUserDependencies{GroupUsers: groupUsers, EntClient: entClient, AuthCache: authCache}
 	if userRepo != nil {
@@ -180,7 +200,20 @@ func ProvideGroupManagementService(
 	if settingService != nil {
 		deps.Defaults = settingService
 	}
-	return NewGroupManagementService(repo).WithGroupUserDependencies(deps)
+	accountDeps := GroupAccountDependencies{}
+	if accountRepo != nil {
+		accountDeps.Accounts = accountRepo
+	}
+	if accountUsage != nil {
+		accountDeps.Usage = accountUsage
+	}
+	if openAIQuota != nil {
+		accountDeps.Quota = openAIQuota
+	}
+	if rateLimit != nil {
+		accountDeps.Recoverer = rateLimit
+	}
+	return NewGroupManagementService(repo).WithGroupUserDependencies(deps).WithGroupAccountDependencies(accountDeps)
 }
 
 // WithGroupUserDependencies 挂载组用户相关依赖，返回同一个服务便于链式构造。
@@ -226,14 +259,20 @@ func (s *GroupManagementService) isManagedGroup(ctx context.Context, groupID int
 }
 
 func (s *GroupManagementService) requireManagedGroup(ctx context.Context, groupID int64) error {
-	managed, err := s.isManagedGroup(ctx, groupID)
+	_, err := s.managedGroupSettings(ctx, groupID)
+	return err
+}
+
+// managedGroupSettings 返回管理分组的有效设置（含类型）；不是管理分组时返回 ErrGroupNotManaged。
+func (s *GroupManagementService) managedGroupSettings(ctx context.Context, groupID int64) (*GroupSettings, error) {
+	settings, err := s.repo.GetSettings(ctx, groupID)
 	if err != nil {
-		return err
+		return nil, err
 	}
-	if !managed {
-		return ErrGroupNotManaged
+	if settings == nil || !settings.Managed {
+		return nil, ErrGroupNotManaged
 	}
-	return nil
+	return settings, nil
 }
 
 func (s *GroupManagementService) invalidateAuth(ctx context.Context, userIDs ...int64) {
@@ -296,6 +335,11 @@ func (s *GroupManagementService) Summary(ctx context.Context, actorID int64, rol
 	}
 	out.ManagedGroupCount = managed
 	out.MembershipCount = memberships
+	pending, err := s.groupUsers.CountPendingInvitations(ctx, actorID)
+	if err != nil {
+		return nil, err
+	}
+	out.PendingInvitationCount = pending
 	return out, nil
 }
 
@@ -333,8 +377,12 @@ func (s *GroupManagementService) CreateGroupUser(ctx context.Context, actorID in
 	if err := s.requireAccess(ctx, actorID, role, groupID); err != nil {
 		return nil, err
 	}
-	if err := s.requireManagedGroup(ctx, groupID); err != nil {
+	settings, err := s.managedGroupSettings(ctx, groupID)
+	if err != nil {
 		return nil, err
+	}
+	if input.InitialAmount != 0 && settings.ManagedType == ManagedGroupTypeSubscription {
+		return nil, ErrGroupTransferNotSupported
 	}
 	email := strings.TrimSpace(input.Email)
 	if email == "" || !strings.Contains(email, "@") {
@@ -372,7 +420,7 @@ func (s *GroupManagementService) CreateGroupUser(ctx context.Context, actorID in
 		return nil, ErrGroupUserPasswordInvalid
 	}
 
-	err := s.withTx(ctx, func(txCtx context.Context) error {
+	err = s.withTx(ctx, func(txCtx context.Context) error {
 		if err := s.groupUsers.LockGroup(txCtx, groupID); err != nil {
 			return err
 		}
@@ -517,12 +565,16 @@ func (s *GroupManagementService) TransferBalance(ctx context.Context, actorID in
 	if len([]rune(notes)) > groupTransferNotesMaxLen {
 		return nil, ErrGroupManagementBadInput
 	}
-	if err := s.requireManagedGroup(ctx, groupID); err != nil {
+	settings, err := s.managedGroupSettings(ctx, groupID)
+	if err != nil {
 		return nil, err
+	}
+	if direction == GroupTransferGrant && settings.ManagedType == ManagedGroupTypeSubscription {
+		return nil, ErrGroupTransferNotSupported
 	}
 
 	var transfer *GroupBalanceTransfer
-	err := s.withTx(ctx, func(txCtx context.Context) error {
+	err = s.withTx(ctx, func(txCtx context.Context) error {
 		state, err := s.groupUsers.GetMemberState(txCtx, groupID, memberID)
 		if err != nil {
 			return err
