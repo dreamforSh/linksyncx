@@ -23,6 +23,8 @@ type UserSubscriptionRepoSuite struct {
 
 func (s *UserSubscriptionRepoSuite) SetupTest() {
 	s.ctx = context.Background()
+	// 固定邮箱会撞上已提交的用户；先清共享库，再开回滚事务。
+	s.Require().NoError(resetSharedIntegrationUsers(s.ctx))
 	tx := testEntTx(s.T())
 	s.client = tx.Client()
 	s.repo = NewUserSubscriptionRepository(s.client).(*userSubscriptionRepository)
