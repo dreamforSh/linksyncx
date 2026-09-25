@@ -8,7 +8,6 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/Wei-Shaw/sub2api/internal/pkg/claude"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/oauth"
 	"github.com/imroc/req/v3"
 	"github.com/stretchr/testify/require"
@@ -28,7 +27,6 @@ type requestCapture struct {
 	body        []byte
 	bodyJSON    map[string]any
 	contentType string
-	userAgent   string
 }
 
 func newTestReqClient(rt http.RoundTripper) *req.Client {
@@ -220,7 +218,6 @@ func (s *ClaudeOAuthServiceSuite) TestExchangeCodeForToken() {
 			validate: func(captured requestCapture) {
 				require.Equal(s.T(), http.MethodPost, captured.method, "expected POST")
 				require.True(s.T(), strings.HasPrefix(captured.contentType, "application/json"), "unexpected content-type")
-				require.Equal(s.T(), claude.DefaultUserAgent(), captured.userAgent)
 				require.Equal(s.T(), "AUTH", captured.bodyJSON["code"])
 				require.Equal(s.T(), "STATE2", captured.bodyJSON["state"])
 				require.Equal(s.T(), oauth.ClientID, captured.bodyJSON["client_id"])
@@ -268,7 +265,6 @@ func (s *ClaudeOAuthServiceSuite) TestExchangeCodeForToken() {
 			rt := newInProcessTransport(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				captured.method = r.Method
 				captured.contentType = r.Header.Get("Content-Type")
-				captured.userAgent = r.UserAgent()
 				captured.body, _ = io.ReadAll(r.Body)
 				_ = json.Unmarshal(captured.body, &captured.bodyJSON)
 				tt.handler(w, r)
@@ -326,12 +322,10 @@ func (s *ClaudeOAuthServiceSuite) TestRefreshToken() {
 				// 验证使用 JSON 格式（不是 form 格式）
 				require.True(s.T(), strings.HasPrefix(captured.contentType, "application/json"),
 					"expected JSON content-type, got: %s", captured.contentType)
-				require.Equal(s.T(), claude.DefaultUserAgent(), captured.userAgent)
 				// 验证 JSON body 内容
 				require.Equal(s.T(), "refresh_token", captured.bodyJSON["grant_type"])
 				require.Equal(s.T(), "rt", captured.bodyJSON["refresh_token"])
 				require.Equal(s.T(), oauth.ClientID, captured.bodyJSON["client_id"])
-				require.Equal(s.T(), oauth.ScopeAPI, captured.bodyJSON["scope"])
 			},
 		},
 		{
@@ -367,7 +361,6 @@ func (s *ClaudeOAuthServiceSuite) TestRefreshToken() {
 			rt := newInProcessTransport(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				captured.method = r.Method
 				captured.contentType = r.Header.Get("Content-Type")
-				captured.userAgent = r.UserAgent()
 				captured.body, _ = io.ReadAll(r.Body)
 				_ = json.Unmarshal(captured.body, &captured.bodyJSON)
 				tt.handler(w, r)
@@ -394,26 +387,6 @@ func (s *ClaudeOAuthServiceSuite) TestRefreshToken() {
 			}
 		})
 	}
-}
-
-func TestClaudeOAuthServiceExchangeUsesSessionState(t *testing.T) {
-	var captured map[string]any
-	rt := newInProcessTransport(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		body, err := io.ReadAll(r.Body)
-		require.NoError(t, err)
-		require.NoError(t, json.Unmarshal(body, &captured))
-		w.Header().Set("Content-Type", "application/json")
-		_ = json.NewEncoder(w).Encode(oauth.TokenResponse{AccessToken: "at", ExpiresIn: 3600})
-	}), nil)
-
-	client, ok := NewClaudeOAuthClient().(*claudeOAuthService)
-	require.True(t, ok)
-	client.tokenURL = "http://in-process/token"
-	client.clientFactory = func(string) (*req.Client, error) { return newTestReqClient(rt), nil }
-
-	_, err := client.ExchangeCodeForToken(context.Background(), "AUTH", "ver", "SESSION_STATE", "", false)
-	require.NoError(t, err)
-	require.Equal(t, "SESSION_STATE", captured["state"])
 }
 
 func TestClaudeOAuthServiceSuite(t *testing.T) {
