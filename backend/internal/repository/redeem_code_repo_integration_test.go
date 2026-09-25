@@ -22,6 +22,8 @@ type RedeemCodeRepoSuite struct {
 }
 
 func (s *RedeemCodeRepoSuite) SetupTest() {
+	// 分组转账会提交 group_transfer 兑换码，List 会把它们算进去。
+	s.Require().NoError(resetSharedIntegrationUsers(context.Background()))
 	tx := testEntTx(s.T())
 	s.ctx = dbent.NewTxContext(context.Background(), tx)
 	s.client = tx.Client()

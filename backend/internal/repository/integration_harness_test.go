@@ -211,6 +211,42 @@ func testTx(t *testing.T) *sql.Tx {
 	return tx
 }
 
+// resetSharedIntegrationUsers 清掉已经提交的用户和兑换码。
+// testEntTx 能看见这些行；trg_protect_last_active_admin 会让被忽略的
+// DELETE FROM users 留下最后一个管理员。触发器只在这个事务里关闭，提交后仍然生效。
+func resetSharedIntegrationUsers(ctx context.Context) error {
+	if integrationDB == nil {
+		return fmt.Errorf("integration db is not initialized")
+	}
+	tx, err := integrationDB.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("begin shared integration reset: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	statements := []string{
+		`ALTER TABLE users DISABLE TRIGGER trg_protect_last_active_admin`,
+		`DELETE FROM usage_cleanup_tasks`,
+		`DELETE FROM api_keys`,
+		`DELETE FROM auth_identity_channels`,
+		`DELETE FROM auth_identities`,
+		`DELETE FROM user_subscriptions`,
+		`DELETE FROM user_allowed_groups`,
+		`DELETE FROM users`,
+		`DELETE FROM redeem_codes`,
+		`ALTER TABLE users ENABLE TRIGGER trg_protect_last_active_admin`,
+	}
+	for _, stmt := range statements {
+		if _, err := tx.ExecContext(ctx, stmt); err != nil {
+			return fmt.Errorf("shared integration reset %q: %w", stmt, err)
+		}
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("commit shared integration reset: %w", err)
+	}
+	return nil
+}
+
 // testEntClient 返回全局的 ent client，用于测试需要内部管理事务的代码（如 Create/Update 方法）。
 // 注意：此 client 的操作会真正写入数据库，测试结束后不会自动回滚。
 func testEntClient(t *testing.T) *dbent.Client {
