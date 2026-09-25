@@ -190,6 +190,7 @@ const (
 const (
 	AdjustmentTypeAdminBalance     = domain.AdjustmentTypeAdminBalance     // 管理员调整余额
 	AdjustmentTypeAdminConcurrency = domain.AdjustmentTypeAdminConcurrency // 管理员调整并发数
+	AdjustmentTypeGroupTransfer    = domain.AdjustmentTypeGroupTransfer    // 组管理员余额划拨 / 回收
 )
 
 // Group subscription type constants

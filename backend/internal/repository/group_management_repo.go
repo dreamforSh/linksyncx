@@ -43,6 +43,9 @@ func (r *groupManagementRepository) Overview(ctx context.Context, userID int64, 
 		}
 	}
 	out := &service.GroupManagementOverview{Role: role, Groups: groups, Memberships: members, Assignments: assignments, Accounts: make([]service.AssignedAccount, 0)}
+	if err := r.db.QueryRowContext(ctx, `SELECT balance FROM users WHERE id=$1 AND deleted_at IS NULL`, userID).Scan(&out.Balance); err != nil && !errors.Is(err, sql.ErrNoRows) {
+		return nil, err
+	}
 	if role != service.RoleUser {
 		for _, group := range groups {
 			if !group.Manager {
@@ -65,7 +68,7 @@ const (
 )
 
 const groupListSQL = `SELECT g.id, g.name, g.kind, COALESCE(g.category,''),
-	(SELECT COUNT(*) FROM group_members gm JOIN users u ON u.id=gm.user_id WHERE gm.group_id=g.id AND u.deleted_at IS NULL AND u.status='active'),
+	(SELECT COUNT(*) FROM group_members gm JOIN users u ON u.id=gm.user_id WHERE gm.group_id=g.id AND u.deleted_at IS NULL),
 	(SELECT COUNT(*) FROM account_groups ag JOIN accounts a ON a.id=ag.account_id WHERE ag.group_id=g.id AND a.deleted_at IS NULL),
 	%s, ` + effectiveEnabledSQL + `, ` + effectiveModeSQL + `, COALESCE(s.max_concurrent,1), COALESCE(s.daily_limit,0),
 	ARRAY(SELECT x.user_id FROM group_managers x JOIN users u ON u.id=x.user_id WHERE x.group_id=g.id AND u.role='group_manager' AND u.status='active' AND u.deleted_at IS NULL ORDER BY x.user_id)
@@ -123,9 +126,14 @@ func (r *groupManagementRepository) ListMembers(ctx context.Context, groupID int
 	if err := r.resetDailyWindows(ctx); err != nil {
 		return nil, err
 	}
-	query := `SELECT gm.user_id, gm.group_id, g.name, u.email, COALESCE(u.username,''), gm.max_concurrent, gm.daily_limit, gm.daily_used, gm.daily_window_start
+	// 停用的组用户也要列出来，组管理员才能重新启用；余额只对管理分组返回。
+	query := `SELECT gm.user_id, gm.group_id, g.name, u.email, COALESCE(u.username,''), gm.owned, u.status,
+		CASE WHEN g.kind='managed' THEN u.balance END,
+		CASE WHEN g.kind='managed' THEN GREATEST(LEAST(u.balance, COALESCE((SELECT SUM(CASE WHEN t.direction='grant' THEN t.amount ELSE -t.amount END)
+			FROM group_balance_transfers t WHERE t.group_id=gm.group_id AND t.member_id=gm.user_id), 0)), 0) END,
+		gm.max_concurrent, gm.daily_limit, gm.daily_used, gm.daily_window_start
 		FROM group_members gm JOIN groups g ON g.id=gm.group_id JOIN users u ON u.id=gm.user_id
-		WHERE g.deleted_at IS NULL AND u.deleted_at IS NULL AND u.status='active'`
+		WHERE g.deleted_at IS NULL AND u.deleted_at IS NULL`
 	args := make([]any, 0, 2)
 	if groupID > 0 {
 		query += " AND gm.group_id=$1"
@@ -144,8 +152,16 @@ func (r *groupManagementRepository) ListMembers(ctx context.Context, groupID int
 	out := make([]service.GroupMembership, 0)
 	for rows.Next() {
 		var item service.GroupMembership
-		if err := rows.Scan(&item.UserID, &item.GroupID, &item.GroupName, &item.Email, &item.Username, &item.MaxConcurrent, &item.DailyLimit, &item.DailyUsed, &item.DailyWindowStart); err != nil {
+		var balance, reclaimable sql.NullFloat64
+		if err := rows.Scan(&item.UserID, &item.GroupID, &item.GroupName, &item.Email, &item.Username, &item.Owned, &item.Status, &balance, &reclaimable,
+			&item.MaxConcurrent, &item.DailyLimit, &item.DailyUsed, &item.DailyWindowStart); err != nil {
 			return nil, err
+		}
+		if balance.Valid {
+			item.Balance = &balance.Float64
+		}
+		if reclaimable.Valid {
+			item.Reclaimable = &reclaimable.Float64
 		}
 		out = append(out, item)
 	}
@@ -309,7 +325,7 @@ func (r *groupManagementRepository) RemoveMember(ctx context.Context, groupID, u
 	if err := lockGroup(ctx, tx, groupID); err != nil {
 		return err
 	}
-	result, err := tx.ExecContext(ctx, `DELETE FROM group_members gm USING users u WHERE gm.group_id=$1 AND gm.user_id=$2 AND u.id=gm.user_id AND u.status='active' AND u.deleted_at IS NULL`, groupID, userID)
+	result, err := tx.ExecContext(ctx, `DELETE FROM group_members gm USING users u WHERE gm.group_id=$1 AND gm.user_id=$2 AND u.id=gm.user_id AND u.deleted_at IS NULL`, groupID, userID)
 	if err != nil {
 		return err
 	}

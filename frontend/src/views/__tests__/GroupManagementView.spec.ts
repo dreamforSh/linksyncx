@@ -6,7 +6,9 @@ import GroupManagementView from '../GroupManagementView.vue'
 const api = vi.hoisted(() => ({
   getOverview: vi.fn(), adminDirectory: vi.fn(), getMembers: vi.fn(), getAccounts: vi.fn(), getSettings: vi.fn(),
   updateSettings: vi.fn(), addMember: vi.fn(), removeMember: vi.fn(), updateMemberLimit: vi.fn(),
-  setMemberAccounts: vi.fn(), adminAssignManager: vi.fn(), adminRevokeManager: vi.fn()
+  setMemberAccounts: vi.fn(), adminAssignManager: vi.fn(), adminRevokeManager: vi.fn(),
+  updateCategory: vi.fn(), getOwnedUsers: vi.fn(), createGroupUser: vi.fn(), setGroupUserStatus: vi.fn(),
+  resetGroupUserPassword: vi.fn(), transferBalance: vi.fn(), listTransfers: vi.fn()
 }))
 const appStore = vi.hoisted(() => ({ showSuccess: vi.fn(), showError: vi.fn() }))
 
@@ -224,6 +226,201 @@ describe('GroupManagementView', () => {
     expect(appStore.showError).toHaveBeenCalledTimes(1)
     expect(appStore.showSuccess).not.toHaveBeenCalled()
     expect(wrapper.find('[role="dialog"]').exists()).toBe(true)
+    wrapper.unmount()
+  })
+})
+
+describe('GroupManagementView managed groups', () => {
+  const managedGroup = { ...group, kind: 'managed', category: 'team' }
+  const groupUser = { ...member, owned: true, status: 'active', balance: 3, reclaimable: 2.5 }
+
+  beforeEach(() => {
+    api.getOverview.mockResolvedValue({ role: 'group_manager', balance: 50, manageable_groups: [managedGroup], memberships: [], assignments: [] })
+    api.getMembers.mockResolvedValue([groupUser])
+    api.getSettings.mockResolvedValue({ group_id: 2, managed: true, ...settings })
+    api.createGroupUser.mockResolvedValue({ ...groupUser, user_id: 9 })
+    api.transferBalance.mockResolvedValue({ id: 1 })
+    api.setGroupUserStatus.mockResolvedValue(undefined)
+    api.resetGroupUserPassword.mockResolvedValue(undefined)
+    api.updateCategory.mockResolvedValue(undefined)
+    api.getOwnedUsers.mockResolvedValue([
+      { user_id: 9, email: 'kim@example.org', username: 'Kim', status: 'active', group_id: 5, group_name: 'Sales' }
+    ])
+    api.listTransfers.mockResolvedValue({
+      items: [{ id: 1, group_id: 2, manager_id: 3, manager_name: 'Boss', member_id: 7, member_name: 'Sam', direction: 'grant', amount: 5, notes: 'monthly', created_at: '2026-09-24T08:00:00Z' }],
+      total: 1, page: 1, page_size: 20, pages: 1
+    })
+  })
+
+  it('labels the member tab as group users, shows balances and locks enforcement', async () => {
+    const wrapper = render()
+    await flushPromises()
+
+    expect(wrapper.get('#gm-tab-members').text()).toContain('groupManagement.tabs.groupUsers')
+    expect(wrapper.find('#gm-tab-transfers').exists()).toBe(true)
+    const panel = wrapper.get('#gm-panel-members')
+    expect(panel.findAll('th').map(th => th.text())).toContain('groupManagement.members.balance')
+    expect(panel.text()).toContain('groupManagement.members.owned')
+    expect(wrapper.get('#gm-panel-settings button[role="switch"]').attributes('disabled')).toBeDefined()
+    expect(wrapper.get('#gm-panel-settings').text()).toContain('groupManagement.settings.managedLocked')
+    wrapper.unmount()
+  })
+
+  it('creates a group user and shows the one-time credentials', async () => {
+    const wrapper = render()
+    await flushPromises()
+
+    await buttonIn(wrapper.get('#gm-panel-members'), 'groupManagement.members.createUser').trigger('click')
+    const dialog = wrapper.get('[role="dialog"]')
+    await dialog.get('input[type="email"]').setValue('new@example.org')
+    const password = (dialog.get('#group-create-user-form-password').element as HTMLInputElement).value
+    expect(password).toHaveLength(14)
+    await dialog.get('#group-create-user-form-amount').setValue('10')
+    await dialog.get('form').trigger('submit')
+    await flushPromises()
+
+    expect(api.createGroupUser).toHaveBeenCalledWith(2, {
+      email: 'new@example.org',
+      username: undefined,
+      password,
+      max_concurrent: 3,
+      daily_limit: 100,
+      initial_amount: 10
+    })
+    expect(wrapper.get('[data-testid="credentials-password"]').text()).toBe(password)
+    expect(appStore.showSuccess).toHaveBeenCalledWith('groupManagement.toast.userCreated')
+    wrapper.unmount()
+  })
+
+  it('rejects an initial transfer above the manager balance', async () => {
+    const wrapper = render()
+    await flushPromises()
+
+    await buttonIn(wrapper.get('#gm-panel-members'), 'groupManagement.members.createUser').trigger('click')
+    const dialog = wrapper.get('[role="dialog"]')
+    await dialog.get('input[type="email"]').setValue('new@example.org')
+    await dialog.get('#group-create-user-form-amount').setValue('80')
+    await dialog.get('form').trigger('submit')
+    await flushPromises()
+
+    expect(dialog.text()).toContain('groupManagement.createUser.invalidAmount')
+    expect(api.createGroupUser).not.toHaveBeenCalled()
+    wrapper.unmount()
+  })
+
+  it('transfers balance to a group user within the available balance', async () => {
+    const wrapper = render()
+    await flushPromises()
+
+    await wrapper.get('button[aria-label="groupManagement.members.transfer \u00b7 Sam"]').trigger('click')
+    const dialog = wrapper.get('[role="dialog"]')
+    await dialog.get('#group-transfer-form-amount').setValue('60')
+    expect(dialog.text()).toContain('groupManagement.transfer.exceedsMine')
+    await dialog.get('form').trigger('submit')
+    expect(api.transferBalance).not.toHaveBeenCalled()
+
+    await dialog.get('[data-testid="transfer-direction-reclaim"]').trigger('click')
+    // 只能收回本分组划拨的净额（2.5），不能动 TA 自己的余额
+    await dialog.get('#group-transfer-form-amount').setValue('3')
+    expect(dialog.text()).toContain('groupManagement.transfer.exceedsReclaimable')
+    await dialog.get('#group-transfer-form-amount').setValue('2')
+    await dialog.get('#group-transfer-form-notes').setValue('unused')
+    await dialog.get('form').trigger('submit')
+    await flushPromises()
+
+    expect(api.transferBalance).toHaveBeenCalledWith(2, 7, { direction: 'reclaim', amount: 2, notes: 'unused' })
+    expect(appStore.showSuccess).toHaveBeenCalledWith('groupManagement.toast.transferReclaimed')
+    expect(wrapper.find('[role="dialog"]').exists()).toBe(false)
+    wrapper.unmount()
+  })
+
+  it('disables an owned group user only after confirmation', async () => {
+    const wrapper = render()
+    await flushPromises()
+
+    await wrapper.get('button[aria-label="groupManagement.members.disable \u00b7 Sam"]').trigger('click')
+    expect(api.setGroupUserStatus).not.toHaveBeenCalled()
+    const dialog = wrapper.get('[role="dialog"]')
+    expect(dialog.text()).toContain('groupManagement.members.confirmDisable')
+    await buttonIn(dialog, 'groupManagement.members.disable').trigger('click')
+    await flushPromises()
+
+    expect(api.setGroupUserStatus).toHaveBeenCalledWith(2, 7, 'disabled')
+    wrapper.unmount()
+  })
+
+  it('resets a group user password and shows the new one', async () => {
+    const wrapper = render()
+    await flushPromises()
+
+    await wrapper.get('button[aria-label="groupManagement.members.resetPassword \u00b7 Sam"]').trigger('click')
+    const dialog = wrapper.get('[role="dialog"]')
+    const password = (dialog.get('#group-reset-password-form-password').element as HTMLInputElement).value
+    await dialog.get('form').trigger('submit')
+    await flushPromises()
+
+    expect(api.resetGroupUserPassword).toHaveBeenCalledWith(2, 7, password)
+    expect(wrapper.get('[data-testid="credentials-password"]').text()).toBe(password)
+    wrapper.unmount()
+  })
+
+  it('switches the group category from the summary card', async () => {
+    const wrapper = render()
+    await flushPromises()
+
+    expect(wrapper.get('[data-testid="group-category-team"]').attributes('aria-checked')).toBe('true')
+    await wrapper.get('[data-testid="group-category-enterprise"]').trigger('click')
+    await flushPromises()
+
+    expect(api.updateCategory).toHaveBeenCalledWith(2, 'enterprise')
+    expect(appStore.showSuccess).toHaveBeenCalledWith('groupManagement.toast.categorySaved')
+    wrapper.unmount()
+  })
+
+  it('adds an existing group user owned by another managed group', async () => {
+    const wrapper = render()
+    await flushPromises()
+
+    await buttonIn(wrapper.get('#gm-panel-members'), 'groupManagement.members.addOwned').trigger('click')
+    await flushPromises()
+    expect(api.getOwnedUsers).toHaveBeenCalledWith(2)
+    const dialog = wrapper.get('[role="dialog"]')
+    expect(dialog.text()).toContain('Kim')
+    await dialog.get('input[type="radio"][value="9"]').setValue(true)
+    await buttonIn(dialog, 'groupManagement.addOwned.submit').trigger('click')
+    await flushPromises()
+
+    expect(api.addMember).toHaveBeenCalledWith(2, 9)
+    wrapper.unmount()
+  })
+
+  it('lists balance transfers when the transfers tab opens', async () => {
+    const wrapper = render()
+    await flushPromises()
+    expect(api.listTransfers).not.toHaveBeenCalled()
+
+    await wrapper.get('#gm-tab-transfers').trigger('click')
+    await flushPromises()
+
+    expect(api.listTransfers).toHaveBeenCalledWith(2, { page: 1, page_size: 20 })
+    const panel = wrapper.get('#gm-panel-transfers')
+    expect(panel.text()).toContain('Sam')
+    expect(panel.text()).toContain('Boss')
+    expect(panel.text()).toContain('monthly')
+    wrapper.unmount()
+  })
+
+  it('does not offer balance transfers to super admins', async () => {
+    api.getOverview.mockResolvedValue({ role: 'admin', balance: 0, manageable_groups: [managedGroup], memberships: [], assignments: [] })
+    api.adminDirectory.mockResolvedValue({ users: [], groups: [{ id: 2, name: 'Operations', manager_user_ids: [] }] })
+    const wrapper = render()
+    await flushPromises()
+
+    const panel = wrapper.get('#gm-panel-members')
+    expect(panel.find('button[aria-label="groupManagement.members.transfer \u00b7 Sam"]').exists()).toBe(false)
+    expect(panel.find('button[aria-label="groupManagement.members.resetPassword \u00b7 Sam"]').exists()).toBe(true)
+    expect(panel.text()).toContain('groupManagement.members.addById')
+    expect(panel.text()).toContain('groupManagement.members.adminTransferHint')
     wrapper.unmount()
   })
 })

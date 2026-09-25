@@ -29,6 +29,7 @@ func RegisterUserRoutes(
 		{
 			me := groupManagement.Group("/me")
 			me.GET("/overview", h.GroupManagement.Overview)
+			me.GET("/summary", h.GroupManagement.Summary)
 			groups := groupManagement.Group("/groups/:id")
 			groups.GET("/members", h.GroupManagement.Members)
 			groups.GET("/accounts", h.GroupManagement.Accounts)
@@ -39,6 +40,14 @@ func RegisterUserRoutes(
 			groups.PUT("/members/:user_id/limit", h.GroupManagement.MemberLimit)
 			groups.PUT("/members/:user_id/accounts", h.GroupManagement.MemberAccounts)
 			groups.DELETE("/members/:user_id/accounts/:account_id", h.GroupManagement.RevokeAccount)
+			// 管理分组：分类、组用户与余额划拨
+			groups.PUT("/category", h.GroupManagement.UpdateCategory)
+			groups.GET("/owned-users", h.GroupManagement.OwnedUsers)
+			groups.POST("/users", panelRateLimiter.Heavy(), h.GroupManagement.CreateGroupUser)
+			groups.PUT("/users/:user_id/status", h.GroupManagement.GroupUserStatus)
+			groups.PUT("/users/:user_id/password", h.GroupManagement.GroupUserPassword)
+			groups.POST("/users/:user_id/balance-transfers", h.GroupManagement.TransferBalance)
+			groups.GET("/balance-transfers", h.GroupManagement.ListTransfers)
 		}
 		// 用户接口
 		user := authenticated.Group("/user")

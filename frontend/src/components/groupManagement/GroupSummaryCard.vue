@@ -12,6 +12,34 @@
           {{ group.name }}
         </h2>
         <div class="mt-2 flex flex-wrap items-center gap-2">
+          <template v-if="managed">
+            <div
+              v-if="categoryEditable"
+              role="radiogroup"
+              :aria-label="t('groupManagement.category.label')"
+              class="inline-flex rounded-lg bg-gray-100 p-0.5 dark:bg-dark-700"
+              data-testid="group-category-switch"
+            >
+              <button
+                v-for="option in categoryOptions"
+                :key="option.value"
+                type="button"
+                role="radio"
+                :aria-checked="group.category === option.value"
+                :disabled="categorySaving"
+                :data-testid="`group-category-${option.value}`"
+                class="flex items-center gap-1 rounded-md px-2.5 py-1 text-xs font-medium transition-colors duration-150 focus:outline-none focus-visible:ring-2 focus-visible:ring-primary-500/50 disabled:cursor-wait"
+                :class="group.category === option.value
+                  ? 'bg-white text-gray-900 shadow-sm dark:bg-dark-600 dark:text-white'
+                  : 'text-gray-600 hover:text-gray-900 dark:text-dark-300 dark:hover:text-white'"
+                @click="group.category !== option.value && emit('update-category', option.value)"
+              >
+                <Icon :name="option.icon" size="xs" />
+                {{ option.label }}
+              </button>
+            </div>
+            <GroupKindBadge v-else kind="managed" :category="group.category" />
+          </template>
           <span class="badge" :class="group.enabled ? 'badge-success' : 'badge-gray'">
             <span
               class="h-1.5 w-1.5 rounded-full"
@@ -82,7 +110,9 @@
 import { computed } from 'vue'
 import { useI18n } from 'vue-i18n'
 import Icon from '@/components/icons/Icon.vue'
+import GroupKindBadge from '@/components/admin/group/GroupKindBadge.vue'
 import type { GroupManagementGroup } from '@/api/groupManagement'
+import type { GroupCategory } from '@/types'
 import { initialOf } from './helpers'
 
 export interface SummaryStat {
@@ -91,18 +121,30 @@ export interface SummaryStat {
   value: string | number
 }
 
-const props = defineProps<{
+const props = withDefaults(defineProps<{
   group: GroupManagementGroup
   stats: SummaryStat[]
   refreshing: boolean
-}>()
+  // 组管理员 / 超管可以直接切换管理分组的分类
+  categoryEditable?: boolean
+  categorySaving?: boolean
+}>(), {
+  categoryEditable: false,
+  categorySaving: false
+})
 
 const emit = defineEmits<{
   (e: 'refresh'): void
   (e: 'open-settings'): void
+  (e: 'update-category', category: GroupCategory): void
 }>()
 
 const { t } = useI18n()
 
 const headingId = computed(() => `group-summary-${props.group.id}`)
+const managed = computed(() => props.group.kind === 'managed')
+const categoryOptions = computed(() => [
+  { value: 'enterprise' as const, icon: 'badge' as const, label: t('groupManagement.category.enterprise') },
+  { value: 'team' as const, icon: 'users' as const, label: t('groupManagement.category.team') }
+])
 </script>

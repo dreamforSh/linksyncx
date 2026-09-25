@@ -69,8 +69,11 @@
             :group="selectedGroup"
             :stats="summaryStats"
             :refreshing="loading || detailsLoading"
+            :category-editable="isManagedGroup && selectedGroup.manager"
+            :category-saving="categorySaving"
             @refresh="refresh"
             @open-settings="activeTab = 'settings'"
+            @update-category="updateCategory"
           />
 
           <template v-if="selectedGroup.manager">
@@ -130,10 +133,19 @@
                   :accounts="accounts"
                   :mode="settings.allocation_mode"
                   :busy="mutating"
+                  :managed="isManagedGroup"
+                  :can-transfer="canTransfer"
+                  :can-manage-users="canManageGroupUsers"
+                  :add-mode="isAdmin ? 'id' : 'owned'"
                   @add="addMemberOpen = true"
+                  @add-owned="openAddOwned"
+                  @create-user="openCreateUser"
                   @edit="openLimit"
                   @assign="openAssign"
                   @remove="requestRemoveMember"
+                  @transfer="openTransfer"
+                  @reset-password="openResetPassword"
+                  @toggle-status="requestToggleStatus"
                 />
               </div>
               <div v-show="activeTab === 'accounts'" id="gm-panel-accounts" role="tabpanel" aria-labelledby="gm-tab-accounts">
@@ -143,6 +155,19 @@
                   :mode="settings.allocation_mode"
                   :busy="mutating"
                   @assign="openAssign()"
+                />
+              </div>
+              <div
+                v-if="isManagedGroup && activeTab === 'transfers'"
+                id="gm-panel-transfers"
+                role="tabpanel"
+                aria-labelledby="gm-tab-transfers"
+              >
+                <GroupTransfersPanel
+                  :group-id="selectedGroup.id"
+                  :members="members"
+                  :refresh-key="transfersRefreshKey"
+                  @error="onPanelError"
                 />
               </div>
               <div v-show="activeTab === 'settings'" id="gm-panel-settings" role="tabpanel" aria-labelledby="gm-tab-settings">
@@ -238,6 +263,40 @@
       @close="addMemberOpen = false"
       @submit="submitAddMember"
     />
+    <CreateGroupUserDialog
+      :show="createUserOpen"
+      :saving="mutating"
+      :defaults="memberDefaults"
+      :can-transfer="canTransfer"
+      :available-balance="ownBalance"
+      :created="createdCredentials"
+      @close="closeCreateUser"
+      @submit="submitCreateUser"
+    />
+    <TransferBalanceDialog
+      :show="transferOpen"
+      :saving="mutating"
+      :member="transferMember"
+      :available-balance="ownBalance"
+      @close="transferOpen = false"
+      @submit="submitTransfer"
+    />
+    <ResetPasswordDialog
+      :show="resetOpen"
+      :saving="mutating"
+      :member="resetMember"
+      :reset-password="resetDonePassword"
+      @close="closeResetPassword"
+      @submit="submitResetPassword"
+    />
+    <AddOwnedMemberDialog
+      :show="ownedOpen"
+      :saving="mutating"
+      :loading="ownedLoading"
+      :candidates="ownedCandidates"
+      @close="ownedOpen = false"
+      @submit="submitAddOwned"
+    />
     <MemberLimitDialog
       :show="limitOpen"
       :saving="mutating"
@@ -280,31 +339,40 @@ import EmptyState from '@/components/common/EmptyState.vue'
 import ConfirmDialog from '@/components/common/ConfirmDialog.vue'
 import AccountStatus from '@/components/groupManagement/AccountStatus.vue'
 import AddMemberDialog from '@/components/groupManagement/AddMemberDialog.vue'
+import AddOwnedMemberDialog from '@/components/groupManagement/AddOwnedMemberDialog.vue'
 import AssignAccountsDialog from '@/components/groupManagement/AssignAccountsDialog.vue'
+import CreateGroupUserDialog from '@/components/groupManagement/CreateGroupUserDialog.vue'
 import GroupAccountsPanel from '@/components/groupManagement/GroupAccountsPanel.vue'
 import GroupManagersPanel from '@/components/groupManagement/GroupManagersPanel.vue'
 import GroupMembersPanel from '@/components/groupManagement/GroupMembersPanel.vue'
 import GroupNavList from '@/components/groupManagement/GroupNavList.vue'
 import GroupSettingsPanel from '@/components/groupManagement/GroupSettingsPanel.vue'
 import GroupSummaryCard, { type SummaryStat } from '@/components/groupManagement/GroupSummaryCard.vue'
+import GroupTransfersPanel from '@/components/groupManagement/GroupTransfersPanel.vue'
 import MemberLimitDialog from '@/components/groupManagement/MemberLimitDialog.vue'
 import PlatformChip from '@/components/groupManagement/PlatformChip.vue'
 import QuotaBar from '@/components/groupManagement/QuotaBar.vue'
+import ResetPasswordDialog from '@/components/groupManagement/ResetPasswordDialog.vue'
+import TransferBalanceDialog from '@/components/groupManagement/TransferBalanceDialog.vue'
 import { memberDisplayName } from '@/components/groupManagement/helpers'
 import { useAppStore } from '@/stores/app'
 import { extractI18nErrorMessage } from '@/utils/apiError'
+import type { GroupCategory } from '@/types'
 import {
   groupManagementAPI,
   type AdminGroupManagementDirectory,
+  type CreateGroupUserInput,
   type GroupManagementAccount,
   type GroupManagementMember,
   type GroupManagementOverview,
   type GroupManagementSettings,
+  type GroupOwnedUser,
+  type GroupTransferDirection,
   type MemberLimit
 } from '@/api/groupManagement'
 
-type TabKey = 'members' | 'accounts' | 'settings' | 'managers'
-type TabIcon = 'users' | 'server' | 'cog' | 'shield'
+type TabKey = 'members' | 'accounts' | 'transfers' | 'settings' | 'managers'
+type TabIcon = 'users' | 'server' | 'dollar' | 'cog' | 'shield'
 
 interface ConfirmState {
   title: string
@@ -340,9 +408,28 @@ const assignMemberId = ref<number | null>(null)
 const confirmOpen = ref(false)
 const confirmState = ref<ConfirmState>({ title: '', message: '', details: [], confirmText: '', danger: false, run: async () => {} })
 
+// 管理分组：组用户、余额划拨与分类
+const createUserOpen = ref(false)
+const createdCredentials = ref<{ email: string; password: string } | null>(null)
+const transferOpen = ref(false)
+const transferMember = ref<GroupManagementMember | null>(null)
+const resetOpen = ref(false)
+const resetMember = ref<GroupManagementMember | null>(null)
+const resetDonePassword = ref<string | null>(null)
+const ownedOpen = ref(false)
+const ownedLoading = ref(false)
+const ownedCandidates = ref<GroupOwnedUser[]>([])
+const categorySaving = ref(false)
+const transfersRefreshKey = ref(0)
+
 const groups = computed(() => overview.value?.manageable_groups ?? [])
 const selectedGroup = computed(() => groups.value.find(group => group.id === selectedGroupId.value) ?? null)
 const isAdmin = computed(() => overview.value?.role === 'admin')
+const isManagedGroup = computed(() => selectedGroup.value?.kind === 'managed')
+// 划拨从组管理员自己的余额出，超管不参与；停用 / 重置密码组管理员与超管都可以
+const canTransfer = computed(() => isManagedGroup.value && overview.value?.role === 'group_manager' && Boolean(selectedGroup.value?.manager))
+const canManageGroupUsers = computed(() => isManagedGroup.value && Boolean(selectedGroup.value?.manager))
+const ownBalance = computed(() => overview.value?.balance ?? 0)
 const detailsReady = computed(() => selectedGroupId.value !== null && detailsGroupId.value === selectedGroupId.value)
 
 const ownMembership = computed(() => overview.value?.memberships.find(member => member.group_id === selectedGroupId.value) ?? null)
@@ -371,10 +458,18 @@ const managerCandidates = computed(() => (directory.value?.users ?? [])
 const tabs = computed(() => {
   const group = selectedGroup.value
   const list: Array<{ key: TabKey; label: string; icon: TabIcon; count?: number }> = [
-    { key: 'members', label: t('groupManagement.tabs.members'), icon: 'users', count: group?.member_count },
-    { key: 'accounts', label: t('groupManagement.tabs.accounts'), icon: 'server', count: group?.account_count },
-    { key: 'settings', label: t('groupManagement.tabs.settings'), icon: 'cog' }
+    {
+      key: 'members',
+      label: isManagedGroup.value ? t('groupManagement.tabs.groupUsers') : t('groupManagement.tabs.members'),
+      icon: 'users',
+      count: group?.member_count
+    },
+    { key: 'accounts', label: t('groupManagement.tabs.accounts'), icon: 'server', count: group?.account_count }
   ]
+  if (isManagedGroup.value) {
+    list.push({ key: 'transfers', label: t('groupManagement.tabs.transfers'), icon: 'dollar' })
+  }
+  list.push({ key: 'settings', label: t('groupManagement.tabs.settings'), icon: 'cog' })
   if (isAdmin.value) {
     list.push({ key: 'managers', label: t('groupManagement.tabs.managers'), icon: 'shield', count: currentManagerIds.value.length })
   }
@@ -453,7 +548,8 @@ async function loadGroupDetails() {
       enabled: groupSettings.enabled,
       allocation_mode: groupSettings.allocation_mode,
       max_concurrent: groupSettings.max_concurrent,
-      daily_limit: groupSettings.daily_limit
+      daily_limit: groupSettings.daily_limit,
+      managed: groupSettings.managed ?? false
     }
     detailsGroupId.value = id
   } catch (error) {
@@ -556,7 +652,9 @@ function requestRemoveMember(member: GroupManagementMember) {
   if (!groupId) return
   openConfirm({
     title: t('groupManagement.members.removeTitle'),
-    message: t('groupManagement.members.confirmRemove', { name: memberDisplayName(member) }),
+    message: isManagedGroup.value
+      ? t('groupManagement.members.confirmRemoveManaged', { name: memberDisplayName(member) })
+      : t('groupManagement.members.confirmRemove', { name: memberDisplayName(member) }),
     confirmText: t('groupManagement.members.remove'),
     danger: true,
     run: () => mutate(() => groupManagementAPI.removeMember(groupId, member.user_id), 'groupManagement.toast.memberRemoved')
@@ -607,6 +705,122 @@ function requestRevokeManager(userId: number) {
     danger: true,
     run: () => mutate(() => groupManagementAPI.adminRevokeManager(groupId, userId), 'groupManagement.toast.managerRevoked')
   })
+}
+
+function onPanelError(error: unknown) {
+  appStore.showError(errorMessage(error, 'groupManagement.loadFailed'))
+}
+
+async function updateCategory(category: GroupCategory) {
+  const groupId = selectedGroupId.value
+  if (!groupId || categorySaving.value) return
+  categorySaving.value = true
+  try {
+    await groupManagementAPI.updateCategory(groupId, category)
+    appStore.showSuccess(t('groupManagement.toast.categorySaved'))
+    await loadOverview()
+  } catch (error) {
+    appStore.showError(errorMessage(error, 'groupManagement.saveFailed'))
+  } finally {
+    categorySaving.value = false
+  }
+}
+
+function openCreateUser() {
+  createdCredentials.value = null
+  createUserOpen.value = true
+}
+
+function closeCreateUser() {
+  createUserOpen.value = false
+  createdCredentials.value = null
+}
+
+async function submitCreateUser(input: CreateGroupUserInput) {
+  const groupId = selectedGroupId.value
+  if (!groupId) return
+  const created = await mutate(() => groupManagementAPI.createGroupUser(groupId, input), 'groupManagement.toast.userCreated')
+  // 保持对话框打开，展示一次性的登录信息
+  if (created) createdCredentials.value = { email: input.email, password: input.password }
+}
+
+function openTransfer(member: GroupManagementMember) {
+  transferMember.value = member
+  transferOpen.value = true
+}
+
+async function submitTransfer(payload: { direction: GroupTransferDirection; amount: number; notes: string }) {
+  const groupId = selectedGroupId.value
+  const member = transferMember.value
+  if (!groupId || !member) return
+  const toast = payload.direction === 'grant' ? 'groupManagement.toast.transferGranted' : 'groupManagement.toast.transferReclaimed'
+  if (await mutate(() => groupManagementAPI.transferBalance(groupId, member.user_id, payload), toast)) {
+    transferOpen.value = false
+    transfersRefreshKey.value += 1
+  }
+}
+
+function openResetPassword(member: GroupManagementMember) {
+  resetMember.value = member
+  resetDonePassword.value = null
+  resetOpen.value = true
+}
+
+function closeResetPassword() {
+  resetOpen.value = false
+  resetDonePassword.value = null
+}
+
+async function submitResetPassword(password: string) {
+  const groupId = selectedGroupId.value
+  const member = resetMember.value
+  if (!groupId || !member) return
+  if (await mutate(() => groupManagementAPI.resetGroupUserPassword(groupId, member.user_id, password), 'groupManagement.toast.passwordReset')) {
+    resetDonePassword.value = password
+  }
+}
+
+function requestToggleStatus(member: GroupManagementMember) {
+  const groupId = selectedGroupId.value
+  if (!groupId) return
+  const enabling = member.status === 'disabled'
+  const name = memberDisplayName(member)
+  openConfirm({
+    title: enabling ? t('groupManagement.members.enableTitle') : t('groupManagement.members.disableTitle'),
+    message: enabling
+      ? t('groupManagement.members.confirmEnable', { name })
+      : t('groupManagement.members.confirmDisable', { name }),
+    confirmText: enabling ? t('groupManagement.members.enable') : t('groupManagement.members.disable'),
+    danger: !enabling,
+    run: () => mutate(
+      () => groupManagementAPI.setGroupUserStatus(groupId, member.user_id, enabling ? 'active' : 'disabled'),
+      enabling ? 'groupManagement.toast.userEnabled' : 'groupManagement.toast.userDisabled'
+    )
+  })
+}
+
+async function openAddOwned() {
+  const groupId = selectedGroupId.value
+  if (!groupId) return
+  ownedCandidates.value = []
+  ownedOpen.value = true
+  ownedLoading.value = true
+  try {
+    ownedCandidates.value = await groupManagementAPI.getOwnedUsers(groupId)
+  } catch (error) {
+    ownedOpen.value = false
+    appStore.showError(errorMessage(error, 'groupManagement.loadFailed'))
+  } finally {
+    ownedLoading.value = false
+  }
+}
+
+async function submitAddOwned(userId: number) {
+  const groupId = selectedGroupId.value
+  if (!groupId) return
+  if (await mutate(() => groupManagementAPI.addMember(groupId, userId), 'groupManagement.toast.memberAdded')) {
+    ownedOpen.value = false
+  }
 }
 
 onMounted(() => { void refresh() })

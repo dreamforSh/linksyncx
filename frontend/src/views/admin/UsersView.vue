@@ -337,10 +337,20 @@
             </div>
           </template>
 
-          <template #cell-role="{ value }">
-            <span :class="['badge', value === 'admin' ? 'badge-purple' : 'badge-gray']">
-              {{ t('admin.users.roles.' + value) }}
-            </span>
+          <template #cell-role="{ row, value }">
+            <div class="flex flex-col items-start gap-1">
+              <span :class="['badge', roleBadgeClass(value)]">
+                {{ t('admin.users.roles.' + value) }}
+              </span>
+              <span
+                v-if="userGroupHint(row.id)"
+                class="max-w-[12rem] truncate text-xs text-gray-500 dark:text-dark-400"
+                :title="userGroupHint(row.id)"
+                data-testid="user-group-hint"
+              >
+                {{ userGroupHint(row.id) }}
+              </span>
+            </div>
           </template>
 
           <template #cell-groups="{ row }">
@@ -803,6 +813,7 @@ import Icon from '@/components/icons/Icon.vue'
 
 const { t } = useI18n()
 import { adminAPI } from '@/api/admin'
+import { groupManagementAPI, type UserGroupSummary } from '@/api/groupManagement'
 import type { AdminUser, AdminGroup, UserAttributeDefinition } from '@/types'
 import type { BatchUserUsageStats } from '@/api/admin/dashboard'
 import type { PlatformQuotaItem } from '@/api/admin/users'
@@ -1214,6 +1225,23 @@ const getAttributeDefinition = (attrId: number): UserAttributeDefinition | undef
   return attributeDefinitions.value.find(d => d.id === attrId)
 }
 const usageStats = ref<Record<string, BatchUserUsageStats>>({})
+// 组管理员管理的分组 / 组用户所属的管理分组（按当前页用户批量加载）
+const userGroupSummaries = ref<Record<number, UserGroupSummary>>({})
+
+const roleBadgeClass = (role: string) => {
+  if (role === 'admin') return 'badge-purple'
+  if (role === 'group_manager') return 'badge-primary'
+  return 'badge-gray'
+}
+
+const userGroupHint = (userId: number) => {
+  const summary = userGroupSummaries.value[userId]
+  if (!summary) return ''
+  if (summary.managed_groups.length > 0) {
+    return t('admin.users.managesGroups', { groups: summary.managed_groups.map(group => group.name).join(' / ') })
+  }
+  return summary.owned_group ? t('admin.users.groupUserOf', { group: summary.owned_group.name }) : ''
+}
 const platformQuotaStats = ref<Record<number, PlatformQuotaItem[]>>({})
 
 const getPlatformUsage = (userId: number, platform: string) =>
@@ -1374,6 +1402,20 @@ const loadUsersSecondaryData = async (
   if (userIds.length === 0) return
 
   const tasks: Promise<void>[] = []
+
+  tasks.push(
+    (async () => {
+      try {
+        const summaries = await groupManagementAPI.adminUserGroups(userIds)
+        if (signal?.aborted) return
+        if (typeof expectedSeq === 'number' && expectedSeq !== secondaryDataSeq) return
+        userGroupSummaries.value = Object.fromEntries(summaries.map(item => [item.user_id, item]))
+      } catch (e) {
+        if (signal?.aborted) return
+        console.error('Failed to load user group summaries:', e)
+      }
+    })()
+  )
 
   if (hasVisibleUsageColumn.value) {
     tasks.push(
@@ -1622,6 +1664,7 @@ const loadUsers = async () => {
     pagination.total = response.total
     pagination.pages = response.pages
     usageStats.value = {}
+    userGroupSummaries.value = {}
     userAttributeValues.value = {}
     platformQuotaStats.value = {}
 

@@ -82,6 +82,8 @@ const (
 const (
 	AdjustmentTypeAdminBalance     = "admin_balance"     // 管理员调整余额
 	AdjustmentTypeAdminConcurrency = "admin_concurrency" // 管理员调整并发数
+	// AdjustmentTypeGroupTransfer 组管理员与组用户之间的余额划拨 / 回收（redeem_codes.type 最长 20 字符）
+	AdjustmentTypeGroupTransfer = "group_transfer"
 )
 
 // Group subscription type constants

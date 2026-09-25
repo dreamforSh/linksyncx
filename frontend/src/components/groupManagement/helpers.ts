@@ -36,3 +36,26 @@ export function quotaTone(used: number, limit: number): QuotaTone {
   if (ratio >= 0.7) return 'warning'
   return 'normal'
 }
+
+// 去掉易混淆字符（0/O、1/l/I），方便线下转交
+const PASSWORD_ALPHABET = 'ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnpqrstuvwxyz23456789'
+
+export function generatePassword(length = 14): string {
+  const values = new Uint32Array(length)
+  crypto.getRandomValues(values)
+  return Array.from(values, value => PASSWORD_ALPHABET[value % PASSWORD_ALPHABET.length]).join('')
+}
+
+// 与后端一致：至少 6 个字符，bcrypt 最多接受 72 字节
+export function isValidPassword(password: string): boolean {
+  return password.length >= 6 && new TextEncoder().encode(password).length <= 72
+}
+
+export function isValidEmail(email: string): boolean {
+  return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email.trim())
+}
+
+// 余额以 8 位小数存储，比较时留出浮点误差
+export function exceedsBalance(amount: number, available: number): boolean {
+  return amount - available > 1e-9
+}

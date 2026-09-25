@@ -6,12 +6,13 @@
           {{ t('groupManagement.settings.enabled') }}
         </h3>
         <p :id="`${idPrefix}-enabled-hint`" class="mt-1 max-w-2xl text-sm leading-relaxed text-gray-500 dark:text-dark-400">
-          {{ t('groupManagement.settings.enabledHint') }}
+          {{ settings.managed ? t('groupManagement.settings.managedLocked') : t('groupManagement.settings.enabledHint') }}
         </p>
       </div>
       <Toggle
         v-model="draft.enabled"
-        class="mt-0.5"
+        class="mt-0.5 disabled:cursor-not-allowed disabled:opacity-60"
+        :disabled="settings.managed"
         :aria-labelledby="`${idPrefix}-enabled`"
         :aria-describedby="`${idPrefix}-enabled-hint`"
       />
@@ -205,6 +206,11 @@ function reset() {
 
 function submit() {
   if (!dirty.value || !valid.value || props.saving) return
-  emit('save', { ...draft })
+  emit('save', {
+    enabled: draft.enabled,
+    allocation_mode: draft.allocation_mode,
+    max_concurrent: draft.max_concurrent,
+    daily_limit: draft.daily_limit
+  })
 }
 </script>
