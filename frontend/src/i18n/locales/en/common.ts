@@ -215,6 +215,15 @@ export default {
     contentModeration: 'Content Moderation',
     promptAudit: 'Prompt Audit',
     auditLogs: 'Audit Logs',
+    searchPlaceholder: 'Search menu',
+    noMatches: 'No matching pages',
+    sections: {
+      overview: 'Overview',
+      users: 'Users & billing',
+      resources: 'Channels & resources',
+      operations: 'Operations',
+      system: 'Security & system'
+    },
   },
 
   // Auth

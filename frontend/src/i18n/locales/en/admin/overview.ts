@@ -77,7 +77,73 @@ export default {
       groupPricingDesc: 'Configure batch discount and hold ratio',
       systemSettings: 'System Settings',
       configureSystem: 'Configure system settings',
-      failedToLoad: 'Failed to load dashboard statistics'
+      failedToLoad: 'Failed to load dashboard statistics',
+      greeting: {
+        morning: 'Good morning',
+        afternoon: 'Good afternoon',
+        evening: 'Good evening',
+        withName: '{greeting}, {name}'
+      },
+      intro: "Here's how the platform is doing today",
+      updatedAt: 'Stats updated at {time}',
+      statsStale: 'Stats may be delayed',
+      kpi: {
+        cumulative: '{value} all time',
+        tokensBreakdown: 'In {input} · Out {output} · Cache {cache}',
+        accountCost: 'Account cost',
+        standardCost: 'Standard price',
+        activeUsersToday: 'Active users today',
+        newUsers: '{count} new today',
+        hourlyActive: '{count} this hour',
+        totalUsers: '{count} total',
+        apiKeysSummary: '{active} active of {total}',
+        throughput: 'Live throughput',
+        throughputHint: 'Avg. over the last 5 min',
+        trendHint: 'Trend over the selected range',
+        uptime: 'Up for {value}',
+        uptimeDays: '{days}d {hours}h',
+        uptimeHours: '{hours}h {minutes}m',
+        uptimeMinutes: '{minutes}m'
+      },
+      health: {
+        title: 'Account health',
+        schedulable: 'Schedulable',
+        ratelimited: 'Rate limited',
+        overloaded: 'Overloaded',
+        error: 'Error'
+      },
+      analytics: {
+        title: 'Usage analytics',
+        subtitle: 'Charts below follow the selected range'
+      },
+      topUsers: {
+        title: 'Top users',
+        subtitle: 'By tokens · selected range',
+        trend: 'Usage trend',
+        viewAll: 'View all'
+      },
+      distribution: {
+        showAll: 'Show all {count}',
+        summary: '{count} items'
+      },
+      trend: {
+        title: 'Usage trend',
+        metricTokens: 'Tokens',
+        metricRequests: 'Requests',
+        metricCost: 'Cost',
+        input: 'Input',
+        output: 'Output',
+        cacheCreation: 'Cache write',
+        cacheRead: 'Cache read',
+        requests: 'Requests',
+        actualCost: 'Actual',
+        standardCost: 'Standard',
+        cacheHitRate: 'Cache hit rate',
+        total: 'Total',
+        viewChart: 'Chart',
+        viewTable: 'Table',
+        time: 'Time'
+      }
     },
 
     backup: {
@@ -496,6 +562,13 @@ export default {
       title: 'User Management',
       description: 'Manage users and their permissions',
       createUser: 'Create User',
+      moreFilters: 'More filters',
+      clearFilters: 'Clear filters',
+      clearSelection: 'Clear selection',
+      viewUsage: 'View usage',
+      statusAll: 'All',
+      statusActive: 'Active',
+      statusDisabled: 'Disabled',
       bulkDelete: {
         action: 'Delete selected ({count})',
         title: 'Delete selected users',

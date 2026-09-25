@@ -70,27 +70,28 @@
 
 @layer components {
   /* ============ 按钮样式 ============ */
+  /* 所有按钮带 1px 边框（主按钮为透明），与输入框等高；
+     主按钮用 primary-700，白字对比度 5.47:1（原渐变起点 primary-500 仅 2.49:1） */
   .btn {
     @apply inline-flex items-center justify-center gap-2;
-    @apply rounded-xl px-4 py-2.5 text-sm font-medium;
-    @apply transition-all duration-200 ease-out;
-    @apply focus:outline-none focus:ring-2 focus:ring-primary-500/50 focus:ring-offset-2;
-    @apply disabled:transform-none disabled:cursor-not-allowed disabled:opacity-50;
-    @apply active:scale-[0.98];
+    @apply rounded-lg border border-transparent px-4 py-2.5 text-sm font-medium;
+    @apply transition-colors duration-150 ease-out;
+    @apply focus:outline-none focus-visible:ring-2 focus-visible:ring-primary-500/50 focus-visible:ring-offset-2;
+    @apply dark:focus-visible:ring-offset-dark-900;
+    @apply disabled:cursor-not-allowed disabled:opacity-50;
   }
 
   .btn-primary {
-    @apply bg-gradient-to-r from-primary-500 to-primary-600;
-    @apply text-white shadow-md shadow-primary-500/25;
-    @apply hover:from-primary-600 hover:to-primary-700 hover:shadow-lg hover:shadow-primary-500/30;
-    @apply dark:shadow-primary-500/20;
+    @apply bg-primary-700 text-white shadow-sm;
+    @apply hover:bg-primary-800 active:bg-primary-900;
+    @apply dark:hover:bg-primary-600;
   }
 
   .btn-secondary {
     @apply bg-white dark:bg-dark-800;
     @apply text-gray-700 dark:text-gray-200;
-    @apply border border-gray-200 dark:border-dark-600;
-    @apply shadow-sm hover:bg-gray-50 dark:hover:bg-dark-700;
+    @apply border-gray-200 dark:border-dark-600;
+    @apply shadow-sm hover:bg-gray-50 active:bg-gray-100 dark:hover:bg-dark-700;
     @apply hover:border-gray-300 dark:hover:border-dark-500;
   }
 
@@ -100,23 +101,18 @@
   }
 
   .btn-danger {
-    @apply bg-gradient-to-r from-red-500 to-red-600;
-    @apply text-white shadow-md shadow-red-500/25;
-    @apply hover:from-red-600 hover:to-red-700 hover:shadow-lg hover:shadow-red-500/30;
+    @apply bg-red-600 text-white shadow-sm;
+    @apply hover:bg-red-700 active:bg-red-800;
   }
 
   .btn-success {
-    @apply bg-gradient-to-r from-emerald-500 to-emerald-600;
-    @apply text-white shadow-md shadow-emerald-500/25;
-    @apply hover:from-emerald-600 hover:to-emerald-700 hover:shadow-lg hover:shadow-emerald-500/30;
-    @apply dark:shadow-emerald-500/20;
+    @apply bg-emerald-600 text-white shadow-sm;
+    @apply hover:bg-emerald-700 active:bg-emerald-800;
   }
 
   .btn-warning {
-    @apply bg-gradient-to-r from-amber-500 to-amber-600;
-    @apply text-white shadow-md shadow-amber-500/25;
-    @apply hover:from-amber-600 hover:to-amber-700 hover:shadow-lg hover:shadow-amber-500/30;
-    @apply dark:shadow-amber-500/20;
+    @apply bg-amber-600 text-white shadow-sm;
+    @apply hover:bg-amber-700 active:bg-amber-800;
   }
 
   .btn-stripe {
@@ -148,30 +144,32 @@
   }
 
   .btn-sm {
-    @apply rounded-lg px-3 py-1.5 text-xs;
+    @apply gap-1.5 rounded-md px-3 py-1.5 text-xs;
   }
 
   .btn-md {
-    @apply rounded-xl px-4 py-2 text-sm;
+    @apply rounded-lg px-4 py-2 text-sm;
   }
 
   .btn-lg {
-    @apply rounded-2xl px-6 py-3 text-base;
+    @apply rounded-xl px-6 py-3 text-base;
   }
 
   .btn-icon {
-    @apply rounded-xl p-2.5;
+    @apply rounded-lg p-2.5;
   }
 
   /* ============ 输入框样式 ============ */
   .input {
-    @apply w-full rounded-xl px-4 py-2.5 text-sm;
+    @apply w-full rounded-lg px-4 py-2.5 text-sm;
     @apply bg-white dark:bg-dark-800;
     @apply border border-gray-200 dark:border-dark-600;
     @apply text-gray-900 dark:text-gray-100;
     @apply placeholder:text-gray-400 dark:placeholder:text-dark-400;
-    @apply transition-all duration-200;
-    @apply focus:border-primary-500 focus:outline-none focus:ring-2 focus:ring-primary-500/30;
+    @apply shadow-sm transition-colors duration-150;
+    @apply hover:border-gray-300 dark:hover:border-dark-500;
+    @apply focus:border-primary-500 focus:outline-none focus:ring-2 focus:ring-primary-500/20;
+    @apply dark:focus:border-primary-500;
     @apply disabled:cursor-not-allowed disabled:bg-gray-100 dark:disabled:bg-dark-900;
   }
 
@@ -227,8 +225,8 @@
   /* ============ 卡片样式 ============ */
   .card {
     @apply bg-white dark:bg-dark-800/50;
-    @apply rounded-2xl;
-    @apply border border-gray-100 dark:border-dark-700/50;
+    @apply rounded-xl;
+    @apply border border-gray-200/70 dark:border-dark-700/60;
     @apply shadow-card;
     @apply transition-all duration-300;
   }
@@ -344,28 +342,35 @@
     @apply rounded-full px-2.5 py-0.5 text-xs font-medium;
   }
 
+  /* 浅底 + 同色系细描边，比纯色块更克制、边界更清晰 */
   .badge-primary {
-    @apply bg-primary-100 text-primary-700 dark:bg-primary-900/30 dark:text-primary-400;
+    @apply bg-primary-50 text-primary-700 ring-1 ring-inset ring-primary-600/20;
+    @apply dark:bg-primary-500/10 dark:text-primary-300 dark:ring-primary-400/20;
   }
 
   .badge-success {
-    @apply bg-emerald-100 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-400;
+    @apply bg-emerald-50 text-emerald-700 ring-1 ring-inset ring-emerald-600/20;
+    @apply dark:bg-emerald-500/10 dark:text-emerald-300 dark:ring-emerald-400/20;
   }
 
   .badge-warning {
-    @apply bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-400;
+    @apply bg-amber-50 text-amber-800 ring-1 ring-inset ring-amber-600/20;
+    @apply dark:bg-amber-500/10 dark:text-amber-300 dark:ring-amber-400/20;
   }
 
   .badge-danger {
-    @apply bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-400;
+    @apply bg-red-50 text-red-700 ring-1 ring-inset ring-red-600/20;
+    @apply dark:bg-red-500/10 dark:text-red-300 dark:ring-red-400/20;
   }
 
   .badge-gray {
-    @apply bg-gray-100 text-gray-700 dark:bg-dark-700 dark:text-dark-300;
+    @apply bg-gray-50 text-gray-700 ring-1 ring-inset ring-gray-500/15;
+    @apply dark:bg-dark-700/60 dark:text-dark-200 dark:ring-dark-500/30;
   }
 
   .badge-purple {
-    @apply bg-purple-100 text-purple-700 dark:bg-purple-900/30 dark:text-purple-400;
+    @apply bg-purple-50 text-purple-700 ring-1 ring-inset ring-purple-600/20;
+    @apply dark:bg-purple-500/10 dark:text-purple-300 dark:ring-purple-400/20;
   }
 
   /* ============ 下拉菜单 ============ */
@@ -540,14 +545,14 @@
   .sidebar {
     @apply fixed inset-y-0 left-0 z-40;
     @apply w-64 bg-white dark:bg-dark-900;
-    @apply border-r border-gray-200 dark:border-dark-800;
+    @apply border-r border-gray-200/80 dark:border-dark-800;
     @apply flex flex-col;
     @apply transition-transform duration-300;
     transition-property: width, transform;
   }
 
   .sidebar-header {
-    @apply h-16 px-6;
+    @apply h-16 px-5;
     @apply flex items-center gap-3;
     @apply border-b border-gray-100 dark:border-dark-800;
     transition:
@@ -556,35 +561,57 @@
   }
 
   .sidebar-nav {
-    @apply flex-1 overflow-y-auto px-3 py-4;
+    @apply flex-1 overflow-y-auto px-3 py-3;
   }
 
+  /* 左侧 3px 指示条通过 ::before 绘制，不影响布局 */
   .sidebar-link {
-    @apply flex items-center gap-3 rounded-xl py-2.5;
+    @apply relative flex items-center gap-3 rounded-lg py-2;
     @apply overflow-hidden;
     @apply text-sm font-medium;
     @apply text-gray-600 dark:text-dark-300;
-    @apply transition-all duration-200;
+    @apply transition-colors duration-150;
     @apply hover:bg-gray-100 dark:hover:bg-dark-800;
     @apply hover:text-gray-900 dark:hover:text-white;
+    @apply focus:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-primary-500/50;
     padding-left: 1.0625rem;
     padding-right: 0.875rem;
   }
 
+  /* 仅内置图标变灰；自定义上传的 SVG（.sidebar-svg-icon）继承链接文字色 */
+  .sidebar-link > svg {
+    @apply text-gray-400 transition-colors dark:text-dark-400;
+  }
+
+  .sidebar-link:hover > svg {
+    @apply text-gray-600 dark:text-dark-200;
+  }
+
   .sidebar-link-active {
-    @apply bg-primary-50 dark:bg-primary-900/20;
-    @apply text-primary-600 dark:text-primary-400;
-    @apply hover:bg-primary-100 dark:hover:bg-primary-900/30;
+    @apply bg-primary-50 dark:bg-primary-500/10;
+    @apply text-primary-800 dark:text-primary-200;
+    @apply hover:bg-primary-50 dark:hover:bg-primary-500/15;
+    @apply hover:text-primary-800 dark:hover:text-primary-100;
+  }
+
+  .sidebar-link-active > svg,
+  .sidebar-link-active:hover > svg {
+    @apply text-primary-600 dark:text-primary-300;
+  }
+
+  .sidebar-link-active::before {
+    content: '';
+    @apply absolute bottom-2 left-0 top-2 w-[3px] rounded-r-full bg-primary-600 dark:bg-primary-400;
   }
 
   .sidebar-section {
-    @apply mb-6;
+    @apply mb-4;
   }
 
   .sidebar-section-title {
-    @apply mb-2 px-3;
-    @apply text-xs font-semibold uppercase tracking-wider;
-    @apply text-gray-400 dark:text-dark-500;
+    @apply mb-1 px-3 pb-0.5 pt-2;
+    @apply text-[11px] font-semibold tracking-wide;
+    @apply text-gray-500 dark:text-dark-400;
   }
 
   /* ============ 页面头部 ============ */
@@ -733,6 +760,186 @@
   .tour-error-box {
     @apply rounded-md border-l-4 border-red-500 bg-red-50 px-3 py-2 text-xs text-red-900;
     @apply dark:border-red-400 dark:bg-red-950/40 dark:text-red-200;
+  }
+
+  /* ============ 统计卡片（新）============ */
+  /* 数值用比例数字（大号数字不用 tabular-nums），表格列才用等宽数字 */
+  .stat-tile {
+    @apply card flex flex-col p-4;
+  }
+
+  .stat-tile-compact {
+    @apply p-3.5;
+  }
+
+  .stat-tile-icon {
+    @apply flex h-7 w-7 flex-shrink-0 items-center justify-center rounded-lg;
+    @apply bg-gray-100 text-gray-500 dark:bg-dark-800 dark:text-dark-300;
+  }
+
+  .stat-tile-value {
+    @apply mt-2.5 truncate text-[26px] font-semibold leading-8 tracking-tight text-gray-900 dark:text-white;
+  }
+
+  .stat-tile-compact .stat-tile-value {
+    @apply mt-2 text-xl leading-7;
+  }
+
+  /* ============ 卡片分区标题 ============ */
+  .card-section-header {
+    @apply flex flex-wrap items-start justify-between gap-3 px-5 pb-3 pt-4;
+  }
+
+  .card-section-title {
+    @apply text-sm font-semibold text-gray-900 dark:text-white;
+  }
+
+  .card-section-subtitle {
+    @apply mt-0.5 text-xs text-gray-500 dark:text-dark-400;
+  }
+
+  /* ============ 分段切换 ============ */
+  .segmented {
+    @apply inline-flex items-center gap-0.5 rounded-lg bg-gray-100 p-0.5 dark:bg-dark-800;
+  }
+
+  .segmented-item {
+    @apply inline-flex items-center justify-center gap-1.5 whitespace-nowrap rounded-md px-3 py-1.5;
+    @apply text-sm font-medium text-gray-600 transition-colors duration-150;
+    @apply hover:text-gray-900 dark:text-dark-300 dark:hover:text-white;
+    @apply focus:outline-none focus-visible:ring-2 focus-visible:ring-primary-500/50;
+  }
+
+  .segmented-sm .segmented-item {
+    @apply px-2.5 py-1 text-xs;
+  }
+
+  .segmented-item-active {
+    @apply bg-white text-gray-900 shadow-sm ring-1 ring-gray-900/5;
+    @apply dark:bg-dark-600 dark:text-white dark:ring-white/10;
+  }
+
+  .segmented-count {
+    @apply rounded-full bg-gray-200/80 px-1.5 text-[11px] leading-4 tabular-nums text-gray-600;
+    @apply dark:bg-dark-700 dark:text-dark-300;
+  }
+
+  .segmented-item-active .segmented-count {
+    @apply bg-primary-50 text-primary-700 dark:bg-primary-500/15 dark:text-primary-300;
+  }
+
+  /* ============ 紧凑工具栏：筛选区内的输入框/下拉/按钮统一 36px 高 ============ */
+  .toolbar-compact .input,
+  .toolbar-compact .select-trigger,
+  .toolbar-compact .date-picker-trigger,
+  .toolbar-compact .btn:not(.btn-sm) {
+    @apply !py-[7px];
+  }
+
+  .toolbar-compact .select-trigger {
+    @apply !px-3;
+  }
+
+  /* ============ 下拉面板 / 菜单项 / 行内操作 ============ */
+  .dropdown-panel {
+    @apply absolute top-full z-50 mt-1.5 rounded-lg border border-gray-200 bg-white p-1 shadow-lg ring-1 ring-black/5;
+    @apply dark:border-dark-700 dark:bg-dark-800 dark:ring-white/5;
+  }
+
+  .dropdown-panel-title {
+    @apply px-2.5 pb-1 pt-1.5 text-[11px] font-semibold text-gray-500 dark:text-dark-400;
+  }
+
+  .dropdown-option {
+    @apply flex w-full items-center justify-between gap-3 rounded-md px-2.5 py-1.5 text-left text-sm;
+    @apply text-gray-700 transition-colors hover:bg-gray-100 dark:text-gray-200 dark:hover:bg-dark-700;
+    @apply focus:outline-none focus-visible:bg-gray-100 dark:focus-visible:bg-dark-700;
+  }
+
+  .menu-item {
+    @apply flex w-full items-center gap-2.5 rounded-md px-2.5 py-1.5 text-left text-sm;
+    @apply text-gray-700 transition-colors hover:bg-gray-100 dark:text-gray-200 dark:hover:bg-dark-700;
+    @apply focus:outline-none focus-visible:bg-gray-100 dark:focus-visible:bg-dark-700;
+  }
+
+  .menu-item-icon {
+    @apply text-gray-400 dark:text-dark-400;
+  }
+
+  .row-action {
+    @apply inline-flex h-8 items-center gap-1 rounded-md px-2 text-xs font-medium text-gray-600 transition-colors;
+    @apply hover:bg-gray-100 hover:text-gray-900 dark:text-dark-300 dark:hover:bg-dark-700 dark:hover:text-white;
+    @apply focus:outline-none focus-visible:ring-2 focus-visible:ring-primary-500/50;
+  }
+
+  /* ============ 图标按钮 / 筛选标签 ============ */
+  .icon-btn {
+    @apply inline-flex h-9 w-9 flex-shrink-0 items-center justify-center rounded-lg text-gray-500 transition-colors;
+    @apply hover:bg-gray-100 hover:text-gray-900 dark:text-dark-300 dark:hover:bg-dark-800 dark:hover:text-white;
+    @apply focus:outline-none focus-visible:ring-2 focus-visible:ring-primary-500/50;
+    @apply disabled:cursor-not-allowed disabled:opacity-50;
+  }
+
+  .filter-chip {
+    @apply inline-flex max-w-full items-center gap-1 rounded-full border py-0.5 pl-2.5 pr-1 text-xs font-medium;
+    @apply border-primary-200 bg-primary-50 text-primary-800;
+    @apply dark:border-primary-500/30 dark:bg-primary-500/10 dark:text-primary-200;
+  }
+
+  .filter-chip-remove {
+    @apply inline-flex h-5 w-5 flex-shrink-0 items-center justify-center rounded-full text-primary-600 transition-colors;
+    @apply hover:bg-primary-100 dark:text-primary-300 dark:hover:bg-primary-500/20;
+    @apply focus:outline-none focus-visible:ring-2 focus-visible:ring-primary-500/50;
+  }
+
+  /* ============ 图表提示框（Chart.js 外部 HTML tooltip，挂在画布父节点下） ============ */
+  .chart-tooltip {
+    position: absolute;
+    z-index: 30;
+    pointer-events: none;
+    opacity: 0;
+    min-width: 168px;
+    max-width: 300px;
+    transition:
+      opacity 120ms ease,
+      left 80ms ease,
+      top 80ms ease;
+    @apply rounded-lg border border-gray-200 bg-white/95 px-3 py-2.5 text-xs shadow-lg backdrop-blur-sm;
+    @apply dark:border-dark-700 dark:bg-dark-800/95;
+  }
+
+  .chart-tooltip-title {
+    @apply mb-1.5 font-medium text-gray-500 dark:text-dark-300;
+  }
+
+  .chart-tooltip-row {
+    @apply flex items-center gap-2 py-0.5;
+  }
+
+  .chart-tooltip-key-line {
+    @apply inline-block h-[3px] w-3 flex-shrink-0 rounded-full;
+  }
+
+  .chart-tooltip-key-rect {
+    @apply inline-block h-2.5 w-2.5 flex-shrink-0 rounded-sm;
+  }
+
+  .chart-tooltip-value {
+    @apply font-semibold tabular-nums text-gray-900 dark:text-white;
+  }
+
+  .chart-tooltip-label {
+    @apply truncate text-gray-500 dark:text-dark-300;
+  }
+
+  .chart-tooltip-footer {
+    @apply mt-1.5 space-y-0.5 border-t border-gray-100 pt-1.5 text-gray-500 dark:border-dark-700 dark:text-dark-300;
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    .chart-tooltip {
+      transition: none;
+    }
   }
 
   /* ============ 表格页面布局优化 ============ */

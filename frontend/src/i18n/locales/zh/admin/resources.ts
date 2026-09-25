@@ -568,6 +568,12 @@ export default {
           cost: '费用'
         }
       },
+      moreFilters: '更多筛选',
+      detailsTitle: '明细',
+      filterBar: {
+        title: '筛选条件',
+        scopeHint: '筛选条件作用于下方全部统计、图表与明细'
+      },
       cleanup: {
         button: '清理',
         title: '清理使用记录',

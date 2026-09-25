@@ -29,13 +29,47 @@
       </div>
     </div>
 
+    <!-- 菜单搜索：Ctrl/⌘ + K 聚焦，回车跳转到第一个匹配项 -->
+    <div v-if="!sidebarCollapsed" class="px-3 pt-3">
+      <label class="relative block">
+        <span class="sr-only">{{ t('nav.searchPlaceholder') }}</span>
+        <Icon name="search" size="sm" class="pointer-events-none absolute left-2.5 top-1/2 -translate-y-1/2 text-gray-400 dark:text-dark-400" />
+        <input
+          ref="navSearchRef"
+          v-model="navQuery"
+          type="search"
+          class="h-8 w-full rounded-lg border border-gray-200 bg-gray-50 pl-8 pr-12 text-[13px] text-gray-900 placeholder:text-gray-400 transition-colors hover:border-gray-300 focus:border-primary-500 focus:bg-white focus:outline-none focus:ring-2 focus:ring-primary-500/20 dark:border-dark-700 dark:bg-dark-800/60 dark:text-gray-100 dark:placeholder:text-dark-400 dark:hover:border-dark-600 dark:focus:bg-dark-800"
+          :placeholder="t('nav.searchPlaceholder')"
+          autocomplete="off"
+          @keydown.enter.prevent="openFirstMatch"
+          @keydown.esc.prevent="clearNavSearch"
+        />
+        <kbd
+          v-if="!navQuery"
+          class="pointer-events-none absolute right-2 top-1/2 -translate-y-1/2 rounded border border-gray-200 bg-white px-1 font-sans text-[10px] font-medium text-gray-500 dark:border-dark-600 dark:bg-dark-900 dark:text-dark-400"
+          aria-hidden="true"
+        >{{ searchShortcutLabel }}</kbd>
+      </label>
+    </div>
+
     <!-- Navigation -->
     <nav ref="sidebarNavRef" class="sidebar-nav scrollbar-hide">
+      <p
+        v-if="navSearchActive && !hasNavMatches"
+        class="px-3 py-6 text-center text-xs text-gray-500 dark:text-dark-400"
+      >
+        {{ t('nav.noMatches') }}
+      </p>
       <!-- Admin View: Admin menu first, then personal menu -->
       <template v-if="isAdmin">
-        <!-- Admin Section -->
-        <div class="sidebar-section">
-          <template v-for="item in adminNavItems" :key="item.path">
+        <!-- Admin Sections -->
+        <div v-for="section in adminNavSections" :key="section.key" class="sidebar-section">
+          <div class="sidebar-section-title" :class="{ 'sidebar-section-title-collapsed': sidebarCollapsed }" :aria-hidden="sidebarCollapsed ? 'true' : 'false'">
+            <span class="sidebar-section-title-text" :class="{ 'sidebar-section-title-text-collapsed': sidebarCollapsed }">
+              {{ section.title }}
+            </span>
+          </div>
+          <template v-for="item in section.items" :key="item.path">
             <!-- Collapsible group (has children) -->
             <template v-if="item.children?.length">
               <button
@@ -102,7 +136,7 @@
         </div>
 
         <!-- Personal Section for Admin (hidden in simple mode) -->
-        <div v-if="!authStore.isSimpleMode" class="sidebar-section">
+        <div v-if="!authStore.isSimpleMode && filteredPersonalNavItems.length" class="sidebar-section">
           <div class="sidebar-section-title" :class="{ 'sidebar-section-title-collapsed': sidebarCollapsed }" :aria-hidden="sidebarCollapsed ? 'true' : 'false'">
             <span class="sidebar-section-title-text" :class="{ 'sidebar-section-title-text-collapsed': sidebarCollapsed }">
               {{ t('nav.myAccount') }}
@@ -110,7 +144,7 @@
           </div>
 
           <router-link
-            v-for="item in personalNavItems"
+            v-for="item in filteredPersonalNavItems"
             :key="item.path"
             :to="item.path"
             class="sidebar-link mb-1"
@@ -130,7 +164,7 @@
       <template v-else-if="!appStore.backendModeEnabled">
         <div class="sidebar-section">
           <router-link
-            v-for="item in userNavItems"
+            v-for="item in filteredUserNavItems"
             :key="item.path"
             :to="item.path"
             class="sidebar-link mb-1"
@@ -147,16 +181,19 @@
       </template>
     </nav>
 
-    <!-- Bottom Section -->
-    <div class="mt-auto border-t border-gray-100 p-3 dark:border-dark-800">
+    <!-- Bottom Section：主题切换 + 收起侧栏 -->
+    <div
+      class="mt-auto flex gap-1 border-t border-gray-100 p-3 dark:border-dark-800"
+      :class="sidebarCollapsed ? 'flex-col' : 'items-center'"
+    >
       <!-- Theme Toggle -->
       <button
         @click="toggleTheme"
-        class="sidebar-link mb-2 w-full"
+        class="sidebar-link min-w-0 flex-1"
         :class="{ 'sidebar-link-collapsed': sidebarCollapsed }"
         :title="sidebarCollapsed ? (isDark ? t('nav.lightMode') : t('nav.darkMode')) : undefined"
       >
-        <SunIcon v-if="isDark" class="h-5 w-5 flex-shrink-0 text-amber-500" />
+        <SunIcon v-if="isDark" class="h-5 w-5 flex-shrink-0 !text-amber-400" />
         <MoonIcon v-else class="h-5 w-5 flex-shrink-0" />
         <span class="sidebar-label" :class="{ 'sidebar-label-collapsed': sidebarCollapsed }" :aria-hidden="sidebarCollapsed ? 'true' : 'false'">{{
           isDark ? t('nav.lightMode') : t('nav.darkMode')
@@ -166,13 +203,13 @@
       <!-- Collapse Button -->
       <button
         @click="toggleSidebar"
-        class="sidebar-link w-full"
-        :class="{ 'sidebar-link-collapsed': sidebarCollapsed }"
+        class="sidebar-link flex-shrink-0"
+        :class="sidebarCollapsed ? 'sidebar-link-collapsed' : '!px-2.5'"
         :title="sidebarCollapsed ? t('nav.expand') : t('nav.collapse')"
+        :aria-label="sidebarCollapsed ? t('nav.expand') : t('nav.collapse')"
       >
         <ChevronDoubleLeftIcon v-if="!sidebarCollapsed" class="h-5 w-5 flex-shrink-0" />
         <ChevronDoubleRightIcon v-else class="h-5 w-5 flex-shrink-0" />
-        <span class="sidebar-label" :class="{ 'sidebar-label-collapsed': sidebarCollapsed }" :aria-hidden="sidebarCollapsed ? 'true' : 'false'">{{ t('nav.collapse') }}</span>
       </button>
     </div>
   </aside>
@@ -200,10 +237,17 @@ import { FeatureFlags, makeSidebarFlag } from '@/utils/featureFlags'
 import { resolveSiteBillingMode } from '@/utils/siteBillingMode'
 import { useBatchImageAccess } from '@/composables/useBatchImageAccess'
 
+type AdminNavSection = 'overview' | 'users' | 'resources' | 'operations' | 'system'
+
+// 管理菜单分区顺序：常用的概览/用户在前，低频的安全与系统设置在后
+const ADMIN_SECTION_ORDER: AdminNavSection[] = ['overview', 'users', 'resources', 'operations', 'system']
+
 interface NavItem {
   path: string
   label: string
   icon: unknown
+  /** 管理菜单所属分区；未指定的归入“安全与系统” */
+  section?: AdminNavSection
   iconSvg?: string
   hideInSimpleMode?: boolean
   children?: NavItem[]
@@ -780,14 +824,15 @@ const customMenuItemsForAdmin = computed(() => {
 // Admin navigation items
 const adminNavItems = computed((): NavItem[] => {
   const baseItems: NavItem[] = [
-    { path: '/admin/dashboard', label: t('nav.dashboard'), icon: DashboardIcon },
-    { path: '/admin/ops', label: t('nav.ops'), icon: ChartIcon, featureFlag: flagOpsMonitoring },
-    { path: '/admin/users', label: t('nav.users'), icon: UsersIcon, hideInSimpleMode: true },
-    { path: '/admin/groups', label: t('nav.groups'), icon: FolderIcon },
+    { path: '/admin/dashboard', label: t('nav.dashboard'), icon: DashboardIcon, section: 'overview' },
+    { path: '/admin/ops', label: t('nav.ops'), icon: ChartIcon, section: 'overview', featureFlag: flagOpsMonitoring },
+    { path: '/admin/users', label: t('nav.users'), icon: UsersIcon, section: 'users', hideInSimpleMode: true },
+    { path: '/admin/groups', label: t('nav.groups'), icon: FolderIcon, section: 'users' },
     {
       path: '/admin/channels',
       label: t('nav.channelManagement'),
       icon: ChannelIcon,
+      section: 'resources',
       hideInSimpleMode: true,
       expandOnly: true,
       children: [
@@ -796,15 +841,16 @@ const adminNavItems = computed((): NavItem[] => {
       ],
     },
     // 「仅充值」站点连管理端的「订阅管理」入口也一并收起（路由本身不拦截）。
-    { path: '/admin/subscriptions', label: t('nav.subscriptions'), icon: CreditCardIcon, hideInSimpleMode: true, featureFlag: flagSubscription },
-    { path: '/admin/accounts', label: t('nav.accounts'), icon: GlobeIcon },
-    { path: '/admin/plugins', label: t('nav.plugins'), icon: PluginIcon, featureFlag: flagPluginManagement },
-    { path: '/admin/announcements', label: t('nav.announcements'), icon: BellIcon },
-    { path: '/admin/proxies', label: t('nav.proxies'), icon: ServerIcon },
+    { path: '/admin/subscriptions', label: t('nav.subscriptions'), icon: CreditCardIcon, section: 'users', hideInSimpleMode: true, featureFlag: flagSubscription },
+    { path: '/admin/accounts', label: t('nav.accounts'), icon: GlobeIcon, section: 'resources' },
+    { path: '/admin/plugins', label: t('nav.plugins'), icon: PluginIcon, section: 'resources', featureFlag: flagPluginManagement },
+    { path: '/admin/announcements', label: t('nav.announcements'), icon: BellIcon, section: 'operations' },
+    { path: '/admin/proxies', label: t('nav.proxies'), icon: ServerIcon, section: 'resources' },
     {
       path: '/admin/security-audit',
       label: t('nav.securityAudit'),
       icon: ShieldIcon,
+      section: 'system',
       expandOnly: true,
       featureFlag: flagRiskControl,
       children: [
@@ -812,12 +858,13 @@ const adminNavItems = computed((): NavItem[] => {
         { path: '/admin/prompt-audit', label: t('nav.promptAudit'), icon: ShieldIcon },
       ],
     },
-    { path: '/admin/redeem', label: t('nav.redeemCodes'), icon: TicketIcon, hideInSimpleMode: true },
-    { path: '/admin/promo-codes', label: t('nav.promoCodes'), icon: GiftIcon, hideInSimpleMode: true },
+    { path: '/admin/redeem', label: t('nav.redeemCodes'), icon: TicketIcon, section: 'operations', hideInSimpleMode: true },
+    { path: '/admin/promo-codes', label: t('nav.promoCodes'), icon: GiftIcon, section: 'operations', hideInSimpleMode: true },
     {
       path: '/admin/affiliates',
       label: t('nav.affiliateManagement'),
       icon: UsersIcon,
+      section: 'operations',
       hideInSimpleMode: true,
       expandOnly: true,
       featureFlag: flagAffiliate,
@@ -831,6 +878,7 @@ const adminNavItems = computed((): NavItem[] => {
       path: '/admin/orders',
       label: t('nav.orderManagement'),
       icon: OrderIcon,
+      section: 'operations',
       hideInSimpleMode: true,
       expandOnly: true,
       featureFlag: flagAdminPayment,
@@ -840,8 +888,8 @@ const adminNavItems = computed((): NavItem[] => {
         { path: '/admin/orders/plans', label: t('nav.paymentPlans'), icon: CreditCardIcon },
       ],
     },
-    { path: '/admin/usage', label: t('nav.usage'), icon: ChartIcon },
-    { path: '/admin/audit-logs', label: t('nav.auditLogs'), icon: ShieldIcon, hideInSimpleMode: true }
+    { path: '/admin/usage', label: t('nav.usage'), icon: ChartIcon, section: 'overview' },
+    { path: '/admin/audit-logs', label: t('nav.auditLogs'), icon: ShieldIcon, section: 'system', hideInSimpleMode: true }
   ]
 
   const visible = applyFeatureFlags(baseItems)
@@ -849,20 +897,111 @@ const adminNavItems = computed((): NavItem[] => {
   // 简单模式下，在系统设置前插入 API密钥
   if (authStore.isSimpleMode) {
     const filtered = visible.filter(item => !item.hideInSimpleMode)
-    filtered.push({ path: '/keys', label: t('nav.apiKeys'), icon: KeyIcon })
-    filtered.push({ path: '/admin/settings', label: t('nav.settings'), icon: CogIcon })
+    filtered.push({ path: '/keys', label: t('nav.apiKeys'), icon: KeyIcon, section: 'overview' })
+    filtered.push({ path: '/admin/settings', label: t('nav.settings'), icon: CogIcon, section: 'system' })
     for (const cm of customMenuItemsForAdmin.value) {
-      filtered.push({ path: `/custom/${cm.id}`, label: cm.label, icon: null, iconSvg: cm.icon_svg })
+      filtered.push({ path: `/custom/${cm.id}`, label: cm.label, icon: null, iconSvg: cm.icon_svg, section: 'system' })
     }
     return filtered
   }
 
-  visible.push({ path: '/admin/settings', label: t('nav.settings'), icon: CogIcon })
+  visible.push({ path: '/admin/settings', label: t('nav.settings'), icon: CogIcon, section: 'system' })
   for (const cm of customMenuItemsForAdmin.value) {
-    visible.push({ path: `/custom/${cm.id}`, label: cm.label, icon: null, iconSvg: cm.icon_svg })
+    visible.push({ path: `/custom/${cm.id}`, label: cm.label, icon: null, iconSvg: cm.icon_svg, section: 'system' })
   }
   return visible
 })
+
+// ==================== 菜单搜索 ====================
+const navSearchRef = ref<HTMLInputElement | null>(null)
+const navQuery = ref('')
+const normalizedNavQuery = computed(() => navQuery.value.trim().toLowerCase())
+const navSearchActive = computed(() => normalizedNavQuery.value.length > 0)
+
+function navItemMatches(item: NavItem): boolean {
+  const q = normalizedNavQuery.value
+  return item.label.toLowerCase().includes(q) || item.path.toLowerCase().includes(q)
+}
+
+// 父级命中则保留整组；否则只保留命中的子项
+function filterNav(items: NavItem[]): NavItem[] {
+  if (!navSearchActive.value) return items
+  const out: NavItem[] = []
+  for (const item of items) {
+    if (item.children?.length) {
+      if (navItemMatches(item)) {
+        out.push(item)
+        continue
+      }
+      const children = item.children.filter(navItemMatches)
+      if (children.length) out.push({ ...item, children })
+    } else if (navItemMatches(item)) {
+      out.push(item)
+    }
+  }
+  return out
+}
+
+const adminNavSections = computed(() => {
+  const items = filterNav(adminNavItems.value)
+  return ADMIN_SECTION_ORDER
+    .map((key) => ({
+      key,
+      title: t(`nav.sections.${key}`),
+      items: items.filter((item) => (item.section ?? 'system') === key)
+    }))
+    .filter((section) => section.items.length > 0)
+})
+
+const filteredPersonalNavItems = computed(() => filterNav(personalNavItems.value))
+const filteredUserNavItems = computed(() => filterNav(userNavItems.value))
+
+const hasNavMatches = computed(() =>
+  isAdmin.value
+    ? adminNavSections.value.length > 0 || (!authStore.isSimpleMode && filteredPersonalNavItems.value.length > 0)
+    : filteredUserNavItems.value.length > 0
+)
+
+function firstNavMatchPath(): string | null {
+  const candidates = isAdmin.value
+    ? [
+        ...adminNavSections.value.flatMap((section) => section.items),
+        ...(authStore.isSimpleMode ? [] : filteredPersonalNavItems.value)
+      ]
+    : filteredUserNavItems.value
+  for (const item of candidates) {
+    if (item.children?.length) return item.children[0].path
+    if (!item.expandOnly) return item.path
+  }
+  return null
+}
+
+function openFirstMatch() {
+  if (!navSearchActive.value) return
+  const path = firstNavMatchPath()
+  if (!path) return
+  handleMenuItemClick(path)
+  clearNavSearch()
+  if (route.path !== path) void router.push(path)
+}
+
+function clearNavSearch() {
+  navQuery.value = ''
+  navSearchRef.value?.blur()
+}
+
+const searchShortcutLabel =
+  typeof navigator !== 'undefined' && /Mac|iPhone|iPad/i.test(navigator.platform || navigator.userAgent)
+    ? '⌘K'
+    : 'Ctrl K'
+
+function handleNavSearchShortcut(event: KeyboardEvent) {
+  if (!(event.metaKey || event.ctrlKey) || event.key.toLowerCase() !== 'k') return
+  event.preventDefault()
+  if (appStore.sidebarCollapsed) appStore.toggleSidebar()
+  if (window.innerWidth < 1024) appStore.setMobileOpen(true)
+  void nextTick(() => navSearchRef.value?.focus())
+}
 
 function toggleSidebar() {
   appStore.toggleSidebar()
@@ -908,6 +1047,7 @@ function isGroupActive(item: NavItem): boolean {
 }
 
 function isGroupExpanded(item: NavItem): boolean {
+  if (navSearchActive.value) return true
   const override = groupExpandOverrides.value.get(item.path)
   if (override !== undefined) return override
   return isGroupActive(item)
@@ -969,6 +1109,7 @@ watch(
 )
 
 onMounted(() => {
+  window.addEventListener('keydown', handleNavSearchShortcut)
   void refreshBatchImageAccess()
   if (isAdmin.value) {
     adminSettingsStore.fetch()
@@ -984,6 +1125,7 @@ onMounted(() => {
 })
 
 onBeforeUnmount(() => {
+  window.removeEventListener('keydown', handleNavSearchShortcut)
   if (sidebarNavRef.value) {
     appStore.sidebarScrollTop = sidebarNavRef.value.scrollTop
   }
