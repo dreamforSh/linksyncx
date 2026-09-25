@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/Wei-Shaw/sub2api/internal/pkg/claude"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/logger"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/oauth"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/proxyurl"
@@ -195,6 +196,9 @@ func (s *claudeOAuthService) ExchangeCodeForToken(ctx context.Context, code, cod
 
 	if codeState != "" {
 		reqBody["state"] = codeState
+	} else if state != "" {
+		// claude-gw always sends the PKCE session state, even when the pasted code has no suffix.
+		reqBody["state"] = state
 	}
 
 	logger.LegacyPrintf("repository.claude_oauth", "[OAuth] Step 3: Exchanging code for token at %s", s.tokenURL)
@@ -207,7 +211,7 @@ func (s *claudeOAuthService) ExchangeCodeForToken(ctx context.Context, code, cod
 		SetContext(ctx).
 		SetHeader("Accept", "application/json, text/plain, */*").
 		SetHeader("Content-Type", "application/json").
-		SetHeader("User-Agent", "axios/1.13.6").
+		SetHeader("User-Agent", claude.DefaultUserAgent()).
 		SetBody(reqBody).
 		SetSuccessResult(&tokenResp).
 		Post(s.tokenURL)
@@ -237,6 +241,7 @@ func (s *claudeOAuthService) RefreshToken(ctx context.Context, refreshToken, pro
 		"grant_type":    "refresh_token",
 		"refresh_token": refreshToken,
 		"client_id":     oauth.ClientID,
+		"scope":         oauth.ScopeAPI,
 	}
 
 	var tokenResp oauth.TokenResponse
@@ -245,7 +250,7 @@ func (s *claudeOAuthService) RefreshToken(ctx context.Context, refreshToken, pro
 		SetContext(ctx).
 		SetHeader("Accept", "application/json, text/plain, */*").
 		SetHeader("Content-Type", "application/json").
-		SetHeader("User-Agent", "axios/1.13.6").
+		SetHeader("User-Agent", claude.DefaultUserAgent()).
 		SetBody(reqBody).
 		SetSuccessResult(&tokenResp).
 		Post(s.tokenURL)
