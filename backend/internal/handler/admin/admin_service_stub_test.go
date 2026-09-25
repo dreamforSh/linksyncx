@@ -273,7 +273,7 @@ func (s *stubAdminService) BindUserAuthIdentity(ctx context.Context, userID int6
 	return result, nil
 }
 
-func (s *stubAdminService) ListGroups(ctx context.Context, page, pageSize int, platform, status, search string, isExclusive *bool, sortBy, sortOrder string) ([]service.Group, int64, error) {
+func (s *stubAdminService) ListGroups(ctx context.Context, page, pageSize int, platform, status, search string, isExclusive *bool, kind, sortBy, sortOrder string) ([]service.Group, int64, error) {
 	s.lastListGroupsIsExclusive = isExclusive
 	return s.groups, int64(len(s.groups)), nil
 }
@@ -291,6 +291,12 @@ func (s *stubAdminService) GetAllGroupsIncludingInactive(ctx context.Context) ([
 }
 
 func (s *stubAdminService) GetGroup(ctx context.Context, id int64) (*service.Group, error) {
+	for i := range s.groups {
+		if s.groups[i].ID == id {
+			group := s.groups[i]
+			return &group, nil
+		}
+	}
 	group := service.Group{ID: id, Name: "group", Status: service.StatusActive}
 	return &group, nil
 }

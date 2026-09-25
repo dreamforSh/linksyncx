@@ -29,7 +29,11 @@ type Group struct {
 	PeakRateMultiplier float64
 	IsExclusive        bool
 	Status             string
-	Hydrated           bool // indicates the group was loaded from a trusted repository source
+	// Kind 分组类型：channel 渠道分组 / managed 管理分组，创建后不可修改。
+	Kind string
+	// Category 管理分组分类：enterprise / team；渠道分组为空。
+	Category string
+	Hydrated bool // indicates the group was loaded from a trusted repository source
 	// DuplicateOperationID is internal persistence metadata used only to recover
 	// an already committed one-click copy. It must never be mapped to API DTOs.
 	DuplicateOperationID string

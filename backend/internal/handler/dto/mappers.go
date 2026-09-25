@@ -148,6 +148,8 @@ func GroupFromServiceAdmin(g *service.Group) *AdminGroup {
 	}
 	out := &AdminGroup{
 		Group:                       groupFromServiceBase(g),
+		Kind:                        service.NormalizeGroupKind(g.Kind),
+		Category:                    g.Category,
 		ForceOpenAIFast:             g.ForceOpenAIFast,
 		FreeOpenAIFast:              g.FreeOpenAIFast,
 		ProfitControlEnabled:        g.ProfitControlEnabled,
@@ -660,9 +662,9 @@ func redeemCodeFromServiceBase(rc *service.RedeemCode) RedeemCode {
 		out.Status = service.StatusExpired
 	}
 
-	// For admin_balance/admin_concurrency types, include notes so users can see
-	// why they were charged or credited by admin
-	if (rc.Type == "admin_balance" || rc.Type == "admin_concurrency") && rc.Notes != "" {
+	// For admin_balance/admin_concurrency/group_transfer types, include notes so users can see
+	// why they were charged or credited by admin or their group manager
+	if (rc.Type == "admin_balance" || rc.Type == "admin_concurrency" || rc.Type == service.AdjustmentTypeGroupTransfer) && rc.Notes != "" {
 		out.Notes = &rc.Notes
 	}
 

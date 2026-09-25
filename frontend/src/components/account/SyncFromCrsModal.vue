@@ -137,6 +137,20 @@
         <div class="mt-1 text-xs text-gray-400">
           {{ t('admin.accounts.crsSelectedCount', { count: selectedIds.size }) }}
         </div>
+
+        <div class="mt-4" data-testid="crs-target-groups">
+          <GroupSelector
+            v-model="targetGroupIds"
+            :groups="targetGroupOptions"
+            :label="t('admin.accounts.crsTargetGroups')"
+          />
+          <p class="input-hint">{{ t('admin.accounts.crsTargetGroupsHint') }}</p>
+          <TargetPlatformCoverage
+            :platform-counts="selectedPlatformCounts"
+            :group-ids="targetGroupIds"
+            :groups="targetGroupOptions"
+          />
+        </div>
       </div>
 
       <!-- Sync options summary -->
@@ -244,12 +258,19 @@
 import { computed, reactive, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import BaseDialog from '@/components/common/BaseDialog.vue'
+import GroupSelector from '@/components/common/GroupSelector.vue'
+import TargetPlatformCoverage from '@/components/admin/account/TargetPlatformCoverage.vue'
 import { useAppStore } from '@/stores/app'
 import { adminAPI } from '@/api/admin'
 import type { PreviewFromCRSResult } from '@/api/admin/accounts'
+import type { AdminGroup } from '@/types'
+import { findTargetGroupProblem } from '@/utils/importTargetGroups'
+import { platformLabel } from '@/utils/platformColors'
 
 interface Props {
   show: boolean
+  // 新账号的目标分组候选（账号必须归属分组）
+  groups?: AdminGroup[]
 }
 
 interface Emits {
@@ -257,7 +278,9 @@ interface Emits {
   (e: 'synced'): void
 }
 
-const props = defineProps<Props>()
+const props = withDefaults(defineProps<Props>(), {
+  groups: () => []
+})
 const emit = defineEmits<Emits>()
 
 const { t } = useI18n()
@@ -276,6 +299,22 @@ const form = reactive({
   username: '',
   password: '',
   sync_proxies: true
+})
+
+// composite 分组不直接挂账号；新账号只绑定与其平台相同的目标分组
+const targetGroupOptions = computed(() => props.groups.filter((group) => group.platform !== 'composite'))
+const targetGroupIds = ref<number[]>([])
+
+const selectedNewAccounts = computed(() =>
+  previewResult.value?.new_accounts.filter((account) => selectedIds.value.has(account.crs_account_id)) ?? []
+)
+
+const selectedPlatformCounts = computed(() => {
+  const counts: Record<string, number> = {}
+  for (const account of selectedNewAccounts.value) {
+    counts[account.platform] = (counts[account.platform] ?? 0) + 1
+  }
+  return counts
 })
 
 const hasNewButNoneSelected = computed(() => {
@@ -302,6 +341,7 @@ watch(
       form.username = ''
       form.password = ''
       form.sync_proxies = true
+      targetGroupIds.value = []
     }
   }
 )
@@ -368,6 +408,26 @@ const handleSync = async () => {
     return
   }
 
+  const problem = findTargetGroupProblem(
+    selectedNewAccounts.value.map((account) => account.platform),
+    targetGroupIds.value,
+    targetGroupOptions.value
+  )
+  if (problem?.kind === 'required') {
+    appStore.showError(t('admin.accounts.importTargetGroupsRequired'))
+    return
+  }
+  if (problem?.kind === 'managed-exclusive') {
+    appStore.showError(t('admin.accounts.managedGroupExclusive'))
+    return
+  }
+  if (problem?.kind === 'missing') {
+    appStore.showError(t('admin.accounts.importTargetGroupsMissing', {
+      platforms: problem.platforms.map(platformLabel).join(', ')
+    }))
+    return
+  }
+
   syncing.value = true
   try {
     const res = await adminAPI.accounts.syncFromCrs({
@@ -375,7 +435,8 @@ const handleSync = async () => {
       username: form.username.trim(),
       password: form.password,
       sync_proxies: form.sync_proxies,
-      selected_account_ids: [...selectedIds.value]
+      selected_account_ids: [...selectedIds.value],
+      group_ids: [...targetGroupIds.value]
     })
     result.value = res
     currentStep.value = 'result'

@@ -543,6 +543,10 @@ export type GroupPlatform = 'anthropic' | 'openai' | 'gemini' | 'antigravity' | 
 export type VideoModelPrices = Record<string, Record<string, number>>
 
 export type SubscriptionType = 'standard' | 'subscription'
+// 分组类型：channel 渠道分组（公共账号池，可挂渠道）/ managed 管理分组（不挂渠道，组账号独占）
+export type GroupKind = 'channel' | 'managed'
+// 管理分组分类（仅 managed 使用）
+export type GroupCategory = 'enterprise' | 'team'
 
 export interface OpenAIMessagesDispatchModelConfig {
   opus_mapped_model?: string
@@ -623,6 +627,9 @@ export interface Group {
 }
 
 export interface AdminGroup extends Group {
+  // 分组类型与管理分组分类；旧后端缺省视为渠道分组
+  kind?: GroupKind
+  category?: GroupCategory
   force_openai_fast: boolean
   free_openai_fast: boolean
   model_pricing: import('@/api/admin/channels').ChannelModelPricing[]
@@ -790,6 +797,8 @@ export interface CreateGroupRequest {
   name: string
   description?: string | null
   platform?: GroupPlatform
+  kind?: GroupKind
+  category?: GroupCategory
   rate_multiplier?: number
   is_exclusive?: boolean
   subscription_type?: SubscriptionType
@@ -855,6 +864,7 @@ export interface UpdateGroupRequest {
   name?: string
   description?: string | null
   platform?: GroupPlatform
+  category?: GroupCategory
   rate_multiplier?: number
   is_exclusive?: boolean
   status?: 'active' | 'inactive'
@@ -1680,7 +1690,6 @@ export interface CodexSessionImportRequest {
   credential_extras?: Record<string, unknown>
   extra?: Record<string, unknown>
   update_existing?: boolean
-  skip_default_group_bind?: boolean
   confirm_mixed_channel_risk?: boolean
 }
 
@@ -1698,7 +1707,6 @@ export interface OpenAICodexPATCreateRequest {
   auto_pause_on_expired?: boolean
   credential_extras?: Record<string, unknown>
   extra?: Record<string, unknown>
-  skip_default_group_bind?: boolean
   confirm_mixed_channel_risk?: boolean
 }
 

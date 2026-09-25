@@ -91,3 +91,47 @@ func TestResetDailyWindow(t *testing.T) {
 		t.Fatalf("member after reset = %+v", member)
 	}
 }
+
+type settingsRepoStub struct {
+	groupManagementRepoStub
+	current *GroupSettings
+	updated *GroupSettings
+}
+
+func (s *settingsRepoStub) GetSettings(context.Context, int64) (*GroupSettings, error) {
+	current := *s.current
+	return &current, nil
+}
+
+func (s *settingsRepoStub) UpdateSettings(_ context.Context, settings GroupSettings) (*GroupSettings, error) {
+	s.updated = &settings
+	return &settings, nil
+}
+
+func TestGroupManagementManagedGroupKeepsEnforcement(t *testing.T) {
+	repo := &settingsRepoStub{current: &GroupSettings{GroupID: 42, Managed: true, Enabled: true, AllocationMode: GroupAssignmentModeManual, MaxConcurrent: 1}}
+	svc := NewGroupManagementService(repo)
+	ctx := context.Background()
+
+	disable := GroupSettings{GroupID: 42, Enabled: false, AllocationMode: GroupAssignmentModeManual, MaxConcurrent: 1}
+	if _, err := svc.UpdateSettings(ctx, 1, RoleAdmin, disable); !errors.Is(err, ErrManagedGroupEnforcement) {
+		t.Fatalf("disable managed enforcement error = %v, want managed-enforcement", err)
+	}
+	if repo.updated != nil {
+		t.Fatalf("settings were persisted despite rejection: %+v", repo.updated)
+	}
+
+	switchMode := GroupSettings{GroupID: 42, Enabled: true, AllocationMode: GroupAssignmentModeAuto, MaxConcurrent: 2}
+	if _, err := svc.UpdateSettings(ctx, 1, RoleAdmin, switchMode); err != nil {
+		t.Fatalf("switching managed allocation mode error = %v, want nil", err)
+	}
+
+	repo.current.Managed = false
+	repo.updated = nil
+	if _, err := svc.UpdateSettings(ctx, 1, RoleAdmin, disable); err != nil {
+		t.Fatalf("disable channel group enforcement error = %v, want nil", err)
+	}
+	if repo.updated == nil || repo.updated.Enabled {
+		t.Fatalf("channel group enforcement was not disabled: %+v", repo.updated)
+	}
+}

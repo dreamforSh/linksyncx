@@ -32,7 +32,7 @@ type AdminService interface {
 	BindUserAuthIdentity(ctx context.Context, userID int64, input AdminBindAuthIdentityInput) (*AdminBoundAuthIdentity, error)
 
 	// Group management
-	ListGroups(ctx context.Context, page, pageSize int, platform, status, search string, isExclusive *bool, sortBy, sortOrder string) ([]Group, int64, error)
+	ListGroups(ctx context.Context, page, pageSize int, platform, status, search string, isExclusive *bool, kind, sortBy, sortOrder string) ([]Group, int64, error)
 	GetAllGroups(ctx context.Context) ([]Group, error)
 	GetAllGroupsByPlatform(ctx context.Context, platform string) ([]Group, error)
 	// GetAllGroupsIncludingInactive returns all groups regardless of status (active + disabled),
@@ -233,9 +233,12 @@ type AdminBoundAuthIdentityChannel struct {
 }
 
 type CreateGroupInput struct {
-	Name                      string
-	Description               string
-	Platform                  string
+	Name        string
+	Description string
+	Platform    string
+	// Kind 分组类型：channel（默认）/ managed；Category 仅管理分组使用（enterprise / team，默认 team）。
+	Kind                      string
+	Category                  string
 	RateMultiplier            float64
 	IsExclusive               bool
 	SubscriptionType          string   // standard/subscription
@@ -313,9 +316,12 @@ type CreateGroupInput struct {
 }
 
 type UpdateGroupInput struct {
-	Name                      string
-	Description               *string
-	Platform                  string
+	Name        string
+	Description *string
+	Platform    string
+	// Kind 仅用于不可变校验：非空且与现值不同则拒绝。Category 为 nil 表示不修改。
+	Kind                      string
+	Category                  *string
 	RateMultiplier            *float64 // 使用指针以支持设置为0
 	IsExclusive               *bool
 	Status                    string
@@ -409,8 +415,6 @@ type CreateAccountInput struct {
 	ExpiresAt          *int64
 	AutoPauseOnExpired *bool
 	ProbeEnabled       *bool
-	// SkipDefaultGroupBind prevents auto-binding to platform default group when GroupIDs is empty.
-	SkipDefaultGroupBind bool
 	// SkipMixedChannelCheck skips the mixed channel risk check when binding groups.
 	// This should only be set when the caller has explicitly confirmed the risk.
 	SkipMixedChannelCheck bool

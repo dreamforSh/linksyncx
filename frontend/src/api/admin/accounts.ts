@@ -83,6 +83,16 @@ export interface AccountUpstreamBillingRatesWithEtagResult {
   data: UpstreamBillingRatesResponse | null
 }
 
+/**
+ * 统计尚未归属任何分组的账号数（只取分页总数，不拉明细）。
+ */
+export async function countUngrouped(): Promise<number> {
+  const { data } = await apiClient.get<PaginatedResponse<AccountListItem>>('/admin/accounts', {
+    params: { page: 1, page_size: 1, group: 'ungrouped', lite: '1' }
+  })
+  return data.total
+}
+
 export async function getUpstreamBillingRatesWithEtag(
   page: number = 1,
   pageSize: number = 20,
@@ -687,6 +697,8 @@ export async function syncFromCrs(params: {
   password: string
   sync_proxies?: boolean
   selected_account_ids?: string[]
+  // 新账号目标分组：每个新账号只绑定与其平台相同的目标分组
+  group_ids?: number[]
 }): Promise<{
   created: number
   updated: number
@@ -755,11 +767,12 @@ export async function exportData(options?: {
 
 export async function importData(payload: {
   data: AdminDataPayload
-  skip_default_group_bind?: boolean
+  // 目标分组：每个账号只绑定与其平台相同的目标分组
+  group_ids: number[]
 }): Promise<AdminDataImportResult> {
   const { data } = await apiClient.post<AdminDataImportResult>('/admin/accounts/data', {
     data: payload.data,
-    skip_default_group_bind: payload.skip_default_group_bind
+    group_ids: payload.group_ids
   })
   return data
 }
@@ -1133,6 +1146,7 @@ export async function refreshOpenCodeGoUsage(id: number): Promise<OpenCodeGoUsag
 
 export const accountsAPI = {
   list,
+  countUngrouped,
   listWithEtag,
   getUpstreamBillingRatesWithEtag,
   getById,

@@ -25,12 +25,28 @@ func (s *adminServiceImpl) ValidateSimpleModeGroupOperation(operation AdminGroup
 	return ValidateSimpleModeGroupOperation(s.cfg, operation)
 }
 
-func (s *adminServiceImpl) ListGroups(ctx context.Context, page, pageSize int, platform, status, search string, isExclusive *bool, sortBy, sortOrder string) ([]Group, int64, error) {
+// groupKindListRepository 是真实仓储提供的「按分组类型筛选」能力；做成可选接口，
+// 避免扩大 GroupRepository 及其众多测试替身。
+type groupKindListRepository interface {
+	ListWithFiltersByKind(ctx context.Context, params pagination.PaginationParams, platform, status, search string, isExclusive *bool, kind string, bindableOnly bool) ([]Group, *pagination.PaginationResult, error)
+}
+
+func (s *adminServiceImpl) ListGroups(ctx context.Context, page, pageSize int, platform, status, search string, isExclusive *bool, kind, sortBy, sortOrder string) ([]Group, int64, error) {
 	params := pagination.PaginationParams{Page: page, PageSize: pageSize, SortBy: sortBy, SortOrder: sortOrder}
 	var groups []Group
 	var result *pagination.PaginationResult
 	var err error
-	if s.cfg != nil && s.cfg.RunMode == config.RunModeSimple {
+	simpleMode := s.cfg != nil && s.cfg.RunMode == config.RunModeSimple
+	if kind != "" {
+		if err := ValidateGroupKind(kind); err != nil {
+			return nil, 0, err
+		}
+		repo, ok := s.groupRepo.(groupKindListRepository)
+		if !ok {
+			return nil, 0, errors.New("group repository does not support kind filtering")
+		}
+		groups, result, err = repo.ListWithFiltersByKind(ctx, params, platform, status, search, isExclusive, kind, simpleMode)
+	} else if simpleMode {
 		repo, ok := s.groupRepo.(interface {
 			ListBindableWithFilters(context.Context, pagination.PaginationParams, string, string, string, *bool) ([]Group, *pagination.PaginationResult, error)
 		})
@@ -363,6 +379,7 @@ func normalizeCreateGroupInputForSimpleMode(input *CreateGroupInput) {
 	}
 	*input = CreateGroupInput{
 		Name: input.Name, Description: input.Description, Platform: input.Platform,
+		Kind: input.Kind, Category: input.Category,
 		RateMultiplier: 1, SubscriptionType: SubscriptionTypeStandard,
 	}
 }
@@ -371,7 +388,7 @@ func normalizeUpdateGroupInputForSimpleMode(input *UpdateGroupInput) {
 	if input == nil {
 		return
 	}
-	*input = UpdateGroupInput{Name: input.Name, Description: input.Description}
+	*input = UpdateGroupInput{Name: input.Name, Description: input.Description, Kind: input.Kind, Category: input.Category}
 }
 
 func (s *adminServiceImpl) CreateGroup(ctx context.Context, input *CreateGroupInput) (*Group, error) {
@@ -386,6 +403,22 @@ func (s *adminServiceImpl) CreateGroup(ctx context.Context, input *CreateGroupIn
 	}
 
 	platform := NormalizeGroupPlatform(input.Platform)
+	kind := NormalizeGroupKind(input.Kind)
+	if err := ValidateGroupKind(kind); err != nil {
+		return nil, err
+	}
+	category := NormalizeGroupCategory(kind, input.Category)
+	if err := ValidateGroupCategory(kind, category); err != nil {
+		return nil, err
+	}
+	isExclusive := input.IsExclusive
+	if kind == GroupKindManaged {
+		// 管理分组的组账号独占：不从其他分组复制账号；专属是其固有属性，直接强制。
+		if len(input.CopyAccountsFromGroupIDs) > 0 {
+			return nil, ErrManagedGroupCopyAccounts
+		}
+		isExclusive = true
+	}
 	// 固定账号 manifest 配置：账号绑定发生在创建之后，创建时无法校验成员关系，
 	// 拒绝开启并在创建后的编辑里配置。
 	if normalizeCodexModelsManifestConfig(platform, input.CodexModelsManifestConfig).Enabled {
@@ -533,6 +566,9 @@ func (s *adminServiceImpl) CreateGroup(ctx context.Context, input *CreateGroupIn
 			if err != nil {
 				return nil, fmt.Errorf("source group %d not found: %w", srcGroupID, err)
 			}
+			if srcGroup.IsManaged() {
+				return nil, ErrManagedGroupCopyAccounts
+			}
 			if !canCopyAccountsFromGroupPlatform(platform, srcGroup.Platform) {
 				return nil, fmt.Errorf("source group %d platform mismatch: expected %s, got %s", srcGroupID, platform, srcGroup.Platform)
 			}
@@ -556,8 +592,10 @@ func (s *adminServiceImpl) CreateGroup(ctx context.Context, input *CreateGroupIn
 		Name:                            input.Name,
 		Description:                     input.Description,
 		Platform:                        platform,
+		Kind:                            kind,
+		Category:                        category,
 		RateMultiplier:                  input.RateMultiplier,
-		IsExclusive:                     input.IsExclusive,
+		IsExclusive:                     isExclusive,
 		Status:                          StatusActive,
 		SubscriptionType:                subscriptionType,
 		DailyLimitUSD:                   dailyLimit,
@@ -621,6 +659,9 @@ func (s *adminServiceImpl) CreateGroup(ctx context.Context, input *CreateGroupIn
 		group.AllowLive = false
 	}
 	sanitizeGroupReasoningEffortPolicy(group)
+	if err := validateManagedGroupShape(group); err != nil {
+		return nil, err
+	}
 	if err := s.groupRepo.Create(ctx, group); err != nil {
 		return nil, err
 	}
@@ -698,6 +739,10 @@ func (s *adminServiceImpl) validateFallbackGroup(ctx context.Context, currentGro
 		if err != nil {
 			return fmt.Errorf("fallback group not found: %w", err)
 		}
+		// 管理分组的组账号独占，不能被其他分组的请求降级借用
+		if fallbackGroup.IsManaged() {
+			return ErrManagedGroupAsFallback
+		}
 
 		// 降级分组不能启用 claude_code_only，否则会造成死循环
 		if nextID == fallbackGroupID && fallbackGroup.ClaudeCodeOnly {
@@ -730,6 +775,9 @@ func (s *adminServiceImpl) validateFallbackGroupOnInvalidRequest(ctx context.Con
 	if err != nil {
 		return fmt.Errorf("fallback group not found: %w", err)
 	}
+	if fallbackGroup.IsManaged() {
+		return ErrManagedGroupAsFallback
+	}
 	if fallbackGroup.Platform != PlatformAnthropic {
 		return fmt.Errorf("fallback group must be anthropic platform")
 	}
@@ -755,6 +803,25 @@ func (s *adminServiceImpl) UpdateGroup(ctx context.Context, id int64, input *Upd
 	}
 	if s.cfg != nil && s.cfg.RunMode == config.RunModeSimple {
 		normalizeUpdateGroupInputForSimpleMode(input)
+	}
+
+	group.Kind = NormalizeGroupKind(group.Kind)
+	if input.Kind != "" && NormalizeGroupKind(input.Kind) != group.Kind {
+		return nil, ErrGroupKindImmutable
+	}
+	if group.IsManaged() && input.Platform != "" && NormalizeGroupPlatform(input.Platform) != group.Platform {
+		return nil, infraerrors.BadRequest("MANAGED_GROUP_CONSTRAINT", "managed group platform cannot be changed because its accounts are platform-bound")
+	}
+	// 复制账号会整体替换绑定且发生在保存之后，必须在任何写入前拒绝涉及管理分组的复制。
+	if err := s.ensureCopyAccountsAllowed(ctx, group, input.CopyAccountsFromGroupIDs); err != nil {
+		return nil, err
+	}
+	if input.Category != nil {
+		category := NormalizeGroupCategory(group.Kind, *input.Category)
+		if err := ValidateGroupCategory(group.Kind, category); err != nil {
+			return nil, err
+		}
+		group.Category = category
 	}
 
 	// 渠道缓存里存了 groupID → platform 的映射，改了平台要让它失效（见函数末尾）
@@ -1046,6 +1113,9 @@ func (s *adminServiceImpl) UpdateGroup(ctx context.Context, id int64, input *Upd
 		}
 	}
 
+	if err := validateManagedGroupShape(group); err != nil {
+		return nil, err
+	}
 	if err := s.groupRepo.Update(ctx, group); err != nil {
 		return nil, err
 	}

@@ -51,6 +51,20 @@
         />
       </div>
 
+      <div data-testid="import-target-groups">
+        <GroupSelector
+          v-model="targetGroupIds"
+          :groups="targetGroupOptions"
+          :label="t('admin.accounts.importTargetGroups')"
+        />
+        <p class="input-hint">{{ t('admin.accounts.importTargetGroupsHint') }}</p>
+        <TargetPlatformCoverage
+          :platform-counts="detectedPlatformCounts"
+          :group-ids="targetGroupIds"
+          :groups="targetGroupOptions"
+        />
+      </div>
+
       <div
         v-if="result"
         class="space-y-2 rounded-xl border border-gray-200 p-4 dark:border-dark-700"
@@ -99,12 +113,18 @@
 import { computed, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import BaseDialog from '@/components/common/BaseDialog.vue'
+import GroupSelector from '@/components/common/GroupSelector.vue'
+import TargetPlatformCoverage from '@/components/admin/account/TargetPlatformCoverage.vue'
 import { adminAPI } from '@/api/admin'
 import { useAppStore } from '@/stores/app'
-import type { AdminDataImportResult, AdminDataPayload } from '@/types'
+import type { AdminDataImportResult, AdminDataPayload, AdminGroup } from '@/types'
+import { findTargetGroupProblem } from '@/utils/importTargetGroups'
+import { platformLabel } from '@/utils/platformColors'
 
 interface Props {
   show: boolean
+  // 导入目标分组候选（账号必须归属分组）
+  groups?: AdminGroup[]
 }
 
 interface Emits {
@@ -112,7 +132,9 @@ interface Emits {
   (e: 'imported'): void
 }
 
-const props = defineProps<Props>()
+const props = withDefaults(defineProps<Props>(), {
+  groups: () => []
+})
 const emit = defineEmits<Emits>()
 
 const { t } = useI18n()
@@ -135,6 +157,38 @@ const fileListTitle = computed(() => files.value.map((item) => item.name).join('
 
 const errorItems = computed(() => result.value?.errors || [])
 
+// composite 分组不直接挂账号，导入只按平台匹配具体分组
+const targetGroupOptions = computed(() => props.groups.filter((group) => group.platform !== 'composite'))
+const targetGroupIds = ref<number[]>([])
+const detectedPlatformCounts = ref<Record<string, number>>({})
+let detectToken = 0
+
+const countAccountsByPlatform = (payloads: AdminDataPayload[]) => {
+  const counts: Record<string, number> = {}
+  for (const payload of payloads) {
+    for (const account of payload.accounts) {
+      const platform = String(account.platform || '')
+      if (platform) counts[platform] = (counts[platform] ?? 0) + 1
+    }
+  }
+  return counts
+}
+
+// 选文件后预读一遍平台分布，用于提示目标分组是否覆盖；解析失败留给导入时报错
+const detectPlatforms = async (sourceFiles: File[]) => {
+  const token = ++detectToken
+  const payloads: AdminDataPayload[] = []
+  for (const sourceFile of sourceFiles) {
+    try {
+      const parsed: unknown = JSON.parse(await readFileAsText(sourceFile))
+      if (isValidDataPayload(parsed)) payloads.push(parsed)
+    } catch {
+      // ignore
+    }
+  }
+  if (token === detectToken) detectedPlatformCounts.value = countAccountsByPlatform(payloads)
+}
+
 watch(
   () => props.show,
   (open) => {
@@ -143,6 +197,9 @@ watch(
       dragDepth.value = 0
       hasCreatedData.value = false
       result.value = null
+      targetGroupIds.value = []
+      detectedPlatformCounts.value = {}
+      detectToken++
       if (fileInput.value) {
         fileInput.value.value = ''
       }
@@ -189,6 +246,7 @@ const setSelectedFiles = (sourceFiles: FileList | File[] | null | undefined) => 
   }
   files.value = picked
   result.value = null
+  void detectPlatforms(picked)
 }
 
 const handleDragEnter = () => {
@@ -293,9 +351,29 @@ const handleImport = async () => {
     }
     const dataPayload = mergeDataPayloads(dataPayloads)
 
+    const problem = findTargetGroupProblem(
+      dataPayload.accounts.map((account) => String(account.platform || '')),
+      targetGroupIds.value,
+      targetGroupOptions.value
+    )
+    if (problem?.kind === 'required') {
+      appStore.showError(t('admin.accounts.importTargetGroupsRequired'))
+      return
+    }
+    if (problem?.kind === 'managed-exclusive') {
+      appStore.showError(t('admin.accounts.managedGroupExclusive'))
+      return
+    }
+    if (problem?.kind === 'missing') {
+      appStore.showError(t('admin.accounts.importTargetGroupsMissing', {
+        platforms: problem.platforms.map(platformLabel).join(', ')
+      }))
+      return
+    }
+
     const res = await adminAPI.accounts.importData({
       data: dataPayload,
-      skip_default_group_bind: true
+      group_ids: [...targetGroupIds.value]
     })
 
     result.value = res

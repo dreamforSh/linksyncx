@@ -1276,6 +1276,8 @@ type SyncFromCRSRequest struct {
 	Password           string   `json:"password" binding:"required"`
 	SyncProxies        *bool    `json:"sync_proxies"`
 	SelectedAccountIDs []string `json:"selected_account_ids"`
+	// GroupIDs 新建账号的目标分组：每个账号只绑定与其平台相同的目标分组，无匹配分组的新账号不会被创建。
+	GroupIDs []int64 `json:"group_ids"`
 }
 
 type PreviewFromCRSRequest struct {
@@ -1360,12 +1362,19 @@ func (h *AccountHandler) SyncFromCRS(c *gin.Context) {
 		syncProxies = *req.SyncProxies
 	}
 
+	groupsByPlatform, err := h.resolveImportTargetGroups(c.Request.Context(), req.GroupIDs)
+	if err != nil {
+		response.ErrorFrom(c, err)
+		return
+	}
+
 	result, err := h.crsSyncService.SyncFromCRS(c.Request.Context(), service.SyncFromCRSInput{
 		BaseURL:            req.BaseURL,
 		Username:           req.Username,
 		Password:           req.Password,
 		SyncProxies:        syncProxies,
 		SelectedAccountIDs: req.SelectedAccountIDs,
+		GroupIDsByPlatform: groupsByPlatform,
 	})
 	if err != nil {
 		// Provide detailed error message for CRS sync failures
@@ -2082,13 +2091,16 @@ func (h *AccountHandler) BatchCreate(c *gin.Context) {
 			return
 		}
 	}
-	groupIDs := make([]int64, 0)
+	// 逐账号校验分组：账号必须归属分组，且管理分组独占规则按账号计算，不能合并后统一校验。
 	for _, item := range req.Accounts {
-		groupIDs = append(groupIDs, item.GroupIDs...)
-	}
-	if err := h.adminService.ValidateAccountGroupBindings(c.Request.Context(), groupIDs); err != nil {
-		response.ErrorFrom(c, err)
-		return
+		if len(item.GroupIDs) == 0 {
+			response.ErrorFrom(c, service.ErrAccountGroupRequired)
+			return
+		}
+		if err := h.adminService.ValidateAccountGroupBindings(c.Request.Context(), item.GroupIDs); err != nil {
+			response.ErrorFrom(c, err)
+			return
+		}
 	}
 
 	executeAdminIdempotentJSON(c, "admin.accounts.batch_create", req, service.DefaultWriteIdempotencyTTL(), func(ctx context.Context) (any, error) {

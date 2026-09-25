@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"math"
@@ -989,12 +990,36 @@ func (s *ChannelService) checkGroupConflicts(ctx context.Context, channelID int6
 	if len(groupIDs) == 0 {
 		return nil
 	}
+	if err := s.rejectManagedGroups(ctx, groupIDs); err != nil {
+		return err
+	}
 	conflicting, err := s.repo.GetGroupsInOtherChannels(ctx, channelID, groupIDs)
 	if err != nil {
 		return fmt.Errorf("check group conflicts: %w", err)
 	}
 	if len(conflicting) > 0 {
 		return ErrGroupAlreadyInChannel
+	}
+	return nil
+}
+
+// rejectManagedGroups 管理分组不挂渠道：定价与模型策略只取分组自身配置，组账号独占。
+// 不存在的分组保持原有处理（交给后续持久化层报错）。
+func (s *ChannelService) rejectManagedGroups(ctx context.Context, groupIDs []int64) error {
+	if s.groupRepo == nil {
+		return nil
+	}
+	for _, groupID := range groupIDs {
+		group, err := s.groupRepo.GetByIDLite(ctx, groupID)
+		if err != nil {
+			if errors.Is(err, ErrGroupNotFound) {
+				continue
+			}
+			return fmt.Errorf("get group: %w", err)
+		}
+		if group.IsManaged() {
+			return ErrManagedGroupInChannel
+		}
 	}
 	return nil
 }

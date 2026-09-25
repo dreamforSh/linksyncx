@@ -51,6 +51,16 @@ func (r *upstreamBillingProbeAccountRepo) Create(_ context.Context, account *Acc
 	return nil
 }
 
+// BindGroups 记录分组绑定：新建账号必须带分组，CreateAccount 总会调用它。
+func (r *upstreamBillingProbeAccountRepo) BindGroups(_ context.Context, accountID int64, groupIDs []int64) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if account := r.accounts[accountID]; account != nil {
+		account.GroupIDs = append([]int64(nil), groupIDs...)
+	}
+	return nil
+}
+
 func (r *upstreamBillingProbeAccountRepo) Update(_ context.Context, account *Account) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()

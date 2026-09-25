@@ -1,17 +1,24 @@
 import { apiClient } from './client'
+import type { GroupCategory, GroupKind } from '@/types'
 
 export type AllocationMode = 'auto' | 'manual'
+export type GroupTransferDirection = 'grant' | 'reclaim'
+export type GroupUserStatus = 'active' | 'disabled'
 
 export interface GroupManagementSettings {
   enabled: boolean
   allocation_mode: AllocationMode
   max_concurrent: number
   daily_limit: number
+  // 管理分组始终启用管控（只读）
+  managed?: boolean
 }
 
 export interface GroupManagementGroup extends GroupManagementSettings {
   id: number
   name: string
+  kind?: GroupKind
+  category?: GroupCategory
   member_count: number
   account_count: number
   manager: boolean
@@ -24,6 +31,12 @@ export interface GroupManagementMembership {
   group_name: string
   email?: string
   username?: string
+  // 由本分组组管理员创建的组用户
+  owned?: boolean
+  status?: GroupUserStatus
+  // 仅管理分组返回；reclaimable 为可回收上限（本分组划拨净额与当前余额的较小值）
+  balance?: number
+  reclaimable?: number
   max_concurrent: number
   daily_limit: number
   daily_used: number
@@ -56,6 +69,8 @@ export interface GroupManagementAccount {
 
 export interface GroupManagementOverview {
   role: string
+  // 当前用户自己的余额
+  balance?: number
   manageable_groups: GroupManagementGroup[]
   memberships: GroupManagementMembership[]
   assignments: GroupManagementAssignment[]
@@ -63,6 +78,63 @@ export interface GroupManagementOverview {
 
 export type GroupManagementMember = GroupManagementMembership
 export type MemberLimit = Pick<GroupManagementSettings, 'max_concurrent' | 'daily_limit'>
+
+export interface GroupManagementSummary {
+  role: string
+  managed_group_count: number
+  membership_count: number
+}
+
+export interface CreateGroupUserInput {
+  email: string
+  username?: string
+  password: string
+  max_concurrent?: number
+  daily_limit?: number
+  initial_amount?: number
+}
+
+export interface GroupOwnedUser {
+  user_id: number
+  email: string
+  username: string
+  status: GroupUserStatus
+  group_id: number
+  group_name: string
+}
+
+export interface GroupBalanceTransfer {
+  id: number
+  group_id: number
+  manager_id: number | null
+  manager_name: string
+  member_id: number | null
+  member_name: string
+  direction: GroupTransferDirection
+  amount: number
+  notes: string
+  created_at: string
+}
+
+export interface GroupTransferPage {
+  items: GroupBalanceTransfer[]
+  total: number
+  page: number
+  page_size: number
+  pages: number
+}
+
+export interface GroupRef {
+  id: number
+  name: string
+  category?: GroupCategory
+}
+
+export interface UserGroupSummary {
+  user_id: number
+  owned_group?: GroupRef
+  managed_groups: GroupRef[]
+}
 
 export interface AdminGroupManagementUser {
   id: number
@@ -79,6 +151,49 @@ export interface AdminGroupManagementDirectory {
 export const groupManagementAPI = {
   async getOverview(): Promise<GroupManagementOverview> {
     const { data } = await apiClient.get<GroupManagementOverview>('/group-management/me/overview')
+    return data
+  },
+
+  async getSummary(): Promise<GroupManagementSummary> {
+    const { data } = await apiClient.get<GroupManagementSummary>('/group-management/me/summary')
+    return data
+  },
+
+  async updateCategory(groupId: number, category: GroupCategory): Promise<void> {
+    await apiClient.put(`/group-management/groups/${groupId}/category`, { category })
+  },
+
+  async getOwnedUsers(groupId: number): Promise<GroupOwnedUser[]> {
+    const { data } = await apiClient.get<GroupOwnedUser[]>(`/group-management/groups/${groupId}/owned-users`)
+    return data
+  },
+
+  async createGroupUser(groupId: number, input: CreateGroupUserInput): Promise<GroupManagementMember> {
+    const { data } = await apiClient.post<GroupManagementMember>(`/group-management/groups/${groupId}/users`, input)
+    return data
+  },
+
+  async setGroupUserStatus(groupId: number, userId: number, status: GroupUserStatus): Promise<void> {
+    await apiClient.put(`/group-management/groups/${groupId}/users/${userId}/status`, { status })
+  },
+
+  async resetGroupUserPassword(groupId: number, userId: number, password: string): Promise<void> {
+    await apiClient.put(`/group-management/groups/${groupId}/users/${userId}/password`, { password })
+  },
+
+  async transferBalance(
+    groupId: number,
+    userId: number,
+    input: { direction: GroupTransferDirection; amount: number; notes?: string }
+  ): Promise<GroupBalanceTransfer> {
+    const { data } = await apiClient.post<GroupBalanceTransfer>(
+      `/group-management/groups/${groupId}/users/${userId}/balance-transfers`, input
+    )
+    return data
+  },
+
+  async listTransfers(groupId: number, params: { page?: number; page_size?: number; user_id?: number } = {}): Promise<GroupTransferPage> {
+    const { data } = await apiClient.get<GroupTransferPage>(`/group-management/groups/${groupId}/balance-transfers`, { params })
     return data
   },
 
@@ -136,6 +251,13 @@ export const groupManagementAPI = {
 
   async adminRevokeManager(groupId: number, userId: number): Promise<void> {
     await apiClient.delete(`/admin/group-management/groups/${groupId}/managers/${userId}`)
+  },
+
+  async adminUserGroups(userIds: number[]): Promise<UserGroupSummary[]> {
+    const { data } = await apiClient.get<UserGroupSummary[]>('/admin/group-management/user-groups', {
+      params: { user_ids: userIds.join(',') }
+    })
+    return data
   }
 }
 

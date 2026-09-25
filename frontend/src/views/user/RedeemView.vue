@@ -310,7 +310,7 @@
                   {{ item.code.slice(0, 8) }}...
                 </p>
                 <p v-else class="text-xs text-gray-400 dark:text-dark-500">
-                  {{ t('redeem.adminAdjustment') }}
+                  {{ item.type === 'group_transfer' ? t('redeem.groupTransfer') : t('redeem.adminAdjustment') }}
                 </p>
                 <!-- Display notes for admin adjustments -->
                 <p
@@ -408,15 +408,16 @@ const contactInfo = ref('')
 
 // Helper functions for history display
 const isBalanceType = (type: string) => {
-  return type === 'balance' || type === 'admin_balance'
+  return type === 'balance' || type === 'admin_balance' || type === 'group_transfer'
 }
 
 const isSubscriptionType = (type: string) => {
   return type === 'subscription'
 }
 
+// 组内划拨同样没有兑换码，按调整记录展示
 const isAdminAdjustment = (type: string) => {
-  return type === 'admin_balance' || type === 'admin_concurrency'
+  return type === 'admin_balance' || type === 'admin_concurrency' || type === 'group_transfer'
 }
 
 const getHistoryItemTitle = (item: RedeemHistoryItem) => {
@@ -424,6 +425,8 @@ const getHistoryItemTitle = (item: RedeemHistoryItem) => {
     return t('redeem.balanceAddedRedeem')
   } else if (item.type === 'admin_balance') {
     return item.value >= 0 ? t('redeem.balanceAddedAdmin') : t('redeem.balanceDeductedAdmin')
+  } else if (item.type === 'group_transfer') {
+    return item.value >= 0 ? t('redeem.groupTransferIn') : t('redeem.groupTransferOut')
   } else if (item.type === 'concurrency') {
     return t('redeem.concurrencyAddedRedeem')
   } else if (item.type === 'admin_concurrency') {

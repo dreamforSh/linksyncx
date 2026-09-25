@@ -10,6 +10,7 @@ const {
   importCodexSessionMock,
   createOpenAICodexPATMock,
   authIsSimpleMode,
+  showErrorMock,
 } = vi.hoisted(() => ({
   createAccountMock: vi.fn(),
   probeUpstreamBillingMock: vi.fn(),
@@ -18,11 +19,12 @@ const {
   importCodexSessionMock: vi.fn(),
   createOpenAICodexPATMock: vi.fn(),
   authIsSimpleMode: { value: true },
+  showErrorMock: vi.fn(),
 }))
 
 vi.mock('@/stores/app', () => ({
   useAppStore: () => ({
-    showError: vi.fn(),
+    showError: showErrorMock,
     showSuccess: vi.fn(),
     showWarning: showWarningMock,
   }),
@@ -133,9 +135,12 @@ const ModelWhitelistSelectorStub = defineComponent({
   >models</button>`,
 })
 
-function mountModal(groups: any[] = []) {
+// composite 分组可接收任意平台账号，作为默认目标分组不锁定平台，便于各平台用例自由切换
+const anyPlatformTargetGroup = { id: 99, name: 'route-all', platform: 'composite', kind: 'channel', status: 'active' }
+
+function mountModal(groups: any[] = [], presetGroup: any = anyPlatformTargetGroup) {
   return mount(CreateAccountModal, {
-    props: { show: true, proxies: [], groups },
+    props: { show: true, proxies: [], groups, presetGroup },
     global: {
       stubs: {
         BaseDialog: BaseDialogStub,
@@ -201,6 +206,7 @@ describe('CreateAccountModal OpenAI long-context billing', () => {
     probeUpstreamBillingMock.mockReset().mockResolvedValue({})
     syncUpstreamModelsMock.mockReset().mockResolvedValue({ models: [], metadata: {} })
     showWarningMock.mockReset()
+    showErrorMock.mockReset()
     importCodexSessionMock.mockReset().mockResolvedValue({
       created: 1,
       updated: 0,
@@ -710,5 +716,77 @@ describe('CreateAccountModal OpenAI long-context billing', () => {
     await flushPromises()
 
     expect(createOpenAICodexPATMock.mock.calls[0]?.[0]?.extra?.openai_long_context_billing_enabled).toBe(false)
+  })
+})
+
+describe('CreateAccountModal target group', () => {
+  const openaiPool = { id: 5, name: 'openai-pool', platform: 'openai', kind: 'channel', status: 'active' }
+  const acmeClaude = { id: 7, name: 'acme-claude', platform: 'anthropic', kind: 'managed', category: 'team', status: 'active' }
+
+  beforeEach(() => {
+    authIsSimpleMode.value = false
+    createAccountMock.mockReset().mockResolvedValue({ id: 42, platform: 'openai', type: 'apikey' })
+    probeUpstreamBillingMock.mockReset().mockResolvedValue({})
+    syncUpstreamModelsMock.mockReset().mockResolvedValue({ models: [], metadata: {} })
+    showErrorMock.mockReset()
+  })
+
+  it('refuses to create an account without any group', async () => {
+    const wrapper = mountModal([], null)
+    await selectButtonByText(wrapper, 'OpenAI')
+    await selectButtonByText(wrapper, 'API Key')
+    await wrapper.get('form#create-account-form input[type="text"]').setValue('no group')
+    await wrapper.get('form#create-account-form input[type="password"]').setValue('test-api-key')
+    await wrapper.get('form#create-account-form').trigger('submit.prevent')
+    await flushPromises()
+
+    expect(showErrorMock).toHaveBeenCalledWith('admin.accounts.groupRequired')
+    expect(createAccountMock).not.toHaveBeenCalled()
+  })
+
+  it('locks the platform to the preset channel group and binds it on submit', async () => {
+    const wrapper = mountModal([openaiPool, acmeClaude], openaiPool)
+    await flushPromises()
+
+    expect(wrapper.find('[data-testid="create-account-target-group"]').text()).toContain('openai-pool')
+    expect(wrapper.findAll('button').some((button) => button.text().includes('Anthropic'))).toBe(false)
+
+    await selectButtonByText(wrapper, 'API Key')
+    await wrapper.get('form#create-account-form input[type="text"]').setValue('pooled')
+    await wrapper.get('form#create-account-form input[type="password"]').setValue('test-api-key')
+    await wrapper.get('form#create-account-form').trigger('submit.prevent')
+    await flushPromises()
+
+    expect(createAccountMock).toHaveBeenCalledTimes(1)
+    expect(createAccountMock.mock.calls[0]?.[0]).toMatchObject({
+      platform: 'openai',
+      group_ids: [5],
+    })
+  })
+
+  it('shows a managed preset group read-only instead of the group selector', async () => {
+    const wrapper = mountModal([openaiPool, acmeClaude], acmeClaude)
+    await flushPromises()
+
+    expect(wrapper.find('[data-testid="create-account-managed-group"]').text()).toContain('acme-claude')
+    expect(wrapper.find('[data-testid="select-pricing-groups"]').exists()).toBe(false)
+  })
+
+  it('rejects a managed group combined with other groups', async () => {
+    const wrapper = mountModal([{ ...acmeClaude, id: 1 }, { id: 2, name: 'pool', platform: 'anthropic', kind: 'channel' }], null)
+    await wrapper.get('[data-testid="select-pricing-groups"]').trigger('click')
+    await wrapper.get('form#create-account-form input[type="text"]').setValue('mixed')
+    await wrapper.get('form#create-account-form').trigger('submit.prevent')
+    await flushPromises()
+
+    expect(showErrorMock).toHaveBeenCalledWith('admin.accounts.managedGroupExclusive')
+    expect(createAccountMock).not.toHaveBeenCalled()
+  })
+
+  it('asks the parent to change the target group', async () => {
+    const wrapper = mountModal([openaiPool], openaiPool)
+    await wrapper.get('[data-testid="create-account-change-group"]').trigger('click')
+
+    expect(wrapper.emitted('change-group')).toHaveLength(1)
   })
 })

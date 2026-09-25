@@ -46,6 +46,12 @@ vi.mock('@/api/admin', () => ({
   }
 }))
 
+vi.mock('@/api/groupManagement', () => ({
+  groupManagementAPI: {
+    adminUserGroups: vi.fn().mockResolvedValue([])
+  }
+}))
+
 vi.mock('@/stores/app', () => ({
   useAppStore: () => ({
     showError,
@@ -108,6 +114,7 @@ const DataTableStub = {
       </template>
       <div v-for="row in data" :key="row.id">
         <slot name="cell-last_used_at" :value="row.last_used_at" :row="row" />
+        <div :data-test="'role-' + row.id"><slot name="cell-role" :value="row.role" :row="row" /></div>
         <div :data-test="'actions-' + row.id"><slot name="cell-actions" :row="row" /></div>
       </div>
     </div>
@@ -571,5 +578,32 @@ describe('admin UsersView', () => {
     expect(wrapper.get('[data-test="row-order"]').text()).toBe('refreshed-page-two@example.com')
     expect(wrapper.find('[data-test="bulk-edit-limits"]').exists()).toBe(false)
     expect(wrapper.get('[data-test="selected-keys"]').text()).toBe('')
+  })
+  it('shows the managed groups of group managers and the owning group of group users', async () => {
+    const { groupManagementAPI } = await import('@/api/groupManagement')
+    vi.mocked(groupManagementAPI.adminUserGroups).mockResolvedValue([
+      { user_id: 42, managed_groups: [{ id: 2, name: 'Acme' }, { id: 3, name: 'Globex' }] },
+      { user_id: 43, owned_group: { id: 2, name: 'Acme' }, managed_groups: [] }
+    ])
+    listUsers.mockResolvedValue({
+      items: [createAdminUser({ role: 'group_manager' }), createAdminUser({ id: 43, email: 'member@example.com' })],
+      total: 2,
+      page: 1,
+      page_size: 20,
+      pages: 1
+    })
+
+    const wrapper = mountBulkDeleteView()
+    await flushPromises()
+    // 次级数据延后 50ms 加载，先让表格渲染
+    await new Promise(resolve => setTimeout(resolve, 80))
+    await flushPromises()
+
+    expect(groupManagementAPI.adminUserGroups).toHaveBeenCalledWith([42, 43])
+    const managerCell = wrapper.get('[data-test="role-42"]')
+    expect(managerCell.get('.badge').classes()).toContain('badge-primary')
+    expect(managerCell.text()).toContain('admin.users.managesGroups')
+    expect(wrapper.get('[data-test="role-43"]').text()).toContain('admin.users.groupUserOf')
+    vi.mocked(groupManagementAPI.adminUserGroups).mockResolvedValue([])
   })
 })

@@ -21,10 +21,10 @@ func TestAdminCreateAccountStripsUserSeedAndCreatesFreshSeedWhenEnabled(t *testi
 	svc := &adminServiceImpl{accountRepo: repo}
 
 	created, err := svc.CreateAccount(context.Background(), &CreateAccountInput{
-		Name:                 "codex-oauth",
-		Platform:             PlatformOpenAI,
-		Type:                 AccountTypeOAuth,
-		SkipDefaultGroupBind: true,
+		Name:     "codex-oauth",
+		Platform: PlatformOpenAI,
+		Type:     AccountTypeOAuth,
+		GroupIDs: []int64{1},
 		Extra: map[string]any{
 			codexFingerprintModeExtraKey: "session",
 			codexFingerprintSeedExtraKey: userSuppliedCodexFingerprintSeed,

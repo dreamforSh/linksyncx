@@ -191,7 +191,7 @@
 import { computed, h, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { useI18n } from 'vue-i18n'
-import { useAdminSettingsStore, useAppStore, useAuthStore, useOnboardingStore } from '@/stores'
+import { useAdminSettingsStore, useAppStore, useAuthStore, useGroupManagementStore, useOnboardingStore } from '@/stores'
 import VersionBadge from '@/components/common/VersionBadge.vue'
 import Icon from '@/components/icons/Icon.vue'
 import { sanitizeSvg } from '@/utils/sanitize'
@@ -244,6 +244,7 @@ const appStore = useAppStore()
 const authStore = useAuthStore()
 const onboardingStore = useOnboardingStore()
 const adminSettingsStore = useAdminSettingsStore()
+const groupManagementStore = useGroupManagementStore()
 const { canUseBatchImage, refreshBatchImageAccess } = useBatchImageAccess()
 
 const sidebarCollapsed = computed(() => appStore.sidebarCollapsed)
@@ -711,6 +712,9 @@ const flagPluginManagement = makeSidebarFlag(FeatureFlags.pluginManagement)
 const flagOpsMonitoring = () => adminSettingsStore.opsMonitoringEnabled
 const flagAdminPayment = () => adminSettingsStore.paymentEnabled
 const flagBatchImageAccess = () => canUseBatchImage.value
+// 组管理入口：超管与组管理员始终可见；普通用户只有属于某个分组时才显示
+const flagGroupManagement = () =>
+  isAdmin.value || authStore.isGroupManager || (groupManagementStore.summary?.membership_count ?? 0) > 0
 
 // buildSelfNavItems 构造用户自己的导航项（用户端主菜单和管理员的"我的账户"子菜单共享这组声明）。
 // withDashboard=true 时包含仪表盘（用户端），false 时不含（管理员的个人区已经有独立仪表盘入口）。
@@ -723,7 +727,7 @@ function buildSelfNavItems(withDashboard: boolean): NavItem[] {
     items.push({ path: '/dashboard', label: t('nav.dashboard'), icon: DashboardIcon })
   }
   items.push(
-    { path: '/group-management', label: t('nav.groupManagement'), icon: FolderIcon },
+    { path: '/group-management', label: t('nav.groupManagement'), icon: FolderIcon, featureFlag: flagGroupManagement },
     { path: '/keys', label: t('nav.apiKeys'), icon: KeyIcon },
     { path: '/batch-image', label: t('nav.batchImage'), icon: BatchImageIcon, hideInSimpleMode: true, featureFlag: flagBatchImageAccess },
     { path: '/usage', label: t('nav.usage'), icon: ChartIcon, hideInSimpleMode: true },
@@ -949,6 +953,16 @@ watch(
   (v) => {
     if (v) {
       adminSettingsStore.fetch()
+    }
+  },
+  { immediate: true }
+)
+
+watch(
+  () => authStore.user?.id,
+  (userId) => {
+    if (userId && !isAdmin.value && !authStore.isGroupManager) {
+      void groupManagementStore.ensureSummary(userId)
     }
   },
   { immediate: true }

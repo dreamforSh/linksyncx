@@ -13,8 +13,8 @@ import (
 func TestGatewayAdmissionManualAtomicReservationAndRelease(t *testing.T) {
 	db, mock, err := sqlmock.New()
 	require.NoError(t, err)
-	defer db.Close()
-	mock.ExpectQuery(regexp.QuoteMeta("SELECT s.enabled, s.allocation_mode FROM group_management_settings")).WithArgs(int64(3)).
+	defer func() { _ = db.Close() }()
+	mock.ExpectQuery(regexp.QuoteMeta(gatewayAdmissionSettingsSQL)).WithArgs(int64(3)).
 		WillReturnRows(sqlmock.NewRows([]string{"enabled", "allocation_mode"}).AddRow(true, "manual"))
 	mock.ExpectBegin()
 	mock.ExpectQuery("SELECT gm.max_concurrent").WithArgs(int64(7), int64(3)).
@@ -41,8 +41,8 @@ func TestGatewayAdmissionManualAtomicReservationAndRelease(t *testing.T) {
 func TestGatewayAdmissionManualWithoutAssignmentsDoesNotSpendQuota(t *testing.T) {
 	db, mock, err := sqlmock.New()
 	require.NoError(t, err)
-	defer db.Close()
-	mock.ExpectQuery("SELECT s.enabled, s.allocation_mode").WithArgs(int64(3)).
+	defer func() { _ = db.Close() }()
+	mock.ExpectQuery(regexp.QuoteMeta(gatewayAdmissionSettingsSQL)).WithArgs(int64(3)).
 		WillReturnRows(sqlmock.NewRows([]string{"enabled", "mode"}).AddRow(true, "manual"))
 	mock.ExpectBegin()
 	mock.ExpectQuery("SELECT gm.max_concurrent").WithArgs(int64(7), int64(3)).
@@ -58,8 +58,8 @@ func TestGatewayAdmissionManualWithoutAssignmentsDoesNotSpendQuota(t *testing.T)
 func TestGatewayAdmissionExhaustedDailyQuota(t *testing.T) {
 	db, mock, err := sqlmock.New()
 	require.NoError(t, err)
-	defer db.Close()
-	mock.ExpectQuery("SELECT s.enabled, s.allocation_mode").WithArgs(int64(3)).
+	defer func() { _ = db.Close() }()
+	mock.ExpectQuery(regexp.QuoteMeta(gatewayAdmissionSettingsSQL)).WithArgs(int64(3)).
 		WillReturnRows(sqlmock.NewRows([]string{"enabled", "mode"}).AddRow(true, "auto"))
 	mock.ExpectBegin()
 	mock.ExpectQuery("SELECT gm.max_concurrent").WithArgs(int64(7), int64(3)).
@@ -67,5 +67,25 @@ func TestGatewayAdmissionExhaustedDailyQuota(t *testing.T) {
 	mock.ExpectRollback()
 	_, _, err = (&groupManagementRepository{db: db}).GatewayAdmission(context.Background(), 7, 3, false, true)
 	require.ErrorIs(t, err, service.ErrGroupQuotaExceeded)
+	require.NoError(t, mock.ExpectationsWereMet())
+}
+
+func TestGatewayAdmissionSettingsForceManagedGroups(t *testing.T) {
+	// 管理分组即使缺少设置行也必须按管控准入（fail-closed），默认手动分配。
+	require.Contains(t, gatewayAdmissionSettingsSQL, "g.kind='managed' OR COALESCE(s.enabled,false)")
+	require.Contains(t, gatewayAdmissionSettingsSQL, "CASE WHEN g.kind='managed' THEN 'manual' ELSE 'auto' END")
+	require.Contains(t, gatewayAdmissionSettingsSQL, "FROM groups g LEFT JOIN group_management_settings s")
+}
+
+func TestGatewayAdmissionPassesThroughWhenEnforcementDisabled(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	require.NoError(t, err)
+	defer func() { _ = db.Close() }()
+	mock.ExpectQuery(regexp.QuoteMeta(gatewayAdmissionSettingsSQL)).WithArgs(int64(3)).
+		WillReturnRows(sqlmock.NewRows([]string{"enabled", "mode"}).AddRow(false, "auto"))
+	policy, release, err := (&groupManagementRepository{db: db}).GatewayAdmission(context.Background(), 7, 3, false, true)
+	require.NoError(t, err)
+	require.False(t, policy.Enabled)
+	release()
 	require.NoError(t, mock.ExpectationsWereMet())
 }

@@ -138,6 +138,7 @@ func registerGroupManagementRoutes(admin *gin.RouterGroup, h *handler.Handlers) 
 	management := admin.Group("/group-management")
 	management.GET("/groups", h.GroupManagement.AdminGroups)
 	management.GET("/users", h.GroupManagement.AdminUsers)
+	management.GET("/user-groups", h.GroupManagement.AdminUserGroups)
 	management.PUT("/groups/:group_id/managers/:user_id", h.GroupManagement.AdminAddManager)
 	management.DELETE("/groups/:group_id/managers/:user_id", h.GroupManagement.AdminRemoveManager)
 }

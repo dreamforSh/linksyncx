@@ -190,12 +190,21 @@ const (
 const (
 	AdjustmentTypeAdminBalance     = domain.AdjustmentTypeAdminBalance     // 管理员调整余额
 	AdjustmentTypeAdminConcurrency = domain.AdjustmentTypeAdminConcurrency // 管理员调整并发数
+	AdjustmentTypeGroupTransfer    = domain.AdjustmentTypeGroupTransfer    // 组管理员余额划拨 / 回收
 )
 
 // Group subscription type constants
 const (
 	SubscriptionTypeStandard     = domain.SubscriptionTypeStandard     // 标准计费模式（按余额扣费）
 	SubscriptionTypeSubscription = domain.SubscriptionTypeSubscription // 订阅模式（按限额控制）
+)
+
+// Group kind / managed group category constants
+const (
+	GroupKindChannel        = domain.GroupKindChannel
+	GroupKindManaged        = domain.GroupKindManaged
+	GroupCategoryEnterprise = domain.GroupCategoryEnterprise
+	GroupCategoryTeam       = domain.GroupCategoryTeam
 )
 
 // Subscription status constants

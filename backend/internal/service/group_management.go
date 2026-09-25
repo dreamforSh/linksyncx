@@ -5,6 +5,7 @@ import (
 	"errors"
 	"time"
 
+	dbent "github.com/Wei-Shaw/sub2api/ent"
 	infraerrors "github.com/Wei-Shaw/sub2api/internal/pkg/errors"
 )
 
@@ -20,10 +21,13 @@ var (
 	ErrGroupManagementBadInput  = infraerrors.BadRequest("GROUP_MANAGEMENT_BAD_INPUT", "invalid group management request")
 	ErrAccountNotInGroup        = infraerrors.BadRequest("ACCOUNT_NOT_IN_GROUP", "account does not belong to this group")
 	ErrCannotDemoteSelf         = infraerrors.BadRequest("CANNOT_DEMOTE_SELF", "cannot demote yourself from admin")
+	ErrManagedGroupEnforcement  = infraerrors.BadRequest("MANAGED_GROUP_ENFORCEMENT_REQUIRED", "managed groups must keep enforcement enabled")
 )
 
 type GroupManagementOverview struct {
-	Role        string            `json:"role"`
+	Role string `json:"role"`
+	// Balance 当前用户自己的余额（组管理员划拨时参考）。
+	Balance     float64           `json:"balance"`
 	Groups      []ManagedGroup    `json:"manageable_groups"`
 	Memberships []GroupMembership `json:"memberships"`
 	Assignments []AssignedAccount `json:"assignments"`
@@ -31,7 +35,9 @@ type GroupManagementOverview struct {
 }
 
 type GroupSettings struct {
-	GroupID        int64  `json:"group_id"`
+	GroupID int64 `json:"group_id"`
+	// Managed 只读：管理分组永远开启管控，不能关闭。
+	Managed        bool   `json:"managed"`
 	Enabled        bool   `json:"enabled"`
 	AllocationMode string `json:"allocation_mode"`
 	MaxConcurrent  int    `json:"max_concurrent"`
@@ -39,8 +45,11 @@ type GroupSettings struct {
 }
 
 type ManagedGroup struct {
-	ID             int64   `json:"id"`
-	Name           string  `json:"name"`
+	ID   int64  `json:"id"`
+	Name string `json:"name"`
+	// Kind 分组类型（channel / managed）；Category 管理分组分类（enterprise / team）。
+	Kind           string  `json:"kind"`
+	Category       string  `json:"category,omitempty"`
 	MemberCount    int64   `json:"member_count"`
 	AccountCount   int64   `json:"account_count"`
 	Manager        bool    `json:"manager"`
@@ -52,11 +61,18 @@ type ManagedGroup struct {
 }
 
 type GroupMembership struct {
-	UserID           int64     `json:"user_id"`
-	GroupID          int64     `json:"group_id"`
-	GroupName        string    `json:"group_name"`
-	Email            string    `json:"email,omitempty"`
-	Username         string    `json:"username,omitempty"`
+	UserID    int64  `json:"user_id"`
+	GroupID   int64  `json:"group_id"`
+	GroupName string `json:"group_name"`
+	Email     string `json:"email,omitempty"`
+	Username  string `json:"username,omitempty"`
+	// Owned 为 true 表示组用户由本分组的组管理员创建；Status 为用户账号状态。
+	Owned  bool   `json:"owned"`
+	Status string `json:"status"`
+	// Balance 仅管理分组返回（组管理员划拨余额时参考）；Reclaimable 为可回收上限：
+	// 本分组累计划拨的净额与当前余额中的较小值。
+	Balance          *float64  `json:"balance,omitempty"`
+	Reclaimable      *float64  `json:"reclaimable,omitempty"`
 	MaxConcurrent    int       `json:"max_concurrent"`
 	DailyLimit       int64     `json:"daily_limit"`
 	DailyUsed        int64     `json:"daily_used"`
@@ -106,6 +122,14 @@ type GroupManagementRepository interface {
 
 type GroupManagementService struct {
 	repo GroupManagementRepository
+
+	// 组用户与余额划拨依赖，见 WithGroupUserDependencies。
+	groupUsers   GroupUserRepository
+	users        groupUserAccountStore
+	entClient    *dbent.Client
+	authCache    APIKeyAuthCacheInvalidator
+	balanceCache userBalanceCacheInvalidator
+	defaults     defaultUserConcurrencyProvider
 }
 
 func NewGroupManagementService(repo GroupManagementRepository) *GroupManagementService {
@@ -156,6 +180,15 @@ func (s *GroupManagementService) UpdateSettings(ctx context.Context, actorID int
 	if settings.MaxConcurrent <= 0 || settings.DailyLimit < 0 || (settings.AllocationMode != GroupAssignmentModeAuto && settings.AllocationMode != GroupAssignmentModeManual) {
 		return nil, ErrGroupManagementBadInput
 	}
+	if !settings.Enabled {
+		current, err := s.repo.GetSettings(ctx, settings.GroupID)
+		if err != nil {
+			return nil, err
+		}
+		if current.Managed {
+			return nil, ErrManagedGroupEnforcement
+		}
+	}
 	return s.repo.UpdateSettings(ctx, settings)
 }
 
@@ -166,6 +199,16 @@ func (s *GroupManagementService) AddMember(ctx context.Context, actorID int64, r
 	if userID <= 0 {
 		return nil, ErrGroupManagementBadInput
 	}
+	// 管理分组：成员资格与绑定资格联动；渠道分组保持原有行为
+	if s.requireGroupUserDeps() == nil {
+		managed, err := s.isManagedGroup(ctx, groupID)
+		if err != nil {
+			return nil, err
+		}
+		if managed {
+			return s.addManagedMember(ctx, actorID, role, groupID, userID)
+		}
+	}
 	return s.repo.AddMember(ctx, groupID, userID)
 }
 
@@ -175,6 +218,15 @@ func (s *GroupManagementService) RemoveMember(ctx context.Context, actorID int64
 	}
 	if userID <= 0 {
 		return ErrGroupManagementBadInput
+	}
+	if s.requireGroupUserDeps() == nil {
+		managed, err := s.isManagedGroup(ctx, groupID)
+		if err != nil {
+			return err
+		}
+		if managed {
+			return s.removeManagedMember(ctx, actorID, groupID, userID)
+		}
 	}
 	return s.repo.RemoveMember(ctx, groupID, userID)
 }
@@ -280,5 +332,6 @@ func ResetDailyWindow(member *GroupMembership, now time.Time) bool {
 }
 
 func IsGroupManagementError(err error) bool {
-	return errors.Is(err, ErrGroupManagementForbidden) || errors.Is(err, ErrGroupManagementBadInput) || errors.Is(err, ErrAccountNotInGroup)
+	return errors.Is(err, ErrGroupManagementForbidden) || errors.Is(err, ErrGroupManagementBadInput) || errors.Is(err, ErrAccountNotInGroup) ||
+		errors.Is(err, ErrGroupNotManaged) || errors.Is(err, ErrGroupMemberNotFound) || errors.Is(err, ErrGroupUserNotOwned)
 }

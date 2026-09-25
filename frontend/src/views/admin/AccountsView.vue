@@ -14,7 +14,7 @@
           <AccountTableActions
             :loading="loading"
             @refresh="handleManualRefresh"
-            @create="showCreate = true"
+            @create="openCreateFlow()"
           >
             <template #after>
               <!-- Auto Refresh Dropdown -->
@@ -172,6 +172,29 @@
           >
             {{ t('admin.accounts.listPendingSyncAction') }}
           </button>
+        </div>
+        <div
+          v-if="showUngroupedBanner"
+          class="mt-2 flex flex-wrap items-center justify-between gap-2 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-800 dark:border-amber-700/40 dark:bg-amber-900/20 dark:text-amber-200"
+          role="status"
+          data-testid="accounts-ungrouped-banner"
+        >
+          <span class="flex min-w-0 items-start gap-2">
+            <Icon name="exclamationTriangle" size="sm" class="mt-0.5 shrink-0" />
+            <span>{{ t('admin.accounts.ungroupedBanner', { count: ungroupedCount }) }}</span>
+          </span>
+          <span class="flex shrink-0 items-center gap-1">
+            <button class="btn btn-secondary px-2 py-1 text-xs" @click="showUngroupedAccounts">
+              {{ t('admin.accounts.ungroupedView') }}
+            </button>
+            <button
+              class="rounded-md p-1 text-amber-700 transition-colors hover:bg-amber-100 dark:text-amber-300 dark:hover:bg-amber-900/40"
+              :aria-label="t('common.close')"
+              @click="ungroupedBannerDismissed = true"
+            >
+              <Icon name="x" size="sm" />
+            </button>
+          </span>
         </div>
       </template>
       <template #table>
@@ -450,15 +473,32 @@
       </template>
       <template #pagination><Pagination v-if="pagination.total > 0" :page="pagination.page" :total="pagination.total" :page-size="pagination.page_size" @update:page="handlePageChange" @update:pageSize="handlePageSizeChange" /></template>
     </TablePageLayout>
-    <CreateAccountModal :show="showCreate" :proxies="proxies" :groups="groups" @close="showCreate = false" @created="reload" />
+    <TargetGroupPickerDialog
+      :show="showTargetGroupPicker"
+      :groups="groups"
+      :initial-group-id="targetGroupPickerInitialId"
+      :z-index="showCreate ? 60 : 50"
+      @close="showTargetGroupPicker = false"
+      @select="handleTargetGroupSelected"
+      @create-group="handleCreateGroupFromPicker"
+    />
+    <CreateAccountModal
+      :show="showCreate"
+      :proxies="proxies"
+      :groups="groups"
+      :preset-group="createPresetGroup"
+      @close="closeCreateAccount"
+      @created="reload"
+      @change-group="openCreateFlow(createPresetGroup?.id ?? null)"
+    />
     <EditAccountModal :show="showEdit" :account="edAcc" :proxies="proxies" :groups="groups" @close="showEdit = false" @updated="handleAccountUpdated" />
     <ReAuthAccountModal :show="showReAuth" :account="reAuthAcc" @close="closeReAuthModal" @reauthorized="handleAccountUpdated" />
     <AccountTestModal :show="showTest" :account="testingAcc" @close="closeTestModal" />
     <AccountStatsModal :show="showStats" :account="statsAcc" @close="closeStatsModal" />
     <ScheduledTestsPanel :show="showSchedulePanel" :account-id="scheduleAcc?.id ?? null" :model-options="scheduleModelOptions" @close="closeSchedulePanel" />
     <AccountActionMenu :show="menu.show" :account="menu.acc" :anchor-rect="menu.anchorRect" @close="menu.show = false" @test="handleTest" @stats="handleViewStats" @schedule="handleSchedule" @duplicate="handleDuplicateAccount" @reauth="handleReAuth" @refresh-token="handleRefresh" @recover-state="handleRecoverState" @reset-quota="handleResetQuota" @set-privacy="handleSetPrivacy" @create-spark-shadow="handleCreateSparkShadow" />
-    <SyncFromCrsModal :show="showSync" @close="showSync = false" @synced="reload" />
-    <ImportDataModal :show="showImportData" @close="showImportData = false" @imported="handleDataImported" />
+    <SyncFromCrsModal :show="showSync" :groups="groups" @close="showSync = false" @synced="reload" />
+    <ImportDataModal :show="showImportData" :groups="groups" @close="showImportData = false" @imported="handleDataImported" />
     <BulkEditAccountModal
       :show="showBulkEdit"
       :account-ids="selIds"
@@ -493,6 +533,7 @@ import { useAppStore } from '@/stores/app'
 import { useAuthStore } from '@/stores/auth'
 import { adminAPI } from '@/api/admin'
 import { useTableLoader } from '@/composables/useTableLoader'
+import { useOptionalRouter } from '@/composables/useOptionalRouter'
 import { useSwipeSelect, type SwipeSelectVirtualContext } from '@/composables/useSwipeSelect'
 import { useTableSelection } from '@/composables/useTableSelection'
 import { useStepUp, isStepUpBlocked, isStepUpCancelled, stepUpBlockReason } from '@/composables/useStepUp'
@@ -509,6 +550,7 @@ import AccountTableFilters from '@/components/admin/account/AccountTableFilters.
 import AccountBulkActionsBar from '@/components/admin/account/AccountBulkActionsBar.vue'
 import AccountActionMenu from '@/components/admin/account/AccountActionMenu.vue'
 import ImportDataModal from '@/components/admin/account/ImportDataModal.vue'
+import TargetGroupPickerDialog from '@/components/admin/account/TargetGroupPickerDialog.vue'
 import ReAuthAccountModal from '@/components/admin/account/ReAuthAccountModal.vue'
 import AccountTestModal from '@/components/admin/account/AccountTestModal.vue'
 import AccountStatsModal from '@/components/admin/account/AccountStatsModal.vue'
@@ -532,11 +574,12 @@ import { extractApiErrorMessage } from '@/utils/apiError'
 import { sanitizeUrl } from '@/utils/url'
 import { getFloatingPanelPosition } from '@/utils/floatingPanel'
 import { formatMultiplier } from '@/utils/formatters'
-import type { Account, AccountListItem, AccountPlatform, AccountSchedulerGroupScore, AccountType, AccountUsageInfo, Proxy as AccountProxy, AdminGroup, WindowStats, ClaudeModel, UpstreamBillingProbeSnapshot } from '@/types'
+import type { Account, AccountListItem, AccountPlatform, AccountSchedulerGroupScore, AccountType, AccountUsageInfo, Proxy as AccountProxy, AdminGroup, GroupKind, WindowStats, ClaudeModel, UpstreamBillingProbeSnapshot } from '@/types'
 
 const { t } = useI18n()
 const appStore = useAppStore()
 const authStore = useAuthStore()
+const { route, router } = useOptionalRouter()
 
 const proxies = ref<AccountProxy[]>([])
 const groups = ref<AdminGroup[]>([])
@@ -588,6 +631,11 @@ const selTypes = computed<AccountType[]>(() => {
   return [...types]
 })
 const showCreate = ref(false)
+const showTargetGroupPicker = ref(false)
+const targetGroupPickerInitialId = ref<number | null>(null)
+const createPresetGroup = ref<AdminGroup | null>(null)
+const ungroupedCount = ref(0)
+const ungroupedBannerDismissed = ref(false)
 const showEdit = ref(false)
 const showSync = ref(false)
 const showImportData = ref(false)
@@ -1165,6 +1213,7 @@ const load = async (options: AccountLoadOptions = {}) => {
 }
 
 const reload = async () => {
+  void refreshUngroupedCount()
   syncAccountListDerivedParams()
   hasPendingListSync.value = false
   resetAutoRefreshCache()
@@ -1357,6 +1406,7 @@ watch(accounts, (rows) => {
 const isAnyModalOpen = computed(() => {
   return (
     showCreate.value ||
+    showTargetGroupPicker.value ||
     showEdit.value ||
     showSync.value ||
     showImportData.value ||
@@ -2123,6 +2173,67 @@ const handleBulkUpdated = () => {
 }
 const handleDataImported = () => { showImportData.value = false; reload() }
 const ACCOUNT_UNGROUPED_GROUP_QUERY_VALUE = 'ungrouped'
+
+// ==================== 先选分组再建号 ====================
+const openCreateFlow = (initialGroupId: number | null = null) => {
+  targetGroupPickerInitialId.value = initialGroupId
+  showTargetGroupPicker.value = true
+}
+const handleTargetGroupSelected = (group: AdminGroup) => {
+  createPresetGroup.value = group
+  showTargetGroupPicker.value = false
+  showCreate.value = true
+}
+const closeCreateAccount = () => {
+  showCreate.value = false
+  createPresetGroup.value = null
+}
+const handleCreateGroupFromPicker = (kind: GroupKind) => {
+  showTargetGroupPicker.value = false
+  closeCreateAccount()
+  void router?.push({ path: '/admin/groups', query: { create: '1', kind } })
+}
+
+// ==================== 存量未分组账号提示 ====================
+const showUngroupedBanner = computed(() =>
+  ungroupedCount.value > 0 && !ungroupedBannerDismissed.value && params.group !== ACCOUNT_UNGROUPED_GROUP_QUERY_VALUE
+)
+async function refreshUngroupedCount() {
+  try {
+    ungroupedCount.value = await adminAPI.accounts.countUngrouped()
+  } catch {
+    // 提示条只是引导，统计失败时静默隐藏
+    ungroupedCount.value = 0
+  }
+}
+const showUngroupedAccounts = () => {
+  params.group = ACCOUNT_UNGROUPED_GROUP_QUERY_VALUE
+  pagination.page = 1
+  reload()
+}
+
+// 路由意图：?group=ID|ungrouped 预置分组筛选；?create=1 直接进入建号流程（可配合 group 预选分组）
+const POSITIVE_ID_PATTERN = /^[1-9]\d*$/
+const firstQueryValue = (value: unknown): string => {
+  const raw = Array.isArray(value) ? value[0] : value
+  return typeof raw === 'string' ? raw.trim() : ''
+}
+const routeGroupFilter = (() => {
+  const value = firstQueryValue(route?.query.group)
+  if (value === ACCOUNT_UNGROUPED_GROUP_QUERY_VALUE) return value
+  return POSITIVE_ID_PATTERN.test(value) ? value : ''
+})()
+if (routeGroupFilter) params.group = routeGroupFilter
+const consumeCreateIntent = () => {
+  if (firstQueryValue(route?.query.create) !== '1') return
+  const groupId = POSITIVE_ID_PATTERN.test(routeGroupFilter) ? Number(routeGroupFilter) : null
+  const preset = groupId === null ? undefined : groups.value.find(group => group.id === groupId)
+  if (preset) handleTargetGroupSelected(preset)
+  else openCreateFlow(groupId)
+  const rest = { ...(route?.query ?? {}) }
+  delete rest.create
+  void router?.replace({ query: rest })
+}
 const ACCOUNT_PRIVACY_MODE_UNSET_QUERY_VALUE = '__unset__'
 const buildAccountQueryFilters = () => ({
   platform: params.platform || '',
@@ -2548,6 +2659,8 @@ onMounted(async () => {
   } else {
     console.error('Failed to load groups:', groupsResult.reason)
   }
+  consumeCreateIntent()
+  void refreshUngroupedCount()
   window.addEventListener('scroll', handleScroll, true)
   window.addEventListener('resize', handleViewportResize)
   document.addEventListener('click', handleClickOutside)

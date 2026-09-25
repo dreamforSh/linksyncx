@@ -43,6 +43,14 @@
               class="w-44"
               @change="loadGroups"
             />
+            <Select
+              v-model="filters.kind"
+              :options="kindFilterOptions"
+              :placeholder="t('admin.groups.groupKind.allKinds')"
+              class="w-40"
+              data-testid="group-kind-filter"
+              @change="loadGroups"
+            />
           </div>
 
           <!-- Right: actions -->
@@ -124,10 +132,13 @@
           default-sort-order="asc"
           @sort="handleSort"
         >
-          <template #cell-name="{ value }">
-            <span class="font-medium text-gray-900 dark:text-white">{{
-              value
-            }}</span>
+          <template #cell-name="{ row, value }">
+            <span class="inline-flex flex-wrap items-center gap-1.5">
+              <span class="font-medium text-gray-900 dark:text-white">{{
+                value
+              }}</span>
+              <GroupKindBadge :kind="groupKindOf(row)" :category="row.category" />
+            </span>
           </template>
 
           <template #cell-id="{ value }">
@@ -316,6 +327,15 @@
                   >{{ t("admin.groups.accountsUnit") }}</span
                 >
               </div>
+              <button
+                type="button"
+                class="inline-flex items-center gap-0.5 font-medium text-primary-600 transition-colors hover:text-primary-700 dark:text-primary-400 dark:hover:text-primary-300"
+                data-testid="group-view-accounts"
+                @click="viewGroupAccounts(row)"
+              >
+                {{ t("admin.groups.groupKind.viewAccounts") }}
+                <Icon name="chevronRight" size="xs" />
+              </button>
             </div>
           </template>
 
@@ -389,7 +409,15 @@
                 <span class="text-xs">{{ t("common.edit") }}</span>
               </button>
               <button
-                v-if="!authStore.isSimpleMode"
+                data-testid="group-add-account"
+                @click="addAccountToGroup(row)"
+                class="flex flex-col items-center gap-0.5 rounded-lg p-1.5 text-gray-500 transition-colors hover:bg-gray-100 hover:text-emerald-600 dark:hover:bg-dark-700 dark:hover:text-emerald-400"
+              >
+                <Icon name="plus" size="sm" />
+                <span class="text-xs">{{ t("admin.groups.groupKind.addAccount") }}</span>
+              </button>
+              <button
+                v-if="!authStore.isSimpleMode && !isManagedGroup(row)"
                 data-testid="group-duplicate"
                 :title="
                   duplicatingGroupIds.has(row.id)
@@ -487,6 +515,15 @@
         @submit.prevent="handleCreateGroup"
         class="space-y-5"
       >
+        <GroupKindField
+          :model-value="createForm.kind"
+          name="create-group-kind"
+          @update:model-value="handleCreateKindChange"
+        />
+        <GroupCategoryField
+          v-if="createForm.kind === 'managed'"
+          v-model="createForm.category"
+        />
         <div>
           <label class="input-label">{{ t("admin.groups.form.name") }}</label>
           <input
@@ -515,14 +552,14 @@
           }}</label>
           <Select
             v-model="createForm.platform"
-            :options="platformOptions"
+            :options="createForm.kind === 'managed' ? managedPlatformOptions : platformOptions"
             data-tour="group-form-platform"
             @change="createForm.copy_accounts_from_group_ids = []"
           />
           <p class="input-hint">{{ t("admin.groups.platformHint") }}</p>
         </div>
         <!-- 从分组复制账号 -->
-        <div v-if="!authStore.isSimpleMode && copyAccountsGroupOptions.length > 0">
+        <div v-if="!authStore.isSimpleMode && createForm.kind !== 'managed' && copyAccountsGroupOptions.length > 0">
           <div class="mb-1.5 flex items-center gap-1">
             <label class="text-sm font-medium text-gray-700 dark:text-gray-300">
               {{ t("admin.groups.copyAccounts.title") }}
@@ -648,7 +685,7 @@
           v-model:mappings="createForm.reasoning_effort_mappings"
         />
         <div
-          v-if="createForm.subscription_type !== 'subscription'"
+          v-if="createForm.kind !== 'managed' && createForm.subscription_type !== 'subscription'"
           data-tour="group-form-exclusive"
         >
           <div class="mb-1.5 flex items-center gap-1">
@@ -706,8 +743,8 @@
           </div>
         </div>
 
-        <!-- Subscription Configuration -->
-        <div class="mt-4 border-t pt-4">
+        <!-- Subscription Configuration（管理分组固定按余额计费） -->
+        <div v-if="createForm.kind !== 'managed'" class="mt-4 border-t pt-4">
           <div>
             <label class="input-label">{{
               t("admin.groups.subscription.type")
@@ -1425,7 +1462,7 @@
             </span>
           </div>
           <!-- 降级分组选择（仅当启用 claude_code_only 时显示） -->
-          <div v-if="createForm.claude_code_only" class="mt-3">
+          <div v-if="createForm.claude_code_only && createForm.kind !== 'managed'" class="mt-3">
             <label class="input-label">{{
               t("admin.groups.claudeCode.fallbackGroup")
             }}</label>
@@ -1878,6 +1915,7 @@
         <!-- 无效请求兜底（仅 anthropic/antigravity 平台，且非订阅分组） -->
         <div
           v-if="
+            createForm.kind !== 'managed' &&
             ['anthropic', 'antigravity'].includes(createForm.platform) &&
             createForm.subscription_type !== 'subscription'
           "
@@ -2158,9 +2196,23 @@
           />
           <p class="input-hint">{{ t("admin.groups.platformNotEditable") }}</p>
         </div>
+        <div data-testid="edit-group-kind">
+          <label class="input-label">{{ t("admin.groups.groupKind.label") }}</label>
+          <div class="flex flex-wrap items-center gap-2">
+            <GroupKindBadge
+              :kind="groupKindOf(editingGroup)"
+              :category="editingGroup.category"
+              show-channel
+            />
+            <span class="text-xs text-gray-500 dark:text-dark-400">{{
+              t("admin.groups.groupKind.immutable")
+            }}</span>
+          </div>
+        </div>
+        <GroupCategoryField v-if="editIsManaged" v-model="editForm.category" />
         <template v-if="!authStore.isSimpleMode">
         <!-- 从分组复制账号（编辑时） -->
-        <div v-if="copyAccountsGroupOptionsForEdit.length > 0">
+        <div v-if="!editIsManaged && copyAccountsGroupOptionsForEdit.length > 0">
           <div class="mb-1.5 flex items-center gap-1">
             <label class="text-sm font-medium text-gray-700 dark:text-gray-300">
               {{ t("admin.groups.copyAccounts.title") }}
@@ -2285,7 +2337,7 @@
           v-model:over-limit="editForm.max_reasoning_effort_over_limit"
           v-model:mappings="editForm.reasoning_effort_mappings"
         />
-        <div v-if="editForm.subscription_type !== 'subscription'">
+        <div v-if="!editIsManaged && editForm.subscription_type !== 'subscription'">
           <div class="mb-1.5 flex items-center gap-1">
             <label class="text-sm font-medium text-gray-700 dark:text-gray-300">
               {{ t("admin.groups.form.exclusive") }}
@@ -2345,8 +2397,8 @@
           <Select v-model="editForm.status" :options="editStatusOptions" />
         </div>
 
-        <!-- Subscription Configuration -->
-        <div class="mt-4 border-t pt-4">
+        <!-- Subscription Configuration（管理分组固定按余额计费） -->
+        <div v-if="!editIsManaged" class="mt-4 border-t pt-4">
           <div>
             <label class="input-label">{{
               t("admin.groups.subscription.type")
@@ -3065,7 +3117,7 @@
             </span>
           </div>
           <!-- 降级分组选择（仅当启用 claude_code_only 时显示） -->
-          <div v-if="editForm.claude_code_only" class="mt-3">
+          <div v-if="editForm.claude_code_only && !editIsManaged" class="mt-3">
             <label class="input-label">{{
               t("admin.groups.claudeCode.fallbackGroup")
             }}</label>
@@ -3527,6 +3579,7 @@
         <!-- 无效请求兜底（仅 anthropic/antigravity 平台，且非订阅分组） -->
         <div
           v-if="
+            !editIsManaged &&
             ['anthropic', 'antigravity'].includes(editForm.platform) &&
             editForm.subscription_type !== 'subscription'
           "
@@ -4279,6 +4332,8 @@ import type {
   CompositeRouteDecision,
   CompositeRouteEndpoint,
   CompositeRouteMatchType,
+  GroupCategory,
+  GroupKind,
   GroupPlatform,
   SubscriptionType,
 } from "@/types";
@@ -4303,6 +4358,10 @@ import GroupRPMOverridesModal from "@/components/admin/group/GroupRPMOverridesMo
 import GroupCapacityBadge from "@/components/common/GroupCapacityBadge.vue";
 import ReasoningEffortPolicyFields from "@/components/admin/group/ReasoningEffortPolicyFields.vue";
 import CodexManifestAccountsField from "@/components/admin/group/CodexManifestAccountsField.vue";
+import GroupKindBadge from "@/components/admin/group/GroupKindBadge.vue";
+import GroupKindField from "@/components/admin/group/GroupKindField.vue";
+import GroupCategoryField from "@/components/admin/group/GroupCategoryField.vue";
+import { groupKindOf, isGroupKind, isManagedGroup } from "@/utils/groupKind";
 import PricingEntryCard from "@/components/admin/channel/PricingEntryCard.vue";
 import type { PricingFormEntry } from "@/components/admin/channel/types";
 import {
@@ -4321,6 +4380,7 @@ import { createStableObjectKeyResolver } from "@/utils/stableObjectKey";
 import { extractApiErrorMessage } from "@/utils/apiError";
 import { useKeyedDebouncedSearch } from "@/composables/useKeyedDebouncedSearch";
 import { getPersistedPageSize } from "@/composables/usePersistedPageSize";
+import { useOptionalRouter } from "@/composables/useOptionalRouter";
 import {
   createDefaultMessagesDispatchFormState,
   messagesDispatchConfigToFormState,
@@ -4451,6 +4511,7 @@ const groupPricingToAPI = (
 const { t } = useI18n();
 const appStore = useAppStore();
 const authStore = useAuthStore();
+const { route, router } = useOptionalRouter();
 const onboardingStore = useOnboardingStore();
 
 const ALWAYS_VISIBLE_COLUMNS = new Set(["name", "actions"]);
@@ -4622,6 +4683,17 @@ const platformFilterOptions = computed(() => [
   ...GROUP_PLATFORM_OPTIONS,
 ]);
 
+// 管理分组按单一真实平台调度，不能是 composite
+const managedPlatformOptions = computed(() =>
+  platformOptions.value.filter((option) => option.value !== "composite"),
+);
+
+const kindFilterOptions = computed(() => [
+  { value: "", label: t("admin.groups.groupKind.allKinds") },
+  { value: "channel", label: t("admin.groups.groupKind.channel") },
+  { value: "managed", label: t("admin.groups.groupKind.managed") },
+]);
+
 const compositeRoutePlatformOptions = computed(() => [
   ...CONCRETE_PLATFORM_OPTIONS,
 ]);
@@ -4676,7 +4748,8 @@ const fallbackGroupOptions = computed(() => {
     (g) =>
       g.platform === "anthropic" &&
       !g.claude_code_only &&
-      g.status === "active",
+      g.status === "active" &&
+      !isManagedGroup(g),
   );
   eligibleGroups.forEach((g) => {
     options.push({ value: g.id, label: g.name });
@@ -4695,6 +4768,7 @@ const fallbackGroupOptionsForEdit = computed(() => {
       g.platform === "anthropic" &&
       !g.claude_code_only &&
       g.status === "active" &&
+      !isManagedGroup(g) &&
       g.id !== currentId,
   );
   eligibleGroups.forEach((g) => {
@@ -4713,7 +4787,8 @@ const invalidRequestFallbackOptions = computed(() => {
       g.platform === "anthropic" &&
       g.status === "active" &&
       g.subscription_type !== "subscription" &&
-      g.fallback_group_id_on_invalid_request === null,
+      g.fallback_group_id_on_invalid_request === null &&
+      !isManagedGroup(g),
   );
   eligibleGroups.forEach((g) => {
     options.push({ value: g.id, label: g.name });
@@ -4733,6 +4808,7 @@ const invalidRequestFallbackOptionsForEdit = computed(() => {
       g.status === "active" &&
       g.subscription_type !== "subscription" &&
       g.fallback_group_id_on_invalid_request === null &&
+      !isManagedGroup(g) &&
       g.id !== currentId,
   );
   eligibleGroups.forEach((g) => {
@@ -4755,7 +4831,8 @@ const copyAccountsGroupOptions = computed(() => {
   const eligibleGroups = groups.value.filter(
     (g) =>
       canCopyAccountsFromGroup(createForm.platform, g.platform) &&
-      (g.account_count || 0) > 0,
+      (g.account_count || 0) > 0 &&
+      !isManagedGroup(g),
   );
   return eligibleGroups.map((g) => ({
     value: g.id,
@@ -4770,6 +4847,7 @@ const copyAccountsGroupOptionsForEdit = computed(() => {
     (g) =>
       canCopyAccountsFromGroup(editForm.platform, g.platform) &&
       (g.account_count || 0) > 0 &&
+      !isManagedGroup(g) &&
       g.id !== currentId,
   );
   return eligibleGroups.map((g) => ({
@@ -4806,6 +4884,7 @@ const filters = reactive({
   platform: "",
   status: "",
   is_exclusive: "",
+  kind: "",
 });
 const pagination = reactive({
   page: 1,
@@ -4836,6 +4915,7 @@ const showSortModal = ref(false);
 const submitting = ref(false);
 const sortSubmitting = ref(false);
 const editingGroup = ref<AdminGroup | null>(null);
+const editIsManaged = computed(() => isManagedGroup(editingGroup.value));
 const deletingGroup = ref<AdminGroup | null>(null);
 const duplicatingGroupIds = reactive(new Set<number>());
 const showRateMultipliersModal = ref(false);
@@ -4938,6 +5018,8 @@ const submitEditAllowlistCustomEntry = () => {
 };
 
 const createForm = reactive({
+  kind: "channel" as GroupKind,
+  category: "enterprise" as GroupCategory,
   name: "",
   description: "",
   platform: "anthropic" as GroupPlatform,
@@ -5302,6 +5384,7 @@ const convertApiFormatToRoutingRules = async (
 };
 
 const editForm = reactive({
+  category: "enterprise" as GroupCategory,
   name: "",
   description: "",
   platform: "anthropic" as GroupPlatform,
@@ -5609,6 +5692,7 @@ const loadGroups = async () => {
         is_exclusive: !authStore.isSimpleMode && filters.is_exclusive
           ? filters.is_exclusive === "true"
           : undefined,
+        kind: isGroupKind(filters.kind) ? filters.kind : undefined,
         search: searchQuery.value.trim() || undefined,
         sort_by: sortState.sort_by,
         sort_order: sortState.sort_order,
@@ -5759,8 +5843,43 @@ const openCreateModal = () => {
   loadModelAllowlistCandidates("create", 0, createForm.platform);
 };
 
+// 切到管理分组：清掉渠道专用配置（composite 平台、复制账号、订阅、兜底）
+const handleCreateKindChange = (kind: GroupKind) => {
+  createForm.kind = kind;
+  if (kind !== "managed") return;
+  if (createForm.platform === "composite") {
+    createForm.platform = "anthropic";
+  }
+  createForm.copy_accounts_from_group_ids = [];
+  createForm.subscription_type = "standard";
+  createForm.fallback_group_id = null;
+  createForm.fallback_group_id_on_invalid_request = null;
+};
+
+// 管理分组的渠道专用字段在界面上隐藏，提交前统一归一，与后端不变式一致
+const applyManagedGroupInvariants = (payload: Record<string, unknown>) => {
+  payload.is_exclusive = true;
+  payload.subscription_type = "standard";
+  payload.fallback_group_id = null;
+  payload.fallback_group_id_on_invalid_request = null;
+  payload.copy_accounts_from_group_ids = [];
+};
+
+const viewGroupAccounts = (group: AdminGroup) => {
+  void router?.push({ path: "/admin/accounts", query: { group: String(group.id) } });
+};
+
+const addAccountToGroup = (group: AdminGroup) => {
+  void router?.push({
+    path: "/admin/accounts",
+    query: { create: "1", group: String(group.id) },
+  });
+};
+
 const closeCreateModal = () => {
   showCreateModal.value = false;
+  createForm.kind = "channel";
+  createForm.category = "enterprise";
   createModelRoutingRules.value.forEach((rule) => {
     accountSearchRunner.clearKey(getCreateRuleSearchKey(rule));
   });
@@ -6018,11 +6137,19 @@ const handleCreateGroup = async () => {
     requestData.peak_rate_multiplier = normalizeRateMultiplier(
       createForm.peak_rate_multiplier,
     );
+    const managed = createForm.kind === "managed";
+    if (managed) {
+      applyManagedGroupInvariants(requestData as Record<string, unknown>);
+    } else {
+      delete (requestData as Record<string, unknown>).category;
+    }
     const payload = authStore.isSimpleMode
       ? {
           name: createForm.name,
           description: createForm.description,
           platform: createForm.platform,
+          kind: createForm.kind,
+          ...(managed ? { category: createForm.category } : {}),
         }
       : requestData;
     await adminAPI.groups.create(payload);
@@ -6046,6 +6173,7 @@ const handleCreateGroup = async () => {
 
 const handleEdit = async (group: AdminGroup) => {
   editingGroup.value = group;
+  editForm.category = group.category ?? "enterprise";
   editForm.name = group.name;
   editForm.description = group.description || "";
   editForm.platform = group.platform;
@@ -6369,10 +6497,17 @@ const handleUpdateGroup = async () => {
     payload.peak_rate_multiplier = normalizeRateMultiplier(
       editForm.peak_rate_multiplier,
     );
+    const managed = editIsManaged.value;
+    if (managed) {
+      applyManagedGroupInvariants(payload as Record<string, unknown>);
+    } else {
+      delete (payload as Record<string, unknown>).category;
+    }
     const requestData = authStore.isSimpleMode
       ? {
           name: editForm.name,
           description: editForm.description,
+          ...(managed ? { category: editForm.category } : {}),
         }
       : payload;
     await adminAPI.groups.update(editingGroup.value.id, requestData);
@@ -6865,8 +7000,21 @@ const saveSortOrder = async () => {
   }
 };
 
+// 路由意图：?create=1&kind=managed|channel 直接打开创建对话框（来自账号页「新建分组」）
+const consumeCreateIntent = () => {
+  const query = route?.query;
+  if (!query || query.create !== "1") return;
+  handleCreateKindChange(isGroupKind(query.kind) ? query.kind : "channel");
+  openCreateModal();
+  const rest = { ...query };
+  delete rest.create;
+  delete rest.kind;
+  void router?.replace({ query: rest });
+};
+
 onMounted(() => {
   loadGroups();
+  consumeCreateIntent();
   if (!authStore.isSimpleMode) {
     void loadLiveCapability();
     loadModelAllowlistCandidates("create", 0, createForm.platform);

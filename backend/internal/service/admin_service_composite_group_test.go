@@ -128,7 +128,6 @@ func TestAdminService_CreateAccountAllowsCompositeGroupAssignment(t *testing.T) 
 		Type:                  AccountTypeAPIKey,
 		Concurrency:           1,
 		GroupIDs:              []int64{99},
-		SkipDefaultGroupBind:  true,
 		SkipMixedChannelCheck: true,
 	})
 

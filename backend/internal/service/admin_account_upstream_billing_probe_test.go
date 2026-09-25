@@ -118,11 +118,11 @@ func TestCreateAccountDropsManagedUpstreamBillingProbeState(t *testing.T) {
 	svc := &adminServiceImpl{accountRepo: repo}
 
 	created, err := svc.CreateAccount(context.Background(), &CreateAccountInput{
-		Name:                 "upstream",
-		Platform:             PlatformOpenAI,
-		Type:                 AccountTypeAPIKey,
-		Credentials:          map[string]any{"api_key": "sk-test"},
-		SkipDefaultGroupBind: true,
+		Name:        "upstream",
+		Platform:    PlatformOpenAI,
+		Type:        AccountTypeAPIKey,
+		Credentials: map[string]any{"api_key": "sk-test"},
+		GroupIDs:    []int64{1},
 		Extra: map[string]any{
 			UpstreamBillingProbeEnabledExtraKey:    true,
 			UpstreamBillingRateSyncEnabledExtraKey: true,
@@ -140,24 +140,24 @@ func TestCreateAccountAcceptsDedicatedUpstreamBillingProbeSetting(t *testing.T) 
 	enabled := true
 	repo := &upstreamBillingProbeAccountRepo{}
 	created, err := (&adminServiceImpl{accountRepo: repo}).CreateAccount(context.Background(), &CreateAccountInput{
-		Name:                 "upstream",
-		Platform:             PlatformOpenAI,
-		Type:                 AccountTypeAPIKey,
-		Credentials:          map[string]any{"api_key": "sk-test"},
-		ProbeEnabled:         &enabled,
-		SkipDefaultGroupBind: true,
+		Name:         "upstream",
+		Platform:     PlatformOpenAI,
+		Type:         AccountTypeAPIKey,
+		Credentials:  map[string]any{"api_key": "sk-test"},
+		ProbeEnabled: &enabled,
+		GroupIDs:     []int64{1},
 	})
 
 	require.NoError(t, err)
 	require.Equal(t, true, created.Extra[UpstreamBillingProbeEnabledExtraKey])
 
 	_, err = (&adminServiceImpl{accountRepo: repo}).CreateAccount(context.Background(), &CreateAccountInput{
-		Name:                 "oauth",
-		Platform:             PlatformOpenAI,
-		Type:                 AccountTypeOAuth,
-		Credentials:          map[string]any{"access_token": "token"},
-		ProbeEnabled:         &enabled,
-		SkipDefaultGroupBind: true,
+		Name:         "oauth",
+		Platform:     PlatformOpenAI,
+		Type:         AccountTypeOAuth,
+		Credentials:  map[string]any{"access_token": "token"},
+		ProbeEnabled: &enabled,
+		GroupIDs:     []int64{1},
 	})
 	require.ErrorIs(t, err, ErrUpstreamBillingProbeAccountInvalid)
 }
@@ -896,11 +896,11 @@ func TestCreateAccountDropsOpenCodeGoManagedKeys(t *testing.T) {
 	svc := &adminServiceImpl{accountRepo: repo}
 
 	created, err := svc.CreateAccount(context.Background(), &CreateAccountInput{
-		Name:                 "opencode",
-		Platform:             PlatformOpenAI,
-		Type:                 AccountTypeAPIKey,
-		Credentials:          map[string]any{"api_key": "sk-1", "base_url": "https://opencode.ai/zen/go/v1"},
-		SkipDefaultGroupBind: true,
+		Name:        "opencode",
+		Platform:    PlatformOpenAI,
+		Type:        AccountTypeAPIKey,
+		Credentials: map[string]any{"api_key": "sk-1", "base_url": "https://opencode.ai/zen/go/v1"},
+		GroupIDs:    []int64{1},
 		Extra: map[string]any{
 			OpenCodeGoUsageAutoRefreshExtraKey: true,
 			OpenCodeGoUsageSnapshotExtraKey:    map[string]any{"status": "forged"},

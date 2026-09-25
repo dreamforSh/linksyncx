@@ -82,12 +82,27 @@ const (
 const (
 	AdjustmentTypeAdminBalance     = "admin_balance"     // 管理员调整余额
 	AdjustmentTypeAdminConcurrency = "admin_concurrency" // 管理员调整并发数
+	// AdjustmentTypeGroupTransfer 组管理员与组用户之间的余额划拨 / 回收（redeem_codes.type 最长 20 字符）
+	AdjustmentTypeGroupTransfer = "group_transfer"
 )
 
 // Group subscription type constants
 const (
 	SubscriptionTypeStandard     = "standard"     // 标准计费模式（按余额扣费）
 	SubscriptionTypeSubscription = "subscription" // 订阅模式（按限额控制）
+)
+
+// Group kind constants：渠道分组承载公共账号池；管理分组不挂渠道，
+// 组账号独占于该分组，由组管理员分配给组成员。
+const (
+	GroupKindChannel = "channel"
+	GroupKindManaged = "managed"
+)
+
+// Managed group category constants（仅管理分组使用）
+const (
+	GroupCategoryEnterprise = "enterprise"
+	GroupCategoryTeam       = "team"
 )
 
 // Subscription status constants

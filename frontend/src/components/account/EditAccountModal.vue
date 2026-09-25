@@ -3135,6 +3135,7 @@ import Icon from '@/components/icons/Icon.vue'
 import ProxySelector from '@/components/common/ProxySelector.vue'
 import ProxyAdBanner from '@/components/common/ProxyAdBanner.vue'
 import GroupSelector from '@/components/common/GroupSelector.vue'
+import { violatesManagedExclusivity } from '@/utils/groupKind'
 import ModelWhitelistSelector from '@/components/account/ModelWhitelistSelector.vue'
 import QuotaLimitCard from '@/components/account/QuotaLimitCard.vue'
 import GrokBaseUrlPresets from '@/components/account/GrokBaseUrlPresets.vue'
@@ -5140,7 +5141,21 @@ const handleSubmit = async () => {
 		}
 	}
 
+  // 账号必须归属分组：不允许清空已有分组；存量未分组账号未改动分组时不回写，避免阻塞停用等紧急操作
+  const hadGroups = (props.account.group_ids ?? []).length > 0
+  if (!form.group_ids.length && hadGroups) {
+    appStore.showError(t('admin.accounts.groupRequired'))
+    return
+  }
+  if (violatesManagedExclusivity(form.group_ids, props.groups)) {
+    appStore.showError(t('admin.accounts.managedGroupExclusive'))
+    return
+  }
+
   const updatePayload: Record<string, unknown> = { ...form }
+  if (!form.group_ids.length) {
+    delete updatePayload.group_ids
+  }
   try {
     // 后端期望 proxy_id: 0 表示清除代理，而不是 null
     if (updatePayload.proxy_id === null) {

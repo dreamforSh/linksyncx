@@ -3,6 +3,7 @@ package handler
 import (
 	"net/http"
 	"strconv"
+	"strings"
 
 	"github.com/Wei-Shaw/sub2api/internal/pkg/response"
 	middleware "github.com/Wei-Shaw/sub2api/internal/server/middleware"
@@ -333,4 +334,252 @@ func (h *GroupManagementHandler) AdminRemoveManager(c *gin.Context) {
 		return
 	}
 	response.Success(c, gin.H{"status": "revoked"})
+}
+
+type groupCategoryRequest struct {
+	Category string `json:"category" binding:"required,oneof=enterprise team"`
+}
+
+type createGroupUserRequest struct {
+	Email         string  `json:"email" binding:"required,email,max=255"`
+	Username      string  `json:"username" binding:"max=100"`
+	Password      string  `json:"password" binding:"required,min=6,max=72"`
+	MaxConcurrent *int    `json:"max_concurrent"`
+	DailyLimit    *int64  `json:"daily_limit"`
+	InitialAmount float64 `json:"initial_amount" binding:"gte=0"`
+}
+
+type groupUserStatusRequest struct {
+	Status string `json:"status" binding:"required,oneof=active disabled"`
+}
+
+type groupUserPasswordRequest struct {
+	Password string `json:"password" binding:"required,min=6,max=72"`
+}
+
+type groupTransferRequest struct {
+	Direction string  `json:"direction" binding:"required,oneof=grant reclaim"`
+	Amount    float64 `json:"amount" binding:"required,gt=0"`
+	Notes     string  `json:"notes" binding:"max=500"`
+}
+
+// GET /api/v1/group-management/me/summary
+func (h *GroupManagementHandler) Summary(c *gin.Context) {
+	uid, role, ok := h.actor(c)
+	if !ok {
+		return
+	}
+	out, err := h.service.Summary(c.Request.Context(), uid, role)
+	if err != nil {
+		handleGroupManagementError(c, err)
+		return
+	}
+	response.Success(c, out)
+}
+
+// PUT /api/v1/group-management/groups/:id/category
+func (h *GroupManagementHandler) UpdateCategory(c *gin.Context) {
+	uid, role, ok := h.actor(c)
+	if !ok {
+		return
+	}
+	gid, ok := parseGroupID(c)
+	if !ok {
+		return
+	}
+	var req groupCategoryRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		response.BadRequest(c, "invalid request: "+err.Error())
+		return
+	}
+	if err := h.service.UpdateCategory(c.Request.Context(), uid, role, gid, req.Category); err != nil {
+		handleGroupManagementError(c, err)
+		return
+	}
+	response.Success(c, gin.H{"category": req.Category})
+}
+
+// GET /api/v1/group-management/groups/:id/owned-users
+func (h *GroupManagementHandler) OwnedUsers(c *gin.Context) {
+	uid, role, ok := h.actor(c)
+	if !ok {
+		return
+	}
+	gid, ok := parseGroupID(c)
+	if !ok {
+		return
+	}
+	out, err := h.service.OwnedUserCandidates(c.Request.Context(), uid, role, gid)
+	if err != nil {
+		handleGroupManagementError(c, err)
+		return
+	}
+	response.Success(c, out)
+}
+
+// POST /api/v1/group-management/groups/:id/users
+func (h *GroupManagementHandler) CreateGroupUser(c *gin.Context) {
+	uid, role, ok := h.actor(c)
+	if !ok {
+		return
+	}
+	gid, ok := parseGroupID(c)
+	if !ok {
+		return
+	}
+	var req createGroupUserRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		response.BadRequest(c, "invalid request: "+err.Error())
+		return
+	}
+	out, err := h.service.CreateGroupUser(c.Request.Context(), uid, role, gid, service.CreateGroupUserInput{
+		Email:         req.Email,
+		Username:      req.Username,
+		Password:      req.Password,
+		MaxConcurrent: req.MaxConcurrent,
+		DailyLimit:    req.DailyLimit,
+		InitialAmount: req.InitialAmount,
+	})
+	if err != nil {
+		handleGroupManagementError(c, err)
+		return
+	}
+	response.Success(c, out)
+}
+
+// PUT /api/v1/group-management/groups/:id/users/:user_id/status
+func (h *GroupManagementHandler) GroupUserStatus(c *gin.Context) {
+	uid, role, ok := h.actor(c)
+	if !ok {
+		return
+	}
+	gid, ok := parseGroupID(c)
+	if !ok {
+		return
+	}
+	target, ok := parseParamID(c, "user_id")
+	if !ok {
+		return
+	}
+	var req groupUserStatusRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		response.BadRequest(c, "invalid request: "+err.Error())
+		return
+	}
+	if err := h.service.SetGroupUserStatus(c.Request.Context(), uid, role, gid, target, req.Status); err != nil {
+		handleGroupManagementError(c, err)
+		return
+	}
+	response.Success(c, gin.H{"status": req.Status})
+}
+
+// PUT /api/v1/group-management/groups/:id/users/:user_id/password
+func (h *GroupManagementHandler) GroupUserPassword(c *gin.Context) {
+	uid, role, ok := h.actor(c)
+	if !ok {
+		return
+	}
+	gid, ok := parseGroupID(c)
+	if !ok {
+		return
+	}
+	target, ok := parseParamID(c, "user_id")
+	if !ok {
+		return
+	}
+	var req groupUserPasswordRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		response.BadRequest(c, "invalid request: "+err.Error())
+		return
+	}
+	if err := h.service.ResetGroupUserPassword(c.Request.Context(), uid, role, gid, target, req.Password); err != nil {
+		handleGroupManagementError(c, err)
+		return
+	}
+	response.Success(c, gin.H{"status": "reset"})
+}
+
+// POST /api/v1/group-management/groups/:id/users/:user_id/balance-transfers
+func (h *GroupManagementHandler) TransferBalance(c *gin.Context) {
+	uid, role, ok := h.actor(c)
+	if !ok {
+		return
+	}
+	gid, ok := parseGroupID(c)
+	if !ok {
+		return
+	}
+	target, ok := parseParamID(c, "user_id")
+	if !ok {
+		return
+	}
+	var req groupTransferRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		response.BadRequest(c, "invalid request: "+err.Error())
+		return
+	}
+	out, err := h.service.TransferBalance(c.Request.Context(), uid, role, gid, target, req.Direction, req.Amount, req.Notes)
+	if err != nil {
+		handleGroupManagementError(c, err)
+		return
+	}
+	response.Success(c, out)
+}
+
+// GET /api/v1/group-management/groups/:id/balance-transfers?page=&page_size=&user_id=
+func (h *GroupManagementHandler) ListTransfers(c *gin.Context) {
+	uid, role, ok := h.actor(c)
+	if !ok {
+		return
+	}
+	gid, ok := parseGroupID(c)
+	if !ok {
+		return
+	}
+	page, _ := strconv.Atoi(c.DefaultQuery("page", "1"))
+	pageSize, _ := strconv.Atoi(c.DefaultQuery("page_size", "20"))
+	var memberID int64
+	if raw := c.Query("user_id"); raw != "" {
+		parsed, err := strconv.ParseInt(raw, 10, 64)
+		if err != nil || parsed <= 0 {
+			response.BadRequest(c, "invalid user id")
+			return
+		}
+		memberID = parsed
+	}
+	if page <= 0 {
+		page = 1
+	}
+	if pageSize <= 0 || pageSize > 100 {
+		pageSize = 20
+	}
+	items, total, err := h.service.ListTransfers(c.Request.Context(), uid, role, gid, memberID, page, pageSize)
+	if err != nil {
+		handleGroupManagementError(c, err)
+		return
+	}
+	response.Paginated(c, items, total, page, pageSize)
+}
+
+// GET /api/v1/admin/group-management/user-groups?user_ids=1,2,3
+func (h *GroupManagementHandler) AdminUserGroups(c *gin.Context) {
+	ids := make([]int64, 0)
+	for _, part := range strings.Split(c.Query("user_ids"), ",") {
+		part = strings.TrimSpace(part)
+		if part == "" {
+			continue
+		}
+		id, err := strconv.ParseInt(part, 10, 64)
+		if err != nil || id <= 0 {
+			response.BadRequest(c, "invalid user ids")
+			return
+		}
+		ids = append(ids, id)
+	}
+	out, err := h.service.AdminUserGroupSummaries(c.Request.Context(), ids)
+	if err != nil {
+		handleGroupManagementError(c, err)
+		return
+	}
+	response.Success(c, out)
 }

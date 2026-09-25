@@ -172,8 +172,10 @@ func TestGroupHandlerSimpleModeResponseUsesFieldAllowlist(t *testing.T) {
 	require.Equal(t, "allowed", item["description"])
 	require.Equal(t, "anthropic", item["platform"])
 	require.Equal(t, float64(3), item["account_count"])
+	// 旧数据没有 kind 时按渠道分组输出；category 仅管理分组才有
+	require.Equal(t, service.GroupKindChannel, item["kind"])
 	require.ElementsMatch(t, []string{
-		"id", "name", "description", "platform", "status", "account_count",
+		"id", "name", "description", "platform", "status", "kind", "account_count",
 		"active_account_count", "rate_limited_account_count", "sort_order", "created_at", "updated_at",
 	}, mapKeys(item))
 	for _, forbidden := range []string{
@@ -184,6 +186,29 @@ func TestGroupHandlerSimpleModeResponseUsesFieldAllowlist(t *testing.T) {
 		_, exposed := item[forbidden]
 		require.Falsef(t, exposed, "simple mode exposed %s", forbidden)
 	}
+}
+
+func TestGroupHandlerSimpleModeResponseIncludesManagedCategory(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	svc := newStubAdminService()
+	svc.groups = []service.Group{{
+		ID: 2, Name: "acme", Platform: service.PlatformAnthropic, Status: service.StatusActive,
+		Kind: service.GroupKindManaged, Category: service.GroupCategoryTeam, IsExclusive: true,
+	}}
+	r := newSimpleModeGroupRouter(svc)
+	res := httptest.NewRecorder()
+	r.ServeHTTP(res, httptest.NewRequest(http.MethodGet, "/groups", nil))
+	require.Equal(t, http.StatusOK, res.Code)
+
+	var payload struct {
+		Data struct {
+			Items []map[string]any `json:"items"`
+		} `json:"data"`
+	}
+	require.NoError(t, json.Unmarshal(res.Body.Bytes(), &payload))
+	require.Len(t, payload.Data.Items, 1)
+	require.Equal(t, service.GroupKindManaged, payload.Data.Items[0]["kind"])
+	require.Equal(t, service.GroupCategoryTeam, payload.Data.Items[0]["category"])
 }
 
 func TestGroupHandlerSimpleModeListsOnlyBindableGroups(t *testing.T) {
