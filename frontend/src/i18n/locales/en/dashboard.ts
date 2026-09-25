@@ -56,7 +56,10 @@ export default {
     viewUsage: 'View Usage',
     checkDetailedLogs: 'Check detailed usage logs',
     redeemCode: 'Redeem Code',
-    addBalanceWithCode: 'Add balance with a code'
+    addBalanceWithCode: 'Add balance with a code',
+    intro: "Here's how your account is doing today",
+    recentUsageSubtitle: 'Latest 5 in the selected range',
+    platformTotalSpend: 'Total spend'
   },
 
   // Groups (shared)

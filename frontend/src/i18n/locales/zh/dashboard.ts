@@ -56,7 +56,10 @@ export default {
     viewUsage: '查看使用记录',
     checkDetailedLogs: '查看详细的使用日志',
     redeemCode: '兑换码',
-    addBalanceWithCode: '使用兑换码充值'
+    addBalanceWithCode: '使用兑换码充值',
+    intro: '这是您账户今天的使用概况',
+    recentUsageSubtitle: '所选时间范围内的最新 5 条',
+    platformTotalSpend: '累计消费'
   },
 
   // Groups (shared)
