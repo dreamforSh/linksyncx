@@ -522,9 +522,9 @@ func (r *clashRepository) ApplyNodeSync(ctx context.Context, profileID int64, pl
 		}
 		if _, err := tx.ExecContext(ctx, `
 			UPDATE clash_nodes SET name = $2, type = $3, server = $4, server_port = $5, config = $6, config_hash = $7,
-				status = $8, status_reason = $9,
-				missing_since = CASE WHEN $8 = 'missing' THEN missing_since ELSE NULL END,
-				exit_status = CASE WHEN $10 AND exit_status = 'ok' THEN 'stale' ELSE exit_status END,
+				status = $8::text, status_reason = $9::text,
+				missing_since = CASE WHEN $8::text = 'missing' THEN missing_since ELSE NULL END,
+				exit_status = CASE WHEN $10::boolean AND exit_status = 'ok' THEN 'stale' ELSE exit_status END,
 				updated_at = NOW()
 			WHERE id = $1`,
 			update.NodeID, update.Name, update.Type, update.Server, update.ServerPort, configJSON, update.ConfigHash,
