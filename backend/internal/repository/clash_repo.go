@@ -603,8 +603,8 @@ func clashUsedPorts(ctx context.Context, tx *sql.Tx) (map[int]struct{}, error) {
 
 func (r *clashRepository) SetNodeStatus(ctx context.Context, nodeID int64, status, reason string) error {
 	result, err := r.db.ExecContext(ctx, `
-		UPDATE clash_nodes SET status = $2, status_reason = $3,
-			missing_since = CASE WHEN $2 = 'missing' THEN COALESCE(missing_since, NOW()) ELSE NULL END,
+		UPDATE clash_nodes SET status = $2::text, status_reason = $3::text,
+			missing_since = CASE WHEN $2::text = 'missing' THEN COALESCE(missing_since, NOW()) ELSE NULL END,
 			updated_at = NOW()
 		WHERE id = $1`, nodeID, status, reason)
 	if err != nil {
@@ -618,8 +618,8 @@ func (r *clashRepository) SetNodeStatus(ctx context.Context, nodeID int64, statu
 
 func (r *clashRepository) MarkProfileNodes(ctx context.Context, profileID int64, status, reason string) error {
 	_, err := r.db.ExecContext(ctx, `
-		UPDATE clash_nodes SET status = $2, status_reason = $3,
-			missing_since = CASE WHEN $2 = 'missing' THEN COALESCE(missing_since, NOW()) ELSE NULL END,
+		UPDATE clash_nodes SET status = $2::text, status_reason = $3::text,
+			missing_since = CASE WHEN $2::text = 'missing' THEN COALESCE(missing_since, NOW()) ELSE NULL END,
 			updated_at = NOW()
 		WHERE profile_id = $1`, profileID, status, reason)
 	return err
