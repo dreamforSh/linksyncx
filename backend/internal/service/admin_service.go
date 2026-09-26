@@ -115,8 +115,8 @@ type AdminService interface {
 	CreateShadow(ctx context.Context, parentID int64, opts ShadowOptions) (*Account, error)
 
 	// Proxy management
-	ListProxies(ctx context.Context, page, pageSize int, protocol, status, search string, sortBy, sortOrder string) ([]Proxy, int64, error)
-	ListProxiesWithAccountCount(ctx context.Context, page, pageSize int, protocol, status, search string, sortBy, sortOrder string) ([]ProxyWithAccountCount, int64, error)
+	ListProxies(ctx context.Context, page, pageSize int, protocol, status, search, source string, sortBy, sortOrder string) ([]Proxy, int64, error)
+	ListProxiesWithAccountCount(ctx context.Context, page, pageSize int, protocol, status, search, source string, sortBy, sortOrder string) ([]ProxyWithAccountCount, int64, error)
 	GetAllProxies(ctx context.Context) ([]Proxy, error)
 	GetAllProxiesWithAccountCount(ctx context.Context) ([]ProxyWithAccountCount, error)
 	GetProxy(ctx context.Context, id int64) (*Proxy, error)
@@ -420,6 +420,9 @@ type CreateAccountInput struct {
 	// SkipMixedChannelCheck skips the mixed channel risk check when binding groups.
 	// This should only be set when the caller has explicitly confirmed the risk.
 	SkipMixedChannelCheck bool
+	// InitiallyUnschedulable creates the account paused (internal callers only),
+	// e.g. imports whose Clash exit binding could not be carried over.
+	InitiallyUnschedulable bool `json:"-"`
 }
 
 // ShadowOptions is the input for CreateShadow.
@@ -717,6 +720,15 @@ type adminServiceImpl struct {
 	compositeResolver    *CompositeRouteResolver
 	// 分组平台变更后用来失效渠道缓存；可为 nil（缓存会在 TTL 到期后自然重建）
 	channelCacheInvalidator ChannelCacheInvalidator
+	// clashGuard 校验账号绑定 Clash 出口的独占约束；为 nil 时不校验。
+	clashGuard ClashExitGuard
+}
+
+// AttachClashExitGuard installs the Clash exit guard on the admin service.
+func AttachClashExitGuard(admin AdminService, guard ClashExitGuard) {
+	if impl, ok := admin.(*adminServiceImpl); ok && impl != nil {
+		impl.clashGuard = guard
+	}
 }
 
 // ChannelCacheInvalidator 失效渠道缓存。

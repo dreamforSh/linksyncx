@@ -42,6 +42,9 @@ func (r *proxyRepository) Create(ctx context.Context, proxyIn *service.Proxy) er
 		SetStatus(proxyIn.Status).
 		SetFallbackMode(proxyIn.FallbackMode).
 		SetExpiryWarnDays(proxyIn.ExpiryWarnDays)
+	if proxyIn.Source != "" {
+		builder.SetSource(proxyIn.Source)
+	}
 	if proxyIn.Username != "" {
 		builder.SetUsername(proxyIn.Username)
 	}
@@ -284,11 +287,20 @@ func (r *proxyRepository) Delete(ctx context.Context, id int64) error {
 }
 
 func (r *proxyRepository) List(ctx context.Context, params pagination.PaginationParams) ([]service.Proxy, *pagination.PaginationResult, error) {
-	return r.ListWithFilters(ctx, params, "", "", "")
+	return r.ListWithFilters(ctx, params, "", "", "", "")
+}
+
+func applyProxySourceFilter(q *dbent.ProxyQuery, source string) *dbent.ProxyQuery {
+	switch strings.TrimSpace(source) {
+	case "", service.ProxySourceAll:
+		return q
+	default:
+		return q.Where(proxy.SourceEQ(strings.TrimSpace(source)))
+	}
 }
 
 // ListWithFilters lists proxies with optional filtering by protocol, status, and search query
-func (r *proxyRepository) ListWithFilters(ctx context.Context, params pagination.PaginationParams, protocol, status, search string) ([]service.Proxy, *pagination.PaginationResult, error) {
+func (r *proxyRepository) ListWithFilters(ctx context.Context, params pagination.PaginationParams, protocol, status, search, source string) ([]service.Proxy, *pagination.PaginationResult, error) {
 	q := r.client.Proxy.Query()
 	if protocol != "" {
 		q = q.Where(proxy.ProtocolEQ(protocol))
@@ -299,6 +311,7 @@ func (r *proxyRepository) ListWithFilters(ctx context.Context, params pagination
 	if search != "" {
 		q = q.Where(proxy.NameContainsFold(search))
 	}
+	q = applyProxySourceFilter(q, source)
 
 	total, err := q.Count(ctx)
 	if err != nil {
@@ -326,7 +339,7 @@ func (r *proxyRepository) ListWithFilters(ctx context.Context, params pagination
 }
 
 // ListWithFiltersAndAccountCount lists proxies with filters and includes account count per proxy
-func (r *proxyRepository) ListWithFiltersAndAccountCount(ctx context.Context, params pagination.PaginationParams, protocol, status, search string) ([]service.ProxyWithAccountCount, *pagination.PaginationResult, error) {
+func (r *proxyRepository) ListWithFiltersAndAccountCount(ctx context.Context, params pagination.PaginationParams, protocol, status, search, source string) ([]service.ProxyWithAccountCount, *pagination.PaginationResult, error) {
 	q := r.client.Proxy.Query()
 	if protocol != "" {
 		q = q.Where(proxy.ProtocolEQ(protocol))
@@ -337,6 +350,7 @@ func (r *proxyRepository) ListWithFiltersAndAccountCount(ctx context.Context, pa
 	if search != "" {
 		q = q.Where(proxy.NameContainsFold(search))
 	}
+	q = applyProxySourceFilter(q, source)
 
 	total, err := q.Count(ctx)
 	if err != nil {
@@ -442,7 +456,7 @@ func proxyListOrder(params pagination.PaginationParams) []func(*entsql.Selector)
 
 func (r *proxyRepository) ListActive(ctx context.Context) ([]service.Proxy, error) {
 	proxies, err := r.client.Proxy.Query().
-		Where(proxy.StatusEQ(service.StatusActive)).
+		Where(proxy.StatusEQ(service.StatusActive), proxy.SourceNEQ(service.ProxySourceClash)).
 		All(ctx)
 	if err != nil {
 		return nil, err
@@ -555,7 +569,7 @@ func (r *proxyRepository) GetAccountCountsForProxies(ctx context.Context) (count
 // ListActiveWithAccountCount returns all active proxies with account count, sorted by creation time descending
 func (r *proxyRepository) ListActiveWithAccountCount(ctx context.Context) ([]service.ProxyWithAccountCount, error) {
 	proxies, err := r.client.Proxy.Query().
-		Where(proxy.StatusEQ(service.StatusActive)).
+		Where(proxy.StatusEQ(service.StatusActive), proxy.SourceNEQ(service.ProxySourceClash)).
 		Order(dbent.Desc(proxy.FieldCreatedAt)).
 		All(ctx)
 	if err != nil {
@@ -601,6 +615,7 @@ func proxyEntityToService(m *dbent.Proxy) *service.Proxy {
 		FallbackMode:   m.FallbackMode,
 		BackupProxyID:  m.BackupProxyID,
 		ExpiryWarnDays: m.ExpiryWarnDays,
+		Source:         m.Source,
 	}
 	if m.Username != nil {
 		out.Username = *m.Username
@@ -618,6 +633,7 @@ func applyProxyEntityToService(dst *service.Proxy, src *dbent.Proxy) {
 	dst.ID = src.ID
 	dst.CreatedAt = src.CreatedAt
 	dst.UpdatedAt = src.UpdatedAt
+	dst.Source = src.Source
 }
 
 // ListAllForFallback 返回所有代理（含过期/非活跃），供改投逻辑使用。

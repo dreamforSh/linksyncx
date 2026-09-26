@@ -1648,7 +1648,13 @@
           <label class="input-label mb-0">{{ t('admin.accounts.proxy') }}</label>
           <ProxyAdBanner />
         </div>
-        <ProxySelector v-model="form.proxy_id" :proxies="proxies" />
+        <ProxySelector
+          v-model="form.proxy_id"
+          :proxies="proxies"
+          :clash-exits="clashExits ?? null"
+          :account-id="account.id"
+          :platform="account.platform"
+        />
       </div>
 
       <UpstreamRequestIdHeaderField
@@ -3123,7 +3129,8 @@ import type {
   GrokMediaEligibilityMode,
   GrokMediaEligibilityState,
   OpenCodeGoUsageState,
-  OpenCodeGoUsageWindow
+  OpenCodeGoUsageWindow,
+  ClashExitList
 } from '@/types'
 import BaseDialog from '@/components/common/BaseDialog.vue'
 import ConfirmDialog from '@/components/common/ConfirmDialog.vue'
@@ -3134,6 +3141,7 @@ import Toggle from '@/components/common/Toggle.vue'
 import Icon from '@/components/icons/Icon.vue'
 import ProxySelector from '@/components/common/ProxySelector.vue'
 import ProxyAdBanner from '@/components/common/ProxyAdBanner.vue'
+import { clashErrorMessage } from '@/utils/clash'
 import GroupSelector from '@/components/common/GroupSelector.vue'
 import { violatesManagedExclusivity } from '@/utils/groupKind'
 import ModelWhitelistSelector from '@/components/account/ModelWhitelistSelector.vue'
@@ -3207,6 +3215,8 @@ interface Props {
   account: Account | null
   proxies: Proxy[]
   groups: AdminGroup[]
+  // Clash 出口（代理选择器中手动代理之后的分组）；null = 未启用或加载失败
+  clashExits?: ClashExitList | null
 }
 
 const props = defineProps<Props>()
@@ -5119,7 +5129,7 @@ const submitUpdateAccount = async (accountID: number, updatePayload: Record<stri
       })
       return
     }
-    appStore.showError(error.message || t('admin.accounts.failedToUpdate'))
+    appStore.showError(clashErrorMessage(error, t) ?? (error.message || t('admin.accounts.failedToUpdate')))
   } finally {
     submitting.value = false
   }

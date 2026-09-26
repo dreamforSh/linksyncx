@@ -105,6 +105,7 @@ type Config struct {
 	BatchImage              BatchImageConfig              `mapstructure:"batch_image"`
 	ImageStorage            ImageStorageConfig            `mapstructure:"image_storage"`
 	Plugins                 PluginConfig                  `mapstructure:"plugins"`
+	ClashPool               ClashPoolConfig               `mapstructure:"clash_pool"`
 
 	// Enforce only API-key spending windows in simple mode.
 	SimpleModeKeyRateLimitEnabled bool `mapstructure:"simple_mode_key_rate_limit_enabled" yaml:"simple_mode_key_rate_limit_enabled"`
@@ -124,6 +125,67 @@ type PluginConfig struct {
 	MaxUploadBytes       int64             `mapstructure:"max_upload_bytes"`
 	MaxUncompressedBytes int64             `mapstructure:"max_uncompressed_bytes"`
 	StartTimeoutSeconds  int               `mapstructure:"start_timeout_seconds"`
+}
+
+// Clash 代理池内核运行模式。
+const (
+	ClashPoolModeEmbedded = "embedded"
+	ClashPoolModeExternal = "external"
+	ClashPoolModeDisabled = "disabled"
+)
+
+// ClashPoolConfig 控制 Clash 订阅代理池。embedded 模式下 mihomo 内核编译进
+// sub2api 进程，一次部署即包含内核；external 模式连接外部 mihomo（sidecar）。
+// 环境变量前缀为 CLASH_POOL_，与 mihomo 自身读取的 CLASH_* 变量区分。
+type ClashPoolConfig struct {
+	Mode string `mapstructure:"mode"`
+	// DataDir 为内核工作目录；为空时使用 {{DATA_DIR}}/clash，未设置 DATA_DIR 时使用 ./data/clash。
+	DataDir string `mapstructure:"data_dir"`
+	// ListenerHost 写入托管代理记录的地址，网关经它连接各节点 listener。
+	// embedded 默认 127.0.0.1；external 模式必须填写 sidecar 地址。
+	ListenerHost string `mapstructure:"listener_host"`
+	// ListenAddress 是 listener 的绑定地址。embedded 默认 127.0.0.1，external 默认 0.0.0.0。
+	ListenAddress  string                      `mapstructure:"listen_address"`
+	PortRangeStart int                         `mapstructure:"port_range_start"`
+	PortRangeEnd   int                         `mapstructure:"port_range_end"`
+	External       ClashPoolExternalConfig     `mapstructure:"external"`
+	Subscription   ClashPoolSubscriptionConfig `mapstructure:"subscription"`
+}
+
+// ClashPoolExternalConfig 描述外部 mihomo 的 RESTful 控制器。
+type ClashPoolExternalConfig struct {
+	ControllerURL string `mapstructure:"controller_url"`
+	Secret        string `mapstructure:"secret"`
+}
+
+// ClashPoolSubscriptionConfig 约束订阅拉取与节点地址。
+type ClashPoolSubscriptionConfig struct {
+	// AllowPrivateHosts 允许订阅地址指向内网/回环（例如自建 subconverter）；云元数据地址始终拦截。
+	AllowPrivateHosts bool `mapstructure:"allow_private_hosts"`
+	// AllowPrivateNodes 允许节点 server 为内网字面量地址；回环与链路本地地址始终拒绝。
+	AllowPrivateNodes   bool  `mapstructure:"allow_private_nodes"`
+	MaxBodyBytes        int64 `mapstructure:"max_body_bytes"`
+	FetchTimeoutSeconds int   `mapstructure:"fetch_timeout_seconds"`
+	MaxNodesPerProfile  int   `mapstructure:"max_nodes_per_profile"`
+}
+
+// EffectiveListenerHost returns the address gateway traffic uses to reach listeners.
+func (c ClashPoolConfig) EffectiveListenerHost() string {
+	if host := strings.TrimSpace(c.ListenerHost); host != "" {
+		return host
+	}
+	return "127.0.0.1"
+}
+
+// EffectiveListenAddress returns the bind address rendered into listeners.
+func (c ClashPoolConfig) EffectiveListenAddress() string {
+	if addr := strings.TrimSpace(c.ListenAddress); addr != "" {
+		return addr
+	}
+	if c.Mode == ClashPoolModeExternal {
+		return "0.0.0.0"
+	}
+	return "127.0.0.1"
 }
 
 type LogConfig struct {
@@ -2316,6 +2378,21 @@ func setDefaults() {
 	viper.SetDefault("plugins.max_uncompressed_bytes", int64(256*1024*1024))
 	viper.SetDefault("plugins.start_timeout_seconds", 15)
 
+	// Clash 订阅代理池。默认使用编译进进程的 mihomo 内核。
+	viper.SetDefault("clash_pool.mode", ClashPoolModeEmbedded)
+	viper.SetDefault("clash_pool.data_dir", "")
+	viper.SetDefault("clash_pool.listener_host", "")
+	viper.SetDefault("clash_pool.listen_address", "")
+	viper.SetDefault("clash_pool.port_range_start", 20000)
+	viper.SetDefault("clash_pool.port_range_end", 24999)
+	viper.SetDefault("clash_pool.external.controller_url", "")
+	viper.SetDefault("clash_pool.external.secret", "")
+	viper.SetDefault("clash_pool.subscription.allow_private_hosts", false)
+	viper.SetDefault("clash_pool.subscription.allow_private_nodes", false)
+	viper.SetDefault("clash_pool.subscription.max_body_bytes", int64(10*1024*1024))
+	viper.SetDefault("clash_pool.subscription.fetch_timeout_seconds", 30)
+	viper.SetDefault("clash_pool.subscription.max_nodes_per_profile", 2000)
+
 	// Timezone (default to Asia/Shanghai for Chinese users)
 	viper.SetDefault("timezone", "Asia/Shanghai")
 
@@ -2681,6 +2758,9 @@ func (c *Config) Validate() error {
 	}
 	if c.Plugins.StartTimeoutSeconds < 1 || c.Plugins.StartTimeoutSeconds > 120 {
 		return fmt.Errorf("plugins.start_timeout_seconds must be between 1 and 120")
+	}
+	if err := c.ClashPool.normalizeAndValidate(); err != nil {
+		return err
 	}
 	if c.Server.ReadHeaderTimeout < 1 || c.Server.ReadHeaderTimeout > 60 {
 		return fmt.Errorf("server.read_header_timeout must be between 1 and 60 seconds")
@@ -3876,4 +3956,40 @@ func warnIfInsecureURL(field, raw string) {
 	if strings.EqualFold(u.Scheme, "http") {
 		slog.Warn("url uses http scheme; use https in production to avoid token leakage", "field", field)
 	}
+}
+
+func (c *ClashPoolConfig) normalizeAndValidate() error {
+	c.Mode = strings.ToLower(strings.TrimSpace(c.Mode))
+	if c.Mode == "" {
+		c.Mode = ClashPoolModeEmbedded
+	}
+	switch c.Mode {
+	case ClashPoolModeEmbedded, ClashPoolModeExternal, ClashPoolModeDisabled:
+	default:
+		return fmt.Errorf("clash_pool.mode must be one of embedded, external, disabled")
+	}
+	if c.PortRangeStart < 1024 || c.PortRangeEnd > 65535 || c.PortRangeStart > c.PortRangeEnd {
+		return fmt.Errorf("clash_pool.port_range_start/port_range_end must satisfy 1024 <= start <= end <= 65535")
+	}
+	if c.PortRangeEnd-c.PortRangeStart+1 > 20000 {
+		return fmt.Errorf("clash_pool port range must not exceed 20000 ports")
+	}
+	if c.Mode == ClashPoolModeExternal {
+		if strings.TrimSpace(c.External.ControllerURL) == "" {
+			return fmt.Errorf("clash_pool.external.controller_url is required when clash_pool.mode=external")
+		}
+		if strings.TrimSpace(c.ListenerHost) == "" {
+			return fmt.Errorf("clash_pool.listener_host is required when clash_pool.mode=external")
+		}
+	}
+	if c.Subscription.MaxBodyBytes < 1024 || c.Subscription.MaxBodyBytes > 64*1024*1024 {
+		return fmt.Errorf("clash_pool.subscription.max_body_bytes must be between 1024 and 67108864")
+	}
+	if c.Subscription.FetchTimeoutSeconds < 5 || c.Subscription.FetchTimeoutSeconds > 120 {
+		return fmt.Errorf("clash_pool.subscription.fetch_timeout_seconds must be between 5 and 120")
+	}
+	if c.Subscription.MaxNodesPerProfile < 1 || c.Subscription.MaxNodesPerProfile > 10000 {
+		return fmt.Errorf("clash_pool.subscription.max_nodes_per_profile must be between 1 and 10000")
+	}
+	return nil
 }

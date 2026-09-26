@@ -351,7 +351,23 @@
           </template>
           <template #cell-proxy="{ row }">
             <div class="flex flex-col gap-1">
-              <div v-if="row.proxy" class="flex items-center gap-2">
+              <div v-if="row.proxy?.source === 'clash'" class="flex flex-col gap-0.5" data-testid="account-clash-proxy">
+                <div class="flex items-center gap-1.5">
+                  <ClashTag />
+                  <span class="max-w-[12rem] truncate text-sm text-gray-700 dark:text-gray-300" :title="row.proxy.name">
+                    {{ clashExitFor(row.proxy_id)?.node_name || row.proxy.name }}
+                  </span>
+                </div>
+                <div class="flex items-center gap-1 text-xs text-gray-500 dark:text-gray-400">
+                  <CountryFlag
+                    v-if="clashExitFor(row.proxy_id)?.exit_ip"
+                    :code="clashExitFor(row.proxy_id)?.exit_country_code"
+                    :label="clashExitFor(row.proxy_id)?.exit_country"
+                  />
+                  <span class="font-mono">{{ clashExitFor(row.proxy_id)?.exit_ip || t('admin.clash.selector.exitUnprobed') }}</span>
+                </div>
+              </div>
+              <div v-else-if="row.proxy" class="flex items-center gap-2">
                 <span class="text-sm text-gray-700 dark:text-gray-300">{{ row.proxy.name }}</span>
                 <span v-if="row.proxy.country_code" class="text-xs text-gray-500 dark:text-gray-400">
                   ({{ row.proxy.country_code }})
@@ -485,13 +501,14 @@
     <CreateAccountModal
       :show="showCreate"
       :proxies="proxies"
+      :clash-exits="clashExits"
       :groups="groups"
       :preset-group="createPresetGroup"
       @close="closeCreateAccount"
-      @created="reload"
+      @created="handleAccountCreated"
       @change-group="openCreateFlow(createPresetGroup?.id ?? null)"
     />
-    <EditAccountModal :show="showEdit" :account="edAcc" :proxies="proxies" :groups="groups" @close="showEdit = false" @updated="handleAccountUpdated" />
+    <EditAccountModal :show="showEdit" :account="edAcc" :proxies="proxies" :clash-exits="clashExits" :groups="groups" @close="showEdit = false" @updated="handleAccountEdited" />
     <ReAuthAccountModal :show="showReAuth" :account="reAuthAcc" @close="closeReAuthModal" @reauthorized="handleAccountUpdated" />
     <AccountTestModal :show="showTest" :account="testingAcc" @close="closeTestModal" />
     <AccountStatsModal :show="showStats" :account="statsAcc" @close="closeStatsModal" />
@@ -563,6 +580,8 @@ import AccountGroupsCell from '@/components/account/AccountGroupsCell.vue'
 import AccountCapacityCell from '@/components/account/AccountCapacityCell.vue'
 import UpstreamBillingRateCell from '@/components/account/UpstreamBillingRateCell.vue'
 import PlatformTypeBadge from '@/components/common/PlatformTypeBadge.vue'
+import ClashTag from '@/components/common/ClashTag.vue'
+import CountryFlag from '@/components/common/CountryFlag.vue'
 import Icon from '@/components/icons/Icon.vue'
 import ErrorPassthroughRulesModal from '@/components/admin/ErrorPassthroughRulesModal.vue'
 import TLSFingerprintProfilesModal from '@/components/admin/TLSFingerprintProfilesModal.vue'
@@ -571,10 +590,11 @@ import { buildGrokUsageRefreshKey, buildOpenAIUsageRefreshKey } from '@/utils/ac
 import { formatDateTime, formatRelativeTime } from '@/utils/format'
 import { proxyExpiryBadgeClass, proxyExpiryLabelKey } from '@/utils/proxyExpiry'
 import { extractApiErrorMessage } from '@/utils/apiError'
+import { clashErrorMessage } from '@/utils/clash'
 import { sanitizeUrl } from '@/utils/url'
 import { getFloatingPanelPosition } from '@/utils/floatingPanel'
 import { formatMultiplier } from '@/utils/formatters'
-import type { Account, AccountListItem, AccountPlatform, AccountSchedulerGroupScore, AccountType, AccountUsageInfo, Proxy as AccountProxy, AdminGroup, GroupKind, WindowStats, ClaudeModel, UpstreamBillingProbeSnapshot } from '@/types'
+import type { Account, AccountListItem, AccountPlatform, AccountSchedulerGroupScore, AccountType, AccountUsageInfo, Proxy as AccountProxy, AdminGroup, GroupKind, WindowStats, ClaudeModel, UpstreamBillingProbeSnapshot, ClashExitList } from '@/types'
 
 const { t } = useI18n()
 const appStore = useAppStore()
@@ -582,6 +602,21 @@ const authStore = useAuthStore()
 const { route, router } = useOptionalRouter()
 
 const proxies = ref<AccountProxy[]>([])
+// Clash exits for the account proxy selector; null when the pool is absent/disabled or failed to load.
+const clashExits = ref<ClashExitList | null>(null)
+const clashExitByProxyId = computed(() => new Map((clashExits.value?.exits ?? []).map((exit) => [exit.proxy_id, exit])))
+const clashExitFor = (proxyId: number | null | undefined) => (proxyId == null ? undefined : clashExitByProxyId.value.get(proxyId))
+let clashExitsRequest = 0
+const loadClashExits = async () => {
+  const request = ++clashExitsRequest
+  try {
+    const list = await adminAPI.clash.listExits()
+    if (request === clashExitsRequest) clashExits.value = list && Array.isArray(list.exits) ? list : null
+  } catch {
+    // 404 (pool not mounted) / 409 (disabled) / network errors: the selector simply shows manual proxies.
+    if (request === clashExitsRequest) clashExits.value = null
+  }
+}
 const groups = ref<AdminGroup[]>([])
 const groupsByID = computed(() => new Map(groups.value.map(group => [group.id, group])))
 const accountGroupsForRow = (account: Pick<AccountListItem, 'group_ids'>): AdminGroup[] => {
@@ -1891,6 +1926,7 @@ const handleEdit = async (a: AccountListItem) => {
   if (!account) return
   edAcc.value = account
   showEdit.value = true
+  void loadClashExits()
 }
 const openMenu = (a: Account, e: MouseEvent) => {
   menu.acc = a
@@ -2183,6 +2219,7 @@ const handleTargetGroupSelected = (group: AdminGroup) => {
   createPresetGroup.value = group
   showTargetGroupPicker.value = false
   showCreate.value = true
+  void loadClashExits()
 }
 const closeCreateAccount = () => {
   showCreate.value = false
@@ -2363,6 +2400,16 @@ const handleAccountUpdated = (updatedAccount: Account) => {
   patchAccountInList(updatedAccount)
   enterAutoRefreshSilentWindow()
 }
+// Only the editor can change a proxy binding, so exit occupancy is refreshed here
+// (usage cells also emit account updates and must not trigger extra requests).
+const handleAccountEdited = (updatedAccount: Account) => {
+  handleAccountUpdated(updatedAccount)
+  void loadClashExits()
+}
+const handleAccountCreated = () => {
+  reload()
+  void loadClashExits()
+}
 const formatExportTimestamp = () => {
   const now = new Date()
   const pad2 = (value: number) => String(value).padStart(2, '0')
@@ -2395,9 +2442,16 @@ const handleExportData = async () => {
     URL.revokeObjectURL(url)
     // spark 影子账号被后端排除出备份(其凭据透传母账号、调度配置不可经凭据型导入重建);
     // 跳过非零时明确提示用户,避免「下载成功但少了账号」的静默丢失。
-    if (dataPayload.skipped_shadows && dataPayload.skipped_shadows > 0) {
-      appStore.showWarning(t('admin.accounts.dataExportedSkippedShadows', { count: dataPayload.skipped_shadows }))
-    } else {
+    // Clash 托管代理只在本实例有意义,不随备份导出,绑定它的账号导入后需重新指定出口。
+    const skippedShadows = dataPayload.skipped_shadows ?? 0
+    const skippedClashBindings = dataPayload.skipped_clash_bindings ?? 0
+    if (skippedShadows > 0) {
+      appStore.showWarning(t('admin.accounts.dataExportedSkippedShadows', { count: skippedShadows }))
+    }
+    if (skippedClashBindings > 0) {
+      appStore.showWarning(t('admin.accounts.dataExportedSkippedClash', { count: skippedClashBindings }))
+    }
+    if (skippedShadows <= 0 && skippedClashBindings <= 0) {
       appStore.showSuccess(t('admin.accounts.dataExported'))
     }
   } catch (error: any) {
@@ -2454,9 +2508,11 @@ const handleDuplicateAccount = async (a: Account) => {
     const duplicate = await adminAPI.accounts.duplicate(a.id)
     appStore.showSuccess(t('admin.accounts.duplicateSuccess', { name: duplicate.name }))
     reload()
+    void loadClashExits()
   } catch (error: any) {
     console.error('Failed to duplicate account:', error)
-    appStore.showError(error?.message || t('admin.accounts.duplicateFailed'))
+    // 复制绑定 Clash 出口的账号会撞上单出口上限，给出可读的原因。
+    appStore.showError(clashErrorMessage(error, t) ?? (error?.message || t('admin.accounts.duplicateFailed')))
   } finally {
     duplicatingAccountIDs.delete(a.id)
   }
@@ -2647,7 +2703,8 @@ onMounted(async () => {
   loadUpstreamBillingProbeGlobalState()
   const [proxiesResult, groupsResult] = await Promise.allSettled([
     adminAPI.proxies.getAll(),
-    adminAPI.groups.getAll()
+    adminAPI.groups.getAll(),
+    loadClashExits()
   ])
   if (proxiesResult.status === 'fulfilled') {
     proxies.value = proxiesResult.value

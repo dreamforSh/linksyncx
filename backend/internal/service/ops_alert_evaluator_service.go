@@ -51,6 +51,9 @@ type OpsAlertEvaluatorService struct {
 
 	emailLimiter *slidingWindowLimiter
 
+	// clashMetrics provides Clash proxy pool metrics; nil disables them.
+	clashMetrics ClashAlertMetrics
+
 	skipLogMu sync.Mutex
 	skipLogAt time.Time
 
@@ -563,6 +566,11 @@ func (s *OpsAlertEvaluatorService) computeRuleMetric(
 		return float64(countAccountsByCondition(availability.Accounts, func(acc *AccountAvailability) bool {
 			return acc.IsOverloaded
 		})), true
+	case ClashMetricExitPausedAccounts, ClashMetricProfileRefreshFailed, ClashMetricExitConflicts, ClashMetricRuntimeUnready:
+		if s == nil || s.clashMetrics == nil {
+			return 0, false
+		}
+		return s.clashMetrics.ClashAlertMetric(ctx, strings.TrimSpace(rule.MetricType))
 	case "proxy_expired_count":
 		if s == nil || s.proxyRepo == nil {
 			return 0, false
@@ -1073,4 +1081,16 @@ func countAccountsByCondition(accounts map[int64]*AccountAvailability, condition
 		}
 	}
 	return count
+}
+
+// ClashAlertMetrics provides Clash proxy pool alert metrics.
+type ClashAlertMetrics interface {
+	ClashAlertMetric(ctx context.Context, metricType string) (float64, bool)
+}
+
+// SetClashMetrics installs the Clash pool metric source.
+func (s *OpsAlertEvaluatorService) SetClashMetrics(metrics ClashAlertMetrics) {
+	if s != nil {
+		s.clashMetrics = metrics
+	}
 }

@@ -18,12 +18,21 @@
         <button
           type="button"
           :class="['badge text-xs', statusClass, 'cursor-pointer']"
-          :title="t('admin.accounts.status.viewTempUnschedDetails')"
+          :title="clashExitPause ? clashExitPauseText : t('admin.accounts.status.viewTempUnschedDetails')"
+          :data-clash-exit="clashExitPause ? 'true' : undefined"
           @click="handleTempUnschedClick"
         >
           {{ statusText }}
         </button>
-        <span class="max-w-[180px] text-center text-[11px] leading-4 text-gray-500 dark:text-gray-400">
+        <!-- Clash 出口暂停由健康检查托管、失效期间自动续期，展示原因比“预计恢复时间”更有用 -->
+        <span
+          v-if="clashExitPause"
+          class="line-clamp-2 max-w-[180px] whitespace-normal break-words text-center text-[11px] leading-4 text-gray-500 dark:text-gray-400"
+          data-testid="clash-exit-pause-reason"
+        >
+          {{ clashExitPauseText }}
+        </span>
+        <span v-else class="max-w-[180px] text-center text-[11px] leading-4 text-gray-500 dark:text-gray-400">
           {{ tempUnschedRecoveryText }}
         </span>
       </div>
@@ -164,6 +173,7 @@ import { useI18n } from 'vue-i18n'
 import Icon from '@/components/icons/Icon.vue'
 import type { Account } from '@/types'
 import { formatCountdown, formatDateTime, formatDateTimeToMinute, formatCountdownWithSuffix, formatTime } from '@/utils/format'
+import { describeClashExitPause } from '@/utils/clash'
 
 const { t } = useI18n()
 
@@ -278,6 +288,18 @@ const isTempUnschedulable = computed(() => {
   return new Date(props.account.temp_unschedulable_until) > new Date()
 })
 
+// Computed: temp-unschedulable owned by the Clash pool ("[clash-exit] <node>: <reason>")
+const clashExitPause = computed(() => {
+  if (!isTempUnschedulable.value) return null
+  return describeClashExitPause(props.account.temp_unschedulable_reason, t)
+})
+
+const clashExitPauseText = computed(() => {
+  const pause = clashExitPause.value
+  if (!pause) return ''
+  return pause.node ? `${pause.node} · ${pause.reason}` : pause.reason
+})
+
 // Computed: has error status
 const hasError = computed(() => {
   return props.account.status === 'error'
@@ -341,7 +363,9 @@ const statusText = computed(() => {
     return t('admin.accounts.status.error')
   }
   if (isTempUnschedulable.value) {
-    return t('admin.accounts.status.tempUnschedulable')
+    return clashExitPause.value
+      ? t('admin.accounts.status.clashExitUnavailable')
+      : t('admin.accounts.status.tempUnschedulable')
   }
   if (props.account.status !== 'active') {
     return t(`admin.accounts.status.${props.account.status}`)

@@ -37584,6 +37584,7 @@ type ProxyMutation struct {
 	fallback_mode          *string
 	expiry_warn_days       *int
 	addexpiry_warn_days    *int
+	source                 *string
 	clearedFields          map[string]struct{}
 	accounts               map[int64]struct{}
 	removedaccounts        map[int64]struct{}
@@ -38305,6 +38306,42 @@ func (m *ProxyMutation) ResetExpiryWarnDays() {
 	m.addexpiry_warn_days = nil
 }
 
+// SetSource sets the "source" field.
+func (m *ProxyMutation) SetSource(s string) {
+	m.source = &s
+}
+
+// Source returns the value of the "source" field in the mutation.
+func (m *ProxyMutation) Source() (r string, exists bool) {
+	v := m.source
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldSource returns the old "source" field's value of the Proxy entity.
+// If the Proxy object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *ProxyMutation) OldSource(ctx context.Context) (v string, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldSource is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldSource requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldSource: %w", err)
+	}
+	return oldValue.Source, nil
+}
+
+// ResetSource resets all changes to the "source" field.
+func (m *ProxyMutation) ResetSource() {
+	m.source = nil
+}
+
 // AddAccountIDs adds the "accounts" edge to the Account entity by ids.
 func (m *ProxyMutation) AddAccountIDs(ids ...int64) {
 	if m.accounts == nil {
@@ -38474,7 +38511,7 @@ func (m *ProxyMutation) Type() string {
 // order to get all numeric fields that were incremented/decremented, call
 // AddedFields().
 func (m *ProxyMutation) Fields() []string {
-	fields := make([]string, 0, 14)
+	fields := make([]string, 0, 15)
 	if m.created_at != nil {
 		fields = append(fields, proxy.FieldCreatedAt)
 	}
@@ -38517,6 +38554,9 @@ func (m *ProxyMutation) Fields() []string {
 	if m.expiry_warn_days != nil {
 		fields = append(fields, proxy.FieldExpiryWarnDays)
 	}
+	if m.source != nil {
+		fields = append(fields, proxy.FieldSource)
+	}
 	return fields
 }
 
@@ -38553,6 +38593,8 @@ func (m *ProxyMutation) Field(name string) (ent.Value, bool) {
 		return m.BackupProxyID()
 	case proxy.FieldExpiryWarnDays:
 		return m.ExpiryWarnDays()
+	case proxy.FieldSource:
+		return m.Source()
 	}
 	return nil, false
 }
@@ -38590,6 +38632,8 @@ func (m *ProxyMutation) OldField(ctx context.Context, name string) (ent.Value, e
 		return m.OldBackupProxyID(ctx)
 	case proxy.FieldExpiryWarnDays:
 		return m.OldExpiryWarnDays(ctx)
+	case proxy.FieldSource:
+		return m.OldSource(ctx)
 	}
 	return nil, fmt.Errorf("unknown Proxy field %s", name)
 }
@@ -38696,6 +38740,13 @@ func (m *ProxyMutation) SetField(name string, value ent.Value) error {
 			return fmt.Errorf("unexpected type %T for field %s", value, name)
 		}
 		m.SetExpiryWarnDays(v)
+		return nil
+	case proxy.FieldSource:
+		v, ok := value.(string)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetSource(v)
 		return nil
 	}
 	return fmt.Errorf("unknown Proxy field %s", name)
@@ -38847,6 +38898,9 @@ func (m *ProxyMutation) ResetField(name string) error {
 		return nil
 	case proxy.FieldExpiryWarnDays:
 		m.ResetExpiryWarnDays()
+		return nil
+	case proxy.FieldSource:
+		m.ResetSource()
 		return nil
 	}
 	return fmt.Errorf("unknown Proxy field %s", name)

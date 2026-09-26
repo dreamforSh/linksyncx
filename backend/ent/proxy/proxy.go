@@ -43,6 +43,8 @@ const (
 	FieldBackupProxyID = "backup_proxy_id"
 	// FieldExpiryWarnDays holds the string denoting the expiry_warn_days field in the database.
 	FieldExpiryWarnDays = "expiry_warn_days"
+	// FieldSource holds the string denoting the source field in the database.
+	FieldSource = "source"
 	// EdgeAccounts holds the string denoting the accounts edge name in mutations.
 	EdgeAccounts = "accounts"
 	// EdgePrimaryProxies holds the string denoting the primary_proxies edge name in mutations.
@@ -85,6 +87,7 @@ var Columns = []string{
 	FieldFallbackMode,
 	FieldBackupProxyID,
 	FieldExpiryWarnDays,
+	FieldSource,
 }
 
 // ValidColumn reports if the column name is valid (part of the table columns).
@@ -131,6 +134,10 @@ var (
 	FallbackModeValidator func(string) error
 	// DefaultExpiryWarnDays holds the default value on creation for the "expiry_warn_days" field.
 	DefaultExpiryWarnDays int
+	// DefaultSource holds the default value on creation for the "source" field.
+	DefaultSource string
+	// SourceValidator is a validator for the "source" field. It is called by the builders before save.
+	SourceValidator func(string) error
 )
 
 // OrderOption defines the ordering options for the Proxy queries.
@@ -209,6 +216,11 @@ func ByBackupProxyID(opts ...sql.OrderTermOption) OrderOption {
 // ByExpiryWarnDays orders the results by the expiry_warn_days field.
 func ByExpiryWarnDays(opts ...sql.OrderTermOption) OrderOption {
 	return sql.OrderByField(FieldExpiryWarnDays, opts...).ToFunc()
+}
+
+// BySource orders the results by the source field.
+func BySource(opts ...sql.OrderTermOption) OrderOption {
+	return sql.OrderByField(FieldSource, opts...).ToFunc()
 }
 
 // ByAccountsCount orders the results by accounts count.

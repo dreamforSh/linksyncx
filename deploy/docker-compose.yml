@@ -151,6 +151,23 @@ services:
       - SECURITY_URL_ALLOWLIST_UPSTREAM_HOSTS=${SECURITY_URL_ALLOWLIST_UPSTREAM_HOSTS:-}
 
       # =======================================================================
+      # Clash Subscription Proxy Pool (Clash 订阅代理池)
+      # =======================================================================
+      # The mihomo core is compiled into sub2api: no extra container is needed.
+      # Saving subscription URLs requires TOTP_ENCRYPTION_KEY above to be set.
+      # 内核已编译进 sub2api，无需额外容器；保存订阅链接需要设置上面的 TOTP_ENCRYPTION_KEY。
+      # embedded (default) | external | disabled
+      - CLASH_POOL_MODE=${CLASH_POOL_MODE:-embedded}
+      # Allow subscription URLs on private/loopback hosts (self-hosted subconverter)
+      - CLASH_POOL_SUBSCRIPTION_ALLOW_PRIVATE_HOSTS=${CLASH_POOL_SUBSCRIPTION_ALLOW_PRIVATE_HOSTS:-false}
+      # Optional external sidecar instead of the built-in core:
+      # 可选：改用外部 mihomo sidecar（在同一 compose 中增加 mihomo 服务）：
+      #   CLASH_POOL_MODE=external
+      #   CLASH_POOL_LISTENER_HOST=mihomo
+      #   CLASH_POOL_EXTERNAL_CONTROLLER_URL=http://mihomo:9090
+      #   CLASH_POOL_EXTERNAL_SECRET=<mihomo secret>
+
+      # =======================================================================
       # Update Configuration (在线更新配置)
       # =======================================================================
       # Proxy for accessing GitHub (online updates + pricing data)

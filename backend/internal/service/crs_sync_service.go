@@ -427,7 +427,7 @@ func (s *CRSSyncService) SyncFromCRS(ctx context.Context, input SyncFromCRSInput
 		existing.Platform = PlatformAnthropic
 		existing.Type = targetType
 		existing.Credentials = credentials
-		if proxyID != nil {
+		if proxyID != nil && !s.keepsClashBinding(ctx, existing) {
 			existing.ProxyID = proxyID
 		}
 		existing.Concurrency = concurrency
@@ -556,7 +556,7 @@ func (s *CRSSyncService) SyncFromCRS(ctx context.Context, input SyncFromCRSInput
 		existing.Platform = PlatformAnthropic
 		existing.Type = AccountTypeAPIKey
 		existing.Credentials = credentials
-		if proxyID != nil {
+		if proxyID != nil && !s.keepsClashBinding(ctx, existing) {
 			existing.ProxyID = proxyID
 		}
 		existing.Concurrency = concurrency
@@ -706,7 +706,7 @@ func (s *CRSSyncService) SyncFromCRS(ctx context.Context, input SyncFromCRSInput
 		existing.Platform = PlatformOpenAI
 		existing.Type = AccountTypeOAuth
 		existing.Credentials = credentials
-		if proxyID != nil {
+		if proxyID != nil && !s.keepsClashBinding(ctx, existing) {
 			existing.ProxyID = proxyID
 		}
 		existing.Concurrency = concurrency
@@ -863,7 +863,7 @@ func (s *CRSSyncService) SyncFromCRS(ctx context.Context, input SyncFromCRSInput
 		existing.Platform = PlatformOpenAI
 		existing.Type = AccountTypeAPIKey
 		existing.Credentials = credentials
-		if proxyID != nil {
+		if proxyID != nil && !s.keepsClashBinding(ctx, existing) {
 			existing.ProxyID = proxyID
 		}
 		existing.Concurrency = concurrency
@@ -995,7 +995,7 @@ func (s *CRSSyncService) SyncFromCRS(ctx context.Context, input SyncFromCRSInput
 		existing.Platform = PlatformGemini
 		existing.Type = AccountTypeOAuth
 		existing.Credentials = credentials
-		if proxyID != nil {
+		if proxyID != nil && !s.keepsClashBinding(ctx, existing) {
 			existing.ProxyID = proxyID
 		}
 		existing.Concurrency = 3
@@ -1122,7 +1122,7 @@ func (s *CRSSyncService) SyncFromCRS(ctx context.Context, input SyncFromCRSInput
 		existing.Platform = PlatformGemini
 		existing.Type = AccountTypeAPIKey
 		existing.Credentials = credentials
-		if proxyID != nil {
+		if proxyID != nil && !s.keepsClashBinding(ctx, existing) {
 			existing.ProxyID = proxyID
 		}
 		existing.Concurrency = 3
@@ -1604,4 +1604,14 @@ func (s *CRSSyncService) PreviewFromCRS(ctx context.Context, input SyncFromCRSIn
 	}
 
 	return result, nil
+}
+
+// keepsClashBinding reports accounts bound to a Clash exit: CRS sync must not
+// move them off their exclusive exit.
+func (s *CRSSyncService) keepsClashBinding(ctx context.Context, account *Account) bool {
+	if account == nil || account.ProxyID == nil || s.proxyRepo == nil {
+		return false
+	}
+	proxy, err := s.proxyRepo.GetByID(ctx, *account.ProxyID)
+	return err == nil && proxy.IsClashManaged()
 }

@@ -1731,6 +1731,12 @@ func init() {
 	proxyDescExpiryWarnDays := proxyFields[10].Descriptor()
 	// proxy.DefaultExpiryWarnDays holds the default value on creation for the expiry_warn_days field.
 	proxy.DefaultExpiryWarnDays = proxyDescExpiryWarnDays.Default.(int)
+	// proxyDescSource is the schema descriptor for source field.
+	proxyDescSource := proxyFields[11].Descriptor()
+	// proxy.DefaultSource holds the default value on creation for the source field.
+	proxy.DefaultSource = proxyDescSource.Default.(string)
+	// proxy.SourceValidator is a validator for the "source" field. It is called by the builders before save.
+	proxy.SourceValidator = proxyDescSource.Validators[0].(func(string) error)
 	redeemcodeFields := schema.RedeemCode{}.Fields()
 	_ = redeemcodeFields
 	// redeemcodeDescCode is the schema descriptor for code field.

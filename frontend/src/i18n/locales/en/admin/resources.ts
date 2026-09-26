@@ -42,6 +42,13 @@ export default {
 
     // Proxies
     proxies: {
+      sourceFilter: 'Source',
+      sources: {
+        manual: 'Manual',
+        clash: 'Clash',
+        all: 'All sources'
+      },
+      clashManagedHint: 'Managed by a Clash subscription. Manage it on the Clash page',
       title: 'Proxy Management',
       description: 'Manage proxy servers for accounts',
       createProxy: 'Create Proxy',

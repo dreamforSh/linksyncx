@@ -167,6 +167,15 @@ func runMainServer() {
 			log.Printf("Plugin manager started in degraded state: %v", err)
 		}
 	}
+	if app.ClashManager != nil {
+		// Listeners must be bound before gateway traffic arrives: a refused
+		// connection counts as a durable proxy failure and pauses accounts.
+		clashCtx, clashCancel := context.WithTimeout(context.Background(), 20*time.Second)
+		if err := app.ClashManager.Start(clashCtx); err != nil {
+			log.Printf("Clash proxy pool started in degraded state: %v", err)
+		}
+		clashCancel()
+	}
 	if app.PromptAudit != nil {
 		if err := app.PromptAudit.Start(context.Background()); err != nil {
 			// Startup continues so unrelated APIs stay up. Fail-closed (unavailable)

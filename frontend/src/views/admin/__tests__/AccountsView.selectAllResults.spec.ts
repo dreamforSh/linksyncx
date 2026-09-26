@@ -234,6 +234,9 @@ describe('admin AccountsView select all filtered results', () => {
 
     expect(wrapper.get('[data-test="selected-count"]').text()).toBe('0')
     expect(wrapper.get('[data-test="all-results-selected"]').text()).toBe('false')
+    // Let the reload triggered by the filter change settle before the next test resets the mocks.
+    await flushPromises()
+    wrapper.unmount()
   })
 
   it('keeps the original page selection when loading all results fails', async () => {

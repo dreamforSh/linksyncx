@@ -27,6 +27,10 @@ func ResolveProxyFallbackTarget(start Proxy, byID map[int64]Proxy, now time.Time
 			if !ok {
 				return nil, false
 			}
+			// Clash exits are exclusive; never fail over onto one.
+			if p.IsClashManaged() {
+				return nil, false
+			}
 			// Disabled nodes may define a fallback, but cannot be selected as targets.
 			if p.IsActive() && !p.IsExpired(now) {
 				id := p.ID

@@ -1333,10 +1333,13 @@ func (r *accountRepository) ListOAuthRefreshCandidatePage(ctx context.Context, o
 			AND btrim(credentials->>'refresh_token') <> ''`
 	}
 	if options.ExcludeRetryCooldown {
+		// Accounts paused because their Clash exit is down would only refresh
+		// through a dead tunnel (and a success would clear the pause).
 		query += `
 			AND (
 				temp_unschedulable_until > NOW()
-				AND temp_unschedulable_reason LIKE 'token refresh retry exhausted:%'
+				AND (temp_unschedulable_reason LIKE 'token refresh retry exhausted:%'
+					OR temp_unschedulable_reason LIKE '[clash-exit]%')
 			) IS NOT TRUE`
 	}
 	query += `

@@ -35,6 +35,15 @@
               @change="handleFilterChange"
             />
           </div>
+          <div class="w-full sm:w-32" data-testid="proxy-source-filter">
+            <Select
+              v-model="filters.source"
+              :options="sourceOptions"
+              :placeholder="t('admin.proxies.sourceFilter')"
+              :aria-label="t('admin.proxies.sourceFilter')"
+              @change="handleFilterChange"
+            />
+          </div>
 
           <!-- Right: All action buttons -->
           <div class="flex flex-1 flex-wrap items-center justify-end gap-2">
@@ -101,8 +110,9 @@
           <template #header-select>
             <input
               type="checkbox"
-              class="h-4 w-4 cursor-pointer rounded border-gray-300 text-primary-600 focus:ring-primary-500"
+              class="h-4 w-4 cursor-pointer rounded border-gray-300 text-primary-600 focus:ring-primary-500 disabled:cursor-not-allowed disabled:opacity-40"
               :checked="allVisibleSelected"
+              :disabled="selectableProxies.length === 0"
               @click.stop
               @change="toggleSelectAllVisible($event)"
             />
@@ -111,15 +121,20 @@
           <template #cell-select="{ row }">
             <input
               type="checkbox"
-              class="h-4 w-4 cursor-pointer rounded border-gray-300 text-primary-600 focus:ring-primary-500"
+              class="h-4 w-4 cursor-pointer rounded border-gray-300 text-primary-600 focus:ring-primary-500 disabled:cursor-not-allowed disabled:opacity-40"
               :checked="selectedProxyIds.has(row.id)"
+              :disabled="isClashProxy(row)"
+              :title="isClashProxy(row) ? t('admin.proxies.clashManagedHint') : undefined"
               @click.stop
               @change="toggleSelectRow(row.id, $event)"
             />
           </template>
 
-          <template #cell-name="{ value }">
-            <span class="font-medium text-gray-900 dark:text-white">{{ value }}</span>
+          <template #cell-name="{ value, row }">
+            <div class="flex items-center gap-1.5">
+              <ClashTag v-if="isClashProxy(row)" :title="t('admin.proxies.clashManagedHint')" />
+              <span class="font-medium text-gray-900 dark:text-white">{{ value }}</span>
+            </div>
           </template>
 
           <template #cell-protocol="{ value }">
@@ -327,14 +342,18 @@
               </button>
               <button
                 @click="handleEdit(row)"
-                class="flex flex-col items-center gap-0.5 rounded-lg p-1.5 text-gray-500 transition-colors hover:bg-gray-100 hover:text-primary-600 dark:hover:bg-dark-700 dark:hover:text-primary-400"
+                :disabled="isClashProxy(row)"
+                :title="isClashProxy(row) ? t('admin.proxies.clashManagedHint') : undefined"
+                class="flex flex-col items-center gap-0.5 rounded-lg p-1.5 text-gray-500 transition-colors hover:bg-gray-100 hover:text-primary-600 disabled:cursor-not-allowed disabled:opacity-40 disabled:hover:bg-transparent disabled:hover:text-gray-500 dark:hover:bg-dark-700 dark:hover:text-primary-400"
               >
                 <Icon name="edit" size="sm" />
                 <span class="text-xs">{{ t('common.edit') }}</span>
               </button>
               <button
                 @click="handleDelete(row)"
-                class="flex flex-col items-center gap-0.5 rounded-lg p-1.5 text-gray-500 transition-colors hover:bg-red-50 hover:text-red-600 dark:hover:bg-red-900/20 dark:hover:text-red-400"
+                :disabled="isClashProxy(row)"
+                :title="isClashProxy(row) ? t('admin.proxies.clashManagedHint') : undefined"
+                class="flex flex-col items-center gap-0.5 rounded-lg p-1.5 text-gray-500 transition-colors hover:bg-red-50 hover:text-red-600 disabled:cursor-not-allowed disabled:opacity-40 disabled:hover:bg-transparent disabled:hover:text-gray-500 dark:hover:bg-red-900/20 dark:hover:text-red-400"
               >
                 <Icon name="trash" size="sm" />
                 <span class="text-xs">{{ t('common.delete') }}</span>
@@ -968,7 +987,7 @@ import { ref, reactive, computed, onMounted, onUnmounted } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useAppStore } from '@/stores/app'
 import { adminAPI } from '@/api/admin'
-import type { Proxy, ProxyAccountSummary, ProxyProtocol, ProxyQualityCheckResult } from '@/types'
+import type { Proxy, ProxyAccountSummary, ProxyProtocol, ProxyQualityCheckResult, ProxySourceFilter } from '@/types'
 import type { Column } from '@/components/common/types'
 import AppLayout from '@/components/layout/AppLayout.vue'
 import TablePageLayout from '@/components/layout/TablePageLayout.vue'
@@ -979,6 +998,7 @@ import ConfirmDialog from '@/components/common/ConfirmDialog.vue'
 import EmptyState from '@/components/common/EmptyState.vue'
 import ImportDataModal from '@/components/admin/proxy/ImportDataModal.vue'
 import Select from '@/components/common/Select.vue'
+import ClashTag from '@/components/common/ClashTag.vue'
 import ProxyAdBanner from '@/components/common/ProxyAdBanner.vue'
 import Icon from '@/components/icons/Icon.vue'
 import PlatformTypeBadge from '@/components/common/PlatformTypeBadge.vue'
@@ -1017,6 +1037,13 @@ const protocolOptions = computed(() => [
   { value: 'socks5h', label: 'SOCKS5H' }
 ])
 
+// 手动 = 管理员维护的代理；Clash = 订阅节点物化的托管代理（只读，在 Clash 订阅页管理）
+const sourceOptions = computed(() => [
+  { value: 'manual' as ProxySourceFilter, label: t('admin.proxies.sources.manual') },
+  { value: 'clash' as ProxySourceFilter, label: t('admin.proxies.sources.clash') },
+  { value: 'all' as ProxySourceFilter, label: t('admin.proxies.sources.all') }
+])
+
 const statusOptions = computed(() => [
   { value: '', label: t('admin.proxies.allStatus') },
   { value: 'active', label: t('admin.accounts.status.active') },
@@ -1044,7 +1071,8 @@ const loading = ref(false)
 const searchQuery = ref('')
 const filters = reactive({
   protocol: '',
-  status: ''
+  status: '',
+  source: 'manual' as ProxySourceFilter
 })
 const pagination = reactive({
   page: 1,
@@ -1074,6 +1102,9 @@ const qualityCheckingProxyIds = ref<Set<number>>(new Set())
 const batchTesting = ref(false)
 const batchQualityChecking = ref(false)
 const proxyTableRef = ref<HTMLElement | null>(null)
+const isClashProxy = (proxy: Pick<Proxy, 'source'> | null | undefined) => proxy?.source === 'clash'
+const selectableProxies = computed(() => proxies.value.filter((proxy) => !isClashProxy(proxy)))
+const clashProxyIds = computed(() => new Set(proxies.value.filter(isClashProxy).map((proxy) => proxy.id)))
 const {
   selectedSet: selectedProxyIds,
   selectedCount,
@@ -1086,14 +1117,20 @@ const {
   toggleVisible,
   batchUpdate
 } = useTableSelection<Proxy>({
-  rows: proxies,
+  rows: selectableProxies,
   getId: (proxy) => proxy.id
 })
 useSwipeSelect(proxyTableRef, {
   isSelected,
-  select,
+  select: (id) => {
+    if (!clashProxyIds.value.has(id)) select(id)
+  },
   deselect,
-  batchUpdate
+  batchUpdate: (updater) =>
+    batchUpdate((draft) => {
+      updater(draft)
+      clashProxyIds.value.forEach((id) => draft.delete(id))
+    })
 })
 const accountsProxy = ref<Proxy | null>(null)
 const proxyAccounts = ref<ProxyAccountSummary[]>([])
@@ -1183,6 +1220,7 @@ const buildProxyQueryFilters = () => ({
   protocol: filters.protocol || undefined,
   status: (filters.status || undefined) as 'active' | 'inactive' | 'expired' | undefined,
   search: searchQuery.value || undefined,
+  source: filters.source,
   sort_by: sortState.sort_by,
   sort_order: sortState.sort_order
 })
@@ -1414,7 +1452,15 @@ const handleCreateProxy = async () => {
   }
 }
 
+const notifyClashManaged = () => {
+  appStore.showInfo(t('admin.proxies.clashManagedHint'))
+}
+
 const handleEdit = (proxy: Proxy) => {
+  if (isClashProxy(proxy)) {
+    notifyClashManaged()
+    return
+  }
   editingProxy.value = proxy
   editForm.name = proxy.name
   editForm.protocol = proxy.protocol
@@ -1818,6 +1864,7 @@ const fetchAllProxiesForBatch = async (): Promise<Proxy[]> => {
         protocol: filters.protocol || undefined,
         status: filters.status as any,
         search: searchQuery.value || undefined,
+        source: filters.source,
         sort_by: sortState.sort_by,
         sort_order: sortState.sort_order
       }
@@ -1949,6 +1996,10 @@ const handleExportData = async () => {
 }
 
 const handleDelete = (proxy: Proxy) => {
+  if (isClashProxy(proxy)) {
+    notifyClashManaged()
+    return
+  }
   if ((proxy.account_count || 0) > 0) {
     appStore.showError(t('admin.proxies.deleteBlockedInUse'))
     return
@@ -1981,7 +2032,8 @@ const confirmDelete = async () => {
 }
 
 const confirmBatchDelete = async () => {
-  const ids = Array.from(selectedProxyIds.value)
+  // The server skips Clash-managed proxies anyway; never send them.
+  const ids = Array.from(selectedProxyIds.value).filter((id) => !clashProxyIds.value.has(id))
   if (ids.length === 0) {
     showBatchDeleteDialog.value = false
     return

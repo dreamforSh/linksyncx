@@ -347,7 +347,8 @@ func (s *proxyRepoStub) Create(ctx context.Context, proxy *Proxy) error {
 }
 
 func (s *proxyRepoStub) GetByID(ctx context.Context, id int64) (*Proxy, error) {
-	panic("unexpected GetByID call")
+	// Deletes look the proxy up to refuse Clash-managed ones; default to a manual proxy.
+	return &Proxy{ID: id, Source: ProxySourceManual}, nil
 }
 
 func (s *proxyRepoStub) ListByIDs(ctx context.Context, ids []int64) ([]Proxy, error) {
@@ -367,7 +368,7 @@ func (s *proxyRepoStub) List(ctx context.Context, params pagination.PaginationPa
 	panic("unexpected List call")
 }
 
-func (s *proxyRepoStub) ListWithFilters(ctx context.Context, params pagination.PaginationParams, protocol, status, search string) ([]Proxy, *pagination.PaginationResult, error) {
+func (s *proxyRepoStub) ListWithFilters(ctx context.Context, params pagination.PaginationParams, protocol, status, search, source string) ([]Proxy, *pagination.PaginationResult, error) {
 	panic("unexpected ListWithFilters call")
 }
 
@@ -379,7 +380,7 @@ func (s *proxyRepoStub) ListActiveWithAccountCount(ctx context.Context) ([]Proxy
 	panic("unexpected ListActiveWithAccountCount call")
 }
 
-func (s *proxyRepoStub) ListWithFiltersAndAccountCount(ctx context.Context, params pagination.PaginationParams, protocol, status, search string) ([]ProxyWithAccountCount, *pagination.PaginationResult, error) {
+func (s *proxyRepoStub) ListWithFiltersAndAccountCount(ctx context.Context, params pagination.PaginationParams, protocol, status, search, source string) ([]ProxyWithAccountCount, *pagination.PaginationResult, error) {
 	panic("unexpected ListWithFiltersAndAccountCount call")
 }
 

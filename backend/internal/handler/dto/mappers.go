@@ -539,7 +539,15 @@ func ProxyFromService(p *service.Proxy) *Proxy {
 		FallbackMode:   p.FallbackMode,
 		BackupProxyID:  p.BackupProxyID,
 		ExpiryWarnDays: p.ExpiryWarnDays,
+		Source:         proxySourceOrManual(p.Source),
 	}
+}
+
+func proxySourceOrManual(source string) string {
+	if source == "" {
+		return service.ProxySourceManual
+	}
+	return source
 }
 
 func ProxyWithAccountCountFromService(p *service.ProxyWithAccountCount) *ProxyWithAccountCount {
@@ -575,9 +583,15 @@ func ProxyFromServiceAdmin(p *service.Proxy) *AdminProxy {
 	if base == nil {
 		return nil
 	}
+	password := p.Password
+	if p.IsClashManaged() {
+		// Listener credentials are internal; admins manage exits, not their auth.
+		password = ""
+		base.Username = ""
+	}
 	return &AdminProxy{
 		Proxy:    *base,
-		Password: p.Password,
+		Password: password,
 	}
 }
 

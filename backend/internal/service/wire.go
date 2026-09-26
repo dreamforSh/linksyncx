@@ -559,8 +559,12 @@ func ProvideOpsAlertEvaluatorService(
 	redisClient *redis.Client,
 	cfg *config.Config,
 	proxyRepo ProxyRepository,
+	clashService *ClashService,
 ) *OpsAlertEvaluatorService {
 	svc := NewOpsAlertEvaluatorService(opsService, opsRepo, emailService, redisClient, cfg, proxyRepo)
+	if clashService != nil {
+		svc.SetClashMetrics(clashService)
+	}
 	svc.Start()
 	return svc
 }
@@ -920,6 +924,8 @@ var ProviderSet = wire.NewSet(
 	ProvideOpsMetricsCollector,
 	ProvideOpsAggregationService,
 	ProvideOpsAlertEvaluatorService,
+	ProvideClashService,
+	ProvideClashManager,
 	ProvideOpsCleanupService,
 	ProvideOpsScheduledReportService,
 	NewEmailService,
@@ -1071,4 +1077,30 @@ func ProvideChannelMonitorV2Aggregator(repo ChannelMonitorV2Repository, db *sql.
 	}
 	aggregator.Start()
 	return aggregator
+}
+
+// ProvideClashService wires the Clash proxy pool facade and installs its exit
+// guard on the admin service (account bindings are validated there).
+func ProvideClashService(
+	cfg *config.Config,
+	repo ClashRepository,
+	proxyRepo ProxyRepository,
+	settings *SettingService,
+	encryptor SecretEncryptor,
+	runtime ClashRuntime,
+	notifier ClashRuntimeNotifier,
+	prober ProxyExitInfoProber,
+	latencyCache ProxyLatencyCache,
+	tempUnschedCache TempUnschedCache,
+	admin AdminService,
+) *ClashService {
+	svc := NewClashService(cfg, repo, proxyRepo, settings, encryptor, runtime, notifier, prober, latencyCache, tempUnschedCache)
+	AttachClashExitGuard(admin, svc)
+	return svc
+}
+
+// ProvideClashManager wires the Clash pool lifecycle manager. It is started
+// from main before the HTTP server listens, like the plugin manager.
+func ProvideClashManager(svc *ClashService, runtime ClashRuntime, notifier ClashRuntimeNotifier, lockCache LeaderLockCache, db *sql.DB, cfg *config.Config) *ClashManager {
+	return NewClashManager(svc, runtime, notifier, lockCache, db, cfg)
 }

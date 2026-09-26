@@ -80,3 +80,12 @@ describe('AppSidebar subscription feature flag', () => {
     expect(componentSource).toMatch(/path: '\/purchase'[^\n]*label: purchaseNavLabel\.value/)
   })
 })
+
+describe('AppSidebar Clash pool entry', () => {
+  it('lists the Clash pool right after proxy management in the resources section', () => {
+    expect(componentSource).toMatch(
+      /path: '\/admin\/proxies'[^\n]*\n\s*\{ path: '\/admin\/clash', label: t\('nav\.clash'\), icon: CloudIcon, section: 'resources' \}/
+    )
+    expect(componentSource).toContain("render: () => h(Icon, { name: 'cloud' })")
+  })
+})

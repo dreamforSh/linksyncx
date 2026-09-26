@@ -1065,6 +1065,54 @@ plugins:
   start_timeout_seconds: 15
 
 # =============================================================================
+# Clash Subscription Proxy Pool (Optional)
+# Clash 订阅代理池（可选）
+# =============================================================================
+# Import Clash subscriptions and give each upstream account its own exit node.
+# The mihomo core is compiled into sub2api (mode: embedded), so no extra
+# service is needed. Environment variables use the CLASH_POOL_ prefix,
+# e.g. CLASH_POOL_MODE=disabled.
+# 导入 Clash 订阅，为每个上游账号分配独立出口节点。mihomo 内核已编译进 sub2api
+# （mode: embedded），一次部署即包含内核，无需额外服务。环境变量前缀为 CLASH_POOL_，
+# 例如 CLASH_POOL_MODE=disabled。
+# Storing subscription URLs requires a fixed TOTP_ENCRYPTION_KEY.
+# 保存订阅链接需要配置固定的 TOTP_ENCRYPTION_KEY。
+clash_pool:
+  # embedded: in-process core (default) | external: mihomo sidecar | disabled
+  # embedded：进程内内核（默认）| external：外部 mihomo sidecar | disabled：关闭
+  mode: "embedded"
+  # Core working directory. Empty means {{DATA_DIR}}/clash, or ./data/clash when DATA_DIR is unset.
+  # 内核工作目录。留空时使用 {{DATA_DIR}}/clash；未设置 DATA_DIR 时使用 ./data/clash。
+  data_dir: ""
+  # Address stored in managed proxies; gateway traffic reaches node listeners through it.
+  # Embedded default: 127.0.0.1. Required in external mode (e.g. "mihomo").
+  # 托管代理记录中的地址，网关经它连接节点 listener。embedded 默认 127.0.0.1；external 模式必填（如 "mihomo"）。
+  listener_host: ""
+  # Listener bind address. Embedded default 127.0.0.1, external default 0.0.0.0.
+  # listener 绑定地址。embedded 默认 127.0.0.1，external 默认 0.0.0.0。
+  listen_address: ""
+  # One listener port per node. Keep the range below the Linux ephemeral range (32768+).
+  # 每个节点占用一个监听端口，建议低于 Linux 临时端口段（32768 起）。
+  port_range_start: 20000
+  port_range_end: 24999
+  external:
+    # mihomo REST controller of the sidecar; its own config only needs external-controller + secret.
+    # sidecar 的 mihomo 控制器地址；sidecar 自身配置只需 external-controller 与 secret。
+    controller_url: ""
+    secret: ""
+  subscription:
+    # Allow subscription URLs on private/loopback hosts (self-hosted subconverter).
+    # Cloud metadata addresses are always blocked.
+    # 允许订阅地址指向内网/本机（自建 subconverter）；云元数据地址始终拦截。
+    allow_private_hosts: false
+    # Allow nodes whose server is a private network IP (loopback is always rejected).
+    # 允许节点 server 为内网 IP（回环地址始终拒绝）。
+    allow_private_nodes: false
+    max_body_bytes: 10485760
+    fetch_timeout_seconds: 30
+    max_nodes_per_profile: 2000
+
+# =============================================================================
 # Pricing Data Source (Optional)
 # 定价数据源（可选）
 # =============================================================================

@@ -62,6 +62,7 @@ type proxyRepoStubForAdminList struct {
 	listWithFiltersProtocol string
 	listWithFiltersStatus   string
 	listWithFiltersSearch   string
+	listWithFiltersSource   string
 	listWithFiltersProxies  []Proxy
 	listWithFiltersResult   *pagination.PaginationResult
 	listWithFiltersErr      error
@@ -71,17 +72,19 @@ type proxyRepoStubForAdminList struct {
 	listWithFiltersAndAccountCountProtocol string
 	listWithFiltersAndAccountCountStatus   string
 	listWithFiltersAndAccountCountSearch   string
+	listWithFiltersAndAccountCountSource   string
 	listWithFiltersAndAccountCountProxies  []ProxyWithAccountCount
 	listWithFiltersAndAccountCountResult   *pagination.PaginationResult
 	listWithFiltersAndAccountCountErr      error
 }
 
-func (s *proxyRepoStubForAdminList) ListWithFilters(_ context.Context, params pagination.PaginationParams, protocol, status, search string) ([]Proxy, *pagination.PaginationResult, error) {
+func (s *proxyRepoStubForAdminList) ListWithFilters(_ context.Context, params pagination.PaginationParams, protocol, status, search, source string) ([]Proxy, *pagination.PaginationResult, error) {
 	s.listWithFiltersCalls++
 	s.listWithFiltersParams = params
 	s.listWithFiltersProtocol = protocol
 	s.listWithFiltersStatus = status
 	s.listWithFiltersSearch = search
+	s.listWithFiltersSource = source
 
 	if s.listWithFiltersErr != nil {
 		return nil, nil, s.listWithFiltersErr
@@ -99,12 +102,13 @@ func (s *proxyRepoStubForAdminList) ListWithFilters(_ context.Context, params pa
 	return s.listWithFiltersProxies, result, nil
 }
 
-func (s *proxyRepoStubForAdminList) ListWithFiltersAndAccountCount(_ context.Context, params pagination.PaginationParams, protocol, status, search string) ([]ProxyWithAccountCount, *pagination.PaginationResult, error) {
+func (s *proxyRepoStubForAdminList) ListWithFiltersAndAccountCount(_ context.Context, params pagination.PaginationParams, protocol, status, search, source string) ([]ProxyWithAccountCount, *pagination.PaginationResult, error) {
 	s.listWithFiltersAndAccountCountCalls++
 	s.listWithFiltersAndAccountCountParams = params
 	s.listWithFiltersAndAccountCountProtocol = protocol
 	s.listWithFiltersAndAccountCountStatus = status
 	s.listWithFiltersAndAccountCountSearch = search
+	s.listWithFiltersAndAccountCountSource = source
 
 	if s.listWithFiltersAndAccountCountErr != nil {
 		return nil, nil, s.listWithFiltersAndAccountCountErr
@@ -212,7 +216,7 @@ func TestAdminService_ListProxies_WithSearch(t *testing.T) {
 		}
 		svc := &adminServiceImpl{proxyRepo: repo}
 
-		proxies, total, err := svc.ListProxies(context.Background(), 3, 50, "http", StatusActive, "p1", "name", "ASC")
+		proxies, total, err := svc.ListProxies(context.Background(), 3, 50, "http", StatusActive, "p1", ProxySourceManual, "name", "ASC")
 		require.NoError(t, err)
 		require.Equal(t, int64(7), total)
 		require.Equal(t, []Proxy{{ID: 2, Name: "p1"}}, proxies)
@@ -222,6 +226,7 @@ func TestAdminService_ListProxies_WithSearch(t *testing.T) {
 		require.Equal(t, "http", repo.listWithFiltersProtocol)
 		require.Equal(t, StatusActive, repo.listWithFiltersStatus)
 		require.Equal(t, "p1", repo.listWithFiltersSearch)
+		require.Equal(t, ProxySourceManual, repo.listWithFiltersSource)
 	})
 }
 
@@ -233,7 +238,7 @@ func TestAdminService_ListProxiesWithAccountCount_WithSearch(t *testing.T) {
 		}
 		svc := &adminServiceImpl{proxyRepo: repo}
 
-		proxies, total, err := svc.ListProxiesWithAccountCount(context.Background(), 2, 10, "socks5", StatusDisabled, "p2", "account_count", "DESC")
+		proxies, total, err := svc.ListProxiesWithAccountCount(context.Background(), 2, 10, "socks5", StatusDisabled, "p2", ProxySourceClash, "account_count", "DESC")
 		require.NoError(t, err)
 		require.Equal(t, int64(9), total)
 		require.Equal(t, []ProxyWithAccountCount{{Proxy: Proxy{ID: 3, Name: "p2"}, AccountCount: 5}}, proxies)
@@ -243,6 +248,7 @@ func TestAdminService_ListProxiesWithAccountCount_WithSearch(t *testing.T) {
 		require.Equal(t, "socks5", repo.listWithFiltersAndAccountCountProtocol)
 		require.Equal(t, StatusDisabled, repo.listWithFiltersAndAccountCountStatus)
 		require.Equal(t, "p2", repo.listWithFiltersAndAccountCountSearch)
+		require.Equal(t, ProxySourceClash, repo.listWithFiltersAndAccountCountSource)
 	})
 }
 

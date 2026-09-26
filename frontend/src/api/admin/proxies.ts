@@ -8,6 +8,7 @@ import type {
   Proxy,
   ProxyAccountSummary,
   ProxyQualityCheckResult,
+  ProxySourceFilter,
   CreateProxyRequest,
   UpdateProxyRequest,
   PaginatedResponse,
@@ -25,7 +26,8 @@ function assertProxyArray(value: unknown): asserts value is Proxy[] {
  * List all proxies with pagination
  * @param page - Page number (default: 1)
  * @param pageSize - Items per page (default: 20)
- * @param filters - Optional filters
+ * @param filters - Optional filters; source defaults to manual on the server
+ *   (clash = read-only proxies managed by Clash subscriptions, all = both)
  * @returns Paginated list of proxies
  */
 export async function list(
@@ -35,6 +37,7 @@ export async function list(
     protocol?: string
     status?: 'active' | 'inactive' | 'expired'
     search?: string
+    source?: ProxySourceFilter
     sort_by?: string
     sort_order?: 'asc' | 'desc'
   },
@@ -56,6 +59,7 @@ export async function list(
 
 /**
  * Get all active proxies (without pagination)
+ * Always excludes Clash-managed proxies; exits come from the Clash API.
  * @returns List of all active proxies
  */
 export async function getAll(): Promise<Proxy[]> {
