@@ -86,10 +86,12 @@ func TestGitHubReleaseClientRedirectAuthorization(t *testing.T) {
 		wantAuth string
 	}{
 		{name: "same HTTPS authority", url: "https://api.github.com/redirected", wantAuth: "Bearer update-secret"},
+		{name: "github web", url: "https://github.com/redirected", wantAuth: "Bearer update-secret"},
 		{name: "HTTP", url: "http://api.github.com/redirected"},
 		{name: "subdomain", url: "https://sub.api.github.com/redirected"},
 		{name: "userinfo", url: "https://user@api.github.com/redirected"},
 		{name: "custom port", url: "https://api.github.com:8443/redirected"},
+		{name: "object storage", url: "https://objects.githubusercontent.com/asset"},
 		{name: "different host", url: "https://example.com/redirected"},
 	}
 
@@ -106,7 +108,7 @@ func TestGitHubReleaseClientRedirectAuthorization(t *testing.T) {
 	}
 }
 
-func TestGitHubReleaseClientDoesNotAuthorizeDownloads(t *testing.T) {
+func TestGitHubReleaseClientAuthorizesPrivateDownloads(t *testing.T) {
 	client := newTestGitHubReleaseClient()
 	client.updateGitHubToken = "update-secret"
 
@@ -127,10 +129,12 @@ func TestGitHubReleaseClientDoesNotAuthorizeDownloads(t *testing.T) {
 	require.NoError(t, client.DownloadFile(context.Background(), "https://objects.githubusercontent.com/asset", dest, 100))
 	_, err := client.FetchChecksumFile(context.Background(), "https://github.com/test/repo/releases/download/v1/checksums.txt")
 	require.NoError(t, err)
-	require.Len(t, headers, 2)
-	for _, header := range headers {
-		require.Empty(t, header.Get("Authorization"))
-	}
+	require.NoError(t, client.DownloadFile(context.Background(), "https://api.github.com/repos/test/repo/releases/assets/7", filepath.Join(t.TempDir(), "api-asset"), 100))
+	require.Len(t, headers, 3)
+	require.Empty(t, headers[0].Get("Authorization"))
+	require.Equal(t, "Bearer update-secret", headers[1].Get("Authorization"))
+	require.Equal(t, "Bearer update-secret", headers[2].Get("Authorization"))
+	require.Equal(t, "application/octet-stream", headers[2].Get("Accept"))
 }
 
 type githubReleaseRoundTripFunc func(*http.Request) (*http.Response, error)
