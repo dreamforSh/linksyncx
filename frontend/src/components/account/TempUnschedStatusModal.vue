@@ -29,7 +29,18 @@
       </div>
 
       <div v-else class="space-y-4">
-        <div class="rounded-lg border border-emerald-200 bg-emerald-50 p-3 text-sm text-emerald-800 dark:border-emerald-500/30 dark:bg-emerald-500/10 dark:text-emerald-300">
+        <div
+          v-if="clashExitPause"
+          class="flex items-start gap-2 rounded-lg border border-indigo-200 bg-indigo-50 p-3 text-sm text-indigo-900 dark:border-indigo-500/30 dark:bg-indigo-500/10 dark:text-indigo-200"
+          data-testid="temp-unsched-clash-exit"
+        >
+          <ClashTag class="mt-0.5" />
+          <span>{{ t('admin.accounts.tempUnschedulable.clashExitManaged') }}</span>
+        </div>
+        <div
+          v-else
+          class="rounded-lg border border-emerald-200 bg-emerald-50 p-3 text-sm text-emerald-800 dark:border-emerald-500/30 dark:bg-emerald-500/10 dark:text-emerald-300"
+        >
           {{ t('admin.accounts.recoverStateHint') }}
         </div>
 
@@ -67,30 +78,50 @@
               {{ remainingText }}
             </p>
           </div>
-          <div class="rounded-lg border border-gray-200 p-3 dark:border-dark-600">
-            <p class="text-xs text-gray-500 dark:text-gray-400">
-              {{ t('admin.accounts.tempUnschedulable.errorCode') }}
-            </p>
-            <p class="mt-1 text-sm font-medium text-gray-900 dark:text-gray-100">
-              {{ state?.status_code || '-' }}
-            </p>
-          </div>
-          <div class="rounded-lg border border-gray-200 p-3 dark:border-dark-600">
-            <p class="text-xs text-gray-500 dark:text-gray-400">
-              {{ t('admin.accounts.tempUnschedulable.matchedKeyword') }}
-            </p>
-            <p class="mt-1 text-sm font-medium text-gray-900 dark:text-gray-100">
-              {{ state?.matched_keyword || '-' }}
-            </p>
-          </div>
-          <div class="rounded-lg border border-gray-200 p-3 dark:border-dark-600">
-            <p class="text-xs text-gray-500 dark:text-gray-400">
-              {{ t('admin.accounts.tempUnschedulable.ruleOrder') }}
-            </p>
-            <p class="mt-1 text-sm font-medium text-gray-900 dark:text-gray-100">
-              {{ ruleIndexDisplay }}
-            </p>
-          </div>
+          <template v-if="clashExitPause">
+            <div class="rounded-lg border border-gray-200 p-3 dark:border-dark-600">
+              <p class="text-xs text-gray-500 dark:text-gray-400">
+                {{ t('admin.accounts.tempUnschedulable.clashExitNode') }}
+              </p>
+              <p class="mt-1 break-words text-sm font-medium text-gray-900 dark:text-gray-100">
+                {{ clashExitPause.node || '-' }}
+              </p>
+            </div>
+            <div class="rounded-lg border border-gray-200 p-3 dark:border-dark-600 sm:col-span-2">
+              <p class="text-xs text-gray-500 dark:text-gray-400">
+                {{ t('admin.accounts.tempUnschedulable.clashExitReason') }}
+              </p>
+              <p class="mt-1 break-words text-sm font-medium text-gray-900 dark:text-gray-100">
+                {{ clashExitPause.reason || '-' }}
+              </p>
+            </div>
+          </template>
+          <template v-else>
+            <div class="rounded-lg border border-gray-200 p-3 dark:border-dark-600">
+              <p class="text-xs text-gray-500 dark:text-gray-400">
+                {{ t('admin.accounts.tempUnschedulable.errorCode') }}
+              </p>
+              <p class="mt-1 text-sm font-medium text-gray-900 dark:text-gray-100">
+                {{ state?.status_code || '-' }}
+              </p>
+            </div>
+            <div class="rounded-lg border border-gray-200 p-3 dark:border-dark-600">
+              <p class="text-xs text-gray-500 dark:text-gray-400">
+                {{ t('admin.accounts.tempUnschedulable.matchedKeyword') }}
+              </p>
+              <p class="mt-1 text-sm font-medium text-gray-900 dark:text-gray-100">
+                {{ state?.matched_keyword || '-' }}
+              </p>
+            </div>
+            <div class="rounded-lg border border-gray-200 p-3 dark:border-dark-600">
+              <p class="text-xs text-gray-500 dark:text-gray-400">
+                {{ t('admin.accounts.tempUnschedulable.ruleOrder') }}
+              </p>
+              <p class="mt-1 text-sm font-medium text-gray-900 dark:text-gray-100">
+                {{ ruleIndexDisplay }}
+              </p>
+            </div>
+          </template>
         </div>
 
         <div class="rounded-lg border border-gray-200 p-3 dark:border-dark-600">
@@ -157,7 +188,9 @@ import { useAppStore } from '@/stores/app'
 import { adminAPI } from '@/api/admin'
 import type { Account, TempUnschedulableStatus } from '@/types'
 import BaseDialog from '@/components/common/BaseDialog.vue'
+import ClashTag from '@/components/common/ClashTag.vue'
 import { formatDateTime } from '@/utils/format'
+import { describeClashExitPause } from '@/utils/clash'
 
 const props = defineProps<{
   show: boolean
@@ -178,6 +211,12 @@ const status = ref<TempUnschedulableStatus | null>(null)
 let requestVersion = 0
 
 const state = computed(() => status.value?.state || null)
+
+// Pauses owned by the Clash pool are cleared automatically once the node recovers;
+// a manual recovery is re-applied on the next health check while it is still down.
+const clashExitPause = computed(() =>
+  describeClashExitPause(state.value?.error_message || props.account?.temp_unschedulable_reason, t)
+)
 
 const isActive = computed(() => {
   if (!status.value?.active || !state.value) return false

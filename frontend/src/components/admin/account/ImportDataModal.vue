@@ -75,6 +75,13 @@
         <div class="text-sm text-gray-700 dark:text-dark-300">
           {{ t('admin.accounts.dataImportResultSummary', result) }}
         </div>
+        <div
+          v-if="(result.account_paused_for_clash ?? 0) > 0"
+          class="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-700 dark:border-amber-800 dark:bg-amber-900/20 dark:text-amber-300"
+          data-testid="import-paused-for-clash"
+        >
+          {{ t('admin.accounts.dataImportPausedForClash', { count: result.account_paused_for_clash }) }}
+        </div>
 
         <div v-if="errorItems.length" class="mt-2">
           <div class="text-sm font-medium text-red-600 dark:text-red-400">
@@ -320,6 +327,10 @@ const mergeDataPayloads = (payloads: AdminDataPayload[]): AdminDataPayload => {
     skipped_shadows: payloads.reduce((sum, item) => {
       const count = Number(item.skipped_shadows || 0)
       return Number.isFinite(count) ? sum + count : sum
+    }, 0),
+    skipped_clash_bindings: payloads.reduce((sum, item) => {
+      const count = Number(item.skipped_clash_bindings || 0)
+      return Number.isFinite(count) ? sum + count : sum
     }, 0)
   }
 }
@@ -394,6 +405,11 @@ const handleImport = async () => {
     } else {
       appStore.showSuccess(t('admin.accounts.dataImportSuccess', msgParams))
       emit('imported')
+    }
+    // 原绑定 Clash 出口的账号以暂停状态导入(托管代理不随备份迁移),需重新指定出口后再恢复调度。
+    const pausedForClash = res.account_paused_for_clash ?? 0
+    if (pausedForClash > 0) {
+      appStore.showWarning(t('admin.accounts.dataImportPausedForClash', { count: pausedForClash }))
     }
   } catch (error: any) {
     appStore.showError(error?.message || t('admin.accounts.dataImportFailed'))

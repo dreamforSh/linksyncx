@@ -33,6 +33,9 @@ type DataPayload struct {
 	// SkippedShadows 记录导出时被排除的 spark 影子账号数量(见 ExportData)。仅作可见性提示,
 	// 导入侧忽略该字段;omitempty 保持向后兼容。
 	SkippedShadows int `json:"skipped_shadows,omitempty"`
+	// SkippedClashBindings 记录绑定 Clash 出口、未随备份导出代理的账号数量。
+	// Clash 托管代理指向本机 listener，换实例无意义，导入后需重新指定出口。
+	SkippedClashBindings int `json:"skipped_clash_bindings,omitempty"`
 }
 
 type DataProxy struct {
@@ -70,6 +73,8 @@ type DataAccount struct {
 	RateMultiplier     *float64       `json:"rate_multiplier,omitempty"`
 	ExpiresAt          *int64         `json:"expires_at,omitempty"`
 	AutoPauseOnExpired *bool          `json:"auto_pause_on_expired,omitempty"`
+	// ClashExitHint 是导出时绑定的 Clash 出口名称；导入时账号以暂停状态创建，避免无代理直连。
+	ClashExitHint *string `json:"clash_exit_hint,omitempty"`
 }
 
 type DataImportRequest struct {
@@ -79,12 +84,14 @@ type DataImportRequest struct {
 }
 
 type DataImportResult struct {
-	ProxyCreated   int               `json:"proxy_created"`
-	ProxyReused    int               `json:"proxy_reused"`
-	ProxyFailed    int               `json:"proxy_failed"`
-	AccountCreated int               `json:"account_created"`
-	AccountFailed  int               `json:"account_failed"`
-	Errors         []DataImportError `json:"errors,omitempty"`
+	ProxyCreated   int `json:"proxy_created"`
+	ProxyReused    int `json:"proxy_reused"`
+	ProxyFailed    int `json:"proxy_failed"`
+	AccountCreated int `json:"account_created"`
+	AccountFailed  int `json:"account_failed"`
+	// AccountPausedForClash 统计因原 Clash 出口未恢复而以暂停状态导入的账号。
+	AccountPausedForClash int               `json:"account_paused_for_clash,omitempty"`
+	Errors                []DataImportError `json:"errors,omitempty"`
 }
 
 type DataImportError struct {
@@ -137,15 +144,22 @@ func (h *AccountHandler) ExportData(c *gin.Context) {
 		return
 	}
 
-	var proxies []service.Proxy
-	if includeProxies {
-		proxies, err = h.resolveExportProxies(ctx, accounts)
-		if err != nil {
-			response.ErrorFrom(c, err)
-			return
+	referenced, err := h.resolveExportProxies(ctx, accounts)
+	if err != nil {
+		response.ErrorFrom(c, err)
+		return
+	}
+	// Clash 托管代理只在本实例有意义：不导出，绑定它的账号改为携带出口提示。
+	clashExitNameByID := make(map[int64]string)
+	proxies := make([]service.Proxy, 0, len(referenced))
+	for i := range referenced {
+		if referenced[i].IsClashManaged() {
+			clashExitNameByID[referenced[i].ID] = referenced[i].Name
+			continue
 		}
-	} else {
-		proxies = []service.Proxy{}
+		if includeProxies {
+			proxies = append(proxies, referenced[i])
+		}
 	}
 
 	// 构建 id→name 映射，用于导出备用代理 name
@@ -187,12 +201,17 @@ func (h *AccountHandler) ExportData(c *gin.Context) {
 	}
 
 	dataAccounts := make([]DataAccount, 0, len(accounts))
+	skippedClashBindings := 0
 	for i := range accounts {
 		acc := accounts[i]
 		var proxyKey *string
+		var clashExitHint *string
 		if acc.ProxyID != nil {
 			if key, ok := proxyKeyByID[*acc.ProxyID]; ok {
 				proxyKey = &key
+			} else if name, ok := clashExitNameByID[*acc.ProxyID]; ok {
+				clashExitHint = &name
+				skippedClashBindings++
 			}
 		}
 		var expiresAt *int64
@@ -213,14 +232,16 @@ func (h *AccountHandler) ExportData(c *gin.Context) {
 			RateMultiplier:     acc.RateMultiplier,
 			ExpiresAt:          expiresAt,
 			AutoPauseOnExpired: &acc.AutoPauseOnExpired,
+			ClashExitHint:      clashExitHint,
 		})
 	}
 
 	payload := DataPayload{
-		ExportedAt:     time.Now().UTC().Format(time.RFC3339),
-		Proxies:        dataProxies,
-		Accounts:       dataAccounts,
-		SkippedShadows: skippedShadows,
+		ExportedAt:           time.Now().UTC().Format(time.RFC3339),
+		Proxies:              dataProxies,
+		Accounts:             dataAccounts,
+		SkippedShadows:       skippedShadows,
+		SkippedClashBindings: skippedClashBindings,
 	}
 
 	response.Success(c, payload)
@@ -463,6 +484,11 @@ func (h *AccountHandler) importData(ctx context.Context, req DataImportRequest) 
 			ExpiresAt:          item.ExpiresAt,
 			AutoPauseOnExpired: item.AutoPauseOnExpired,
 		}
+		clashUnbound := proxyID == nil && item.ClashExitHint != nil && strings.TrimSpace(*item.ClashExitHint) != ""
+		if clashUnbound {
+			// 原账号走 Clash 独立出口；无代理直接启用会直连，先以暂停状态导入。
+			accountInput.InitiallyUnschedulable = true
+		}
 
 		created, err := h.adminService.CreateAccount(ctx, accountInput)
 		if err != nil {
@@ -480,6 +506,9 @@ func (h *AccountHandler) importData(ctx context.Context, req DataImportRequest) 
 		}
 		h.scheduleGrokImportProbe(created)
 		result.AccountCreated++
+		if clashUnbound {
+			result.AccountPausedForClash++
+		}
 	}
 
 	// 异步设置 Antigravity 隐私，避免大量导入时阻塞请求
@@ -507,7 +536,7 @@ func (h *AccountHandler) listAllProxies(ctx context.Context) ([]service.Proxy, e
 	pageSize := dataPageCap
 	var out []service.Proxy
 	for {
-		items, total, err := h.adminService.ListProxies(ctx, page, pageSize, "", "", "", "created_at", "desc")
+		items, total, err := h.adminService.ListProxies(ctx, page, pageSize, "", "", "", service.ProxySourceManual, "created_at", "desc")
 		if err != nil {
 			return nil, err
 		}

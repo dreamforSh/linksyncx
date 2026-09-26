@@ -583,6 +583,9 @@ const (
 	// SettingKeyOllamaCloudUsageSettings stores the opt-in global runner switch and interval.
 	SettingKeyOllamaCloudUsageSettings = "ollama_cloud_usage_settings"
 
+	// SettingKeyClashPoolSettings stores Clash proxy pool runtime tunables (JSON).
+	SettingKeyClashPoolSettings = "clash_pool_settings"
+
 	// SettingKeyOpenCodeGoUsageSettings stores the opt-in global runner switch and interval.
 	SettingKeyOpenCodeGoUsageSettings = "opencode_go_usage_settings"
 

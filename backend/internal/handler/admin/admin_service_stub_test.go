@@ -74,6 +74,7 @@ type stubAdminService struct {
 		protocol  string
 		status    string
 		search    string
+		source    string
 		sortBy    string
 		sortOrder string
 		calls     int
@@ -586,10 +587,11 @@ func (s *stubAdminService) CheckMixedChannelRisk(ctx context.Context, currentAcc
 	return s.checkMixedErr
 }
 
-func (s *stubAdminService) ListProxies(ctx context.Context, page, pageSize int, protocol, status, search string, sortBy, sortOrder string) ([]service.Proxy, int64, error) {
+func (s *stubAdminService) ListProxies(ctx context.Context, page, pageSize int, protocol, status, search, source string, sortBy, sortOrder string) ([]service.Proxy, int64, error) {
 	s.lastListProxies.protocol = protocol
 	s.lastListProxies.status = status
 	s.lastListProxies.search = search
+	s.lastListProxies.source = source
 	s.lastListProxies.sortBy = sortBy
 	s.lastListProxies.sortOrder = sortOrder
 	s.lastListProxies.calls++
@@ -614,7 +616,7 @@ func (s *stubAdminService) ListProxies(ctx context.Context, page, pageSize int, 
 	return filtered, int64(len(filtered)), nil
 }
 
-func (s *stubAdminService) ListProxiesWithAccountCount(ctx context.Context, page, pageSize int, protocol, status, search string, sortBy, sortOrder string) ([]service.ProxyWithAccountCount, int64, error) {
+func (s *stubAdminService) ListProxiesWithAccountCount(ctx context.Context, page, pageSize int, protocol, status, search, source string, sortBy, sortOrder string) ([]service.ProxyWithAccountCount, int64, error) {
 	return s.proxyCounts, int64(len(s.proxyCounts)), nil
 }
 

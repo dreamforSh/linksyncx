@@ -575,6 +575,18 @@ const routes: RouteRecordRaw[] = [
     }
   },
   {
+    path: '/admin/clash',
+    name: 'AdminClash',
+    component: () => import('@/views/admin/ClashView.vue'),
+    meta: {
+      requiresAuth: true,
+      requiresAdmin: true,
+      title: 'Clash Subscription Pool',
+      titleKey: 'admin.clash.title',
+      descriptionKey: 'admin.clash.description'
+    }
+  },
+  {
     path: '/admin/redeem',
     name: 'AdminRedeem',
     component: () => import('@/views/admin/RedeemView.vue'),

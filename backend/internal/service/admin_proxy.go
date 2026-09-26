@@ -4,8 +4,12 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
+	"strings"
 	"time"
+
+	"github.com/Wei-Shaw/sub2api/internal/config"
 
 	infraerrors "github.com/Wei-Shaw/sub2api/internal/pkg/errors"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/httpclient"
@@ -15,18 +19,18 @@ import (
 )
 
 // Proxy management implementations
-func (s *adminServiceImpl) ListProxies(ctx context.Context, page, pageSize int, protocol, status, search string, sortBy, sortOrder string) ([]Proxy, int64, error) {
+func (s *adminServiceImpl) ListProxies(ctx context.Context, page, pageSize int, protocol, status, search, source string, sortBy, sortOrder string) ([]Proxy, int64, error) {
 	params := pagination.PaginationParams{Page: page, PageSize: pageSize, SortBy: sortBy, SortOrder: sortOrder}
-	proxies, result, err := s.proxyRepo.ListWithFilters(ctx, params, protocol, status, search)
+	proxies, result, err := s.proxyRepo.ListWithFilters(ctx, params, protocol, status, search, source)
 	if err != nil {
 		return nil, 0, err
 	}
 	return proxies, result.Total, nil
 }
 
-func (s *adminServiceImpl) ListProxiesWithAccountCount(ctx context.Context, page, pageSize int, protocol, status, search string, sortBy, sortOrder string) ([]ProxyWithAccountCount, int64, error) {
+func (s *adminServiceImpl) ListProxiesWithAccountCount(ctx context.Context, page, pageSize int, protocol, status, search, source string, sortBy, sortOrder string) ([]ProxyWithAccountCount, int64, error) {
 	params := pagination.PaginationParams{Page: page, PageSize: pageSize, SortBy: sortBy, SortOrder: sortOrder}
-	proxies, result, err := s.proxyRepo.ListWithFiltersAndAccountCount(ctx, params, protocol, status, search)
+	proxies, result, err := s.proxyRepo.ListWithFiltersAndAccountCount(ctx, params, protocol, status, search, source)
 	if err != nil {
 		return nil, 0, err
 	}
@@ -71,6 +75,12 @@ func (s *adminServiceImpl) CreateProxy(ctx context.Context, input *CreateProxyIn
 	if input.ExpiryWarnDays < 0 {
 		return nil, infraerrors.BadRequest("PROXY_WARN_DAYS_INVALID", "expiry_warn_days must be >= 0")
 	}
+	if err := s.validateManualProxyEndpoint(input.Host, input.Port); err != nil {
+		return nil, err
+	}
+	if err := s.validateProxyBackupTarget(ctx, input.BackupProxyID); err != nil {
+		return nil, err
+	}
 
 	proxy := &Proxy{
 		Name:           input.Name,
@@ -104,6 +114,9 @@ func (s *adminServiceImpl) UpdateProxy(ctx context.Context, id int64, input *Upd
 	proxy, err := s.proxyRepo.GetByID(ctx, id)
 	if err != nil {
 		return nil, err
+	}
+	if proxy.IsClashManaged() {
+		return nil, ErrClashManagedReadonly
 	}
 
 	// Merge only supplied fields, then validate the resulting fallback configuration.
@@ -151,6 +164,14 @@ func (s *adminServiceImpl) UpdateProxy(ctx context.Context, id int64, input *Upd
 	if input.ExpiryWarnDays != nil {
 		proxy.ExpiryWarnDays = *input.ExpiryWarnDays
 	}
+	if err := s.validateManualProxyEndpoint(proxy.Host, proxy.Port); err != nil {
+		return nil, err
+	}
+	if input.BackupProxyID != nil {
+		if err := s.validateProxyBackupTarget(ctx, input.BackupProxyID); err != nil {
+			return nil, err
+		}
+	}
 
 	if err := s.proxyRepo.Update(ctx, proxy); err != nil {
 		return nil, err
@@ -159,6 +180,9 @@ func (s *adminServiceImpl) UpdateProxy(ctx context.Context, id int64, input *Upd
 }
 
 func (s *adminServiceImpl) DeleteProxy(ctx context.Context, id int64) error {
+	if proxy, err := s.proxyRepo.GetByID(ctx, id); err == nil && proxy.IsClashManaged() {
+		return ErrClashManagedReadonly
+	}
 	count, err := s.proxyRepo.CountAccountsByProxyID(ctx, id)
 	if err != nil {
 		return err
@@ -176,6 +200,13 @@ func (s *adminServiceImpl) BatchDeleteProxies(ctx context.Context, ids []int64) 
 	}
 
 	for _, id := range ids {
+		if proxy, err := s.proxyRepo.GetByID(ctx, id); err == nil && proxy.IsClashManaged() {
+			result.Skipped = append(result.Skipped, ProxyBatchDeleteSkipped{
+				ID:     id,
+				Reason: ErrClashManagedReadonly.Error(),
+			})
+			continue
+		}
 		count, err := s.proxyRepo.CountAccountsByProxyID(ctx, id)
 		if err != nil {
 			result.Skipped = append(result.Skipped, ProxyBatchDeleteSkipped{
@@ -617,4 +648,43 @@ func (s *adminServiceImpl) saveProxyLatency(ctx context.Context, proxyID int64, 
 	if err := s.proxyLatencyCache.SetProxyLatency(ctx, proxyID, &merged); err != nil {
 		logger.LegacyPrintf("service.admin", "Warning: store proxy latency cache failed: %v", err)
 	}
+}
+
+// validateProxyBackupTarget keeps Clash exits out of expiry fallback chains:
+// failing over onto an exclusive exit would silently share it.
+func (s *adminServiceImpl) validateProxyBackupTarget(ctx context.Context, backupID *int64) error {
+	if backupID == nil || *backupID <= 0 {
+		return nil
+	}
+	backup, err := s.proxyRepo.GetByID(ctx, *backupID)
+	if err != nil {
+		return err
+	}
+	if backup.IsClashManaged() {
+		return infraerrors.BadRequest(ClashErrCodeManagedReadonly, "a Clash exit cannot be used as a backup proxy")
+	}
+	return nil
+}
+
+// validateManualProxyEndpoint reserves the Clash listener port range: a manual
+// proxy pointing at a node listener would bypass exit exclusivity.
+func (s *adminServiceImpl) validateManualProxyEndpoint(host string, port int) error {
+	if s.cfg == nil || s.cfg.ClashPool.Mode == config.ClashPoolModeDisabled {
+		return nil
+	}
+	pool := s.cfg.ClashPool
+	if port < pool.PortRangeStart || port > pool.PortRangeEnd {
+		return nil
+	}
+	normalized := strings.ToLower(strings.Trim(strings.TrimSpace(host), "[]"))
+	listenerHost := strings.ToLower(strings.TrimSpace(pool.EffectiveListenerHost()))
+	loopback := normalized == "localhost"
+	if ip := net.ParseIP(normalized); ip != nil && (ip.IsLoopback() || ip.IsUnspecified()) {
+		loopback = true
+	}
+	if loopback || normalized == listenerHost {
+		return infraerrors.BadRequest(ClashErrCodePortReserved,
+			fmt.Sprintf("ports %d-%d on the Clash listener host are reserved for Clash exits", pool.PortRangeStart, pool.PortRangeEnd))
+	}
+	return nil
 }

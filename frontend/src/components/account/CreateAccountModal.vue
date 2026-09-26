@@ -3033,7 +3033,12 @@
           <label class="input-label mb-0">{{ t('admin.accounts.proxy') }}</label>
           <ProxyAdBanner />
         </div>
-        <ProxySelector v-model="form.proxy_id" :proxies="proxies" />
+        <ProxySelector
+          v-model="form.proxy_id"
+          :proxies="proxies"
+          :clash-exits="clashExits"
+          :platform="form.platform"
+        />
       </div>
 
       <UpstreamRequestIdHeaderField
@@ -3962,7 +3967,8 @@ import type {
   CodexSessionImportMessage,
   OpenAICompactMode,
   OpenAIResponsesMode,
-  OpenAIEndpointCapability
+  OpenAIEndpointCapability,
+  ClashExitList
 } from '@/types'
 import BaseDialog from '@/components/common/BaseDialog.vue'
 import ConfirmDialog from '@/components/common/ConfirmDialog.vue'
@@ -3973,6 +3979,7 @@ import PlatformIcon from '@/components/common/PlatformIcon.vue'
 import Icon from '@/components/icons/Icon.vue'
 import ProxySelector from '@/components/common/ProxySelector.vue'
 import ProxyAdBanner from '@/components/common/ProxyAdBanner.vue'
+import { clashErrorMessage, estimateCodexImportCount, findClashExit } from '@/utils/clash'
 import GroupSelector from '@/components/common/GroupSelector.vue'
 import GroupBadge from '@/components/common/GroupBadge.vue'
 import GroupKindBadge from '@/components/admin/group/GroupKindBadge.vue'
@@ -4121,10 +4128,13 @@ interface Props {
   groups: AdminGroup[]
   // 先选分组再建号：目标分组决定平台（composite 除外），管理分组的账号只能属于该分组
   presetGroup?: AdminGroup | null
+  // Clash 出口（代理选择器中手动代理之后的分组）；null = 未启用或加载失败
+  clashExits?: ClashExitList | null
 }
 
 const props = withDefaults(defineProps<Props>(), {
-  presetGroup: null
+  presetGroup: null,
+  clashExits: null
 })
 const emit = defineEmits<{
   close: []
@@ -4791,6 +4801,17 @@ const form = reactive({
   expires_at: null as number | null
 })
 
+// 一个 Clash 出口只服务一个账号：会创建多个账号的路径必须在换 token / 发请求之前拦截，
+// 否则后端只放行第一个账号，其余凭据已被消耗却创建失败。
+const selectedClashExit = computed(() => findClashExit(props.clashExits, form.proxy_id))
+const blockClashBatchCreate = (count: number, setError?: (message: string) => void): boolean => {
+  if (count <= 1 || !selectedClashExit.value) return false
+  const message = t('admin.clash.errors.batchCreate')
+  setError?.(message)
+  appStore.showError(message)
+  return true
+}
+
 // Helper to check if current type needs OAuth flow
 const isOAuthFlow = computed(() => {
   // Antigravity upstream 类型不需要 OAuth 流程
@@ -5372,7 +5393,10 @@ const submitCreateAccount = async (payload: CreateAccountRequest) => {
       })
       return
     }
-    appStore.showError(error.response?.data?.message || error.response?.data?.detail || t('admin.accounts.failedToCreate'))
+    appStore.showError(
+      clashErrorMessage(error, t) ??
+        (error.response?.data?.message || error.response?.data?.detail || t('admin.accounts.failedToCreate'))
+    )
   } finally {
     submitting.value = false
   }
@@ -6121,6 +6145,7 @@ const handleGrokValidateRT = async (refreshTokenInput: string) => {
     grokOAuth.error.value = t('admin.accounts.oauth.grok.pleaseEnterRefreshToken')
     return
   }
+  if (blockClashBatchCreate(refreshTokens.length, (message) => (grokOAuth.error.value = message))) return
   if (!validateGrokOAuthUpstreamConfig()) return
 
   grokOAuth.loading.value = true
@@ -6173,7 +6198,7 @@ const handleGrokValidateRT = async (refreshTokenInput: string) => {
         successCount++
       } catch (error: any) {
         failedCount++
-        const errMsg = error.response?.data?.detail || error.message || 'Unknown error'
+        const errMsg = clashErrorMessage(error, t) ?? (error.response?.data?.detail || error.message || 'Unknown error')
         errors.push(`#${i + 1}: ${errMsg}`)
       }
     }
@@ -6206,6 +6231,7 @@ const handleGrokImportSSO = async (ssoInput: string) => {
     .map((token) => token.trim())
     .filter((token) => token)
   if (ssoTokens.length === 0) return
+  if (blockClashBatchCreate(ssoTokens.length, (message) => (grokOAuth.error.value = message))) return
   if (!validateGrokOAuthUpstreamConfig()) return
 
   grokOAuth.loading.value = true
@@ -6264,7 +6290,9 @@ const handleGrokImportSSO = async (ssoInput: string) => {
       appStore.showError(t('admin.accounts.oauth.batchFailed'))
     }
   } catch (error: any) {
-    grokOAuth.error.value = error.response?.data?.detail || error.message || t('admin.accounts.oauth.grok.failedToConvertSSO')
+    grokOAuth.error.value =
+      clashErrorMessage(error, t) ??
+      (error.response?.data?.detail || error.message || t('admin.accounts.oauth.grok.failedToConvertSSO'))
     appStore.showError(grokOAuth.error.value)
   } finally {
     grokOAuth.loading.value = false
@@ -6292,6 +6320,7 @@ const handleGrokAuthorizePassword = async (emailPasswordInput: string) => {
     )
     return
   }
+  if (blockClashBatchCreate(lines.length, (message) => (grokOAuth.error.value = message))) return
 
   grokOAuth.loading.value = true
   grokOAuth.error.value = ''
@@ -6350,7 +6379,7 @@ const handleGrokAuthorizePassword = async (emailPasswordInput: string) => {
         successCount++
       } catch (error: any) {
         failedCount++
-        const errMsg = error.response?.data?.detail || error.message || 'Unknown error'
+        const errMsg = clashErrorMessage(error, t) ?? (error.response?.data?.detail || error.message || 'Unknown error')
         errors.push(`#${i + 1}: ${errMsg}`)
       }
     }
@@ -6452,7 +6481,7 @@ const handleOpenAIExchange = async (authCode: string) => {
     emit('created')
     handleClose()
   } catch (error: any) {
-    oauthClient.error.value = error.response?.data?.detail || t('admin.accounts.oauth.authFailed')
+    oauthClient.error.value = clashErrorMessage(error, t) ?? (error.response?.data?.detail || t('admin.accounts.oauth.authFailed'))
     appStore.showError(oauthClient.error.value)
   } finally {
     oauthClient.loading.value = false
@@ -6527,6 +6556,7 @@ const handleOpenAIImportCodexSession = async (content: string) => {
     oauthClient.error.value = t('admin.accounts.oauth.openai.agentIdentityInvalid')
     return
   }
+  if (blockClashBatchCreate(estimateCodexImportCount(trimmed), (message) => (oauthClient.error.value = message))) return
 
   const credentialExtras = buildOpenAICodexImportCredentialExtras()
   if (credentialExtras === null) {
@@ -6588,10 +6618,11 @@ const handleOpenAIImportCodexSession = async (content: string) => {
     appStore.showError(t('admin.accounts.oauth.openai.codexSessionImportFailed'))
   } catch (error: any) {
     oauthClient.error.value =
-      error.response?.data?.detail ||
-      error.response?.data?.message ||
-      error.message ||
-      t('admin.accounts.oauth.openai.codexSessionImportFailed')
+      clashErrorMessage(error, t) ??
+      (error.response?.data?.detail ||
+        error.response?.data?.message ||
+        error.message ||
+        t('admin.accounts.oauth.openai.codexSessionImportFailed'))
     appStore.showError(oauthClient.error.value)
   } finally {
     oauthClient.loading.value = false
@@ -6637,10 +6668,11 @@ const handleOpenAIImportCodexPAT = async (accessToken: string) => {
     handleClose()
   } catch (error: any) {
     oauthClient.error.value =
-      error.response?.data?.detail ||
-      error.response?.data?.message ||
-      error.message ||
-      t('admin.accounts.oauth.openai.codexPatImportFailed')
+      clashErrorMessage(error, t) ??
+      (error.response?.data?.detail ||
+        error.response?.data?.message ||
+        error.message ||
+        t('admin.accounts.oauth.openai.codexPatImportFailed'))
     appStore.showError(oauthClient.error.value)
   } finally {
     oauthClient.loading.value = false
@@ -6661,6 +6693,7 @@ const handleOpenAIBatchRT = async (refreshTokenInput: string, clientId?: string)
     oauthClient.error.value = t('admin.accounts.oauth.openai.pleaseEnterRefreshToken')
     return
   }
+  if (blockClashBatchCreate(refreshTokens.length, (message) => (oauthClient.error.value = message))) return
 
   oauthClient.loading.value = true
   oauthClient.error.value = ''
@@ -6732,7 +6765,7 @@ const handleOpenAIBatchRT = async (refreshTokenInput: string, clientId?: string)
         successCount++
       } catch (error: any) {
         failedCount++
-        const errMsg = error.response?.data?.detail || error.message || 'Unknown error'
+        const errMsg = clashErrorMessage(error, t) ?? (error.response?.data?.detail || error.message || 'Unknown error')
         errors.push(`#${i + 1}: ${errMsg}`)
       }
     }
@@ -6781,6 +6814,7 @@ const handleAntigravityValidateRT = async (refreshTokenInput: string) => {
     antigravityOAuth.error.value = t('admin.accounts.oauth.antigravity.pleaseEnterRefreshToken')
     return
   }
+  if (blockClashBatchCreate(refreshTokens.length, (message) => (antigravityOAuth.error.value = message))) return
 
   antigravityOAuth.loading.value = true
   antigravityOAuth.error.value = ''
@@ -6830,7 +6864,7 @@ const handleAntigravityValidateRT = async (refreshTokenInput: string) => {
         successCount++
       } catch (error: any) {
         failedCount++
-        const errMsg = error.response?.data?.detail || error.message || 'Unknown error'
+        const errMsg = clashErrorMessage(error, t) ?? (error.response?.data?.detail || error.message || 'Unknown error')
         errors.push(`#${i + 1}: ${errMsg}`)
       }
     }
@@ -7098,6 +7132,7 @@ const handleCookieAuth = async (sessionKey: string) => {
       oauth.error.value = t('admin.accounts.oauth.pleaseEnterSessionKey')
       return
     }
+    if (blockClashBatchCreate(keys.length, (message) => (oauth.error.value = message))) return
 
     const tempUnschedPayload = tempUnschedEnabled.value
       ? buildTempUnschedRules(tempUnschedRules.value)
@@ -7214,7 +7249,7 @@ const handleCookieAuth = async (sessionKey: string) => {
         errors.push(
           t('admin.accounts.oauth.keyAuthFailed', {
             index: i + 1,
-            error: error.response?.data?.detail || t('admin.accounts.oauth.authFailed')
+            error: clashErrorMessage(error, t) ?? (error.response?.data?.detail || t('admin.accounts.oauth.authFailed'))
           })
         )
       }

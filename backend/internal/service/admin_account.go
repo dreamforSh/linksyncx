@@ -299,6 +299,10 @@ func (s *adminServiceImpl) DuplicateAccount(ctx context.Context, id int64, actor
 		// Proxy fallback is transient runtime state; duplicate the configured origin.
 		proxyID = source.ProxyFallbackOriginID
 	}
+	if s.isClashManagedProxy(ctx, proxyID) {
+		// A Clash exit is exclusive to its account; the (paused) copy needs its own.
+		proxyID = nil
+	}
 	input := &CreateAccountInput{
 		Name:                  duplicateAccountName(source.Name),
 		Notes:                 cloneAccountValuePointer(source.Notes),
@@ -520,11 +524,26 @@ func (s *adminServiceImpl) CreateAccount(ctx context.Context, input *CreateAccou
 	if err != nil {
 		return nil, err
 	}
+	if input.InitiallyUnschedulable {
+		account.Schedulable = false
+	}
 	if err := s.validateAccountGroupPolicy(ctx, input.Platform, groupIDs); err != nil {
 		return nil, err
 	}
+	unlockClash, err := s.checkClashBinding(ctx, ClashBindingCheck{
+		NewAccounts: 1,
+		NewProxyID:  account.ProxyID,
+		CustomRelay: account.IsCustomBaseURLEnabled(),
+	})
+	if err != nil {
+		return nil, err
+	}
+	defer unlockClash()
 	if err := s.accountRepo.Create(ctx, account); err != nil {
 		return nil, err
+	}
+	if account.ProxyID != nil {
+		s.clashBindingsChanged(ctx)
 	}
 
 	// 绑定分组
@@ -565,6 +584,7 @@ func (s *adminServiceImpl) UpdateAccount(ctx context.Context, id int64, input *U
 	if err != nil {
 		return nil, err
 	}
+	previousProxyID := cloneAccountValuePointer(account.ProxyID)
 	var normalizedExtra map[string]any
 	if input.Extra != nil {
 		normalizedExtra, err = normalizeOpenAILongContextBillingUpdateExtra(account, input)
@@ -848,6 +868,19 @@ func (s *adminServiceImpl) UpdateAccount(ctx context.Context, id int64, input *U
 		}
 	}
 
+	if !account.IsCredentialShadow() {
+		unlockClash, err := s.checkClashBinding(ctx, ClashBindingCheck{
+			AccountIDs:  []int64{account.ID},
+			OldProxyID:  previousProxyID,
+			NewProxyID:  account.ProxyID,
+			CustomRelay: account.IsCustomBaseURLEnabled(),
+		})
+		if err != nil {
+			return nil, err
+		}
+		defer unlockClash()
+	}
+
 	billingSettingsAppliedAtomically := false
 	updater := s.accountBillingRepo
 	if updater == nil {
@@ -892,6 +925,9 @@ func (s *adminServiceImpl) UpdateAccount(ctx context.Context, id int64, input *U
 	if input.ProxyID != nil && !account.IsCredentialShadow() {
 		if err := s.propagateProxyToShadows(ctx, id, account.ProxyID); err != nil {
 			return nil, err
+		}
+		if !reflect.DeepEqual(previousProxyID, account.ProxyID) {
+			s.clashBindingsChanged(ctx)
 		}
 	}
 
@@ -1050,6 +1086,17 @@ func (s *adminServiceImpl) BulkUpdateAccounts(ctx context.Context, input *BulkUp
 					"spark shadow account %d proxy is inherited from its parent and cannot be set in bulk; manage it on the parent account", acc.ID)
 			}
 		}
+		if *input.ProxyID > 0 {
+			unlockClash, err := s.checkClashBinding(ctx, ClashBindingCheck{
+				AccountIDs: input.AccountIDs,
+				NewProxyID: input.ProxyID,
+				Bulk:       true,
+			})
+			if err != nil {
+				return nil, err
+			}
+			unlockClash()
+		}
 	}
 
 	// 预加载账号平台信息（混合渠道检查需要）。
@@ -1189,6 +1236,7 @@ func (s *adminServiceImpl) BulkUpdateAccounts(ctx context.Context, input *BulkUp
 				return nil, err
 			}
 		}
+		s.clashBindingsChanged(ctx)
 	}
 
 	// Handle group bindings per account (requires individual operations).
@@ -1845,4 +1893,27 @@ func (s *adminServiceImpl) ForceAntigravityPrivacy(ctx context.Context, account 
 	}
 	applyAntigravityPrivacyMode(account, mode)
 	return mode
+}
+
+func (s *adminServiceImpl) checkClashBinding(ctx context.Context, check ClashBindingCheck) (func(), error) {
+	if s.clashGuard == nil {
+		return func() {}, nil
+	}
+	return s.clashGuard.CheckAccountBinding(ctx, check)
+}
+
+// clashBindingsChanged lets the Clash pool re-evaluate pauses and listener
+// placeholders after account bindings moved.
+func (s *adminServiceImpl) clashBindingsChanged(ctx context.Context) {
+	if s.clashGuard != nil {
+		s.clashGuard.OnBindingsChanged(ctx)
+	}
+}
+
+func (s *adminServiceImpl) isClashManagedProxy(ctx context.Context, proxyID *int64) bool {
+	if proxyID == nil || *proxyID <= 0 || s.proxyRepo == nil {
+		return false
+	}
+	proxy, err := s.proxyRepo.GetByID(ctx, *proxyID)
+	return err == nil && proxy.IsClashManaged()
 }

@@ -453,6 +453,8 @@ type Proxy struct {
 	FallbackMode   string     `json:"fallback_mode"`
 	BackupProxyID  *int64     `json:"backup_proxy_id"`
 	ExpiryWarnDays int        `json:"expiry_warn_days"`
+	// Source is "manual" or "clash" (managed by a Clash subscription node).
+	Source string `json:"source"`
 }
 
 type ProxyWithAccountCount struct {

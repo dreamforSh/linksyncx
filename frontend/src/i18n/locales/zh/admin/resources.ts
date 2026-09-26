@@ -44,6 +44,13 @@ export default {
     proxies: {
       title: 'IP管理',
       description: '管理代理服务器配置',
+      sourceFilter: '来源',
+      sources: {
+        manual: '手动代理',
+        clash: 'Clash',
+        all: '全部来源'
+      },
+      clashManagedHint: '由 Clash 订阅托管，请在 Clash 订阅页管理',
       createProxy: '添加代理',
       editProxy: '编辑代理',
       deleteProxy: '删除代理',

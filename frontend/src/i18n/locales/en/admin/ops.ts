@@ -499,7 +499,8 @@ export default {
         metricGroups: {
           system: 'System Metrics',
           group: 'Group-level Metrics (requires group_id)',
-          account: 'Account-level Metrics'
+          account: 'Account-level Metrics',
+          proxy: 'Proxies & Clash Exits'
         },
         metrics: {
           successRate: 'Success Rate (%)',
@@ -517,7 +518,13 @@ export default {
           accountErrorCount: 'Error Accounts (excluding temporarily unschedulable)',
           accountErrorRatio: 'Error Account Ratio (%)',
           accountTempUnscheduledCount: 'Temporarily Unschedulable Accounts',
-          overloadAccountCount: 'Overloaded Accounts'
+          overloadAccountCount: 'Overloaded Accounts',
+          proxyExpiredCount: 'Expired Proxies',
+          proxyExpiringSoonCount: 'Proxies Expiring Soon',
+          clashExitPausedAccountCount: 'Accounts Paused by Clash Exits',
+          clashProfileRefreshFailedCount: 'Failed Clash Subscription Refreshes',
+          clashExitConflictCount: 'Clash Exit Conflicts',
+          clashRuntimeUnreadyInstanceCount: 'Clash Core Instances Not Ready'
         },
         metricDescriptions: {
           successRate: 'Percentage of successful requests in the window (0-100).',
@@ -535,7 +542,13 @@ export default {
           accountErrorCount: 'Number of error accounts within the window (excluding temporarily unschedulable).',
           accountErrorRatio: 'Error account ratio within the window (0-100).',
           accountTempUnscheduledCount: 'Number of accounts currently temporarily unschedulable (e.g. proxy/credential failure auto-eviction).',
-          overloadAccountCount: 'Number of overloaded accounts within the window.'
+          overloadAccountCount: 'Number of overloaded accounts within the window.',
+          proxyExpiredCount: 'Number of manual proxies that have expired.',
+          proxyExpiringSoonCount: 'Number of manual proxies inside their expiry warning window but not expired yet.',
+          clashExitPausedAccountCount: 'Number of accounts paused because their Clash exit is unavailable.',
+          clashProfileRefreshFailedCount: 'Number of enabled Clash subscriptions whose last refresh failed or hit the node drop protection.',
+          clashExitConflictCount: 'Number of exit IPs carrying more accounts than the per-exit limit (e.g. several nodes turned out to share one exit IP).',
+          clashRuntimeUnreadyInstanceCount: 'Number of service instances whose Clash core is not ready.'
         },
         hints: {
           recommended: 'Recommended: operator {operator}, threshold {threshold}{unit}',

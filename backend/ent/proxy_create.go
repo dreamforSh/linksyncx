@@ -187,6 +187,20 @@ func (_c *ProxyCreate) SetNillableExpiryWarnDays(v *int) *ProxyCreate {
 	return _c
 }
 
+// SetSource sets the "source" field.
+func (_c *ProxyCreate) SetSource(v string) *ProxyCreate {
+	_c.mutation.SetSource(v)
+	return _c
+}
+
+// SetNillableSource sets the "source" field if the given value is not nil.
+func (_c *ProxyCreate) SetNillableSource(v *string) *ProxyCreate {
+	if v != nil {
+		_c.SetSource(*v)
+	}
+	return _c
+}
+
 // AddAccountIDs adds the "accounts" edge to the Account entity by IDs.
 func (_c *ProxyCreate) AddAccountIDs(ids ...int64) *ProxyCreate {
 	_c.mutation.AddAccountIDs(ids...)
@@ -285,6 +299,10 @@ func (_c *ProxyCreate) defaults() error {
 		v := proxy.DefaultExpiryWarnDays
 		_c.mutation.SetExpiryWarnDays(v)
 	}
+	if _, ok := _c.mutation.Source(); !ok {
+		v := proxy.DefaultSource
+		_c.mutation.SetSource(v)
+	}
 	return nil
 }
 
@@ -351,6 +369,14 @@ func (_c *ProxyCreate) check() error {
 	}
 	if _, ok := _c.mutation.ExpiryWarnDays(); !ok {
 		return &ValidationError{Name: "expiry_warn_days", err: errors.New(`ent: missing required field "Proxy.expiry_warn_days"`)}
+	}
+	if _, ok := _c.mutation.Source(); !ok {
+		return &ValidationError{Name: "source", err: errors.New(`ent: missing required field "Proxy.source"`)}
+	}
+	if v, ok := _c.mutation.Source(); ok {
+		if err := proxy.SourceValidator(v); err != nil {
+			return &ValidationError{Name: "source", err: fmt.Errorf(`ent: validator failed for field "Proxy.source": %w`, err)}
+		}
 	}
 	return nil
 }
@@ -430,6 +456,10 @@ func (_c *ProxyCreate) createSpec() (*Proxy, *sqlgraph.CreateSpec) {
 	if value, ok := _c.mutation.ExpiryWarnDays(); ok {
 		_spec.SetField(proxy.FieldExpiryWarnDays, field.TypeInt, value)
 		_node.ExpiryWarnDays = value
+	}
+	if value, ok := _c.mutation.Source(); ok {
+		_spec.SetField(proxy.FieldSource, field.TypeString, value)
+		_node.Source = value
 	}
 	if nodes := _c.mutation.AccountsIDs(); len(nodes) > 0 {
 		edge := &sqlgraph.EdgeSpec{
@@ -743,6 +773,9 @@ func (u *ProxyUpsertOne) UpdateNewValues() *ProxyUpsertOne {
 	u.create.conflict = append(u.create.conflict, sql.ResolveWith(func(s *sql.UpdateSet) {
 		if _, exists := u.create.mutation.CreatedAt(); exists {
 			s.SetIgnore(proxy.FieldCreatedAt)
+		}
+		if _, exists := u.create.mutation.Source(); exists {
+			s.SetIgnore(proxy.FieldSource)
 		}
 	}))
 	return u
@@ -1184,6 +1217,9 @@ func (u *ProxyUpsertBulk) UpdateNewValues() *ProxyUpsertBulk {
 		for _, b := range u.create.builders {
 			if _, exists := b.mutation.CreatedAt(); exists {
 				s.SetIgnore(proxy.FieldCreatedAt)
+			}
+			if _, exists := b.mutation.Source(); exists {
+				s.SetIgnore(proxy.FieldSource)
 			}
 		}
 	}))

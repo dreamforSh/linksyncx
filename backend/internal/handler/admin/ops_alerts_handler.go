@@ -33,6 +33,10 @@ var validOpsAlertMetricTypes = []string{
 	"overload_account_count",
 	"proxy_expired_count",
 	"proxy_expiring_soon_count",
+	"clash_exit_paused_account_count",
+	"clash_profile_refresh_failed_count",
+	"clash_exit_conflict_count",
+	"clash_runtime_unready_instance_count",
 }
 
 var validOpsAlertMetricTypeSet = func() map[string]struct{} {

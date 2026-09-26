@@ -689,6 +689,12 @@ export type MetricType =
   | 'account_error_ratio'
   | 'account_temp_unscheduled_count'
   | 'overload_account_count'
+  | 'proxy_expired_count'
+  | 'proxy_expiring_soon_count'
+  | 'clash_exit_paused_account_count'
+  | 'clash_profile_refresh_failed_count'
+  | 'clash_exit_conflict_count'
+  | 'clash_runtime_unready_instance_count'
 export type Operator = '>' | '>=' | '<' | '<=' | '==' | '!='
 
 export interface AlertRule {

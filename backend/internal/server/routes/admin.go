@@ -106,6 +106,7 @@ func RegisterAdminRoutes(
 
 		// 本地进程插件管理
 		registerPluginRoutes(admin, h, stepUpAuth)
+		registerClashRoutes(admin, h)
 
 		// API Key 管理
 		registerAdminAPIKeyRoutes(admin, h)
@@ -903,5 +904,35 @@ func channelMonitorModeV2Guard(settingService *service.SettingService) gin.Handl
 			return
 		}
 		c.Next()
+	}
+}
+
+// registerClashRoutes 注册 Clash 订阅代理池管理路由（仅管理员）。
+func registerClashRoutes(admin *gin.RouterGroup, h *handler.Handlers) {
+	if h.Admin.Clash == nil {
+		return
+	}
+	clash := admin.Group("/clash")
+	{
+		clash.GET("/profiles", h.Admin.Clash.ListProfiles)
+		clash.POST("/profiles", h.Admin.Clash.CreateProfile)
+		clash.POST("/profiles/preview", h.Admin.Clash.PreviewProfile)
+		clash.GET("/profiles/:id", h.Admin.Clash.GetProfile)
+		clash.PUT("/profiles/:id", h.Admin.Clash.UpdateProfile)
+		clash.DELETE("/profiles/:id", h.Admin.Clash.DeleteProfile)
+		clash.POST("/profiles/:id/refresh", h.Admin.Clash.RefreshProfile)
+
+		clash.GET("/nodes", h.Admin.Clash.ListNodes)
+		clash.POST("/nodes/test-latency", h.Admin.Clash.TestNodesLatency)
+		clash.POST("/nodes/probe-exit", h.Admin.Clash.ProbeNodesExit)
+		clash.POST("/nodes/:id/enable", h.Admin.Clash.EnableNode)
+		clash.POST("/nodes/:id/disable", h.Admin.Clash.DisableNode)
+		clash.POST("/nodes/:id/accept-exit", h.Admin.Clash.AcceptNodeExit)
+
+		clash.GET("/exits", h.Admin.Clash.ListExits)
+		clash.GET("/runtime", h.Admin.Clash.RuntimeStatus)
+		clash.POST("/runtime/resync", h.Admin.Clash.ResyncRuntime)
+		clash.GET("/settings", h.Admin.Clash.GetSettings)
+		clash.PUT("/settings", h.Admin.Clash.UpdateSettings)
 	}
 }

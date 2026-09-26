@@ -13,6 +13,15 @@ const (
 	FallbackModeDirect = "direct"
 )
 
+// Proxy sources. Clash-managed proxies are materialized from Clash subscription
+// nodes; their host, port and credentials never change once created.
+const (
+	ProxySourceManual = "manual"
+	ProxySourceClash  = "clash"
+	// ProxySourceAll disables the source filter when listing.
+	ProxySourceAll = "all"
+)
+
 type Proxy struct {
 	ID             int64
 	Name           string
@@ -28,6 +37,14 @@ type Proxy struct {
 	FallbackMode   string
 	BackupProxyID  *int64
 	ExpiryWarnDays int
+	// Source is ProxySourceManual or ProxySourceClash; empty means manual
+	// (older scheduler snapshots predate the field).
+	Source string
+}
+
+// IsClashManaged reports whether the proxy is owned by a Clash subscription node.
+func (p *Proxy) IsClashManaged() bool {
+	return p != nil && p.Source == ProxySourceClash
 }
 
 func (p *Proxy) IsActive() bool {

@@ -526,6 +526,10 @@ const PluginIcon = {
   render: () => h(Icon, { name: 'cube' })
 }
 
+const CloudIcon = {
+  render: () => h(Icon, { name: 'cloud' })
+}
+
 const BellIcon = {
   render: () =>
     h(
@@ -850,6 +854,7 @@ const adminNavItems = computed((): NavItem[] => {
     { path: '/admin/plugins', label: t('nav.plugins'), icon: PluginIcon, section: 'resources', featureFlag: flagPluginManagement },
     { path: '/admin/announcements', label: t('nav.announcements'), icon: BellIcon, section: 'operations' },
     { path: '/admin/proxies', label: t('nav.proxies'), icon: ServerIcon, section: 'resources' },
+    { path: '/admin/clash', label: t('nav.clash'), icon: CloudIcon, section: 'resources' },
     {
       path: '/admin/security-audit',
       label: t('nav.securityAudit'),

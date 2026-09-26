@@ -301,37 +301,6 @@ export interface CurrentUserResponse extends User {
   run_mode?: 'standard' | 'simple'
 }
 
-// ==================== Subscription Types ====================
-
-export interface Subscription {
-  id: number
-  user_id: number
-  name: string
-  url: string
-  type: 'clash' | 'v2ray' | 'surge' | 'quantumult' | 'shadowrocket'
-  update_interval: number // in hours
-  last_updated: string | null
-  node_count: number
-  is_active: boolean
-  created_at: string
-  updated_at: string
-}
-
-export interface CreateSubscriptionRequest {
-  name: string
-  url: string
-  type: Subscription['type']
-  update_interval?: number
-}
-
-export interface UpdateSubscriptionRequest {
-  name?: string
-  url?: string
-  type?: Subscription['type']
-  update_interval?: number
-  is_active?: boolean
-}
-
 // ==================== Announcement Types ====================
 
 export type AnnouncementStatus = 'draft' | 'active' | 'archived'
@@ -410,66 +379,6 @@ export interface AnnouncementUserReadStatus {
   balance: number
   eligible: boolean
   read_at?: string
-}
-
-// ==================== Proxy Node Types ====================
-
-export interface ProxyNode {
-  id: number
-  subscription_id: number
-  name: string
-  type: 'ss' | 'ssr' | 'vmess' | 'vless' | 'trojan' | 'hysteria' | 'hysteria2'
-  server: string
-  port: number
-  config: Record<string, unknown> // JSON configuration specific to proxy type
-  latency: number | null // in milliseconds
-  last_checked: string | null
-  is_available: boolean
-  created_at: string
-  updated_at: string
-}
-
-// ==================== Conversion Types ====================
-
-export interface ConversionRequest {
-  subscription_ids: number[]
-  target_type: 'clash' | 'v2ray' | 'surge' | 'quantumult' | 'shadowrocket'
-  filter?: {
-    name_pattern?: string
-    types?: ProxyNode['type'][]
-    min_latency?: number
-    max_latency?: number
-    available_only?: boolean
-  }
-  sort?: {
-    by: 'name' | 'latency' | 'type'
-    order: 'asc' | 'desc'
-  }
-}
-
-export interface ConversionResult {
-  url: string // URL to download the converted subscription
-  expires_at: string
-  node_count: number
-}
-
-// ==================== Statistics Types ====================
-
-export interface SubscriptionStats {
-  subscription_id: number
-  total_nodes: number
-  available_nodes: number
-  avg_latency: number | null
-  by_type: Record<ProxyNode['type'], number>
-  last_update: string
-}
-
-export interface UserStats {
-  total_subscriptions: number
-  total_nodes: number
-  active_subscriptions: number
-  total_conversions: number
-  last_conversion: string | null
 }
 
 // ==================== API Response Types ====================
@@ -938,6 +847,10 @@ export type AccountPlatform = 'anthropic' | 'openai' | 'gemini' | 'antigravity' 
 export type AccountType = 'oauth' | 'setup-token' | 'apikey' | 'upstream' | 'bedrock' | 'service_account'
 export type OAuthAddMethod = 'oauth' | 'setup-token'
 export type ProxyProtocol = 'http' | 'https' | 'socks5' | 'socks5h'
+/** manual = 管理员手动维护；clash = Clash 订阅节点物化的托管代理（只读） */
+export type ProxySource = 'manual' | 'clash'
+/** GET /admin/proxies 的 source 过滤，不传时后端默认 manual */
+export type ProxySourceFilter = ProxySource | 'all'
 
 // Claude Model type (returned by /v1/models and account models API)
 export interface ClaudeModel {
@@ -976,6 +889,8 @@ export interface Proxy {
   expiry_warn_days: number
   created_at: string
   updated_at: string
+  /** 后端总会返回；旧数据/测试夹具缺省时按 manual 处理 */
+  source?: ProxySource
 }
 
 export interface ProxyAccountSummary {
@@ -1010,6 +925,276 @@ export interface ProxyQualityCheckResult {
   challenge_count: number
   checked_at: number
   items: ProxyQualityCheckItem[]
+}
+
+// ==================== Clash Proxy Pool Types ====================
+// 订阅节点在后端物化为 source='clash' 的托管代理，账号仍通过 proxy_id 绑定。
+
+export type ClashRefreshStatus = 'never' | 'ok' | 'error' | 'skipped'
+export type ClashSubscriptionFormat = '' | 'clash_yaml' | 'base64_yaml' | 'uri_list'
+export type ClashNodeStatus = 'active' | 'missing' | 'disabled' | 'invalid'
+export type ClashHealthStatus = 'unknown' | 'healthy' | 'unhealthy'
+export type ClashExitStatus = 'unknown' | 'ok' | 'stale' | 'changed'
+export type ClashPlatform = 'openai' | 'anthropic' | 'gemini' | 'grok'
+export type ClashPlatformCheckResult = 'pass' | 'warn' | 'fail' | 'challenge'
+export type ClashRuntimeMode = 'embedded' | 'external' | 'disabled'
+export type ClashExitChangePolicy = 'pause' | 'accept'
+
+export interface ClashProfileStats {
+  total: number
+  active: number
+  healthy: number
+  unhealthy: number
+  missing: number
+  invalid: number
+  disabled: number
+  /** 有账号绑定的节点数 */
+  bound: number
+  /** 使用该订阅节点的账号数（去重，不含影子账号） */
+  bound_accounts: number
+}
+
+export interface ClashProfile {
+  id: number
+  name: string
+  /** 订阅链接只以脱敏形式返回 */
+  url_masked: string
+  user_agent: string
+  enabled: boolean
+  /** 0 = 仅手动刷新 */
+  refresh_interval_minutes: number
+  include_pattern: string
+  exclude_pattern: string
+  fetch_proxy_id: number | null
+  notes: string
+  last_refresh_at: string | null
+  last_refresh_status: ClashRefreshStatus
+  last_refresh_error: string
+  last_format: ClashSubscriptionFormat
+  upload_bytes: number
+  download_bytes: number
+  /** 0 = 订阅未提供流量信息 */
+  total_bytes: number
+  expire_at: string | null
+  node_count: number
+  stats: ClashProfileStats
+  created_at: string
+  updated_at: string
+}
+
+/**
+ * 新建/编辑订阅的请求体。编辑时所有字段可选：url 留空 = 不修改；fetch_proxy_id=0 = 清除；
+ * 新建时不传 exclude_pattern = 使用后端默认的信息节点过滤正则。
+ */
+export interface ClashProfileInput {
+  name?: string
+  url?: string
+  user_agent?: string
+  enabled?: boolean
+  refresh_interval_minutes?: number
+  include_pattern?: string
+  exclude_pattern?: string
+  fetch_proxy_id?: number
+  notes?: string
+}
+
+export interface ClashSkippedNode {
+  name: string
+  reason: string
+}
+
+export interface ClashRefreshResult {
+  profile_id: number
+  /** skipped = 节点数骤降保护生效，可带 force 重试 */
+  status: Exclude<ClashRefreshStatus, 'never'>
+  error?: string
+  format?: ClashSubscriptionFormat
+  parsed: number
+  filtered: number
+  private: number
+  inserted: number
+  updated: number
+  missing: number
+  skipped?: ClashSkippedNode[]
+}
+
+export interface ClashCreateProfileResult {
+  profile: ClashProfile
+  /** 订阅启用时创建后会同步拉取一次 */
+  refresh: ClashRefreshResult | null
+}
+
+export interface ClashUserInfo {
+  upload: number
+  download: number
+  total: number
+  expire: string | null
+}
+
+export interface ClashPreviewNode {
+  name: string
+  type: string
+  server: string
+  port: number
+  /** 被包含/排除正则过滤掉 */
+  excluded: boolean
+}
+
+export interface ClashPreviewResult {
+  format: ClashSubscriptionFormat
+  node_count: number
+  usable: number
+  nodes: ClashPreviewNode[]
+  skipped?: ClashSkippedNode[]
+  user_info?: ClashUserInfo
+}
+
+export interface ClashBoundAccount {
+  id: number
+  name: string
+  platform: string
+  is_shadow: boolean
+}
+
+export interface ClashPlatformChecks {
+  checked_at: string | null
+  results: Partial<Record<ClashPlatform, ClashPlatformCheckResult>>
+}
+
+export interface ClashNode {
+  id: number
+  profile_id: number
+  profile_name: string
+  name: string
+  type: string
+  server: string
+  server_port: number
+  status: ClashNodeStatus
+  status_reason: string
+  missing_since: string | null
+  listen_port: number
+  proxy_id: number
+  health_status: ClashHealthStatus
+  latency_ms: number | null
+  consecutive_failures: number
+  last_checked_at: string | null
+  last_check_error: string
+  exit_ip: string
+  exit_country: string
+  exit_country_code: string
+  exit_region: string
+  exit_city: string
+  exit_status: ClashExitStatus
+  /** exit_status=changed 时的新出口 IP，确认前绑定账号保持暂停 */
+  exit_pending_ip: string
+  exit_checked_at: string | null
+  exit_changed_at: string | null
+  platform_checks: ClashPlatformChecks
+  available: boolean
+  unavailable_reason: string
+  accounts: ClashBoundAccount[]
+  created_at: string
+  updated_at: string
+}
+
+export interface ClashNodeListFilters {
+  profile_id?: number
+  status?: ClashNodeStatus
+  health?: ClashHealthStatus
+  bound?: boolean
+  search?: string
+}
+
+/** 测延迟/探测出口的节点范围：node_ids 或 profile_id */
+export interface ClashNodeSelection {
+  node_ids?: number[]
+  profile_id?: number
+}
+
+export interface ClashLatencyResult {
+  node_id: number
+  success: boolean
+  latency_ms?: number
+  error?: string
+  health_status: ClashHealthStatus
+}
+
+export interface ClashExitProbeResult {
+  node_id: number
+  success: boolean
+  exit_ip?: string
+  country?: string
+  exit_status: ClashExitStatus
+  error?: string
+}
+
+export interface ClashExitOption {
+  proxy_id: number
+  node_id: number
+  profile_id: number
+  profile_name: string
+  node_name: string
+  type: string
+  status: ClashNodeStatus
+  health_status: ClashHealthStatus
+  latency_ms: number | null
+  exit_ip: string
+  exit_country: string
+  exit_country_code: string
+  exit_city: string
+  exit_status: ClashExitStatus
+  exit_pending_ip: string
+  exit_key: string
+  available: boolean
+  unavailable_reason: string
+  /** 同一出口 IP 上的非影子账号（跨节点汇总） */
+  occupants: ClashBoundAccount[]
+  platform_checks: ClashPlatformChecks
+}
+
+export interface ClashExitList {
+  max_accounts_per_exit: number
+  allow_unprobed_exit_binding: boolean
+  exits: ClashExitOption[]
+}
+
+export interface ClashInstanceStatus {
+  instance_id: string
+  mode: string
+  ready: boolean
+  version: string
+  config_hash: string
+  listeners: number
+  listener_failures: number
+  last_applied_at: string | null
+  last_error: string
+  updated_at: string
+}
+
+export interface ClashRuntimeStatus {
+  mode: ClashRuntimeMode
+  enabled: boolean
+  local: ClashInstanceStatus
+  instances: ClashInstanceStatus[]
+}
+
+export interface ClashPoolSettings {
+  max_accounts_per_exit: number
+  allow_unprobed_exit_binding: boolean
+  health_test_url: string
+  health_timeout_ms: number
+  bound_check_interval_seconds: number
+  unbound_check_interval_seconds: number
+  failure_threshold: number
+  recovery_threshold: number
+  exit_probe_interval_minutes: number
+  exit_probe_per_minute: number
+  platform_checks_enabled: boolean
+  exit_change_policy: ClashExitChangePolicy
+  pause_ttl_minutes: number
+  missing_retention_days: number
+  drop_protection_percent: number
+  default_user_agent: string
 }
 
 // Gemini credentials structure for OAuth and API Key authentication
@@ -1636,6 +1821,8 @@ export interface AdminDataPayload {
   accounts: AdminDataAccount[]
   // 导出时被排除的 spark 影子账号数量(影子不持凭据、其调度配置不在备份范围)。
   skipped_shadows?: number
+  // 绑定 Clash 出口的账号数:托管代理只在本实例有意义,不随备份导出,导入后需重新指定出口。
+  skipped_clash_bindings?: number
 }
 
 export interface AdminDataProxy {
@@ -1662,6 +1849,8 @@ export interface AdminDataAccount {
   rate_multiplier?: number | null
   expires_at?: number | null
   auto_pause_on_expired?: boolean
+  // 导出时绑定的 Clash 出口名称;导入时账号以暂停状态创建,避免无代理直连。
+  clash_exit_hint?: string | null
 }
 
 export interface AdminDataImportError {
@@ -1677,6 +1866,8 @@ export interface AdminDataImportResult {
   proxy_failed: number
   account_created: number
   account_failed: number
+  // 原绑定 Clash 出口、以暂停状态导入的账号数(需重新指定出口后再启用调度)。
+  account_paused_for_clash?: number
   errors?: AdminDataImportError[]
 }
 

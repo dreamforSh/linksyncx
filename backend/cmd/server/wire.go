@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/Wei-Shaw/sub2api/ent"
+	"github.com/Wei-Shaw/sub2api/internal/clashruntime"
 	"github.com/Wei-Shaw/sub2api/internal/config"
 	"github.com/Wei-Shaw/sub2api/internal/handler"
 	"github.com/Wei-Shaw/sub2api/internal/payment"
@@ -28,6 +29,7 @@ type Application struct {
 	Server        *http.Server
 	PromptAudit   *securityaudit.PromptService
 	PluginManager *service.PluginManager
+	ClashManager  *service.ClashManager
 	Cleanup       func()
 }
 
@@ -54,11 +56,14 @@ func initializeApplication(buildInfo handler.BuildInfo) (*Application, error) {
 		provideServiceBuildInfo,
 		providePluginHostInfo,
 
+		// Clash proxy pool core (mihomo compiled in, or an external sidecar)
+		clashruntime.New,
+
 		// Cleanup function provider
 		provideCleanup,
 
 		// Application struct
-		wire.Struct(new(Application), "Server", "PromptAudit", "PluginManager", "Cleanup"),
+		wire.Struct(new(Application), "Server", "PromptAudit", "PluginManager", "ClashManager", "Cleanup"),
 	)
 	return nil, nil
 }
@@ -131,6 +136,7 @@ func provideCleanup(
 	openAIAutoReset *service.OpenAIQuotaAutoResetService,
 	promptAudit *securityaudit.PromptService,
 	pluginManager *service.PluginManager,
+	clashManager *service.ClashManager,
 ) func() {
 	return func() {
 		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
@@ -146,6 +152,12 @@ func provideCleanup(
 			{"PluginManager", func() error {
 				if pluginManager != nil {
 					pluginManager.Stop()
+				}
+				return nil
+			}},
+			{"ClashManager", func() error {
+				if clashManager != nil {
+					clashManager.Stop()
 				}
 				return nil
 			}},

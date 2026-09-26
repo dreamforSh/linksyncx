@@ -57,6 +57,7 @@ export default {
       dataExportConfirmMessage: 'The exported data contains sensitive account and proxy information. Store it securely.',
       dataExportConfirm: 'Confirm Export',
       dataExported: 'Data exported successfully',
+      dataExportedSkippedClash: 'Data exported. {count} account(s) are bound to Clash exits whose proxies are not exported; they are imported paused and need a new exit.',
       dataExportedSkippedShadows: 'Data exported. Skipped {count} spark shadow account(s): their scheduling config is not included in the backup; recreate and re-tune them after restore.',
       dataExportFailed: 'Failed to export data',
       dataImportTitle: 'Import Data',
@@ -75,6 +76,7 @@ export default {
       dataImportResultSummary: 'Proxies created {proxy_created}, reused {proxy_reused}, failed {proxy_failed}; Accounts created {account_created}, failed {account_failed}',
       dataImportErrors: 'Error Details',
       dataImportSuccess: 'Import completed: accounts {account_created}, failed {account_failed}',
+      dataImportPausedForClash: '{count} account(s) were bound to Clash exits and were imported paused. Assign an exit in the account editor before resuming them.',
       dataImportCompletedWithErrors: 'Import completed with errors: account failed {account_failed}, proxy failed {proxy_failed}',
       syncFromCrsTitle: 'Sync Accounts from CRS',
       syncFromCrsDesc:
@@ -273,6 +275,7 @@ export default {
         creditsExhausted: 'Credits Exhausted',
         creditsExhaustedUntil: 'AI Credits exhausted, expected recovery at {time}',
         overloadedUntil: 'Overloaded until {time}',
+        clashExitUnavailable: 'Exit unavailable',
         viewTempUnschedDetails: 'View temp unschedulable details',
         tempUnschedulableUntil: 'Resumes {time}'
       },
@@ -464,6 +467,9 @@ export default {
         resetSuccess: 'Account state recovered successfully',
         resetFailed: 'Failed to recover account state',
         failedToLoad: 'Failed to load temp unschedulable status',
+        clashExitManaged: 'This pause is managed by the Clash exit health checks and is lifted automatically once the node recovers. A manual recovery is re-applied on the next check cycle.',
+        clashExitNode: 'Exit node',
+        clashExitReason: 'Reason',
         notActive: 'This account is not temporarily unschedulable.',
         expired: 'Expired',
         remainingMinutes: 'About {minutes} minutes',

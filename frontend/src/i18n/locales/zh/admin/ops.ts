@@ -499,7 +499,8 @@ export default {
         metricGroups: {
           system: '系统指标',
           group: '分组级别指标（需 group_id）',
-          account: '账号级别指标'
+          account: '账号级别指标',
+          proxy: '代理与 Clash 出口'
         },
         metrics: {
           successRate: '成功率 (%)',
@@ -517,7 +518,13 @@ export default {
           accountErrorCount: '错误账号数（不含临时不可调度）',
           accountErrorRatio: '错误账号比例 (%)',
           accountTempUnscheduledCount: '临时不可调度账号数',
-          overloadAccountCount: '过载账号数'
+          overloadAccountCount: '过载账号数',
+          proxyExpiredCount: '已过期代理数',
+          proxyExpiringSoonCount: '即将过期代理数',
+          clashExitPausedAccountCount: 'Clash 出口暂停账号数',
+          clashProfileRefreshFailedCount: 'Clash 订阅刷新失败数',
+          clashExitConflictCount: 'Clash 出口冲突数',
+          clashRuntimeUnreadyInstanceCount: 'Clash 内核未就绪实例数'
         },
         metricDescriptions: {
           successRate: '统计窗口内成功请求占比（0~100）。',
@@ -535,7 +542,13 @@ export default {
           accountErrorCount: '统计窗口内产生错误的账号数量（不含临时不可调度）。',
           accountErrorRatio: '统计窗口内错误账号占比（0~100）。',
           accountTempUnscheduledCount: '当前处于临时不可调度状态的账号数量（如代理/凭据故障被自动摘除）。',
-          overloadAccountCount: '统计窗口内过载账号数量。'
+          overloadAccountCount: '统计窗口内过载账号数量。',
+          proxyExpiredCount: '当前已过期的手动代理数量。',
+          proxyExpiringSoonCount: '进入到期预警期（按各代理的预警天数）但尚未过期的手动代理数量。',
+          clashExitPausedAccountCount: '因 Clash 出口不可用而被暂停调度的账号数量。',
+          clashProfileRefreshFailedCount: '已启用、且最近一次刷新失败或触发节点骤降保护的 Clash 订阅数量。',
+          clashExitConflictCount: '绑定账号数超过单出口上限的出口 IP 数量（例如多个节点探测后发现共享同一出口 IP）。',
+          clashRuntimeUnreadyInstanceCount: 'Clash 内核未就绪的服务实例数量。'
         },
         hints: {
           recommended: '推荐：运算符 {operator}，阈值 {threshold}{unit}',

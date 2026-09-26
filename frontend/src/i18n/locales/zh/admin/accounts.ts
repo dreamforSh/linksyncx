@@ -58,6 +58,7 @@ export default {
       dataExportConfirm: '确认导出',
       dataExported: '数据导出成功',
       dataExportedSkippedShadows: '数据已导出。已跳过 {count} 个 spark 影子账号：其调度配置不在备份内，还原后需在重建的影子上重新调优。',
+      dataExportedSkippedClash: '数据已导出。{count} 个账号绑定了 Clash 出口，其代理不随备份导出；导入后这些账号会以暂停状态创建，需重新指定出口。',
       dataExportFailed: '数据导出失败',
       dataImportTitle: '导入数据',
       dataImportHint: '上传导出的 JSON 文件以批量导入账号与代理。',
@@ -76,6 +77,7 @@ export default {
       dataImportErrors: '失败详情',
       dataImportSuccess: '导入完成：账号 {account_created}，失败 {account_failed}',
       dataImportCompletedWithErrors: '导入完成但有错误：账号失败 {account_failed}，代理失败 {proxy_failed}',
+      dataImportPausedForClash: '{count} 个账号原绑定 Clash 出口，已以暂停调度状态导入；请在账号编辑中重新指定出口后再恢复调度。',
       syncFromCrsTitle: '从 CRS 同步账号',
       syncFromCrsDesc:
         '将 claude-relay-service（CRS）中的账号同步到当前系统（不会在浏览器侧直接请求 CRS）。',
@@ -477,7 +479,8 @@ export default {
         creditsExhaustedUntil: 'AI Credits 已用尽，预计 {time} 恢复',
         overloadedUntil: '负载过重，重置时间：{time}',
         viewTempUnschedDetails: '查看临时不可调度详情',
-        tempUnschedulableUntil: '预计 {time} 恢复'
+        tempUnschedulableUntil: '预计 {time} 恢复',
+        clashExitUnavailable: '出口不可用'
       },
       tempUnschedulable: {
         title: '临时不可调度',
@@ -513,6 +516,9 @@ export default {
         resetFailed: '恢复账号状态失败',
         failedToLoad: '加载临时不可调度状态失败',
         notActive: '当前账号未处于临时不可调度状态。',
+        clashExitManaged: '该暂停由 Clash 出口健康检查托管，节点恢复后自动解除；手动解除会在下个检查周期被重新施加。',
+        clashExitNode: '出口节点',
+        clashExitReason: '不可用原因',
         expired: '已到期',
         remainingMinutes: '约 {minutes} 分钟',
         remainingHours: '约 {hours} 小时',

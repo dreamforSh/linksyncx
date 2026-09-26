@@ -48,7 +48,7 @@ const saving = ref(false)
 const editingId = ref<number | null>(null)
 const draft = ref<AlertRule | null>(null)
 
-type MetricGroup = 'system' | 'group' | 'account'
+type MetricGroup = 'system' | 'group' | 'account' | 'proxy'
 
 interface MetricDefinition {
   type: MetricType
@@ -240,6 +240,56 @@ const metricDefinitions = computed(() => {
       description: t('admin.ops.alertRules.metricDescriptions.overloadAccountCount'),
       recommendedOperator: '>',
       recommendedThreshold: 0
+    },
+
+    // Proxy & Clash exit metrics (global counters, evaluated server-side)
+    {
+      type: 'proxy_expired_count',
+      group: 'proxy',
+      label: t('admin.ops.alertRules.metrics.proxyExpiredCount'),
+      description: t('admin.ops.alertRules.metricDescriptions.proxyExpiredCount'),
+      recommendedOperator: '>',
+      recommendedThreshold: 0
+    },
+    {
+      type: 'proxy_expiring_soon_count',
+      group: 'proxy',
+      label: t('admin.ops.alertRules.metrics.proxyExpiringSoonCount'),
+      description: t('admin.ops.alertRules.metricDescriptions.proxyExpiringSoonCount'),
+      recommendedOperator: '>',
+      recommendedThreshold: 0
+    },
+    {
+      type: 'clash_exit_paused_account_count',
+      group: 'proxy',
+      label: t('admin.ops.alertRules.metrics.clashExitPausedAccountCount'),
+      description: t('admin.ops.alertRules.metricDescriptions.clashExitPausedAccountCount'),
+      recommendedOperator: '>',
+      recommendedThreshold: 0
+    },
+    {
+      type: 'clash_profile_refresh_failed_count',
+      group: 'proxy',
+      label: t('admin.ops.alertRules.metrics.clashProfileRefreshFailedCount'),
+      description: t('admin.ops.alertRules.metricDescriptions.clashProfileRefreshFailedCount'),
+      recommendedOperator: '>',
+      recommendedThreshold: 0
+    },
+    {
+      type: 'clash_exit_conflict_count',
+      group: 'proxy',
+      label: t('admin.ops.alertRules.metrics.clashExitConflictCount'),
+      description: t('admin.ops.alertRules.metricDescriptions.clashExitConflictCount'),
+      recommendedOperator: '>',
+      recommendedThreshold: 0
+    },
+    {
+      type: 'clash_runtime_unready_instance_count',
+      group: 'proxy',
+      label: t('admin.ops.alertRules.metrics.clashRuntimeUnreadyInstanceCount'),
+      description: t('admin.ops.alertRules.metricDescriptions.clashRuntimeUnreadyInstanceCount'),
+      recommendedOperator: '>',
+      recommendedThreshold: 0
     }
   ] satisfies MetricDefinition[]
 })
@@ -266,7 +316,7 @@ const metricOptions = computed(() => {
     ]
   }
 
-  return [...buildGroup('system'), ...buildGroup('group'), ...buildGroup('account')]
+  return [...buildGroup('system'), ...buildGroup('group'), ...buildGroup('account'), ...buildGroup('proxy')]
 })
 
 const operatorOptions = computed(() => {

@@ -54,6 +54,21 @@ type UpdateProxyRequest struct {
 	ExpiryWarnDays *int                   `json:"expiry_warn_days" binding:"omitempty,min=0"`
 }
 
+// parseProxySourceFilter maps the source query parameter; the proxy page lists
+// manual proxies unless asked otherwise.
+func parseProxySourceFilter(raw string) (string, bool) {
+	switch strings.TrimSpace(raw) {
+	case "", service.ProxySourceManual:
+		return service.ProxySourceManual, true
+	case service.ProxySourceClash:
+		return service.ProxySourceClash, true
+	case service.ProxySourceAll:
+		return service.ProxySourceAll, true
+	default:
+		return "", false
+	}
+}
+
 // List handles listing all proxies with pagination
 // GET /api/v1/admin/proxies
 func (h *ProxyHandler) List(c *gin.Context) {
@@ -68,8 +83,13 @@ func (h *ProxyHandler) List(c *gin.Context) {
 	if len(search) > 100 {
 		search = search[:100]
 	}
+	source, ok := parseProxySourceFilter(c.Query("source"))
+	if !ok {
+		response.BadRequest(c, "Invalid source, expected manual, clash or all")
+		return
+	}
 
-	proxies, total, err := h.adminService.ListProxiesWithAccountCount(c.Request.Context(), page, pageSize, protocol, status, search, sortBy, sortOrder)
+	proxies, total, err := h.adminService.ListProxiesWithAccountCount(c.Request.Context(), page, pageSize, protocol, status, search, source, sortBy, sortOrder)
 	if err != nil {
 		response.ErrorFrom(c, err)
 		return

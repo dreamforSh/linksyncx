@@ -26,3 +26,26 @@ describe.each([
     await expect(load()).resolves.toBe(data)
   })
 })
+
+describe('paginated list source filter', () => {
+  beforeEach(() => { get.mockReset() })
+
+  it.each(['manual', 'clash', 'all'] as const)('passes source=%s through to the query', async (source) => {
+    const data = { items: [], total: 0, pages: 1 }
+    get.mockResolvedValue({ data })
+    const controller = new AbortController()
+
+    await list(2, 50, { status: 'active', source }, { signal: controller.signal })
+
+    expect(get).toHaveBeenCalledWith('/admin/proxies', {
+      params: { page: 2, page_size: 50, status: 'active', source },
+      signal: controller.signal
+    })
+  })
+
+  it('omits source when the caller does not filter by it (server defaults to manual)', async () => {
+    get.mockResolvedValue({ data: { items: [], total: 0, pages: 1 } })
+    await list(1, 20, { search: 'hk' })
+    expect(get.mock.lastCall?.[1].params).not.toHaveProperty('source')
+  })
+})

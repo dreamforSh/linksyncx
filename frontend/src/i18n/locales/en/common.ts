@@ -185,6 +185,7 @@ export default {
     accounts: 'Accounts',
     plugins: 'Plugins',
     proxies: 'Proxies',
+    clash: 'Clash Pool',
     redeemCodes: 'Redeem Codes',
     ops: 'Ops',
     promoCodes: 'Promo Codes',

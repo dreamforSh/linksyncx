@@ -64,6 +64,11 @@ func (Proxy) Fields() []ent.Field {
 		field.Int("expiry_warn_days").
 			Default(7).
 			Comment("Days before expiry to flag as expiring-soon (per proxy)."),
+		field.String("source").
+			MaxLen(16).
+			Default("manual").
+			Immutable().
+			Comment("Proxy origin: manual | clash (managed by a Clash subscription node)."),
 	}
 }
 
@@ -89,5 +94,6 @@ func (Proxy) Indexes() []ent.Index {
 		index.Fields("deleted_at"),
 		index.Fields("expires_at"),
 		index.Fields("backup_proxy_id"),
+		index.Fields("source"),
 	}
 }
