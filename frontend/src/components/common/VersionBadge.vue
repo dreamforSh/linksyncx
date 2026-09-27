@@ -772,7 +772,7 @@ import Icon from "@/components/icons/Icon.vue";
 
 const GITHUB_REPO = "dreamforSh/linksyncx";
 const CUSTOM_TAG_PREFIX = "custom-v";
-const DOCKER_IMAGE = "ghcr.io/linksyncx/linksyncx";
+const DOCKER_IMAGE = "ghcr.io/dreamforsh/linksyncx";
 
 const { t } = useI18n();
 

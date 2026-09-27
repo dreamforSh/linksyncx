@@ -285,9 +285,10 @@ func performTLSHandshake(ctx context.Context, conn net.Conn, profile *Profile, a
 
 	spec := buildClientHelloSpecFromProfile(profile)
 	tlsConn := utls.UClient(conn, &utls.Config{
-		ServerName:         host,
-		ClientSessionCache: tlsSessionCache,
-		OmitEmptyPsk:       true, // 未命中复用时 hello 与首次抓包逐字节一致
+		ServerName:                         host,
+		ClientSessionCache:                 tlsSessionCache,
+		OmitEmptyPsk:                       true, // 未命中复用时 hello 与首次抓包逐字节一致
+		PreferSkipResumptionOnNilExtension: true, // 2.1.280 hello 没有 PSK 扩展，避免 utls panic
 	}, utls.HelloCustom)
 
 	if err := tlsConn.ApplyPreset(spec); err != nil {

@@ -10,7 +10,7 @@ docker run -d \
   -p 8080:8080 \
   -e DATABASE_URL="postgres://user:pass@host:5432/sub2api" \
   -e REDIS_URL="redis://host:6379" \
-  ghcr.io/linksyncx/linksyncx:latest
+  ghcr.io/dreamforsh/linksyncx:latest
 ```
 
 ## Docker Compose
@@ -20,7 +20,7 @@ version: '3.8'
 
 services:
   sub2api:
-    image: ghcr.io/linksyncx/linksyncx:latest
+    image: ghcr.io/dreamforsh/linksyncx:latest
     ports:
       - "8080:8080"
     environment:

@@ -20,7 +20,7 @@ concurrency:
   cancel-in-progress: false
 
 env:
-  IMAGE_NAME: ghcr.io/linksyncx/linksyncx
+  IMAGE_NAME: ghcr.io/dreamforsh/linksyncx
 
 jobs:
   validate:
@@ -278,7 +278,7 @@ jobs:
 
             Docker 镜像：
             ```bash
-            docker pull ghcr.io/linksyncx/linksyncx:${{ needs.validate.outputs.version }}
+            docker pull ghcr.io/dreamforsh/linksyncx:${{ needs.validate.outputs.version }}
             ```
           files: dist/*
           fail_on_unmatched_files: true

@@ -12,7 +12,7 @@
 
 services:
   sub2api:
-    image: ghcr.io/linksyncx/linksyncx:latest
+    image: ghcr.io/dreamforsh/linksyncx:latest
     container_name: sub2api
     restart: unless-stopped
     security_opt:
