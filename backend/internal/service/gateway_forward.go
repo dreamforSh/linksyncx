@@ -93,10 +93,15 @@ func (s *GatewayService) Forward(ctx context.Context, c *gin.Context, account *A
 	if parsed == nil {
 		return nil, fmt.Errorf("parse request: empty request")
 	}
-	// API-key mappings and OAuth native IDs are resolved before mimicry.
+	// API-key mappings, Anthropic OAuth/SetupToken account mappings and OAuth
+	// native IDs are resolved before mimicry.
 	validationModel := parsed.Model
 	if account != nil && account.Type == AccountTypeAPIKey {
 		validationModel = account.GetMappedModel(validationModel)
+	}
+	oauthMappedModel, oauthMapped := account.ResolveAnthropicOAuthMappedModel(parsed.Model)
+	if oauthMapped {
+		validationModel = oauthMappedModel
 	}
 	if account != nil && account.Platform == PlatformAnthropic && !account.IsBedrock() && account.Type != AccountTypeServiceAccount {
 		if err := validateClaudeOpus55Request(parsed.Body.Bytes(), validationModel); err != nil {
@@ -145,6 +150,20 @@ func (s *GatewayService) Forward(ctx context.Context, c *gin.Context, account *A
 		return s.forwardBedrock(ctx, c, account, parsed, startTime)
 	}
 
+	// 原始请求模型：用于计费和日志，响应中的模型名也回写为它（与 API Key 账号映射一致）。
+	originalModel := parsed.Model
+
+	// Anthropic OAuth/SetupToken 账号级模型限制（白名单/映射）必须先于 beta 策略、Claude Code
+	// 伪装与请求体规范化落到请求体上：这些逻辑都按模型分支（beta 组合、Opus 5.5 约束、
+	// temperature 补齐等），必须看到最终上游模型。未命中映射时保持原有的短 ID 标准化流程。
+	if oauthMapped && oauthMappedModel != originalModel {
+		if err := parsed.ReplaceBody(s.replaceModelInBody(parsed.Body.Bytes(), oauthMappedModel)); err != nil {
+			return nil, fmt.Errorf("rewrite request body: %w", err)
+		}
+		parsed.Model = oauthMappedModel
+		logger.LegacyPrintf("service.gateway", "Model mapping applied: %s -> %s (account: %s, source=account)", originalModel, oauthMappedModel, account.Name)
+	}
+
 	// Beta policy: evaluate once; block check + cache filter set for buildUpstreamRequest.
 	// Always overwrite the cache to prevent stale values from a previous retry with a different account.
 	if account.Platform == PlatformAnthropic && c != nil {
@@ -169,7 +188,6 @@ func (s *GatewayService) Forward(ctx context.Context, c *gin.Context, account *A
 	}
 	reqModel := parsed.Model
 	reqStream := parsed.Stream
-	originalModel := reqModel
 
 	// === DEBUG: 打印客户端原始请求（headers + body 摘要）===
 	if c != nil {
@@ -278,7 +296,7 @@ func (s *GatewayService) Forward(ctx context.Context, c *gin.Context, account *A
 
 	// 应用模型映射：
 	// - APIKey 账号：使用账号级别的显式映射（如果配置），否则透传原始模型名
-	// - OAuth/SetupToken 账号：使用 Anthropic 标准映射（短ID → 长ID）
+	// - OAuth/SetupToken 账号：账号级映射已在伪装前应用，这里只做 Anthropic 标准映射（短ID → 长ID）
 	mappedModel := reqModel
 	mappingSource := ""
 	if account.Type == AccountTypeAPIKey {
@@ -1026,6 +1044,10 @@ func (s *GatewayService) isUpstreamModelRestrictedByChannel(ctx context.Context,
 func resolveAccountUpstreamModel(account *Account, requestedModel string) string {
 	if account.Platform == PlatformAntigravity {
 		return mapAntigravityModel(account, requestedModel)
+	}
+	// Anthropic OAuth/SetupToken 的映射结果会再做短 ID 标准化后发往上游，与转发保持一致。
+	if mappedModel, matched := account.ResolveAnthropicOAuthMappedModel(requestedModel); matched {
+		return mappedModel
 	}
 	return account.GetMappedModel(requestedModel)
 }

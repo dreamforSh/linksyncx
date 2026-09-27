@@ -344,12 +344,22 @@ export const groupManagementAPI = {
   },
 
   async refreshAccountQuota(groupId: number, accountId: number): Promise<GroupAccountUsage> {
-    const { data } = await apiClient.post<GroupAccountUsage>(`/group-management/groups/${groupId}/accounts/${accountId}/quota-refresh`)
+    const { data } = await apiClient.post<GroupAccountUsage>(
+      `/group-management/groups/${groupId}/accounts/${accountId}/quota-refresh`,
+      undefined,
+      { timeout: 60_000 }
+    )
     return data
   },
 
+  // 重置卡不可退回，后端串联了状态读取、领取与领取后的刷新：超时要足够长，
+  // 本地提前中断会把成功的领取报成失败，诱发重复领取。
   async resetAccountCredit(groupId: number, accountId: number): Promise<GroupAccountResetResult> {
-    const { data } = await apiClient.post<GroupAccountResetResult>(`/group-management/groups/${groupId}/accounts/${accountId}/reset-credit`)
+    const { data } = await apiClient.post<GroupAccountResetResult>(
+      `/group-management/groups/${groupId}/accounts/${accountId}/reset-credit`,
+      undefined,
+      { timeout: 90_000 }
+    )
     return data
   },
 

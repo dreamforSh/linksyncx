@@ -732,10 +732,11 @@
         </div>
       </div>
 
-      <!-- OpenAI/Grok OAuth Model Mapping (OAuth 类型没有 apikey 容器，需要独立的模型映射区域) -->
+      <!-- OpenAI/Grok OAuth、Anthropic OAuth/SetupToken Model Mapping (OAuth 类型没有 apikey 容器，需要独立的模型映射区域) -->
       <div
-        v-if="(account.platform === 'openai' || account.platform === 'grok') && account.type === 'oauth'"
+        v-if="((account.platform === 'openai' || account.platform === 'grok') && account.type === 'oauth') || isAnthropicOAuthOrSetupToken"
         class="border-t border-gray-200 pt-4 dark:border-dark-600"
+        data-testid="edit-oauth-model-restriction"
       >
         <label class="input-label">{{ t('admin.accounts.modelRestriction') }}</label>
 
@@ -3935,6 +3936,11 @@ const normalizeOpenAIResponsesMode = (mode: unknown): OpenAIResponsesMode => {
 const isOpenAIModelRestrictionDisabled = computed(() =>
   props.account?.platform === 'openai' && openaiPassthroughEnabled.value
 )
+// Anthropic OAuth/SetupToken 与 OpenAI OAuth 一样没有 apikey 容器，模型限制使用独立区域编辑
+const isAnthropicOAuthOrSetupToken = computed(() =>
+  props.account?.platform === 'anthropic' &&
+  (props.account?.type === 'oauth' || props.account?.type === 'setup-token')
+)
 const openAIResponsesStatusKey = computed(() => {
   if (openAIResponsesMode.value === 'force_responses') {
     return 'admin.accounts.openai.responsesStatusForcedResponses'
@@ -4532,8 +4538,8 @@ const syncFormFromAccount = (newAccount: Account | null) => {
             : 'https://api.anthropic.com'
     editBaseUrl.value = platformDefaultUrl
 
-    // Load model mappings for OpenAI/Grok OAuth accounts
-    if ((newAccount.platform === 'openai' || newAccount.platform === 'grok') && newAccount.credentials) {
+    // Load model mappings for OpenAI/Grok OAuth and Anthropic OAuth/SetupToken accounts
+    if ((newAccount.platform === 'openai' || newAccount.platform === 'grok' || newAccount.platform === 'anthropic') && newAccount.credentials) {
       const oauthCredentials = newAccount.credentials as Record<string, unknown>
       loadModelRestrictionFromMapping(oauthCredentials.model_mapping as Record<string, unknown> | undefined)
     } else {
@@ -5469,6 +5475,21 @@ const handleSubmit = async () => {
         } else {
           delete newCredentials.model_mapping
         }
+      }
+
+      updatePayload.credentials = newCredentials
+    }
+
+    // Anthropic OAuth/SetupToken: persist model mapping to credentials（清空限制即移除 model_mapping）
+    if (isAnthropicOAuthOrSetupToken.value) {
+      const currentCredentials = (updatePayload.credentials as Record<string, unknown>) ||
+        ((props.account.credentials as Record<string, unknown>) || {})
+      const newCredentials: Record<string, unknown> = { ...currentCredentials }
+      const modelMapping = buildModelRestrictionMapping()
+      if (modelMapping) {
+        newCredentials.model_mapping = modelMapping
+      } else {
+        delete newCredentials.model_mapping
       }
 
       updatePayload.credentials = newCredentials

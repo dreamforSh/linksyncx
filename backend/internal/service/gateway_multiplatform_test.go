@@ -1252,6 +1252,46 @@ func TestGatewayService_isModelSupportedByAccount(t *testing.T) {
 			expected: true,
 		},
 		{
+			name: "Anthropic OAuth-白名单写短ID-短ID请求命中",
+			account: &Account{
+				Platform:    PlatformAnthropic,
+				Type:        AccountTypeOAuth,
+				Credentials: map[string]any{"model_mapping": map[string]any{"claude-sonnet-4-5": "claude-sonnet-4-5"}},
+			},
+			model:    "claude-sonnet-4-5",
+			expected: true,
+		},
+		{
+			name: "Anthropic OAuth-白名单写长ID-短ID请求标准化后命中",
+			account: &Account{
+				Platform:    PlatformAnthropic,
+				Type:        AccountTypeOAuth,
+				Credentials: map[string]any{"model_mapping": map[string]any{"claude-sonnet-4-5-20250929": "claude-sonnet-4-5-20250929"}},
+			},
+			model:    "claude-sonnet-4-5",
+			expected: true,
+		},
+		{
+			name: "Anthropic SetupToken-映射键写短ID-短ID请求命中",
+			account: &Account{
+				Platform:    PlatformAnthropic,
+				Type:        AccountTypeSetupToken,
+				Credentials: map[string]any{"model_mapping": map[string]any{"claude-haiku-4-5": "claude-opus-4-6"}},
+			},
+			model:    "claude-haiku-4-5",
+			expected: true,
+		},
+		{
+			name: "Anthropic OAuth-白名单未包含-不支持",
+			account: &Account{
+				Platform:    PlatformAnthropic,
+				Type:        AccountTypeOAuth,
+				Credentials: map[string]any{"model_mapping": map[string]any{"claude-opus-4-6": "claude-opus-4-6"}},
+			},
+			model:    "claude-sonnet-4-5",
+			expected: false,
+		},
+		{
 			name:     "Gemini平台-无映射配置-支持所有模型",
 			account:  &Account{Platform: PlatformGemini, Type: AccountTypeAPIKey},
 			model:    "gemini-2.5-flash",

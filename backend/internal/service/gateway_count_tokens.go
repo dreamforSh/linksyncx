@@ -28,6 +28,10 @@ func (s *GatewayService) ForwardCountTokens(ctx context.Context, c *gin.Context,
 	if account != nil && account.Type == AccountTypeAPIKey {
 		validationModel = account.GetMappedModel(validationModel)
 	}
+	oauthMappedModel, oauthMapped := account.ResolveAnthropicOAuthMappedModel(parsed.Model)
+	if oauthMapped {
+		validationModel = oauthMappedModel
+	}
 	if account != nil && account.Platform == PlatformAnthropic && !account.IsBedrock() && account.Type != AccountTypeServiceAccount {
 		if err := validateClaudeOpus55Request(parsed.Body.Bytes(), validationModel); err != nil {
 			s.countTokensError(c, http.StatusBadRequest, "invalid_request_error", err.Error())
@@ -61,6 +65,17 @@ func (s *GatewayService) ForwardCountTokens(ctx context.Context, c *gin.Context,
 		return nil
 	}
 	reqModel := parsed.Model
+
+	// Anthropic OAuth/SetupToken 账号级模型限制（白名单/映射）先于 Claude Code 伪装应用，
+	// 与 Forward 保持一致：伪装与 beta 头按最终上游模型计算。
+	if oauthMapped && oauthMappedModel != reqModel {
+		if err := replaceBody(s.replaceModelInBody(body, oauthMappedModel)); err != nil {
+			return err
+		}
+		logger.LegacyPrintf("service.gateway", "CountTokens model mapping applied: %s -> %s (account: %s, source=account)", reqModel, oauthMappedModel, account.Name)
+		reqModel = oauthMappedModel
+		parsed.Model = oauthMappedModel
+	}
 
 	// Pre-filter: strip empty text blocks to prevent upstream 400.
 	if err := replaceBody(StripEmptyTextBlocks(body)); err != nil {
@@ -107,7 +122,7 @@ func (s *GatewayService) ForwardCountTokens(ctx context.Context, c *gin.Context,
 
 	// 应用模型映射：
 	// - APIKey 账号：使用账号级别的显式映射（如果配置），否则透传原始模型名
-	// - OAuth/SetupToken 账号：使用 Anthropic 标准映射（短ID → 长ID）
+	// - OAuth/SetupToken 账号：账号级映射已在伪装前应用，这里只做 Anthropic 标准映射（短ID → 长ID）
 	if reqModel != "" {
 		mappedModel := reqModel
 		mappingSource := ""

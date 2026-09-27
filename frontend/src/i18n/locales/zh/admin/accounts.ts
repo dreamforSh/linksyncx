@@ -628,6 +628,67 @@ export default {
         confirmTitle: '确认重置周限',
         confirmMessage: '将消耗 1 次重置次数立即恢复当前窗口，剩余 {count} 次。此操作不可撤销，确定继续吗？'
       },
+      claudeQuotaReset: {
+        count: '重置卡',
+        reset: '重置',
+        countTooltipLoad: '点击查询 Claude 重置卡与订阅档位',
+        countTooltipRefresh: '点击刷新重置卡与订阅档位',
+        fetchedAt: '查询时间：{time}',
+        resetTooltipReady: '使用 1 次重置，立即恢复对应的额度',
+        resetTooltipNeedQuery: '先点击「重置卡」查询可用的重置',
+        resetTooltipNoResets: '没有可用的重置',
+        resetTooltipRequiresLimit: '这张重置卡只能在它覆盖的额度用尽后使用',
+        expiresAt: '到期 {time}',
+        expiresAtFull: '到期时间：{time}',
+        grantNoExpiry: '长期有效',
+        grantLeft: '剩余 {count} 次',
+        grantClears: '可重置：{limits}',
+        expandGrants: '展开其余 {count} 张重置卡',
+        requiresLimit: '触顶后可用',
+        paused: '已暂停，暂不可用',
+        weeklyAvailable: '会话重置可用',
+        weeklyNextAvailable: '会话重置 {time} 后可用',
+        weeklyTitle: '每周一次的 5 小时会话重置（部分 Max 账号的灰度功能），只能在 5 小时额度用尽时使用',
+        ineligible: '无重置资格',
+        ineligibleTitle: '上游原因：{reason}',
+        limits: {
+          five_hour: '5 小时',
+          seven_day: '每周',
+          seven_day_overage_included: 'Fable 周额度',
+          seven_day_opus: 'Opus 周额度',
+          seven_day_sonnet: 'Sonnet 周额度'
+        },
+        programs: {
+          cedar_ember: '免费重置券',
+          juniper_tide: '每周会话重置'
+        },
+        programHints: {
+          cedar_ember: '官方赠送的重置券，到期前可用；可重置：{limits}',
+          juniper_tide: '每周一次，只恢复 5 小时额度'
+        },
+        confirmTitle: '确认使用重置',
+        confirmMessage: '将立即使用 1 次重置恢复对应的额度，此操作不可撤销。',
+        confirmChoose: '选择要使用的重置：',
+        resetSuccess: '已重置：{limits}',
+        resetSuccessGeneric: '重置已生效，额度与账号状态已更新',
+        resetAlreadyUsed: '重置已生效（之前的请求已完成），已刷新额度',
+        resetNotLimited: '当前未达到这张重置卡覆盖的额度上限，未消耗重置',
+        resetCooldown: '账号刚使用过重置，请稍后再试',
+        resetNotApplied: '上游未执行重置（{result}）',
+        resetCacheRefreshFailed: '已重置，但未能回读最新的重置卡状态，请重新查询。',
+        resetAccountRecoveryFailed: '已重置，但本地账号状态恢复失败，请手动恢复账号状态。',
+        resetAccountRefreshFailed: '已重置并更新了重置卡，但无法加载最新账号显示。',
+        refreshCachePersistFailed: '已显示实时状态，但快照保存失败，请重新查询。',
+        errors: {
+          CLAUDE_RESET_UNAVAILABLE: '当前没有可用的重置',
+          CLAUDE_RESET_REQUIRES_LIMIT: '这张重置卡只能在它覆盖的额度用尽后使用',
+          CLAUDE_QUOTA_NO_ORGANIZATION: '账号缺少组织信息，请重新授权后再试',
+          CLAUDE_QUOTA_NO_TOKEN: '账号没有可用的访问令牌',
+          CLAUDE_QUOTA_UNSUPPORTED: '只有 Claude OAuth 账号支持重置卡',
+          CLAUDE_UPSTREAM_AUTH_FAILED: '上游拒绝了该账号的凭据，请检查账号授权',
+          CLAUDE_UPSTREAM_RATE_LIMITED: '上游请求过于频繁，请稍后再试'
+        }
+      },
       tier: {
         free: 'Free',
         pro: 'Pro',

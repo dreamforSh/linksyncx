@@ -2327,10 +2327,11 @@
         </div>
       </div>
 
-      <!-- OpenAI OAuth Model Mapping (OAuth 类型没有 apikey 容器，需要独立的模型映射区域) -->
+      <!-- OpenAI/Grok OAuth、Anthropic OAuth/SetupToken Model Mapping (OAuth 类型没有 apikey 容器，需要独立的模型映射区域) -->
       <div
-        v-if="(form.platform === 'openai' || form.platform === 'grok') && isOAuthFlow"
+        v-if="(form.platform === 'openai' || form.platform === 'grok' || form.platform === 'anthropic') && isOAuthFlow"
         class="border-t border-gray-200 pt-4 dark:border-dark-600"
+        data-testid="create-oauth-model-restriction"
       >
         <label class="input-label">{{ t('admin.accounts.modelRestriction') }}</label>
 
@@ -5084,6 +5085,24 @@ watch(
   }
 )
 
+// Claude OAuth / setup-token start unrestricted instead of taking the API-key
+// prefill: a preset whitelist would reject aliases, "-latest" ids and models
+// released later, while these accounts can serve every Claude model. Admins
+// opt in by picking models or switching to mapping. Declared after the prefill
+// watchers above so it runs after them on the same change.
+watch(
+  [() => props.show, () => form.platform, isOAuthFlow],
+  ([show, platform, oauthFlow], previous) => {
+    if (!show || platform !== 'anthropic' || modelRestrictionMode.value !== 'whitelist') return
+    if (oauthFlow) {
+      allowedModels.value = []
+    } else if (previous?.[2] && allowedModels.value.length === 0) {
+      // Back to an API-key style flow: restore its usual prefill.
+      allowedModels.value = [...getModelsByPlatform(platform)]
+    }
+  }
+)
+
 watch(
   [antigravityModelRestrictionMode, () => form.platform],
   ([, platform]) => {
@@ -7092,6 +7111,11 @@ const handleAnthropicExchange = async (authCode: string) => {
     }
 
     const credentials: Record<string, unknown> = { ...tokenInfo }
+    // 模型限制（白名单/映射），与 OpenAI OAuth 一致写入 credentials.model_mapping
+    const modelMapping = buildModelMappingObject(modelRestrictionMode.value, allowedModels.value, modelMappings.value)
+    if (modelMapping) {
+      credentials.model_mapping = modelMapping
+    }
     applyInterceptWarmup(credentials, interceptWarmupRequests.value, 'create')
     await createAccountAndFinish(form.platform, addMethod.value as AccountType, credentials, extra)
   } catch (error: any) {
@@ -7141,6 +7165,8 @@ const handleCookieAuth = async (sessionKey: string) => {
       appStore.showError(t('admin.accounts.tempUnschedulable.rulesInvalid'))
       return
     }
+    // 模型限制（白名单/映射）对本批次所有账号生效
+    const modelMapping = buildModelMappingObject(modelRestrictionMode.value, allowedModels.value, modelMappings.value)
 
     const endpoint =
       addMethod.value === 'oauth'
@@ -7220,6 +7246,9 @@ const handleCookieAuth = async (sessionKey: string) => {
         const accountName = keys.length > 1 ? `${form.name} #${i + 1}` : form.name
 
         const credentials: Record<string, unknown> = { ...tokenInfo }
+        if (modelMapping) {
+          credentials.model_mapping = modelMapping
+        }
         applyInterceptWarmup(credentials, interceptWarmupRequests.value, 'create')
         if (tempUnschedEnabled.value) {
           credentials.temp_unschedulable_enabled = true

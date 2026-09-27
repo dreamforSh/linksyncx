@@ -1741,4 +1741,68 @@ describe('AccountUsageCell', () => {
     expect(wrapper.text()).not.toContain('7d S')
     expect(wrapper.text()).not.toContain('7d F')
   })
+
+  const claudeResetCellStub = {
+    name: 'ClaudeQuotaResetCell',
+    props: ['account'],
+    emits: ['usage-updated', 'account-updated'],
+    template: '<div class="claude-reset-stub"><slot name="pre-actions" /></div>'
+  }
+
+  it('Anthropic OAuth 渲染 Claude 重置卡单元格，并采纳它回传的用量', async () => {
+    getUsage.mockResolvedValue({
+      source: 'passive',
+      five_hour: { utilization: 41, resets_at: '2026-07-03T10:00:00Z', remaining_seconds: 3600 }
+    })
+    const account = makeAccount({ id: 3003, platform: 'anthropic', type: 'oauth', extra: {} })
+
+    const wrapper = mount(AccountUsageCell, {
+      props: { account },
+      global: {
+        stubs: {
+          UsageProgressBar: {
+            props: ['label', 'utilization', 'resetsAt', 'color'],
+            template: '<div class="usage-bar">{{ label }}|{{ utilization }}</div>'
+          },
+          AccountQuotaInfo: true,
+          ClaudeQuotaResetCell: claudeResetCellStub
+        }
+      }
+    })
+    await flushPromises()
+
+    const cell = wrapper.findComponent({ name: 'ClaudeQuotaResetCell' })
+    expect(cell.exists()).toBe(true)
+    // 主动查询按钮通过插槽与重置卡按钮排在同一行
+    expect(wrapper.find('.claude-reset-stub button').exists()).toBe(true)
+
+    cell.vm.$emit('usage-updated', {
+      five_hour: { utilization: 3, resets_at: null, remaining_seconds: 0 },
+      seven_day_fable: { utilization: 12, resets_at: null, remaining_seconds: 0 }
+    })
+    await flushPromises()
+    expect(wrapper.text()).toContain('5h|3')
+    expect(wrapper.text()).toContain('7d F|12')
+
+    const updated = { ...account, name: 'claude-renamed' }
+    cell.vm.$emit('account-updated', updated)
+    expect(wrapper.emitted('account-updated')?.[0]?.[0]).toStrictEqual(updated)
+  })
+
+  it('Anthropic setup-token 不渲染 Claude 重置卡单元格', async () => {
+    getUsage.mockResolvedValue({
+      source: 'passive',
+      five_hour: { utilization: 41, resets_at: '2026-07-03T10:00:00Z', remaining_seconds: 3600 }
+    })
+
+    const wrapper = mount(AccountUsageCell, {
+      props: { account: makeAccount({ id: 3004, platform: 'anthropic', type: 'setup-token', extra: {} }) },
+      global: {
+        stubs: { UsageProgressBar: true, AccountQuotaInfo: true, ClaudeQuotaResetCell: claudeResetCellStub }
+      }
+    })
+    await flushPromises()
+
+    expect(wrapper.findComponent({ name: 'ClaudeQuotaResetCell' }).exists()).toBe(false)
+  })
 })

@@ -1475,6 +1475,8 @@ export interface Account {
       last_result_at?: string
       error_code?: string
     }
+    claude_subscription?: ClaudeSubscriptionInfo
+    claude_reset_snapshot?: ClaudeResetSnapshot
   } & Record<string, unknown>)
   proxy_id: number | null
   proxy_fallback_origin_id?: number | null
@@ -1711,6 +1713,71 @@ export interface AccountUsageInfo {
   error_code?: string
 
   error?: string            // usage 获取失败时的错误信息
+}
+
+/** Claude 订阅档位（GET /api/oauth/profile 归一化后写入 extra.claude_subscription）。 */
+export interface ClaudeSubscriptionInfo {
+  /** free / pro / max / max_5x / max_20x / team / enterprise，未知组织类型保留原值 */
+  plan_type: string
+  organization_type?: string
+  rate_limit_tier?: string
+  seat_tier?: string
+  billing_type?: string
+  extra_usage_enabled?: boolean
+  updated_at: string
+}
+
+/** 一张 Claude 免费重置券（不含上游 grant id）。 */
+export interface ClaudeResetGrant {
+  label?: string
+  resets_total: number
+  resets_left: number
+  starts_at?: string
+  ends_at?: string
+  /** 能清除的限额：five_hour / seven_day / seven_day_overage_included ... */
+  clears: string[]
+  paused: boolean
+  usable_now: boolean
+  /** 只能在它能清除的限额打满时使用 */
+  use_requires_limit: boolean
+  blocking?: string[]
+  /** 上游指定的下一张可领取的券 */
+  next: boolean
+}
+
+/** 免费重置券（cedar_ember）的状态。 */
+export interface ClaudeCedarEmberStatus {
+  eligible: boolean
+  ineligible_reason?: string
+  at_limit: boolean
+  exhausted?: string[]
+  grants: ClaudeResetGrant[]
+  weekly_resets_at?: string
+  cooldown_until?: string
+  tier?: string
+}
+
+/** 每周会话重置（juniper_tide）的状态，只在 5 小时额度用尽时下发。 */
+export interface ClaudeJuniperTideStatus {
+  eligible: boolean
+  ineligible_reason?: string
+  in_experiment: boolean
+  arm?: string
+  available: boolean
+  next_available_at?: string
+  weekly_resets_at?: string
+  resets_per_week?: number
+  tier?: string
+}
+
+/** Claude 重置状态快照（extra.claude_reset_snapshot）。 */
+export interface ClaudeResetSnapshot {
+  fetched_at: string
+  /** 读取时账号处于 5 小时限额（只有此时才会拿到每周会话重置的状态） */
+  at_wall: boolean
+  available_count: number
+  cedar_ember?: ClaudeCedarEmberStatus | null
+  juniper_tide?: ClaudeJuniperTideStatus | null
 }
 
 // OpenAI Codex usage snapshot (from response headers)

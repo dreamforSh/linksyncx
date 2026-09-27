@@ -14,6 +14,8 @@ import type {
   AccountUsageInfo,
   WindowStats,
   ClaudeModel,
+  ClaudeResetSnapshot,
+  ClaudeSubscriptionInfo,
   AccountUsageStatsResponse,
   TempUnschedulableStatus,
   AdminDataPayload,
@@ -1024,6 +1026,68 @@ export async function resetOpenAIQuota(id: number): Promise<OpenAIQuotaResetResu
   return data
 }
 
+export type ClaudeResetProgram = 'cedar_ember' | 'juniper_tide'
+
+/** Claude 重置状态刷新：同一次上游读取刷新了用量进度条与订阅档位。 */
+export interface ClaudeQuotaRefreshResult {
+  snapshot: ClaudeResetSnapshot
+  usage?: AccountUsageInfo | null
+  subscription?: ClaudeSubscriptionInfo | null
+  cache_persisted: boolean
+  account?: Account | null
+}
+
+/**
+ * Claude 重置领取结果。result 取上游原值：reset（已重置）、already_used（此前同一请求已生效）、
+ * not_limited（未达限额，未消耗）、cooldown、ineligible、unavailable。
+ */
+export interface ClaudeQuotaResetResult {
+  program: ClaudeResetProgram
+  result: string
+  reason?: string
+  resets_left?: number | null
+  cleared?: string[]
+  weekly_resets_at?: string
+  cooldown_until?: string
+  next_available_at?: string
+  snapshot?: ClaudeResetSnapshot | null
+  usage?: AccountUsageInfo | null
+  account?: Account | null
+  cache_refreshed: boolean
+  account_state_recovered: boolean
+  warning_code?:
+    | 'reset_credit_cache_refresh_failed'
+    | 'account_state_recovery_failed'
+    | 'account_state_refresh_failed'
+}
+
+/** 查询 Claude OAuth 账号的重置状态与订阅档位并写入快照（写账号状态，所以是 POST）。 */
+export async function refreshClaudeQuota(id: number): Promise<ClaudeQuotaRefreshResult> {
+  const { data } = await apiClient.post<ClaudeQuotaRefreshResult>(
+    `/admin/anthropic/accounts/${id}/quota/refresh`,
+    undefined,
+    { timeout: 60_000 }
+  )
+  return data
+}
+
+/**
+ * 领取一次 Claude 重置（program 省略时由后端自动选择）。重置不可退回，接口串联了
+ * 状态读取、领取与领取后的刷新，需要比默认更长的超时：本地提前中断会把成功的领取
+ * 报成失败，诱发重复领取。
+ */
+export async function resetClaudeQuota(
+  id: number,
+  program?: ClaudeResetProgram
+): Promise<ClaudeQuotaResetResult> {
+  const { data } = await apiClient.post<ClaudeQuotaResetResult>(
+    `/admin/anthropic/accounts/${id}/reset-quota`,
+    program ? { program } : undefined,
+    { timeout: 90_000 }
+  )
+  return data
+}
+
 export interface SparkShadowCreatePayload {
   name?: string
   priority?: number
@@ -1196,6 +1260,8 @@ export const accountsAPI = {
   revertProxyFallback,
   refreshOpenAIQuota,
   resetOpenAIQuota,
+  refreshClaudeQuota,
+  resetClaudeQuota,
   createSparkShadow,
   getUpstreamBillingProbeSettings,
   updateUpstreamBillingProbeSettings,

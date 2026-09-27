@@ -41,3 +41,28 @@ export function openAIPlanTypeLabel(value?: string | null): string {
       return ''
   }
 }
+
+/**
+ * Claude 订阅档位 → 展示标签（后端 extra.claude_subscription.plan_type）；未知档位返回空串。
+ * Max 的倍率来自 rate_limit_tier（default_claude_max_5x / default_claude_max_20x）。
+ */
+export function claudePlanTypeLabel(value?: string | null): string {
+  switch (normalizePlanType(value)) {
+    case 'max20x':
+      return 'Max 20x'
+    case 'max5x':
+      return 'Max 5x'
+    case 'max':
+      return 'Max'
+    case 'pro':
+      return 'Pro'
+    case 'team':
+      return 'Team'
+    case 'enterprise':
+      return 'Enterprise'
+    case 'free':
+      return 'Free'
+    default:
+      return ''
+  }
+}

@@ -77,8 +77,8 @@
           color="amber"
         />
 
-        <!-- Passive sampling label + active query button -->
-        <div class="flex items-center gap-1.5 mt-0.5">
+        <!-- Setup Token: passive sampling label + active query button -->
+        <div v-if="account.type !== 'oauth'" class="flex items-center gap-1.5 mt-0.5">
           <span
             v-if="usageInfo.source === 'passive'"
             class="text-[9px] text-gray-400 dark:text-gray-500 italic"
@@ -114,6 +114,51 @@
       <div v-else class="space-y-1">
         <div class="text-xs text-gray-400">-</div>
       </div>
+
+      <!--
+        OAuth: a single instance outside the usage states above, so its feedback
+        survives usage loads and reloads (the first load swaps those branches).
+        Once usage is available, the passive label and the active query share
+        its row with the Claude limit-reset controls.
+      -->
+      <ClaudeQuotaResetCell
+        v-if="account.type === 'oauth'"
+        :account="account"
+        class="mt-0.5"
+        @account-updated="handleQuotaResetAccountUpdated"
+        @usage-updated="handleClaudeUsageUpdated"
+      >
+        <template v-if="usageInfo && !loading && !error" #pre-actions>
+          <span
+            v-if="usageInfo.source === 'passive'"
+            class="text-[9px] text-gray-400 dark:text-gray-500 italic"
+          >
+            {{ t('admin.accounts.usageWindow.passiveSampled') }}
+          </span>
+          <button
+            type="button"
+            class="inline-flex items-center gap-0.5 rounded px-1.5 py-0.5 text-[9px] font-medium text-blue-600 hover:bg-blue-50 dark:text-blue-400 dark:hover:bg-blue-900/30 transition-colors"
+            :disabled="activeQueryLoading"
+            @click="loadActiveUsage"
+          >
+            <svg
+              class="h-2.5 w-2.5"
+              :class="{ 'animate-spin': activeQueryLoading }"
+              fill="none"
+              stroke="currentColor"
+              viewBox="0 0 24 24"
+            >
+              <path
+                stroke-linecap="round"
+                stroke-linejoin="round"
+                stroke-width="2"
+                d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"
+              />
+            </svg>
+            {{ t('admin.accounts.usageWindow.activeQuery') }}
+          </button>
+        </template>
+      </ClaudeQuotaResetCell>
     </template>
 
     <!-- OpenAI OAuth accounts: single source from /usage API -->
@@ -678,6 +723,7 @@ import { formatCompactNumber } from '@/utils/format'
 import UsageProgressBar from './UsageProgressBar.vue'
 import AccountQuotaInfo from './AccountQuotaInfo.vue'
 import OpenAIQuotaResetCell from './OpenAIQuotaResetCell.vue'
+import ClaudeQuotaResetCell from './ClaudeQuotaResetCell.vue'
 import GrokQuotaProbeCell from './GrokQuotaProbeCell.vue'
 import CNProviderQuotaCell from './CNProviderQuotaCell.vue'
 import CNProviderBalanceCell from './CNProviderBalanceCell.vue'
@@ -1577,6 +1623,12 @@ const quotaTotalBar = computed((): QuotaBarInfo | null => {
 
 const handleQuotaResetAccountUpdated = (account: Account) => {
   emit('account-updated', account)
+}
+
+// A Claude reset refresh reads usage in the same upstream call; adopt it so the
+// 5h / 7d / Fable bars reflect the post-reset state without another query.
+const handleClaudeUsageUpdated = (usage: AccountUsageInfo) => {
+  usageInfo.value = usage
 }
 
 const handleOllamaCloudUsageUpdated = (state: NonNullable<Account['ollama_cloud_usage']>) => {

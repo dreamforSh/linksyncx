@@ -53,6 +53,9 @@ func RegisterAdminRoutes(
 		// OpenAI OAuth
 		registerOpenAIOAuthRoutes(admin, h)
 
+		// Claude OAuth 订阅档位与重置
+		registerClaudeQuotaRoutes(admin, h)
+
 		// Gemini OAuth
 		registerGeminiOAuthRoutes(admin, h)
 
@@ -472,6 +475,14 @@ func registerOpenAIOAuthRoutes(admin *gin.RouterGroup, h *handler.Handlers) {
 		openai.POST("/accounts/:id/reset-quota", h.Admin.OpenAIOAuth.ResetQuota)
 		openai.POST("/accounts/:id/referrals/refresh", h.Admin.OpenAIOAuth.RefreshReferrals)
 		openai.POST("/accounts/:id/referrals/invite", h.Admin.OpenAIOAuth.SendReferralInvite)
+	}
+}
+
+func registerClaudeQuotaRoutes(admin *gin.RouterGroup, h *handler.Handlers) {
+	anthropic := admin.Group("/anthropic")
+	{
+		anthropic.POST("/accounts/:id/quota/refresh", h.Admin.ClaudeQuota.RefreshQuota)
+		anthropic.POST("/accounts/:id/reset-quota", h.Admin.ClaudeQuota.ResetQuota)
 	}
 }
 

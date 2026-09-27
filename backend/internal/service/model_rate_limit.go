@@ -70,6 +70,9 @@ func (a *Account) modelRateLimitKeysForRequest(ctx context.Context, requestedMod
 	modelKey := a.GetMappedModel(requestedModel)
 	if a.Platform == PlatformAntigravity {
 		modelKey = resolveFinalAntigravityModelKey(ctx, a, requestedModel)
+	} else if mappedModel, matched := a.ResolveAnthropicOAuthMappedModel(requestedModel); matched {
+		// Anthropic OAuth/SetupToken 按最终上游模型（映射 + 短 ID 标准化）匹配，与转发时记录限流的模型一致。
+		modelKey = mappedModel
 	}
 	modelKey = strings.TrimSpace(modelKey)
 	if modelKey == "" {

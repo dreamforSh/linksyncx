@@ -15,6 +15,7 @@ import (
 
 	"github.com/Wei-Shaw/sub2api/internal/config"
 	"github.com/Wei-Shaw/sub2api/internal/domain"
+	"github.com/Wei-Shaw/sub2api/internal/pkg/claude"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/geminicli"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/openai_compat"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/xai"
@@ -901,6 +902,29 @@ func (a *Account) ResolveMappedModel(requestedModel string) (mappedModel string,
 		}
 	}
 	return requestedModel, false
+}
+
+// ResolveAnthropicOAuthMappedModel 解析 Anthropic OAuth/SetupToken 账号的账号级模型限制（白名单/映射）。
+//
+// 先按原始请求模型匹配 model_mapping，未命中再按 Claude OAuth 标准化 ID（短 ID → 带日期长 ID，
+// 见 claude.NormalizeModelID）匹配，与调度阶段的白名单判定保持一致；命中后映射结果同样做一次
+// 标准化，保证上游收到原生模型 ID。matched=false 表示不是 Anthropic OAuth/SetupToken 账号或未命中
+// 账号级映射（含未配置映射），调用方应保持原有的模型处理逻辑。
+func (a *Account) ResolveAnthropicOAuthMappedModel(requestedModel string) (mappedModel string, matched bool) {
+	if a == nil || !a.IsAnthropicOAuthOrSetupToken() || requestedModel == "" {
+		return requestedModel, false
+	}
+	mappedModel, matched = a.ResolveMappedModel(requestedModel)
+	if !matched {
+		normalized := claude.NormalizeModelID(requestedModel)
+		if normalized == requestedModel {
+			return requestedModel, false
+		}
+		if mappedModel, matched = a.ResolveMappedModel(normalized); !matched {
+			return requestedModel, false
+		}
+	}
+	return claude.NormalizeModelID(mappedModel), true
 }
 
 // GetOpenAICompactMode returns the compact routing mode for an OpenAI account.

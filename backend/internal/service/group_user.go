@@ -188,6 +188,7 @@ func ProvideGroupManagementService(
 	accountRepo AccountRepository,
 	accountUsage *AccountUsageService,
 	openAIQuota *OpenAIQuotaService,
+	claudeQuota *ClaudeQuotaService,
 	rateLimit *RateLimitService,
 ) *GroupManagementService {
 	deps := GroupUserDependencies{GroupUsers: groupUsers, EntClient: entClient, AuthCache: authCache}
@@ -209,6 +210,9 @@ func ProvideGroupManagementService(
 	}
 	if openAIQuota != nil {
 		accountDeps.Quota = openAIQuota
+	}
+	if claudeQuota != nil {
+		accountDeps.ClaudeQuota = claudeQuota
 	}
 	if rateLimit != nil {
 		accountDeps.Recoverer = rateLimit

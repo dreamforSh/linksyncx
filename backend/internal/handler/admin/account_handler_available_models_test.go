@@ -10,6 +10,7 @@ import (
 	"testing"
 
 	"github.com/Wei-Shaw/sub2api/internal/config"
+	"github.com/Wei-Shaw/sub2api/internal/pkg/claude"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/tlsfingerprint"
 	"github.com/Wei-Shaw/sub2api/internal/service"
 	"github.com/gin-gonic/gin"
@@ -292,6 +293,83 @@ func TestAccountHandlerGetAvailableModels_OpenAISparkShadowReturnsMappingModels(
 	require.ElementsMatch(t, []string{
 		"gpt-5.3-codex-spark",
 	}, ids, "影子可用模型由 model_mapping 派生（非写死）")
+}
+
+func TestAccountHandlerGetAvailableModels_AnthropicOAuthUsesModelRestriction(t *testing.T) {
+	for _, accountType := range []string{service.AccountTypeOAuth, service.AccountTypeSetupToken} {
+		t.Run(accountType, func(t *testing.T) {
+			svc := &availableModelsAdminService{
+				stubAdminService: newStubAdminService(),
+				account: service.Account{
+					ID:       47,
+					Name:     "claude-oauth-restricted",
+					Platform: service.PlatformAnthropic,
+					Type:     accountType,
+					Status:   service.StatusActive,
+					Credentials: map[string]any{
+						"access_token": "oauth-token",
+						"model_mapping": map[string]any{
+							"claude-opus-4-6":    "claude-opus-4-6",
+							"claude-public-fast": "claude-sonnet-4-6",
+						},
+					},
+				},
+			}
+			router := setupAvailableModelsRouter(svc)
+
+			rec := httptest.NewRecorder()
+			req := httptest.NewRequest(http.MethodGet, "/api/v1/admin/accounts/47/models", nil)
+			router.ServeHTTP(rec, req)
+
+			require.Equal(t, http.StatusOK, rec.Code)
+			var resp struct {
+				Data []struct {
+					ID          string `json:"id"`
+					DisplayName string `json:"display_name"`
+				} `json:"data"`
+			}
+			require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &resp))
+			displayNames := make(map[string]string, len(resp.Data))
+			for _, model := range resp.Data {
+				displayNames[model.ID] = model.DisplayName
+			}
+			require.Len(t, displayNames, 2, "白名单/映射的请求模型即为账号可用模型")
+			require.Equal(t, "Claude Opus 4.6", displayNames["claude-opus-4-6"])
+			require.Equal(t, "claude-public-fast", displayNames["claude-public-fast"])
+		})
+	}
+}
+
+func TestAccountHandlerGetAvailableModels_AnthropicOAuthWithoutMappingUsesDefaults(t *testing.T) {
+	svc := &availableModelsAdminService{
+		stubAdminService: newStubAdminService(),
+		account: service.Account{
+			ID:          48,
+			Name:        "claude-oauth-defaults",
+			Platform:    service.PlatformAnthropic,
+			Type:        service.AccountTypeOAuth,
+			Status:      service.StatusActive,
+			Credentials: map[string]any{"access_token": "oauth-token"},
+		},
+	}
+	router := setupAvailableModelsRouter(svc)
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/admin/accounts/48/models", nil)
+	router.ServeHTTP(rec, req)
+
+	require.Equal(t, http.StatusOK, rec.Code)
+	var resp struct {
+		Data []struct {
+			ID string `json:"id"`
+		} `json:"data"`
+	}
+	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &resp))
+	ids := make([]string, 0, len(resp.Data))
+	for _, model := range resp.Data {
+		ids = append(ids, model.ID)
+	}
+	require.Equal(t, claude.DefaultModelIDs(), ids)
 }
 
 func TestAccountHandlerGetAvailableModels_GeminiGoogleOneUsesConservativeCatalog(t *testing.T) {

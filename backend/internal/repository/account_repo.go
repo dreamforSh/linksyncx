@@ -69,6 +69,9 @@ var schedulerNeutralExtraKeys = map[string]struct{}{
 	"codex_referral_snapshot":    {},
 	"grok_billing_snapshot":      {},
 	"session_window_utilization": {},
+	// Claude OAuth 订阅档位与重置状态只用于展示，调度不读取。
+	"claude_subscription":   {},
+	"claude_reset_snapshot": {},
 }
 
 const postgresParameterBatchSize = 50000

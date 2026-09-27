@@ -95,10 +95,33 @@ func (s *groupAccountRecovererStub) RecoverAccountState(_ context.Context, accou
 	return &SuccessfulTestRecoveryResult{}, nil
 }
 
+type groupAccountClaudeQuotaStub struct {
+	refreshes []int64
+	resets    []int64
+	programs  []string
+	result    *ClaudeQuotaResetResult
+}
+
+func (s *groupAccountClaudeQuotaStub) RefreshQuota(_ context.Context, accountID int64) (*ClaudeQuotaRefreshResult, error) {
+	s.refreshes = append(s.refreshes, accountID)
+	return &ClaudeQuotaRefreshResult{Snapshot: &ClaudeResetSnapshot{}, CachePersisted: true}, nil
+}
+
+func (s *groupAccountClaudeQuotaStub) ResetCredit(_ context.Context, accountID int64, program string) (*ClaudeQuotaResetResult, error) {
+	s.resets = append(s.resets, accountID)
+	s.programs = append(s.programs, program)
+	if s.result != nil {
+		result := *s.result
+		return &result, nil
+	}
+	return &ClaudeQuotaResetResult{Program: ClaudeResetProgramCedarEmber, Result: ClaudeResetResultReset, Cleared: []string{"five_hour"}}, nil
+}
+
 type groupAccountFixture struct {
 	svc       *GroupManagementService
 	repo      *accountUsageMgmtRepoStub
 	quota     *groupAccountQuotaStub
+	claude    *groupAccountClaudeQuotaStub
 	recoverer *groupAccountRecovererStub
 }
 
@@ -112,7 +135,12 @@ func newGroupAccountFixture(managedType string) *groupAccountFixture {
 				"available_count": float64(2),
 				"credits":         []any{map[string]any{"expires_at": future}, map[string]any{"expires_at": past}},
 			}}},
-		101: {ID: 101, Name: "claude-a", Platform: PlatformAnthropic, Type: AccountTypeOAuth, Status: StatusActive},
+		// setup-token 没有 profile 权限，查不到重置：用它覆盖“不支持重置卡”的账号。
+		101: {ID: 101, Name: "claude-a", Platform: PlatformAnthropic, Type: AccountTypeSetupToken, Status: StatusActive},
+		102: {ID: 102, Name: "claude-max", Platform: PlatformAnthropic, Type: AccountTypeOAuth, Status: StatusActive,
+			Extra: map[string]any{claudeResetSnapshotExtraKey: &ClaudeResetSnapshot{
+				CedarEmber: &ClaudeCedarEmberStatus{Eligible: true, Grants: []ClaudeResetGrant{{ResetsLeft: 1, EndsAt: future}}},
+			}}},
 	}
 	f := &groupAccountFixture{
 		repo: &accountUsageMgmtRepoStub{
@@ -125,6 +153,7 @@ func newGroupAccountFixture(managedType string) *groupAccountFixture {
 			assigned: []AssignedAccount{{ID: 101, GroupID: 42, UserID: 7}},
 		},
 		quota:     &groupAccountQuotaStub{},
+		claude:    &groupAccountClaudeQuotaStub{},
 		recoverer: &groupAccountRecovererStub{},
 	}
 	f.svc = NewGroupManagementService(f.repo).WithGroupAccountDependencies(GroupAccountDependencies{
@@ -133,9 +162,16 @@ func newGroupAccountFixture(managedType string) *groupAccountFixture {
 			100: {FiveHour: &UsageProgress{Utilization: 42, ResetsAt: &resetAt, RemainingSeconds: 1}, SevenDay: &UsageProgress{Utilization: 10}},
 			101: {Error: "upstream unavailable"},
 		}},
-		Quota:     f.quota,
-		Recoverer: f.recoverer,
+		Quota:       f.quota,
+		ClaudeQuota: f.claude,
+		Recoverer:   f.recoverer,
 	})
+	return f
+}
+
+// withClaudeAccountInPool 把 Claude OAuth 账号 102 加入分组账号池。
+func (f *groupAccountFixture) withClaudeAccountInPool() *groupAccountFixture {
+	f.repo.pool = append(f.repo.pool, AssignedAccount{ID: 102, GroupID: 42, AssignedUserIDs: []int64{9}})
 	return f
 }
 
@@ -238,4 +274,50 @@ func TestReadGroupAccountResetCredits(t *testing.T) {
 	empty := readGroupAccountResetCredits(map[string]any{openaiQuotaResetCreditsKey: map[string]any{"available_count": float64(0)}}, now)
 	require.NotNil(t, empty)
 	require.Zero(t, empty.AvailableCount)
+}
+
+func TestClaudeOAuthAccountResetCreditsInSubscriptionGroup(t *testing.T) {
+	f := newGroupAccountFixture(ManagedGroupTypeSubscription).withClaudeAccountInPool()
+	ctx := context.Background()
+
+	items, err := f.svc.AccountUsage(ctx, 7, RoleGroupManager, 42)
+	require.NoError(t, err)
+	require.Len(t, items, 3)
+	claude := items[2]
+	require.Equal(t, int64(102), claude.AccountID)
+	require.True(t, claude.SupportsReset)
+	require.True(t, claude.CanReset)
+	require.NotNil(t, claude.ResetCredits)
+	require.Equal(t, 1, claude.ResetCredits.AvailableCount)
+	require.Len(t, claude.ResetCredits.ExpiresAt, 1)
+
+	refreshed, err := f.svc.RefreshAccountQuota(ctx, 7, RoleGroupManager, 42, 102)
+	require.NoError(t, err)
+	require.Equal(t, int64(102), refreshed.AccountID)
+	require.Equal(t, []int64{102}, f.claude.refreshes)
+	require.Empty(t, f.quota.queries, "claude accounts never reach the OpenAI quota service")
+
+	out, err := f.svc.ResetAccountCredit(ctx, 7, RoleGroupManager, 42, 102)
+	require.NoError(t, err)
+	require.Equal(t, ClaudeResetResultReset, out.Code)
+	require.Equal(t, 1, out.WindowsReset)
+	require.Empty(t, out.WarningCode)
+	require.Equal(t, []int64{102}, f.claude.resets)
+	require.Equal(t, []string{""}, f.claude.programs, "group managers let the service pick the reset")
+	require.Equal(t, []int64{102}, f.recoverer.recovered)
+	require.Equal(t, []int64{102, 102}, f.claude.refreshes, "the post-process refreshes the snapshot")
+	require.Empty(t, f.quota.resets)
+}
+
+func TestClaudeOAuthGroupResetReportsNotAppliedResults(t *testing.T) {
+	f := newGroupAccountFixture(ManagedGroupTypeSubscription).withClaudeAccountInPool()
+	f.claude.result = &ClaudeQuotaResetResult{Program: ClaudeResetProgramCedarEmber, Result: ClaudeResetResultNotLimited}
+
+	_, err := f.svc.ResetAccountCredit(context.Background(), 7, RoleGroupManager, 42, 102)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "not_limited")
+	require.Empty(t, f.recoverer.recovered, "nothing to recover when no reset was spent")
+
+	_, err = f.svc.ResetAccountCredit(context.Background(), 7, RoleUser, 42, 102)
+	require.ErrorIs(t, err, ErrGroupManagementForbidden)
 }

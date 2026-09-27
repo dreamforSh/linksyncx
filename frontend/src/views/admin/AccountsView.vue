@@ -1761,6 +1761,10 @@ function getAccountPlanType(row: any): string | undefined {
       row.parent_plan_type
     )
   }
+  if (row.platform === 'anthropic') {
+    // Claude OAuth 的档位由后端从 /api/oauth/profile 同步到 extra.claude_subscription。
+    return firstNonBlankString(row.extra?.claude_subscription?.plan_type, row.credentials?.plan_type)
+  }
   return firstNonBlankString(row.credentials?.plan_type, row.parent_plan_type)
 }
 

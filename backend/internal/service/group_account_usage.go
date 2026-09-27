@@ -45,12 +45,20 @@ type groupAccountQuotaService interface {
 	CacheResetCreditsSnapshot(ctx context.Context, accountID int64, credits *OpenAIRateLimitResetCredits) error
 }
 
+// groupAccountClaudeQuotaService 是 Claude OAuth 账号的重置状态刷新与领取。
+type groupAccountClaudeQuotaService interface {
+	claudeQuotaResetWorkflowQuota
+	ResetCredit(ctx context.Context, accountID int64, program string) (*ClaudeQuotaResetResult, error)
+}
+
 // GroupAccountDependencies 订阅组账号限额与重置卡需要的依赖；缺省时这些接口返回服务不可用。
+// Quota 服务 OpenAI OAuth 账号，ClaudeQuota 服务 Claude OAuth 账号。
 type GroupAccountDependencies struct {
-	Accounts  groupAccountLoader
-	Usage     groupAccountUsageReader
-	Quota     groupAccountQuotaService
-	Recoverer openAIQuotaResetWorkflowRecoverer
+	Accounts    groupAccountLoader
+	Usage       groupAccountUsageReader
+	Quota       groupAccountQuotaService
+	ClaudeQuota groupAccountClaudeQuotaService
+	Recoverer   openAIQuotaResetWorkflowRecoverer
 }
 
 // WithGroupAccountDependencies 挂载账号限额与重置卡依赖，返回同一个服务便于链式构造。
@@ -104,7 +112,21 @@ func (s *GroupManagementService) requireAccountDeps(needQuota bool) error {
 	if deps.Accounts == nil || deps.Usage == nil {
 		return errGroupAccountDependenciesMissing
 	}
-	if needQuota && deps.Quota == nil {
+	if needQuota && deps.Quota == nil && deps.ClaudeQuota == nil {
+		return errGroupAccountDependenciesMissing
+	}
+	return nil
+}
+
+// requireAccountQuotaDeps 按账号平台检查重置卡依赖是否已挂载。
+func (s *GroupManagementService) requireAccountQuotaDeps(account *Account) error {
+	if isClaudeQuotaAccount(account) {
+		if s.accountDeps.ClaudeQuota == nil {
+			return errGroupAccountDependenciesMissing
+		}
+		return nil
+	}
+	if s.accountDeps.Quota == nil {
 		return errGroupAccountDependenciesMissing
 	}
 	return nil
@@ -122,9 +144,13 @@ func (s *GroupManagementService) requireSubscriptionGroup(ctx context.Context, g
 	return nil
 }
 
-// supportsGroupResetCredit 重置卡只存在于 OpenAI OAuth 母账号（影子账号要在母账号上重置）。
+// supportsGroupResetCredit 重置卡存在于 OpenAI OAuth 母账号（影子账号要在母账号上重置）
+// 和 Claude OAuth 账号（setup-token 没有 profile 权限，查不到重置）。
 func supportsGroupResetCredit(account *Account) bool {
-	return account != nil && account.IsOpenAIOAuth() && !account.IsShadow()
+	if account == nil {
+		return false
+	}
+	return (account.IsOpenAIOAuth() && !account.IsShadow()) || isClaudeQuotaAccount(account)
 }
 
 // AccountUsage 订阅组账号的限额视图：组管理员 / 超管看分组全部账号，组用户只看分配给自己的账号。
@@ -222,7 +248,11 @@ func groupAccountUsageView(account *Account, usage *UsageInfo, assignedUsers int
 		}
 	}
 	if item.SupportsReset {
-		item.ResetCredits = readGroupAccountResetCredits(account.Extra, now)
+		if isClaudeQuotaAccount(account) {
+			item.ResetCredits = readClaudeGroupResetCredits(account.Extra, now)
+		} else {
+			item.ResetCredits = readGroupAccountResetCredits(account.Extra, now)
+		}
 		item.CanReset = manager
 	}
 	if manager {
@@ -295,6 +325,32 @@ func readGroupAccountResetCredits(extra map[string]any, now time.Time) *GroupAcc
 	return &GroupAccountResetCredits{AvailableCount: available, ExpiresAt: expires}
 }
 
+// readClaudeGroupResetCredits 从 Claude 重置快照读出仍持有的重置：未过期券的剩余次数与到期时间，
+// 加上快照时刻可用的每周会话重置（它没有到期时间）。没有快照时视为未知（返回 nil）。
+func readClaudeGroupResetCredits(extra map[string]any, now time.Time) *GroupAccountResetCredits {
+	snapshot := readClaudeResetSnapshot(extra)
+	if snapshot == nil {
+		return nil
+	}
+	credits := &GroupAccountResetCredits{ExpiresAt: []string{}}
+	if cedar := snapshot.CedarEmber; cedar != nil && cedar.Eligible {
+		for _, grant := range cedar.Grants {
+			if grant.ResetsLeft <= 0 || claudeResetExpired(grant.EndsAt, now) {
+				continue
+			}
+			credits.AvailableCount += grant.ResetsLeft
+			if endsAt := strings.TrimSpace(grant.EndsAt); endsAt != "" {
+				credits.ExpiresAt = append(credits.ExpiresAt, endsAt)
+			}
+		}
+	}
+	if snapshot.JuniperTide.claimable() {
+		credits.AvailableCount++
+	}
+	sort.Strings(credits.ExpiresAt)
+	return credits
+}
+
 // requireResettableAccount 校验写操作：组管理员 / 超管、订阅组、账号属于该分组且支持重置卡。
 func (s *GroupManagementService) requireResettableAccount(ctx context.Context, actorID int64, role string, groupID, accountID int64) (*Account, error) {
 	if err := s.requireAccountDeps(true); err != nil {
@@ -330,6 +386,9 @@ func (s *GroupManagementService) requireResettableAccount(ctx context.Context, a
 	if !supportsGroupResetCredit(account) {
 		return nil, ErrGroupAccountResetUnsupported
 	}
+	if err := s.requireAccountQuotaDeps(account); err != nil {
+		return nil, err
+	}
 	return account, nil
 }
 
@@ -353,8 +412,19 @@ func (s *GroupManagementService) singleAccountUsage(ctx context.Context, groupID
 
 // RefreshAccountQuota 组管理员刷新账号的额度与重置卡（向上游查询一次并写入快照）。
 func (s *GroupManagementService) RefreshAccountQuota(ctx context.Context, actorID int64, role string, groupID, accountID int64) (*GroupAccountUsage, error) {
-	if _, err := s.requireResettableAccount(ctx, actorID, role, groupID, accountID); err != nil {
+	account, err := s.requireResettableAccount(ctx, actorID, role, groupID, accountID)
+	if err != nil {
 		return nil, err
+	}
+	if isClaudeQuotaAccount(account) {
+		if _, err := s.accountDeps.ClaudeQuota.RefreshQuota(ctx, accountID); err != nil {
+			return nil, err
+		}
+		view := s.singleAccountUsage(ctx, groupID, accountID)
+		if view == nil {
+			return nil, ErrGroupAccountUsageUnavailable
+		}
+		return view, nil
 	}
 	usage, err := s.accountDeps.Quota.QueryUsage(ctx, accountID)
 	if err != nil {
@@ -380,8 +450,12 @@ func (s *GroupManagementService) RefreshAccountQuota(ctx context.Context, actorI
 
 // ResetAccountCredit 组管理员 / 超管对订阅组的账号使用一张重置卡，随后解除限流并刷新额度快照。
 func (s *GroupManagementService) ResetAccountCredit(ctx context.Context, actorID int64, role string, groupID, accountID int64) (*GroupAccountResetResult, error) {
-	if _, err := s.requireResettableAccount(ctx, actorID, role, groupID, accountID); err != nil {
+	account, err := s.requireResettableAccount(ctx, actorID, role, groupID, accountID)
+	if err != nil {
 		return nil, err
+	}
+	if isClaudeQuotaAccount(account) {
+		return s.resetClaudeAccountCredit(ctx, actorID, role, groupID, accountID)
 	}
 	result, err := s.accountDeps.Quota.ResetCredit(ctx, accountID)
 	if err != nil {
@@ -400,6 +474,34 @@ func (s *GroupManagementService) ResetAccountCredit(ctx context.Context, actorID
 	return &GroupAccountResetResult{
 		Code:         result.Code,
 		WindowsReset: result.WindowsReset,
+		WarningCode:  post.WarningCode,
+		Account:      s.singleAccountUsage(postCtx, groupID, accountID),
+	}, nil
+}
+
+// resetClaudeAccountCredit 组管理员为 Claude OAuth 账号领取一次重置（自动选择：优先每周会话重置）。
+// 组管理员界面只区分成功与失败：上游确认未扣卡的结果（未达限额、冷却中等）按失败返回并附上原因。
+func (s *GroupManagementService) resetClaudeAccountCredit(ctx context.Context, actorID int64, role string, groupID, accountID int64) (*GroupAccountResetResult, error) {
+	result, err := s.accountDeps.ClaudeQuota.ResetCredit(ctx, accountID, "")
+	if err != nil {
+		return nil, err
+	}
+	if result == nil {
+		return nil, ErrGroupAccountUsageUnavailable
+	}
+	logger.LegacyPrintf("service.group_management", "audit: group account claude limit reset actor_id=%d role=%s group_id=%d account_id=%d program=%s result=%s reason=%s",
+		actorID, role, groupID, accountID, result.Program, result.Result, result.Reason)
+	if !result.Consumed() {
+		return nil, ClaudeResetNotAppliedError(result)
+	}
+
+	// 上游已经扣卡：后处理与读取不受请求取消影响
+	postCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), groupAccountResetPostProcessTimeout)
+	defer cancel()
+	post := RunClaudeQuotaResetPostProcess(postCtx, accountID, s.accountDeps.ClaudeQuota, s.accountDeps.Recoverer, s.accountDeps.Accounts.GetByID)
+	return &GroupAccountResetResult{
+		Code:         result.Result,
+		WindowsReset: len(result.Cleared),
 		WarningCode:  post.WarningCode,
 		Account:      s.singleAccountUsage(postCtx, groupID, accountID),
 	}, nil

@@ -267,6 +267,33 @@ function buildGrokOAuthAccount() {
   } as any
 }
 
+function buildAnthropicOAuthAccount(
+  type: 'oauth' | 'setup-token',
+  modelMapping?: Record<string, string>
+) {
+  return {
+    id: 8,
+    name: 'Claude OAuth',
+    notes: '',
+    platform: 'anthropic',
+    type,
+    credentials: {
+      access_token: 'claude-access-token',
+      refresh_token: 'claude-refresh-token',
+      ...(modelMapping ? { model_mapping: modelMapping } : {})
+    },
+    extra: {},
+    proxy_id: null,
+    concurrency: 1,
+    priority: 1,
+    rate_multiplier: 1,
+    status: 'active',
+    group_ids: [],
+    expires_at: null,
+    auto_pause_on_expired: false
+  } as any
+}
+
 function buildGrokAPIKeyAccount() {
   return {
     ...buildAccount(),
@@ -1032,6 +1059,69 @@ describe('EditAccountModal', () => {
     expect(updateAccountMock.mock.calls[0]?.[1]?.credentials?.model_mapping).toEqual({
       grok: 'grok-build-0.1'
     })
+  })
+
+  it('loads and saves the Claude OAuth model restriction', async () => {
+    const account = buildAnthropicOAuthAccount('oauth', {
+      'claude-opus-4-6': 'claude-opus-4-6',
+      'claude-haiku-4-5-20251001': 'claude-sonnet-4-6'
+    })
+    updateAccountMock.mockReset().mockResolvedValue(account)
+    checkMixedChannelRiskMock.mockReset().mockResolvedValue({ has_risk: false })
+
+    const wrapper = mountModal(account)
+    const section = wrapper.get('[data-testid="edit-oauth-model-restriction"]')
+    expect(section.text()).toContain('admin.accounts.modelRestriction')
+    expect(wrapper.get('[data-testid="model-whitelist-value"]').text()).toBe('claude-opus-4-6')
+
+    await wrapper.get('[data-testid="rewrite-to-snapshot"]').trigger('click')
+    await wrapper.get('form#edit-account-form').trigger('submit.prevent')
+
+    expect(updateAccountMock).toHaveBeenCalledTimes(1)
+    const credentials = updateAccountMock.mock.calls[0]?.[1]?.credentials
+    expect(credentials).toMatchObject({ access_token: 'claude-access-token' })
+    expect(credentials?.model_mapping).toEqual({
+      'gpt-5.2-2025-12-11': 'gpt-5.2-2025-12-11',
+      'claude-haiku-4-5-20251001': 'claude-sonnet-4-6'
+    })
+  })
+
+  it('removes model_mapping when a Claude setup-token restriction is cleared', async () => {
+    const account = buildAnthropicOAuthAccount('setup-token', {
+      'claude-opus-4-6': 'claude-sonnet-4-6'
+    })
+    updateAccountMock.mockReset().mockResolvedValue(account)
+    checkMixedChannelRiskMock.mockReset().mockResolvedValue({ has_risk: false })
+
+    const wrapper = mountModal(account)
+    const section = wrapper.get('[data-testid="edit-oauth-model-restriction"]')
+    // 仅有映射时以映射模式载入
+    const fromInput = section.get<HTMLInputElement>('input[placeholder="admin.accounts.requestModel"]')
+    expect(fromInput.element.value).toBe('claude-opus-4-6')
+    const removeButton = section.findAll('button').find((button) => button.classes().includes('text-red-500'))
+    expect(removeButton).toBeDefined()
+    await removeButton!.trigger('click')
+    await wrapper.get('form#edit-account-form').trigger('submit.prevent')
+
+    expect(updateAccountMock).toHaveBeenCalledTimes(1)
+    const credentials = updateAccountMock.mock.calls[0]?.[1]?.credentials
+    expect(credentials).toMatchObject({ access_token: 'claude-access-token' })
+    expect(credentials).not.toHaveProperty('model_mapping')
+  })
+
+  it('keeps an unrestricted Claude OAuth account without model_mapping', async () => {
+    const account = buildAnthropicOAuthAccount('oauth')
+    updateAccountMock.mockReset().mockResolvedValue(account)
+    checkMixedChannelRiskMock.mockReset().mockResolvedValue({ has_risk: false })
+
+    const wrapper = mountModal(account)
+    expect(wrapper.find('[data-testid="edit-oauth-model-restriction"]').exists()).toBe(true)
+    expect(wrapper.get('[data-testid="model-whitelist-value"]').text()).toBe('')
+
+    await wrapper.get('form#edit-account-form').trigger('submit.prevent')
+
+    expect(updateAccountMock).toHaveBeenCalledTimes(1)
+    expect(updateAccountMock.mock.calls[0]?.[1]?.credentials).not.toHaveProperty('model_mapping')
   })
 
   it('uses the official xAI base URL when a Grok API-key account omits base_url', async () => {

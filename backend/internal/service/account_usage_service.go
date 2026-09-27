@@ -270,6 +270,13 @@ type ClaudeUsageResponse struct {
 	// 见 anthropic-ratelimit-unified-representative-claim 头）。上游 usage API
 	// 若不下发该字段，GetUsage 会用被动采样数据回填。
 	SevenDayOverageIncluded ClaudeUsageWindow `json:"seven_day_overage_included"`
+	// Limits 是按范围细分的额度条目。Claude Code 的 /usage 从 kind=weekly_scoped、
+	// 带 scope.model.display_name 的条目读取按模型的周额度，Max 计划的 Fable 周额度即在此。
+	// 保留原始 JSON 宽松解析，单个条目格式异常不影响整份用量。
+	Limits json.RawMessage `json:"limits,omitempty"`
+	// CedarEmber / JuniperTide 是重置状态块，只在 ?cedar_ember=1 或 ?at_wall=1 读取时下发。
+	CedarEmber  json.RawMessage `json:"cedar_ember,omitempty"`
+	JuniperTide json.RawMessage `json:"juniper_tide,omitempty"`
 }
 
 // ClaudeUsageFetchOptions 包含获取 Claude 用量数据所需的所有选项
@@ -279,6 +286,7 @@ type ClaudeUsageFetchOptions struct {
 	AccountID   int64                   // 账号 ID（用于连接池隔离）
 	TLSProfile  *tlsfingerprint.Profile // TLS 指纹 Profile（nil 表示不启用）
 	Fingerprint *Fingerprint            // 缓存的指纹信息（User-Agent 等）
+	Query       string                  // 附加查询参数（如 cedar_ember=1&skip_spend=1），空表示普通读取
 }
 
 // ClaudeUsageFetcher fetches usage data from Anthropic OAuth API
@@ -303,6 +311,18 @@ type AccountUsageService struct {
 	tlsFPProfileService     *TLSFingerprintProfileService
 	agentIdentityTaskMu     sync.Mutex
 	agentIdentityWS         agentIdentityWSConnectionInvalidator
+	// claudeSubscription 在读取 Claude OAuth 用量时按需后台补全订阅档位（可为 nil）。
+	claudeSubscription claudeSubscriptionRefresher
+}
+
+// claudeSubscriptionRefresher 在后台为缺少或过期的 Claude OAuth 账号补全订阅档位，不阻塞调用方。
+type claudeSubscriptionRefresher interface {
+	RefreshSubscriptionIfStale(account *Account)
+}
+
+// SetClaudeSubscriptionRefresher 挂载 Claude 订阅档位的后台补全器。
+func (s *AccountUsageService) SetClaudeSubscriptionRefresher(refresher claudeSubscriptionRefresher) {
+	s.claudeSubscription = refresher
 }
 
 // NewAccountUsageService 创建AccountUsageService实例
@@ -454,22 +474,7 @@ func (s *AccountUsageService) getUsageForAccount(ctx context.Context, account *A
 			apiResp, _ = result.(*ClaudeUsageResponse)
 		}
 
-		// 3. 构建 UsageInfo（每次都重新计算 RemainingSeconds）
-		now := time.Now()
-		usage := s.buildUsageInfo(apiResp, &now)
-
-		// 4. 添加窗口统计（有独立缓存，1 分钟）
-		s.addWindowStats(ctx, account, usage)
-
-		// 5. 将主动查询结果同步到被动缓存，下次 passive 加载即为最新值
-		s.syncActiveToPassive(ctx, account.ID, usage)
-
-		// 6. 上游 usage API 目前不一定下发 Fable 7d 窗口；缺失时回填被动采样
-		// （7d_oi 响应头）的数据，避免主动查询后 7d F 进度条丢失。
-		if usage.SevenDayFable == nil {
-			usage.SevenDayFable = buildPassiveUsageWindow(account.Extra, "passive_usage_7d_oi_utilization", "passive_usage_7d_oi_reset")
-		}
-
+		usage := s.applyClaudeUsageResponse(ctx, account, apiResp)
 		s.tryClearRecoverableAccountError(ctx, account)
 		return usage, nil
 	}
@@ -484,6 +489,54 @@ func (s *AccountUsageService) getUsageForAccount(ctx context.Context, account *A
 
 	// API Key账号不支持usage查询
 	return nil, fmt.Errorf("account type %s does not support usage query", account.Type)
+}
+
+// applyClaudeUsageResponse 把一份 /api/oauth/usage 响应落到 UsageInfo：计算窗口、补窗口统计、
+// 回写被动缓存，并在上游未下发 Fable 窗口时回填被动采样数据。重置状态查询复用同一流程，
+// 一次上游读取同时刷新进度条。
+func (s *AccountUsageService) applyClaudeUsageResponse(ctx context.Context, account *Account, resp *ClaudeUsageResponse) *UsageInfo {
+	// 1. 构建 UsageInfo（每次都重新计算 RemainingSeconds）
+	now := time.Now()
+	usage := s.buildUsageInfo(resp, &now)
+
+	// 2. 添加窗口统计（有独立缓存，1 分钟）
+	s.addWindowStats(ctx, account, usage)
+
+	// 3. 将主动查询结果同步到被动缓存，下次 passive 加载即为最新值
+	s.syncActiveToPassive(ctx, account.ID, usage)
+
+	// 4. 上游 usage API 不一定下发 Fable 7d 窗口；缺失时回填被动采样
+	// （7d_oi 响应头）的数据，避免主动查询后 7d F 进度条丢失。
+	if usage.SevenDayFable == nil {
+		usage.SevenDayFable = buildPassiveUsageWindow(account.Extra, "passive_usage_7d_oi_utilization", "passive_usage_7d_oi_reset")
+	}
+
+	applyClaudeSubscriptionToUsage(usage, account.Extra)
+	s.refreshClaudeSubscriptionIfStale(account)
+	return usage
+}
+
+// cacheClaudeUsageResponse 把一份新鲜的上游用量写入 3 分钟缓存（重置状态查询顺带读到的用量）。
+func (s *AccountUsageService) cacheClaudeUsageResponse(accountID int64, resp *ClaudeUsageResponse) {
+	if s == nil || s.cache == nil || resp == nil {
+		return
+	}
+	s.cache.apiCache.Store(accountID, &apiUsageCache{response: resp, timestamp: time.Now()})
+}
+
+// invalidateClaudeUsageCache 丢弃账号的用量缓存（含负缓存），重置后下一次查询直接读上游。
+func (s *AccountUsageService) invalidateClaudeUsageCache(accountID int64) {
+	if s == nil || s.cache == nil {
+		return
+	}
+	s.cache.apiCache.Delete(accountID)
+}
+
+func (s *AccountUsageService) refreshClaudeSubscriptionIfStale(account *Account) {
+	if s == nil || s.claudeSubscription == nil || account == nil {
+		return
+	}
+	s.claudeSubscription.RefreshSubscriptionIfStale(account)
 }
 
 // GetUsage 获取账号使用量
@@ -624,6 +677,8 @@ func (s *AccountUsageService) getPassiveUsageForAccount(ctx context.Context, acc
 		applySyntheticWindowStats(info, account.Extra)
 	}
 
+	applyClaudeSubscriptionToUsage(info, account.Extra)
+	s.refreshClaudeSubscriptionIfStale(account)
 	return info, nil
 }
 
@@ -1566,12 +1621,17 @@ func (s *AccountUsageService) fetchOAuthUsageRaw(ctx context.Context, account *A
 		return nil, fmt.Errorf("no access token available")
 	}
 
+	return s.usageFetcher.FetchUsageWithOptions(ctx, s.claudeFetchOptions(ctx, account, accessToken))
+}
+
+// claudeFetchOptions 构建调用 Claude OAuth 账号侧接口的公共选项：代理、TLS 指纹与缓存的
+// Fingerprint（包含 User-Agent 等信息），用量、profile 与重置领取共用。
+func (s *AccountUsageService) claudeFetchOptions(ctx context.Context, account *Account, accessToken string) *ClaudeUsageFetchOptions {
 	var proxyURL string
 	if account.ProxyID != nil && account.Proxy != nil {
 		proxyURL = account.Proxy.URL()
 	}
 
-	// 构建完整的选项
 	opts := &ClaudeUsageFetchOptions{
 		AccessToken: accessToken,
 		ProxyURL:    proxyURL,
@@ -1579,14 +1639,12 @@ func (s *AccountUsageService) fetchOAuthUsageRaw(ctx context.Context, account *A
 		TLSProfile:  s.tlsFPProfileService.ResolveTLSProfile(account),
 	}
 
-	// 尝试获取缓存的 Fingerprint（包含 User-Agent 等信息）
 	if s.identityCache != nil {
 		if fp, err := s.identityCache.GetFingerprint(ctx, account.ID); err == nil && fp != nil {
 			opts.Fingerprint = fp
 		}
 	}
-
-	return s.usageFetcher.FetchUsageWithOptions(ctx, opts)
+	return opts
 }
 
 // parseTime 尝试多种格式解析时间
@@ -1682,8 +1740,11 @@ func (s *AccountUsageService) buildUsageInfo(resp *ClaudeUsageResponse, updatedA
 		}
 	}
 
-	// 7天Fable窗口（响应头 7d_oi 对应的窗口）
-	if fable := resp.SevenDayOverageIncluded; fable.ResetsAt != "" {
+	// 7天Fable窗口：优先取 limits[] 中 Fable 的按模型周额度（Claude Code /usage 的数据源），
+	// 其次兼容顶层 seven_day_overage_included（响应头 7d_oi 对应的 claim）。
+	if fable := claudeFableUsageFromLimits(resp.Limits, time.Now()); fable != nil {
+		info.SevenDayFable = fable
+	} else if fable := resp.SevenDayOverageIncluded; fable.ResetsAt != "" {
 		if fableReset, err := parseTime(fable.ResetsAt); err == nil {
 			info.SevenDayFable = &UsageProgress{
 				Utilization:      fable.Utilization,

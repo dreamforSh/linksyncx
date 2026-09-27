@@ -69,7 +69,7 @@ import { computed } from 'vue'
 import { useI18n } from 'vue-i18n'
 import type { AccountPlatform, AccountType } from '@/types'
 import { platformLabel as sharedPlatformLabel } from '@/utils/platformColors'
-import { normalizePlanType, openAIPlanTypeLabel } from '@/utils/planType'
+import { claudePlanTypeLabel, normalizePlanType, openAIPlanTypeLabel } from '@/utils/planType'
 import GrokFreeIcon from './GrokFreeIcon.vue'
 import PlatformIcon from './PlatformIcon.vue'
 import Icon from '@/components/icons/Icon.vue'
@@ -122,6 +122,11 @@ const planLabel = computed(() => {
   // OpenAI：Antigravity 与 Grok 各自的 pro/team 沿用下面的通用标签。
   if (props.platform === 'openai') {
     const label = openAIPlanTypeLabel(props.planType)
+    if (label) return label
+  }
+  // Claude 的 Max 倍率档位（Max 5x / Max 20x）同样只对 Anthropic 成立。
+  if (props.platform === 'anthropic') {
+    const label = claudePlanTypeLabel(props.planType)
     if (label) return label
   }
   switch (normalizedPlanType.value) {
@@ -254,6 +259,18 @@ const planBadgeClass = computed(() => {
     }
     // Any other non-free Grok plan (future tiers) → amber so it still stands out
     return 'bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-300'
+  }
+  if (props.platform === 'anthropic') {
+    // Max 20x → orange, Max 5x / Max → amber; Pro / Team / Free fall through to the shared colors.
+    if (normalizedPlanType.value === 'max20x') {
+      return 'bg-orange-100 text-orange-700 dark:bg-orange-900/30 dark:text-orange-300'
+    }
+    if (normalizedPlanType.value.startsWith('max')) {
+      return 'bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-300'
+    }
+    if (normalizedPlanType.value === 'enterprise') {
+      return 'bg-slate-100 text-slate-700 dark:bg-slate-800 dark:text-slate-300'
+    }
   }
   // OpenAI / other paid plan labels: keep readable distinction from free gray
   if (normalizedPlanType.value === 'plus') {

@@ -9,6 +9,8 @@ const {
   showWarningMock,
   importCodexSessionMock,
   createOpenAICodexPATMock,
+  generateAuthUrlMock,
+  exchangeCodeMock,
   authIsSimpleMode,
   showErrorMock,
 } = vi.hoisted(() => ({
@@ -18,6 +20,8 @@ const {
   showWarningMock: vi.fn(),
   importCodexSessionMock: vi.fn(),
   createOpenAICodexPATMock: vi.fn(),
+  generateAuthUrlMock: vi.fn(),
+  exchangeCodeMock: vi.fn(),
   authIsSimpleMode: { value: true },
   showErrorMock: vi.fn(),
 }))
@@ -47,6 +51,8 @@ vi.mock('@/api/admin', () => ({
       checkMixedChannelRisk: vi.fn().mockResolvedValue({ has_risk: false }),
       importCodexSession: importCodexSessionMock,
       createOpenAICodexPAT: createOpenAICodexPATMock,
+      generateAuthUrl: generateAuthUrlMock,
+      exchangeCode: exchangeCodeMock,
     },
     settings: {
       getWebSearchEmulationConfig: vi.fn().mockResolvedValue({ enabled: false, providers: [] }),
@@ -71,6 +77,7 @@ vi.mock('vue-i18n', async () => {
 })
 
 import CreateAccountModal from '../CreateAccountModal.vue'
+import { claudeModels } from '@/composables/useModelWhitelist'
 
 const BaseDialogStub = defineComponent({
   name: 'BaseDialog',
@@ -87,8 +94,8 @@ const OAuthAuthorizationFlowStub = defineComponent({
     showCodexPatOption: Boolean,
     initialInputMethod: String,
   },
-  data: () => ({ inputMethod: 'manual' }),
-  emits: ['import-codex-session', 'import-codex-pat'],
+  data: () => ({ inputMethod: 'manual', authCode: '' }),
+  emits: ['import-codex-session', 'import-codex-pat', 'generate-url', 'cookie-auth'],
   template: `
     <div>
       <button data-testid="import-codex-session" @click="$emit('import-codex-session', 'session-json')">session</button>
@@ -788,5 +795,147 @@ describe('CreateAccountModal target group', () => {
     await wrapper.get('[data-testid="create-account-change-group"]').trigger('click')
 
     expect(wrapper.emitted('change-group')).toHaveLength(1)
+  })
+})
+
+describe('CreateAccountModal Claude OAuth model restriction', () => {
+  beforeEach(() => {
+    authIsSimpleMode.value = true
+    createAccountMock.mockReset().mockResolvedValue({ id: 51, platform: 'anthropic', type: 'oauth' })
+    syncUpstreamModelsMock.mockReset().mockResolvedValue({ models: [], metadata: {} })
+    generateAuthUrlMock.mockReset().mockResolvedValue({
+      auth_url: 'https://claude.ai/oauth/authorize?code=true',
+      session_id: 'claude-session',
+    })
+    exchangeCodeMock.mockReset().mockResolvedValue({
+      access_token: 'claude-access-token',
+      refresh_token: 'claude-refresh-token',
+      expires_at: 1893456000,
+    })
+    showErrorMock.mockReset()
+  })
+
+  const restrictionSection = (wrapper: ReturnType<typeof mountModal>) =>
+    wrapper.find('[data-testid="create-oauth-model-restriction"]')
+
+  it('shows the whitelist and mapping section for Claude OAuth and setup-token', async () => {
+    const wrapper = mountModal()
+
+    expect(restrictionSection(wrapper).exists()).toBe(true)
+    expect(restrictionSection(wrapper).text()).toContain('admin.accounts.modelRestriction')
+    expect(wrapper.getComponent(ModelWhitelistSelectorStub).props('platform')).toBe('anthropic')
+
+    await wrapper.get('input[type="radio"][value="setup-token"]').setValue(true)
+    expect(restrictionSection(wrapper).exists()).toBe(true)
+
+    await selectButtonByText(wrapper, 'admin.accounts.modelMapping')
+    expect(restrictionSection(wrapper).text()).toContain('admin.accounts.mapRequestModels')
+    expect(restrictionSection(wrapper).text()).toContain('Opus->Sonnet')
+
+    // API Key 使用 apikey 容器里的模型限制区域，不再渲染 OAuth 专用区域
+    await selectButtonByText(wrapper, 'admin.accounts.claudeConsole')
+    expect(restrictionSection(wrapper).exists()).toBe(false)
+  })
+
+  it('submits the Claude OAuth model mapping through the auth-code exchange', async () => {
+    const wrapper = mountModal()
+    await selectButtonByText(wrapper, 'admin.accounts.modelMapping')
+    await selectButtonByText(wrapper, 'Opus->Sonnet')
+    await wrapper.get('form#create-account-form input[type="text"]').setValue('Claude OAuth')
+    await wrapper.get('form#create-account-form').trigger('submit.prevent')
+    await flushPromises()
+
+    const flow = wrapper.getComponent(OAuthAuthorizationFlowStub)
+    flow.vm.$emit('generate-url')
+    await flushPromises()
+    expect(generateAuthUrlMock).toHaveBeenCalledWith('/admin/accounts/generate-auth-url', {})
+
+    ;(flow.vm as unknown as { authCode: string }).authCode = 'claude-auth-code'
+    await flushPromises()
+    await selectButtonByText(wrapper, 'admin.accounts.oauth.completeAuth')
+    await flushPromises()
+
+    expect(exchangeCodeMock).toHaveBeenCalledWith(
+      '/admin/accounts/exchange-code',
+      expect.objectContaining({ session_id: 'claude-session', code: 'claude-auth-code' })
+    )
+    expect(createAccountMock).toHaveBeenCalledTimes(1)
+    const payload = createAccountMock.mock.calls[0]?.[0]
+    expect(payload).toMatchObject({ platform: 'anthropic', type: 'oauth' })
+    expect(payload?.credentials).toMatchObject({ access_token: 'claude-access-token' })
+    expect(payload?.credentials?.model_mapping).toEqual({
+      'claude-opus-4-6': 'claude-sonnet-4-5-20250929'
+    })
+  })
+
+  it('does not restrict Claude OAuth accounts by default', async () => {
+    const wrapper = mountModal()
+    // 重新打开弹窗会走预填逻辑：Claude OAuth 流程应回到“不限制”，而不是沿用 API Key 的预填白名单
+    await wrapper.setProps({ show: false })
+    await wrapper.setProps({ show: true })
+    await flushPromises()
+    expect(wrapper.getComponent(ModelWhitelistSelectorStub).props('modelValue')).toEqual([])
+
+    await wrapper.get('input[type="radio"][value="setup-token"]').setValue(true)
+    await wrapper.get('form#create-account-form input[type="text"]').setValue('Claude cookie')
+    await wrapper.get('form#create-account-form').trigger('submit.prevent')
+    await flushPromises()
+
+    wrapper.getComponent(OAuthAuthorizationFlowStub).vm.$emit('cookie-auth', 'session-key-a\nsession-key-b')
+    await flushPromises()
+
+    expect(exchangeCodeMock).toHaveBeenCalledTimes(2)
+    expect(exchangeCodeMock.mock.calls[0]?.[0]).toBe('/admin/accounts/setup-token-cookie-auth')
+    expect(createAccountMock).toHaveBeenCalledTimes(2)
+    for (const [payload] of createAccountMock.mock.calls) {
+      expect(payload).toMatchObject({ platform: 'anthropic', type: 'setup-token' })
+      expect(payload.credentials).not.toHaveProperty('model_mapping')
+    }
+  })
+
+  it('applies an explicit Claude whitelist to every cookie-auth account', async () => {
+    const wrapper = mountModal()
+    await wrapper.get('input[type="radio"][value="setup-token"]').setValue(true)
+    const picked = claudeModels.slice(0, 2)
+    wrapper.getComponent(ModelWhitelistSelectorStub).vm.$emit('update:modelValue', picked)
+    await flushPromises()
+    await wrapper.get('form#create-account-form input[type="text"]').setValue('Claude cookie')
+    await wrapper.get('form#create-account-form').trigger('submit.prevent')
+    await flushPromises()
+
+    wrapper.getComponent(OAuthAuthorizationFlowStub).vm.$emit('cookie-auth', 'session-key-a\nsession-key-b')
+    await flushPromises()
+
+    expect(createAccountMock).toHaveBeenCalledTimes(2)
+    const expectedWhitelist = Object.fromEntries(picked.map((model) => [model, model]))
+    for (const [payload] of createAccountMock.mock.calls) {
+      expect(payload.credentials.model_mapping).toEqual(expectedWhitelist)
+    }
+  })
+
+  it('keeps the usual whitelist prefill for Claude API-key accounts', async () => {
+    const wrapper = mountModal()
+    expect(wrapper.getComponent(ModelWhitelistSelectorStub).props('modelValue')).toEqual([])
+
+    await selectButtonByText(wrapper, 'admin.accounts.claudeConsole')
+    await flushPromises()
+    expect(wrapper.getComponent(ModelWhitelistSelectorStub).props('modelValue')).toEqual(claudeModels)
+  })
+
+  it('omits model_mapping when the Claude OAuth restriction is empty', async () => {
+    const wrapper = mountModal()
+    // 映射模式下未添加任何映射：等同于不限制模型
+    await selectButtonByText(wrapper, 'admin.accounts.modelMapping')
+    await wrapper.get('form#create-account-form input[type="text"]').setValue('Claude cookie')
+    await wrapper.get('form#create-account-form').trigger('submit.prevent')
+    await flushPromises()
+
+    wrapper.getComponent(OAuthAuthorizationFlowStub).vm.$emit('cookie-auth', 'session-key-a')
+    await flushPromises()
+
+    expect(exchangeCodeMock.mock.calls[0]?.[0]).toBe('/admin/accounts/cookie-auth')
+    expect(createAccountMock).toHaveBeenCalledTimes(1)
+    expect(createAccountMock.mock.calls[0]?.[0]?.type).toBe('oauth')
+    expect(createAccountMock.mock.calls[0]?.[0]?.credentials).not.toHaveProperty('model_mapping')
   })
 })

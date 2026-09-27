@@ -2962,14 +2962,16 @@ func (h *AccountHandler) GetAvailableModels(c *gin.Context) {
 	}
 
 	// Handle Claude/Anthropic accounts
-	// For OAuth and Setup-Token accounts: return default models
-	if account.IsOAuth() {
+	// For OAuth and Setup-Token accounts: return default models, unless an Anthropic
+	// OAuth/Setup-Token account has a model restriction (whitelist/mapping) configured,
+	// in which case its mapping keys are the available models just like API Key accounts.
+	mapping := account.GetModelMapping()
+	if account.IsOAuth() && (!account.IsAnthropicOAuthOrSetupToken() || len(mapping) == 0) {
 		response.Success(c, claude.DefaultModels)
 		return
 	}
 
 	// For API Key accounts: return models based on model_mapping
-	mapping := account.GetModelMapping()
 	if len(mapping) == 0 {
 		// No mapping configured, return default models
 		response.Success(c, claude.DefaultModels)

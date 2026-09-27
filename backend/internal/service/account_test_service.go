@@ -497,6 +497,10 @@ func (s *AccountTestService) testClaudeAccountConnection(c *gin.Context, account
 	if account.Type == "apikey" {
 		testModelID = account.GetMappedModel(testModelID)
 	}
+	// Anthropic OAuth/SetupToken 账号同样按账号级模型限制（白名单/映射）解析，与实际转发一致。
+	if mappedModel, matched := account.ResolveAnthropicOAuthMappedModel(testModelID); matched {
+		testModelID = mappedModel
+	}
 
 	// Bedrock accounts use a separate test path
 	if account.IsBedrock() {

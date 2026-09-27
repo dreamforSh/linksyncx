@@ -1710,6 +1710,67 @@ export default {
         confirmTitle: 'Confirm Weekly Limit Reset',
         confirmMessage: 'This will consume 1 reset credit to immediately restore the current window ({count} remaining). This action cannot be undone. Continue?'
       },
+      claudeQuotaReset: {
+        count: 'Resets',
+        reset: 'Reset',
+        countTooltipLoad: 'Click to load Claude limit resets and the subscription plan',
+        countTooltipRefresh: 'Click to refresh limit resets and the subscription plan',
+        fetchedAt: 'Checked at {time}',
+        resetTooltipReady: 'Use 1 reset to restore the covered limit immediately',
+        resetTooltipNeedQuery: 'Click "Resets" first to load the available resets',
+        resetTooltipNoResets: 'No reset is available',
+        resetTooltipRequiresLimit: 'This reset can only be used after the limit it covers is used up',
+        expiresAt: 'Expires {time}',
+        expiresAtFull: 'Expires at {time}',
+        grantNoExpiry: 'No expiry',
+        grantLeft: '{count} left',
+        grantClears: 'Restores: {limits}',
+        expandGrants: 'Show {count} more resets',
+        requiresLimit: 'Usable at the limit',
+        paused: 'Paused, not usable right now',
+        weeklyAvailable: 'Session reset available',
+        weeklyNextAvailable: 'Session reset after {time}',
+        weeklyTitle: 'A weekly 5-hour session reset (a limited rollout for some Max accounts); usable only once the 5-hour limit is used up',
+        ineligible: 'Not eligible for resets',
+        ineligibleTitle: 'Upstream reason: {reason}',
+        limits: {
+          five_hour: '5-hour',
+          seven_day: 'weekly',
+          seven_day_overage_included: 'Fable weekly',
+          seven_day_opus: 'Opus weekly',
+          seven_day_sonnet: 'Sonnet weekly'
+        },
+        programs: {
+          cedar_ember: 'Free reset',
+          juniper_tide: 'Weekly session reset'
+        },
+        programHints: {
+          cedar_ember: 'A reset granted by Anthropic, usable until it expires; restores: {limits}',
+          juniper_tide: 'Once a week; restores the 5-hour limit only'
+        },
+        confirmTitle: 'Use a Limit Reset',
+        confirmMessage: 'This uses 1 reset to restore the covered limit immediately. This action cannot be undone.',
+        confirmChoose: 'Choose the reset to use:',
+        resetSuccess: 'Reset: {limits}',
+        resetSuccessGeneric: 'The reset went through; limits and account state were refreshed',
+        resetAlreadyUsed: 'The reset had already gone through (an earlier request completed); limits were refreshed',
+        resetNotLimited: 'The limit this reset covers is not used up, so no reset was spent',
+        resetCooldown: 'A reset was just used on this account; try again shortly',
+        resetNotApplied: 'The reset was not applied upstream ({result})',
+        resetCacheRefreshFailed: 'Reset applied, but the latest reset status could not be read back. Please check again.',
+        resetAccountRecoveryFailed: 'Reset applied, but restoring the local account state failed. Please recover the account manually.',
+        resetAccountRefreshFailed: 'Reset applied and resets updated, but the latest account row could not be loaded.',
+        refreshCachePersistFailed: 'Showing live status, but saving the snapshot failed. Please check again.',
+        errors: {
+          CLAUDE_RESET_UNAVAILABLE: 'No reset is available right now',
+          CLAUDE_RESET_REQUIRES_LIMIT: 'This reset can only be used after the limit it covers is used up',
+          CLAUDE_QUOTA_NO_ORGANIZATION: 'The account has no organization info; re-authorize it and try again',
+          CLAUDE_QUOTA_NO_TOKEN: 'The account has no usable access token',
+          CLAUDE_QUOTA_UNSUPPORTED: 'Only Claude OAuth accounts support limit resets',
+          CLAUDE_UPSTREAM_AUTH_FAILED: 'Upstream rejected the account credentials; check the account authorization',
+          CLAUDE_UPSTREAM_RATE_LIMITED: 'Too many upstream requests; try again shortly'
+        }
+      },
       tier: {
         free: 'Free',
         pro: 'Pro',
