@@ -4,14 +4,17 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"net"
 	"net/http"
 	"net/url"
 	"strings"
 	"time"
 
+	"github.com/Wei-Shaw/sub2api/internal/pkg/claude"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/logger"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/oauth"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/proxyurl"
+	"github.com/Wei-Shaw/sub2api/internal/pkg/tlsfingerprint"
 	"github.com/Wei-Shaw/sub2api/internal/service"
 	"github.com/Wei-Shaw/sub2api/internal/util/logredact"
 
@@ -205,9 +208,12 @@ func (s *claudeOAuthService) ExchangeCodeForToken(ctx context.Context, code, cod
 
 	resp, err := client.R().
 		SetContext(ctx).
-		SetHeader("Accept", "application/json, text/plain, */*").
+		// 头部形状对齐真实 CLI 2.1.280 的 sdk-ts OAuth helper（二进制实证）：
+		// content-type + anthropic-beta: oauth-2025-04-20 + sdk-ts UA；无 axios Accept。
 		SetHeader("Content-Type", "application/json").
-		SetHeader("User-Agent", "axios/1.13.6").
+		SetHeader("Accept", "*/*").
+		SetHeader("anthropic-beta", "oauth-2025-04-20").
+		SetHeader("User-Agent", claude.OAuthHelperUserAgent).
 		SetBody(reqBody).
 		SetSuccessResult(&tokenResp).
 		Post(s.tokenURL)
@@ -243,9 +249,12 @@ func (s *claudeOAuthService) RefreshToken(ctx context.Context, refreshToken, pro
 
 	resp, err := client.R().
 		SetContext(ctx).
-		SetHeader("Accept", "application/json, text/plain, */*").
+		// 头部形状对齐真实 CLI 2.1.280 的 sdk-ts OAuth helper（二进制实证）：
+		// content-type + anthropic-beta: oauth-2025-04-20 + sdk-ts UA；无 axios Accept。
 		SetHeader("Content-Type", "application/json").
-		SetHeader("User-Agent", "axios/1.13.6").
+		SetHeader("Accept", "*/*").
+		SetHeader("anthropic-beta", "oauth-2025-04-20").
+		SetHeader("User-Agent", claude.OAuthHelperUserAgent).
 		SetBody(reqBody).
 		SetSuccessResult(&tokenResp).
 		Post(s.tokenURL)
@@ -265,16 +274,41 @@ func createReqClient(proxyURL string) (*req.Client, error) {
 	// 禁用 CookieJar，确保每次授权都是干净的会话
 	client := req.C().
 		SetTimeout(60 * time.Second).
-		ImpersonateChrome().
 		SetCookieJar(nil) // 禁用 CookieJar
 
 	trimmed, _, err := proxyurl.Parse(proxyURL)
 	if err != nil {
 		return nil, err
 	}
-	if trimmed != "" {
-		client.SetProxyURL(trimmed)
+
+	// 传输层对齐真实 CLI 的运行时指纹（Node.js spec + ALPN http/1.1），代替
+	// Chrome 指纹：浏览器 persona + CLI 凭证是矛盾信号（2.1.280 实证控制面
+	// 同样走 Node/Bun fetch）。代理由 dialer 自建 CONNECT/SOCKS5 隧道处理。
+	dialTLS, err := oauthControlPlaneDialTLS(trimmed)
+	if err != nil {
+		return nil, err
 	}
+	client.SetDialTLS(dialTLS)
 
 	return instrumentReqClient(client), nil
+}
+
+// oauthControlPlaneDialTLS 返回控制面（platform.claude.com 等）的 TLS 拨号函数：
+// uTLS Node.js 指纹（与数据面同一 persona）。
+func oauthControlPlaneDialTLS(rawProxy string) (func(ctx context.Context, network, addr string) (net.Conn, error), error) {
+	if rawProxy == "" {
+		return tlsfingerprint.NewDialer(nil, nil).DialTLSContext, nil
+	}
+	pu, err := url.Parse(rawProxy)
+	if err != nil {
+		return nil, fmt.Errorf("parse proxy url: %w", err)
+	}
+	switch strings.ToLower(pu.Scheme) {
+	case "http", "https":
+		return tlsfingerprint.NewHTTPProxyDialer(nil, pu).DialTLSContext, nil
+	case "socks5", "socks5h":
+		return tlsfingerprint.NewSOCKS5ProxyDialer(nil, pu).DialTLSContext, nil
+	default:
+		return nil, fmt.Errorf("unsupported proxy scheme %q", pu.Scheme)
+	}
 }

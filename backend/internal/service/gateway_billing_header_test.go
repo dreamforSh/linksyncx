@@ -142,8 +142,13 @@ func TestBuildOAuthRequest_BillingMatchesWireUserAgent(t *testing.T) {
 				}
 				require.Equal(t, wantUA, getHeaderRaw(req.Header, "User-Agent"))
 				version := ExtractCLIVersion(wantUA)
-				require.Contains(t, gjson.GetBytes(wireBody, "system.0.text").String(),
-					"cc_version="+version+"."+computeClaudeCodeFingerprint(wireBody, version)+";")
+				if endpoint == "count_tokens" {
+					// 真实 CLI 2.1.280 的 count_tokens 不带 system/billing 块
+					require.False(t, gjson.GetBytes(wireBody, "system").Exists())
+				} else {
+					require.Contains(t, gjson.GetBytes(wireBody, "system.0.text").String(),
+						"cc_version="+version+"."+computeClaudeCodeFingerprint(wireBody, version)+";")
+				}
 				actualBody, err := io.ReadAll(req.Body)
 				require.NoError(t, err)
 				require.Equal(t, wireBody, actualBody)

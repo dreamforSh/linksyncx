@@ -202,12 +202,12 @@ func (r *clashRepository) RecordRefresh(ctx context.Context, profileID int64, re
 			last_refresh_at = $2,
 			last_refresh_status = $3,
 			last_refresh_error = $4,
-			last_format = CASE WHEN $5 = '' THEN last_format ELSE $5 END,
-			upload_bytes = CASE WHEN $6 THEN $7 ELSE upload_bytes END,
-			download_bytes = CASE WHEN $6 THEN $8 ELSE download_bytes END,
-			total_bytes = CASE WHEN $6 THEN $9 ELSE total_bytes END,
-			expire_at = CASE WHEN $6 THEN $10 ELSE expire_at END,
-			node_count = CASE WHEN $11 THEN $12 ELSE node_count END,
+			last_format = CASE WHEN $5::text = '' THEN last_format ELSE $5::text END,
+			upload_bytes = CASE WHEN $6::boolean THEN $7::bigint ELSE upload_bytes END,
+			download_bytes = CASE WHEN $6::boolean THEN $8::bigint ELSE download_bytes END,
+			total_bytes = CASE WHEN $6::boolean THEN $9::bigint ELSE total_bytes END,
+			expire_at = CASE WHEN $6::boolean THEN $10::timestamptz ELSE expire_at END,
+			node_count = CASE WHEN $11::boolean THEN $12::integer ELSE node_count END,
 			updated_at = NOW()
 		WHERE id = $1`,
 		profileID, rec.At, rec.Status, truncateClashError(rec.Error), rec.Format,
@@ -522,9 +522,9 @@ func (r *clashRepository) ApplyNodeSync(ctx context.Context, profileID int64, pl
 		}
 		if _, err := tx.ExecContext(ctx, `
 			UPDATE clash_nodes SET name = $2, type = $3, server = $4, server_port = $5, config = $6, config_hash = $7,
-				status = $8, status_reason = $9,
-				missing_since = CASE WHEN $8 = 'missing' THEN missing_since ELSE NULL END,
-				exit_status = CASE WHEN $10 AND exit_status = 'ok' THEN 'stale' ELSE exit_status END,
+				status = $8::text, status_reason = $9::text,
+				missing_since = CASE WHEN $8::text = 'missing' THEN missing_since ELSE NULL END,
+				exit_status = CASE WHEN $10::boolean AND exit_status = 'ok' THEN 'stale' ELSE exit_status END,
 				updated_at = NOW()
 			WHERE id = $1`,
 			update.NodeID, update.Name, update.Type, update.Server, update.ServerPort, configJSON, update.ConfigHash,
@@ -603,8 +603,8 @@ func clashUsedPorts(ctx context.Context, tx *sql.Tx) (map[int]struct{}, error) {
 
 func (r *clashRepository) SetNodeStatus(ctx context.Context, nodeID int64, status, reason string) error {
 	result, err := r.db.ExecContext(ctx, `
-		UPDATE clash_nodes SET status = $2, status_reason = $3,
-			missing_since = CASE WHEN $2 = 'missing' THEN COALESCE(missing_since, NOW()) ELSE NULL END,
+		UPDATE clash_nodes SET status = $2::text, status_reason = $3::text,
+			missing_since = CASE WHEN $2::text = 'missing' THEN COALESCE(missing_since, NOW()) ELSE NULL END,
 			updated_at = NOW()
 		WHERE id = $1`, nodeID, status, reason)
 	if err != nil {
@@ -618,8 +618,8 @@ func (r *clashRepository) SetNodeStatus(ctx context.Context, nodeID int64, statu
 
 func (r *clashRepository) MarkProfileNodes(ctx context.Context, profileID int64, status, reason string) error {
 	_, err := r.db.ExecContext(ctx, `
-		UPDATE clash_nodes SET status = $2, status_reason = $3,
-			missing_since = CASE WHEN $2 = 'missing' THEN COALESCE(missing_since, NOW()) ELSE NULL END,
+		UPDATE clash_nodes SET status = $2::text, status_reason = $3::text,
+			missing_since = CASE WHEN $2::text = 'missing' THEN COALESCE(missing_since, NOW()) ELSE NULL END,
 			updated_at = NOW()
 		WHERE profile_id = $1`, profileID, status, reason)
 	return err

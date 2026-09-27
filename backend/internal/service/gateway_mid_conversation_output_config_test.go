@@ -194,74 +194,48 @@ func TestSanitizeAnthropicBodyForBetaTokens_MidConversationOutputConfig_Idempote
 // 真实 request 联动
 // ============================================================================
 
-// OAuth mimic 路径真实 request 联动，两 case 明确期望：
-//   - 默认：mimic 固定列表带该 beta → outgoing header 含 token，空控制 system 消息保留；
-//   - policy filter 命中（经 gin context 的 betaPolicyFilterSetKey 缓存注入该 token，
-//     走真实 policy filter/dropSet 路径）→ outgoing header 无 token，空控制 system
-//     消息整条删除。
+// OAuth mimic 路径真实 request 联动。
 //
-// 两 case 都断言 user 文本、消息数、顶层 effort 原值；期望为显式常量，不引用
-// FullClaudeCodeMimicryBetas（避免把实现列表当 expected）。
+// 2.1.280 第一方抓包实证：真实 CLI 不携带 mid-conversation-output-config beta，
+// 也不使用 message-level output_config（仅顶层 output_config.effort）。故 OAuth mimic
+// 出站 header 永不含该 beta → 携带 message-level output_config 的空控制 system 消息被整条
+// 删除；顶层 output_config.effort 不受该 beta 约束，保留原值。
+// （客户端透传路径下"带/不带该 beta 同进同退"的对称行为，另见下方 API-key passthrough 用例。）
 func TestBuildUpstreamRequestOAuthMimic_MidConversationOutputConfig(t *testing.T) {
-	cases := []struct {
-		name              string
-		policyFilterDrops bool
-		wantHeaderHasBeta bool
-		wantMsgLen        int
-		wantFieldOnFirst  bool
-	}{
-		{"default_mimic_keeps_beta", false, true, 2, true},
-		{"policy_filter_drops_beta", true, false, 1, false},
+	gin.SetMode(gin.TestMode)
+	rec := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(rec)
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/messages", nil)
+
+	account := &Account{ID: 701, Platform: PlatformAnthropic, Type: AccountTypeOAuth,
+		Credentials: map[string]any{"access_token": "oauth-tok"},
+		Status:      StatusActive,
+		Schedulable: true,
 	}
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			gin.SetMode(gin.TestMode)
-			rec := httptest.NewRecorder()
-			c, _ := gin.CreateTestContext(rec)
-			c.Request = httptest.NewRequest(http.MethodPost, "/v1/messages", nil)
-			if tc.policyFilterDrops {
-				c.Set(betaPolicyFilterSetKey, map[string]struct{}{claude.BetaMidConversationOutputConfig: {}})
-			}
+	body := []byte(`{"model":"claude-opus-5","output_config":{"effort":"high"},"messages":[` +
+		`{"role":"system","content":[],"output_config":{"effort":"high"}},` +
+		`{"role":"user","content":"hello"}]}`)
 
-			account := &Account{ID: 701, Platform: PlatformAnthropic, Type: AccountTypeOAuth,
-				Credentials: map[string]any{"access_token": "oauth-tok"},
-				Status:      StatusActive,
-				Schedulable: true,
-			}
-			body := []byte(`{"model":"claude-opus-5","output_config":{"effort":"high"},"messages":[` +
-				`{"role":"system","content":[],"output_config":{"effort":"high"}},` +
-				`{"role":"user","content":"hello"}]}`)
+	svc := &GatewayService{cfg: &config.Config{}}
+	req, _, err := svc.buildUpstreamRequest(
+		context.Background(), c, account, body,
+		"oauth-tok", "oauth", "claude-opus-5", false, true, // mimicClaudeCode=true
+	)
+	require.NoError(t, err)
 
-			svc := &GatewayService{cfg: &config.Config{}}
-			req, _, err := svc.buildUpstreamRequest(
-				context.Background(), c, account, body,
-				"oauth-tok", "oauth", "claude-opus-5", false, true, // mimicClaudeCode=true
-			)
-			require.NoError(t, err)
+	outBody := readUpstreamBodyForTest(t, req)
+	outBeta := getHeaderRaw(req.Header, "anthropic-beta")
+	require.False(t, anthropicBetaTokensContains(outBeta, claude.BetaMidConversationOutputConfig),
+		"OAuth mimic 出站 header 不得含 mid-conversation-output-config（outgoing beta=%q）", outBeta)
 
-			outBody := readUpstreamBodyForTest(t, req)
-			outBeta := getHeaderRaw(req.Header, "anthropic-beta")
-			require.Equalf(t, tc.wantHeaderHasBeta,
-				anthropicBetaTokensContains(outBeta, claude.BetaMidConversationOutputConfig),
-				"outgoing anthropic-beta 必须与 filter 结果一致（outgoing beta=%q）", outBeta)
+	msgs := gjson.GetBytes(outBody, "messages").Array()
+	require.Len(t, msgs, 1, "缺该 beta 时携带 message-level output_config 的空控制 system 消息整条删除")
+	require.Equal(t, "user", msgs[0].Get("role").String())
+	require.False(t, msgs[0].Get("output_config").Exists(), "剩余消息不得残留 message-level output_config")
+	require.Equal(t, "hello", msgs[0].Get("content").String(), "用户消息文本必须保留")
 
-			msgs := gjson.GetBytes(outBody, "messages").Array()
-			require.Len(t, msgs, tc.wantMsgLen,
-				"空控制 system 消息：header 带 beta 保留 / 缺 beta 整条删除")
-			require.Equal(t, tc.wantFieldOnFirst, msgs[0].Get("output_config").Exists())
-
-			var userContent string
-			for _, m := range msgs {
-				if m.Get("role").String() == "user" {
-					userContent = m.Get("content").String()
-				}
-			}
-			require.Equal(t, "hello", userContent, "用户消息文本必须始终保留")
-
-			require.Equal(t, "high", gjson.GetBytes(outBody, "output_config.effort").String(),
-				"顶层 effort 不受该 beta 约束")
-		})
-	}
+	require.Equal(t, "high", gjson.GetBytes(outBody, "output_config.effort").String(),
+		"顶层 effort 不受该 beta 约束")
 }
 
 // API-key passthrough 透传路径：客户端 header 带/不带该 beta 时，

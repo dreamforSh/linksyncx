@@ -132,9 +132,9 @@ func (s *GatewayService) buildUpstreamRequest(ctx context.Context, c *gin.Contex
 		return nil, nil, err
 	}
 
-	// 设置认证头（保持原始大小写）
+	// 设置认证头（2.1.280 抓包为 Canonical 形态）
 	if tokenType == "oauth" {
-		setHeaderRaw(req.Header, "authorization", "Bearer "+token)
+		setHeaderRaw(req.Header, "Authorization", "Bearer "+token)
 	} else {
 		// Ollama Cloud Anthropic 兼容端点按实际 base_url 强制 Bearer（同上方
 		// targetURL 的 base 取值），其余保持 extra/default 行为。
@@ -163,9 +163,9 @@ func (s *GatewayService) buildUpstreamRequest(ctx context.Context, c *gin.Contex
 		s.identityService.ApplyFingerprint(req, fingerprint)
 	}
 
-	// 确保必要的headers存在（保持原始大小写）
+	// 确保必要的headers存在（2.1.280 抓包为 Canonical 形态）
 	if getHeaderRaw(req.Header, "content-type") == "" {
-		setHeaderRaw(req.Header, "content-type", "application/json")
+		setHeaderRaw(req.Header, "Content-Type", "application/json")
 	}
 	if getHeaderRaw(req.Header, "anthropic-version") == "" {
 		setHeaderRaw(req.Header, "anthropic-version", "2023-06-01")
@@ -175,9 +175,22 @@ func (s *GatewayService) buildUpstreamRequest(ctx context.Context, c *gin.Contex
 	}
 
 	// OAuth + mimic Claude Code：强制注入 CLI 指纹相关 header
-	// （user-agent/x-stainless-*/x-app/Accept/x-stainless-helper-method/x-client-request-id）
+	// （user-agent/x-stainless-*/x-app/Accept/x-client-request-id）。
+	// x-client-request-id 有第一方门控（2.1.280 实证：仅 api.anthropic.com
+	// 直连时发送），自定义 relay 不带。
 	if tokenType == "oauth" && mimicClaudeCode {
-		applyClaudeCodeMimicHeaders(req, reqStream, mimicUserAgent)
+		applyClaudeCodeMimicHeaders(req, mimicUserAgent, targetURL == claudeAPIURL)
+		// 非流式请求的真实 timeout 为 300（流式 600，见 DefaultHeaders 与抓包）。
+		if !reqStream {
+			setHeaderRaw(req.Header, "X-Stainless-Timeout", "300")
+		}
+	}
+
+	// Accept-Encoding：真实客户端（Bun/Node fetch）恒发 "gzip, deflate, br, zstd"。
+	// 显式设置后 Go Transport 不再自动解压，由 repository 层 decompressResponseBody
+	// 统一处理（该函数本来就在每个响应上执行）。
+	if getHeaderRaw(req.Header, "Accept-Encoding") == "" {
+		setHeaderRaw(req.Header, "Accept-Encoding", "gzip, deflate, br, zstd")
 	}
 
 	// 写入最终 anthropic-beta header
@@ -188,12 +201,19 @@ func (s *GatewayService) buildUpstreamRequest(ctx context.Context, c *gin.Contex
 		setHeaderRaw(req.Header, "anthropic-beta", finalBetaHeader)
 	}
 
-	// 同步 X-Claude-Code-Session-Id 头：取 body 中已处理的 metadata.user_id 的 session_id 覆盖
-	if sessionHeader := getHeaderRaw(req.Header, "X-Claude-Code-Session-Id"); sessionHeader != "" {
+	// 同步 X-Claude-Code-Session-Id 头：真实 CLI 每个请求都带，且与
+	// metadata.user_id 的 session_id 一致。OAuth 路径无条件从 body 重建
+	// （mimic 路径下客户端可能根本没发该头）；极端缺省时随机 UUID 兜底。
+	if tokenType == "oauth" {
+		synced := false
 		if uid := gjson.GetBytes(body, "metadata.user_id").String(); uid != "" {
-			if parsed := ParseMetadataUserID(uid); parsed != nil {
+			if parsed := ParseMetadataUserID(uid); parsed != nil && parsed.SessionID != "" {
 				setHeaderRaw(req.Header, "X-Claude-Code-Session-Id", parsed.SessionID)
+				synced = true
 			}
+		}
+		if !synced && mimicClaudeCode && getHeaderRaw(req.Header, "X-Claude-Code-Session-Id") == "" {
+			setHeaderRaw(req.Header, "X-Claude-Code-Session-Id", uuid.NewString())
 		}
 	}
 
@@ -509,9 +529,12 @@ func (s *GatewayService) computeFinalAnthropicBeta(
 
 	if tokenType == "oauth" {
 		if mimicClaudeCode {
-			// mimic 路径跳过白名单透传，incomingBeta 始终为空；所有模型都必须
-			// 携带完整 Claude Code beta 集合，避免 Haiku 被识别为第三方客户端。
-			return mergeAnthropicBetaDropping(claude.FullClaudeCodeMimicryBetas(), "", effectiveDropSet), true
+			// mimic 路径跳过白名单透传，incomingBeta 始终为空；按真实 CLI 2.1.280
+			// 的 beta 选择规则按请求计算（haiku 的 claude-code 挪到末尾、thinking 才带
+			// redact-thinking 等），固定列表已无法通过上游的来源判定。
+			thinkingType := gjson.GetBytes(body, "thinking.type").String()
+			thinkingEnabled := thinkingType == "enabled" || thinkingType == "adaptive"
+			return mergeAnthropicBetaDropping(claude.ClaudeCodeMimicryBetas(modelID, thinkingEnabled), "", effectiveDropSet), true
 		}
 		// 真 Claude Code 客户端透传路径
 		return stripBetaTokensWithSet(s.getBetaHeader(modelID, clientBeta), effectiveDropSet), true
@@ -556,12 +579,9 @@ func (s *GatewayService) computeFinalCountTokensAnthropicBeta(
 
 	if tokenType == "oauth" {
 		if mimicClaudeCode {
-			// 与原代码严格等价：original buildCountTokensRequest 在 count_tokens mimic
-			// 分支上**不**会跳过白名单透传（与 messages mimic 路径不同），所以
-			// incomingBeta = req.Header[anthropic-beta] = 客户端透传过来的 client beta。
-			// 重构后直接从 clientHeaders 拿同一个值，保持行为一致。
-			requiredBetas := append(claude.FullClaudeCodeMimicryBetas(), claude.BetaTokenCounting)
-			return mergeAnthropicBetaDropping(requiredBetas, clientBeta, effectiveDropSet), true
+			// count_tokens 的实测固定集合（CLIProxyAPI 对 37 次真实调用验证）；
+			// 不再并入客户端 beta（与 messages mimic 的"不信任客户端"对齐）。
+			return mergeAnthropicBetaDropping(strings.Split(claude.CountTokensBetaHeader, ","), "", effectiveDropSet), true
 		}
 		if clientBeta == "" {
 			return claude.CountTokensBetaHeader, true
@@ -861,7 +881,9 @@ var defaultDroppedBetasSet = buildBetaTokenSet(claude.DroppedBetas)
 // headers when using Claude Code-scoped OAuth credentials.
 // mimicUserAgent 由调用方在同一请求内取一次传入，保证出站 User-Agent 头与
 // 请求体 billing attribution 的 cc_version 版本号严格一致。
-func applyClaudeCodeMimicHeaders(req *http.Request, isStream bool, mimicUserAgent string) {
+// firstParty：x-client-request-id 有第一方门控（2.1.280 实证：仅直连
+// api.anthropic.com 时发送），自定义 relay/第三方上游不带。
+func applyClaudeCodeMimicHeaders(req *http.Request, mimicUserAgent string, firstParty bool) {
 	if req == nil {
 		return
 	}
@@ -881,12 +903,11 @@ func applyClaudeCodeMimicHeaders(req *http.Request, isStream bool, mimicUserAgen
 	}
 	// Real Claude CLI uses Accept: application/json (even for streaming).
 	setHeaderRaw(req.Header, "Accept", "application/json")
-	if isStream {
-		setHeaderRaw(req.Header, "x-stainless-helper-method", "stream")
-	}
-	// Real Claude CLI 每个请求都会生成一个新的 UUID 放在 x-client-request-id。
-	// 上游会以此作为会话/请求指纹的一部分，缺失或重复都可能触发第三方判定。
-	if getHeaderRaw(req.Header, "x-client-request-id") == "" {
+	// 注意：2.1.280 抓包中主流式请求**不带** x-stainless-helper-method（该头只
+	// 出现在特定 helper 调用），之前的 stream 注入是偏差，已移除。
+	if firstParty && getHeaderRaw(req.Header, "x-client-request-id") == "" {
+		// Real Claude CLI 每个第一方请求都会生成一个新的 UUID 放在 x-client-request-id。
+		// 上游会以此作为会话/请求指纹的一部分，缺失或重复都可能触发第三方判定。
 		setHeaderRaw(req.Header, "x-client-request-id", uuid.NewString())
 	}
 }

@@ -124,11 +124,11 @@ func defaultFingerprint() Fingerprint {
 	return Fingerprint{
 		UserAgent:               claude.DefaultUserAgent(),
 		StainlessLang:           "js",
-		StainlessPackageVersion: "0.94.0",
+		StainlessPackageVersion: claude.SDKTSVersion,
 		StainlessOS:             "Linux",
 		StainlessArch:           "arm64",
 		StainlessRuntime:        "node",
-		StainlessRuntimeVersion: "v24.3.0",
+		StainlessRuntimeVersion: claude.SDKTSRuntimeVersion,
 	}
 }
 

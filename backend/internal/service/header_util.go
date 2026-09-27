@@ -32,11 +32,11 @@ var headerWireCasing = map[string]string{
 	"anthropic-version":                         "anthropic-version",
 	"anthropic-beta":                            "anthropic-beta",
 	"x-app":                                     "x-app",
-	"content-type":                              "content-type",
 	"accept-language":                           "accept-language",
 	"sec-fetch-mode":                            "sec-fetch-mode",
 	"accept-encoding":                           "Accept-Encoding",
-	"authorization":                             "authorization",
+	// 注意：authorization / content-type 在 2.1.280 本机抓包中为 Canonical 形态
+	// （2.1.81 旧抓包为小写，以新抓包为准），故不在表中，按 Canonical 直写。
 
 	// Claude Code 2.1.87+ 新增 header
 	"x-claude-code-session-id": "X-Claude-Code-Session-Id",
@@ -44,32 +44,33 @@ var headerWireCasing = map[string]string{
 	"content-length":           "content-length",
 }
 
-// headerWireOrder 定义真实 Claude CLI 发送 header 的顺序（基于抓包）。
+// headerWireOrder 定义真实 Claude CLI 发送 header 的顺序（本机 claude.exe
+// 2.1.280 抓包：Bun fetch 的用户头按头名字节序升序，随后 Connection/Host/
+// Accept-Encoding/Content-Length 固定尾序；后两者由 Go transport 自管，不列出）。
 // 用于 debug log 按此顺序输出，便于与抓包结果直接对比。
 var headerWireOrder = []string{
 	"Accept",
-	"X-Stainless-Retry-Count",
-	"X-Stainless-Timeout",
-	"X-Stainless-Lang",
-	"X-Stainless-Package-Version",
-	"X-Stainless-OS",
-	"X-Stainless-Arch",
-	"X-Stainless-Runtime",
-	"X-Stainless-Runtime-Version",
-	"anthropic-dangerous-direct-browser-access",
-	"anthropic-version",
-	"authorization",
-	"x-app",
+	"Authorization",
+	"Content-Type",
 	"User-Agent",
 	"X-Claude-Code-Session-Id",
-	"content-type",
+	"X-Stainless-Arch",
+	"X-Stainless-Lang",
+	"X-Stainless-OS",
+	"X-Stainless-Package-Version",
+	"X-Stainless-Retry-Count",
+	"X-Stainless-Runtime",
+	"X-Stainless-Runtime-Version",
+	"X-Stainless-Timeout",
 	"anthropic-beta",
+	"anthropic-dangerous-direct-browser-access",
+	"anthropic-version",
+	"x-app",
 	"x-client-request-id",
+	"x-stainless-helper-method",
 	"accept-language",
 	"sec-fetch-mode",
-	"accept-encoding",
-	"content-length",
-	"x-stainless-helper-method",
+	"Accept-Encoding",
 }
 
 // headerWireOrderSet 用于快速判断某个 key 是否在 headerWireOrder 中（按 lowercase 匹配）。

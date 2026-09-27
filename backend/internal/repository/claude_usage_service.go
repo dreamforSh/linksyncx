@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"time"
 
+	"github.com/Wei-Shaw/sub2api/internal/pkg/claude"
 	infraerrors "github.com/Wei-Shaw/sub2api/internal/pkg/errors"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/httpclient"
 	"github.com/Wei-Shaw/sub2api/internal/service"
@@ -15,8 +16,11 @@ import (
 
 const defaultClaudeUsageURL = "https://api.anthropic.com/api/oauth/usage"
 
-// 默认 User-Agent，与用户抓包的请求一致
-const defaultUsageUserAgent = "claude-code/2.1.7"
+// 默认 User-Agent 跟随运行期生效的 CLI 版本（真实客户端 2.1.280 的
+// /api/oauth/usage UA 形如 claude-code/2.1.280）；指纹缓存命中时优先用账号指纹 UA。
+func defaultUsageUserAgent() string {
+	return "claude-code/" + claude.EffectiveCLIVersion()
+}
 
 type claudeUsageService struct {
 	usageURL          string
@@ -60,7 +64,7 @@ func (s *claudeUsageService) FetchUsageWithOptions(ctx context.Context, opts *se
 	req.Header.Set("anthropic-beta", "oauth-2025-04-20")
 
 	// 设置 User-Agent（优先使用缓存的 Fingerprint，否则使用默认值）
-	userAgent := defaultUsageUserAgent
+	userAgent := defaultUsageUserAgent()
 	if opts.Fingerprint != nil && opts.Fingerprint.UserAgent != "" {
 		userAgent = opts.Fingerprint.UserAgent
 	}
