@@ -173,6 +173,8 @@ type ClashNodeView struct {
 	ProfileEnabled bool
 	ProfileDeleted bool
 	Accounts       []ClashBoundAccount
+	// Traffic is only filled by node listings (ClashService.ListNodes).
+	Traffic ClashNodeTraffic
 }
 
 // Available reports whether traffic may be routed through the node.
@@ -224,6 +226,13 @@ type ClashNodeFilter struct {
 	Health    string
 	Bound     *bool
 	Search    string
+	// LiveOnly keeps nodes that can carry traffic (and be probed): active
+	// nodes of enabled, undeleted profiles.
+	LiveOnly bool
+	// Sort is one of the ClashNodeSort* orders ("" = profile, then id).
+	Sort string
+	// TrafficDate is the bucket day for ClashNodeSortTrafficToday.
+	TrafficDate string
 }
 
 // ClashRefreshRecord is persisted after every refresh attempt.
@@ -354,6 +363,7 @@ type ClashRepository interface {
 
 	ListNodesByProfile(ctx context.Context, profileID int64) ([]ClashNode, error)
 	ListNodeViews(ctx context.Context, filter ClashNodeFilter, params pagination.PaginationParams) ([]ClashNodeView, *pagination.PaginationResult, error)
+	ListNodeIDs(ctx context.Context, filter ClashNodeFilter) ([]int64, error)
 	ListAllNodeViews(ctx context.Context) ([]ClashNodeView, error)
 	GetNodeView(ctx context.Context, id int64) (*ClashNodeView, error)
 	GetNodeViewByProxyID(ctx context.Context, proxyID int64) (*ClashNodeView, error)
@@ -377,6 +387,14 @@ type ClashRepository interface {
 	// ClearPauses clears Clash-owned pauses only (reason prefix match).
 	ClearPauses(ctx context.Context, accountIDs []int64) ([]int64, error)
 	ListPausedAccounts(ctx context.Context) (map[int64]string, error)
+
+	// AddNodeTraffic adds sampled bytes to daily buckets in one statement;
+	// increments of nodes deleted meanwhile are dropped.
+	AddNodeTraffic(ctx context.Context, increments []ClashTrafficIncrement, at time.Time) error
+	// ListNodeTraffic returns all-time totals plus the buckets from since
+	// (YYYY-MM-DD) on; nodes without traffic are absent.
+	ListNodeTraffic(ctx context.Context, nodeIDs []int64, since string) (map[int64]*ClashNodeTrafficTotals, error)
+	ListProfileTraffic(ctx context.Context, today string) (map[int64]ClashProfileTraffic, error)
 }
 
 // ClashManagedProxySpecFactory creates listener credentials for new nodes.
@@ -389,6 +407,8 @@ type ClashRuntimeNotifier interface {
 	SubscribeConfigChanged(ctx context.Context, handler func()) error
 	PublishInstanceStatus(ctx context.Context, status ClashInstanceStatus, ttl time.Duration) error
 	ListInstanceStatuses(ctx context.Context) ([]ClashInstanceStatus, error)
+	PublishTrafficLive(ctx context.Context, live ClashTrafficLive, ttl time.Duration) error
+	ListTrafficLive(ctx context.Context) ([]ClashTrafficLive, error)
 }
 
 // ClashInstanceStatus is one instance's view of its local core.

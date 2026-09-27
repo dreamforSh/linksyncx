@@ -5,16 +5,34 @@
         <h2 id="clash-nodes-title" class="card-section-title">{{ t('admin.clash.nodes.title') }}</h2>
         <p class="card-section-subtitle">{{ t('admin.clash.nodes.subtitle', { count: pagination.total }) }}</p>
       </div>
-      <button
-        type="button"
-        class="btn btn-secondary btn-sm px-2.5"
-        :disabled="loading"
-        :title="t('common.refresh')"
-        :aria-label="t('common.refresh')"
-        @click="load"
-      >
-        <Icon name="refresh" size="sm" :class="loading ? 'animate-spin' : ''" />
-      </button>
+      <div class="flex items-center gap-2">
+        <SegmentedControl
+          :model-value="viewMode"
+          size="sm"
+          :options="viewOptions"
+          :aria-label="t('admin.clash.nodes.view.label')"
+          test-id="clash-nodes-view"
+          @update:model-value="setViewMode"
+        />
+        <AutoRefreshButton
+          :enabled="autoRefresh.enabled.value"
+          :interval-seconds="autoRefresh.intervalSeconds.value"
+          :countdown="autoRefresh.countdown.value"
+          :intervals="autoRefresh.intervals"
+          @update:enabled="autoRefresh.setEnabled"
+          @update:interval="autoRefresh.setInterval"
+        />
+        <button
+          type="button"
+          class="btn btn-secondary btn-sm px-2.5"
+          :disabled="loading"
+          :title="t('common.refresh')"
+          :aria-label="t('common.refresh')"
+          @click="load()"
+        >
+          <Icon name="refresh" size="sm" :class="loading ? 'animate-spin' : ''" />
+        </button>
+      </div>
     </div>
 
     <div class="toolbar-compact flex flex-wrap items-center gap-2 px-5 pb-3">
@@ -75,6 +93,50 @@
         test-id="clash-nodes-bound-filter"
         @change="applyFilters"
       />
+      <div class="w-full sm:w-40">
+        <Select
+          v-model="filters.sort"
+          :options="sortOptions"
+          :aria-label="t('admin.clash.nodes.sort.label')"
+          data-testid="clash-nodes-sort"
+          @change="applyFilters"
+        />
+      </div>
+
+      <div v-if="selectedIds.length === 0" ref="batchMenuRef" class="relative sm:ml-auto">
+        <button
+          type="button"
+          class="btn btn-secondary btn-sm"
+          :disabled="readonly || batch.running.value"
+          :aria-expanded="batchMenuOpen"
+          aria-haspopup="menu"
+          data-testid="clash-nodes-batch-menu"
+          @click="batchMenuOpen = !batchMenuOpen"
+        >
+          <Icon name="play" size="sm" />
+          {{ t('admin.clash.actions.batchTest') }}
+          <Icon name="chevronDown" size="xs" />
+        </button>
+        <div
+          v-if="batchMenuOpen"
+          role="menu"
+          class="absolute right-0 z-20 mt-1 w-64 overflow-hidden rounded-lg border border-gray-200 bg-white py-1 shadow-lg dark:border-dark-600 dark:bg-dark-800"
+        >
+          <p class="px-3 pb-1 pt-1.5 text-xs text-gray-500 dark:text-dark-400">{{ t('admin.clash.nodes.batch.scopeFiltered') }}</p>
+          <button
+            v-for="item in batchMenuItems"
+            :key="item.kind"
+            type="button"
+            role="menuitem"
+            class="flex w-full flex-col items-start px-3 py-2 text-left text-sm hover:bg-gray-50 dark:hover:bg-dark-700"
+            :data-testid="`clash-nodes-batch-${item.kind}`"
+            @click="startBatch(item.kind, 'filtered')"
+          >
+            <span class="font-medium text-gray-900 dark:text-gray-100">{{ item.label }}</span>
+            <span class="text-xs text-gray-500 dark:text-dark-400">{{ item.hint }}</span>
+          </button>
+        </div>
+      </div>
     </div>
 
     <div
@@ -98,22 +160,32 @@
       <button
         type="button"
         class="btn btn-secondary btn-sm"
-        :disabled="readonly || bulkTesting || bulkProbing"
+        :disabled="readonly || batch.running.value"
         data-testid="clash-nodes-bulk-latency"
-        @click="runLatencyTest(selectedIds)"
+        @click="startBatch('latency', 'selected')"
       >
-        <Icon name="bolt" size="sm" :class="bulkTesting ? 'animate-pulse' : ''" />
-        {{ bulkTesting ? t('admin.clash.nodes.testingLatency') : t('admin.clash.actions.testLatency') }}
+        <Icon name="bolt" size="sm" :class="runningKind === 'latency' ? 'animate-pulse' : ''" />
+        {{ runningKind === 'latency' ? t('admin.clash.nodes.testingLatency') : t('admin.clash.actions.testLatency') }}
       </button>
       <button
         type="button"
         class="btn btn-secondary btn-sm"
-        :disabled="readonly || bulkTesting || bulkProbing"
+        :disabled="readonly || batch.running.value"
         data-testid="clash-nodes-bulk-probe"
-        @click="runExitProbe(selectedIds)"
+        @click="startBatch('exit', 'selected')"
       >
-        <Icon name="globe" size="sm" :class="bulkProbing ? 'animate-pulse' : ''" />
-        {{ bulkProbing ? t('admin.clash.nodes.probingExit') : t('admin.clash.actions.probeExit') }}
+        <Icon name="globe" size="sm" :class="runningKind === 'exit' ? 'animate-pulse' : ''" />
+        {{ runningKind === 'exit' ? t('admin.clash.nodes.probingExit') : t('admin.clash.actions.probeExit') }}
+      </button>
+      <button
+        type="button"
+        class="btn btn-secondary btn-sm"
+        :disabled="readonly || batch.running.value"
+        data-testid="clash-nodes-bulk-full"
+        @click="startBatch('full', 'selected')"
+      >
+        <Icon name="shield" size="sm" :class="runningKind === 'full' ? 'animate-pulse' : ''" />
+        {{ t('admin.clash.actions.fullCheck') }}
       </button>
       <button
         type="button"
@@ -124,7 +196,109 @@
       </button>
     </div>
 
+    <div
+      v-if="batch.progress.value"
+      class="flex flex-wrap items-center gap-x-4 gap-y-2 border-b border-gray-100 px-5 py-2.5 text-sm dark:border-dark-700"
+      role="status"
+      aria-live="polite"
+      data-testid="clash-nodes-batch-progress"
+    >
+      <span class="font-medium text-gray-900 dark:text-gray-100">
+        {{ batchKindLabel(batch.progress.value.kind) }}
+        <span class="tabular-nums text-gray-500 dark:text-dark-400">{{ batch.progress.value.done }}/{{ batch.progress.value.total }}</span>
+      </span>
+      <div class="h-1.5 min-w-[8rem] flex-1 overflow-hidden rounded-full bg-gray-100 dark:bg-dark-700">
+        <div
+          class="h-full rounded-full bg-primary-500 transition-[width] duration-300"
+          :style="{ width: `${batchPercent}%` }"
+        ></div>
+      </div>
+      <span class="flex items-center gap-3 text-xs tabular-nums">
+        <span class="text-emerald-700 dark:text-emerald-300">{{ t('admin.clash.nodes.batch.success', { count: batch.progress.value.success }) }}</span>
+        <span :class="batch.progress.value.failed > 0 ? 'text-red-600 dark:text-red-400' : 'text-gray-500 dark:text-dark-400'">
+          {{ t('admin.clash.nodes.batch.failed', { count: batch.progress.value.failed }) }}
+        </span>
+        <span v-if="batch.progress.value.changed > 0" class="text-amber-700 dark:text-amber-300">
+          {{ t('admin.clash.nodes.batch.changed', { count: batch.progress.value.changed }) }}
+        </span>
+        <span v-if="batch.progress.value.skipped > 0" class="text-gray-500 dark:text-dark-400">
+          {{ t('admin.clash.nodes.batch.skipped', { count: batch.progress.value.skipped }) }}
+        </span>
+      </span>
+      <button
+        v-if="batch.running.value"
+        type="button"
+        class="btn btn-secondary btn-sm"
+        data-testid="clash-nodes-batch-stop"
+        @click="batch.stop()"
+      >
+        {{ t('admin.clash.actions.stop') }}
+      </button>
+      <button
+        v-else
+        type="button"
+        class="icon-btn"
+        :aria-label="t('common.close')"
+        :title="t('common.close')"
+        @click="batch.dismiss()"
+      >
+        <Icon name="x" size="sm" />
+      </button>
+    </div>
+
+    <template v-if="viewMode === 'card'">
+      <div
+        v-if="nodes.length > 0"
+        class="flex items-center gap-2 px-5 pb-1 pt-2 text-sm text-gray-600 dark:text-dark-300"
+      >
+        <label class="inline-flex cursor-pointer items-center gap-2">
+          <input
+            ref="selectPageRef"
+            type="checkbox"
+            class="h-4 w-4 rounded border-gray-300 text-primary-600 focus:ring-primary-500 dark:border-dark-500 dark:bg-dark-800"
+            :checked="pageFullySelected"
+            data-testid="clash-nodes-select-page"
+            @change="togglePageSelection"
+          />
+          {{ t('admin.clash.nodes.selectPage') }}
+        </label>
+      </div>
+      <div class="px-5 pb-5 pt-2" data-testid="clash-nodes-cards">
+        <div v-if="loading && nodes.length === 0" class="grid gap-4 sm:grid-cols-2 xl:grid-cols-3 2xl:grid-cols-4">
+          <div v-for="index in 6" :key="index" class="skeleton h-72 rounded-xl"></div>
+        </div>
+        <EmptyState
+          v-else-if="nodes.length === 0"
+          :title="t('admin.clash.nodes.empty')"
+          :description="t('admin.clash.nodes.emptyHint')"
+        />
+        <div
+          v-else
+          class="grid gap-4 transition-opacity sm:grid-cols-2 xl:grid-cols-3 2xl:grid-cols-4"
+          :class="loading ? 'opacity-60' : ''"
+        >
+          <ClashNodeCard
+            v-for="node in nodes"
+            :key="node.id"
+            :node="node"
+            :selected="selectedSet.has(node.id)"
+            :busy="busyIds.has(node.id)"
+            :readonly="readonly"
+            :max-per-exit="maxAccountsPerExit"
+            @toggle-select="toggleSelected(node.id)"
+            @test-latency="testOne(node)"
+            @probe-exit="probeOne(node)"
+            @enable="setNodeEnabled(node, true)"
+            @disable="pendingDisable = node"
+            @accept-exit="pendingAccept = node"
+            @bindings="openBindings(node)"
+          />
+        </div>
+      </div>
+    </template>
+
     <DataTable
+      v-else
       :columns="columns"
       :data="nodes"
       :loading="loading"
@@ -136,10 +310,10 @@
       @update:selected-keys="onSelectionChange"
     >
       <template #cell-name="{ row }">
-        <div class="min-w-[12rem] max-w-[15rem]">
+        <div class="min-w-[11rem] max-w-[14rem]">
           <div class="flex items-center gap-1.5">
             <span class="truncate font-medium text-gray-900 dark:text-white" :title="row.name">{{ row.name }}</span>
-            <span class="type-badge">{{ row.type }}</span>
+            <span :class="CLASH_TYPE_BADGE_CLASS">{{ row.type }}</span>
           </div>
           <code
             class="mt-0.5 block truncate font-mono text-xs text-gray-600 dark:text-gray-400"
@@ -159,8 +333,8 @@
       </template>
 
       <template #cell-status="{ row }">
-        <div class="flex max-w-[12rem] flex-col items-start gap-1 whitespace-normal">
-          <span :class="['status-pill', statusPillClass(row.status)]" data-testid="clash-node-status">
+        <div class="flex max-w-[10.5rem] flex-col items-start gap-1 whitespace-normal">
+          <span :class="statusPillClass(row.status)" data-testid="clash-node-status">
             <span class="h-1.5 w-1.5 rounded-full" :class="statusDotClass(row.status)" aria-hidden="true"></span>
             {{ statusLabel(row.status) }}
           </span>
@@ -189,7 +363,7 @@
       </template>
 
       <template #cell-exit="{ row }">
-        <div class="min-w-[9rem] max-w-[13rem] whitespace-normal" data-testid="clash-node-exit">
+        <div class="min-w-[9rem] max-w-[12rem] whitespace-normal" data-testid="clash-node-exit">
           <div v-if="row.exit_ip" class="flex items-center gap-1.5">
             <CountryFlag :code="row.exit_country_code" :label="row.exit_country" />
             <span class="font-mono text-xs text-gray-900 dark:text-gray-100">{{ row.exit_ip }}</span>
@@ -215,28 +389,56 @@
           <div v-else-if="row.exit_status === 'stale'" class="mt-0.5 text-xs text-amber-600 dark:text-amber-400">
             {{ t('admin.clash.nodes.exitStale') }}
           </div>
+          <div
+            class="mt-1.5 grid w-max grid-cols-2 gap-1"
+            role="group"
+            :aria-label="t('admin.clash.nodes.columns.platforms')"
+            data-testid="clash-node-platforms"
+          >
+            <span
+              v-for="platform in CLASH_CHECK_PLATFORMS"
+              :key="platform"
+              :class="platformBadgeClass(row.platform_checks.results[platform])"
+              :title="platformTitle(row, platform)"
+            >{{ CLASH_PLATFORM_LABELS[platform] }}</span>
+          </div>
         </div>
       </template>
 
-      <template #cell-platforms="{ row }">
-        <div class="grid w-max grid-cols-2 gap-1" data-testid="clash-node-platforms">
-          <span
-            v-for="platform in CHECK_PLATFORMS"
-            :key="platform"
-            :class="['platform-badge', platformBadgeClass(row.platform_checks.results[platform])]"
-            :title="platformTitle(row, platform)"
-          >{{ PLATFORM_LABELS[platform] }}</span>
+      <template #cell-traffic="{ row }">
+        <div class="min-w-[7rem] whitespace-nowrap text-xs" data-testid="clash-node-traffic">
+          <div :title="t('admin.clash.nodes.traffic.split', {
+            up: formatTrafficBytes(row.traffic?.today_upload_bytes),
+            down: formatTrafficBytes(row.traffic?.today_download_bytes)
+          })">
+            <span class="text-gray-500 dark:text-dark-400">{{ t('admin.clash.nodes.traffic.today') }}</span>
+            <span class="ml-1 font-medium tabular-nums text-gray-900 dark:text-gray-100">{{ formatTrafficBytes(clashTrafficToday(row.traffic)) }}</span>
+          </div>
+          <div class="mt-0.5 text-gray-500 dark:text-dark-400" :title="t('admin.clash.nodes.traffic.approxHint')">
+            {{ t('admin.clash.nodes.traffic.totalValue', { value: formatTrafficBytes(clashTrafficTotal(row.traffic)) }) }}
+          </div>
+          <div v-if="(row.traffic?.connections ?? 0) > 0" class="mt-0.5 tabular-nums text-primary-700 dark:text-primary-300">
+            {{ formatTrafficRate(row.traffic?.download_rate) }} · {{ t('admin.clash.nodes.traffic.connections', { count: row.traffic?.connections ?? 0 }) }}
+          </div>
         </div>
       </template>
 
       <template #cell-accounts="{ row }">
-        <div v-if="row.accounts.length > 0" class="flex items-center gap-1" :title="accountNames(row)" data-testid="clash-node-accounts">
-          <span
-            class="inline-block max-w-[8rem] truncate rounded bg-gray-100 px-1.5 py-0.5 align-middle text-xs text-gray-700 dark:bg-dark-700 dark:text-gray-300"
-          >{{ row.accounts[0].name }}<template v-if="row.accounts[0].is_shadow"> · {{ t('admin.clash.nodes.shadowTag') }}</template></span>
-          <span v-if="row.accounts.length > 1" class="flex-shrink-0 text-xs text-gray-500 dark:text-dark-400">+{{ row.accounts.length - 1 }}</span>
-        </div>
-        <span v-else class="text-sm text-gray-400 dark:text-dark-500">-</span>
+        <button
+          type="button"
+          class="flex max-w-[10rem] items-center gap-1 rounded-md px-1 py-0.5 text-left transition-colors hover:bg-gray-100 dark:hover:bg-dark-700"
+          :title="row.accounts.length > 0 ? `${accountNames(row)}\n${t('admin.clash.nodes.card.manageBindings')}` : t('admin.clash.nodes.card.manageBindings')"
+          data-testid="clash-node-accounts"
+          @click="openBindings(row)"
+        >
+          <template v-if="row.accounts.length > 0">
+            <span
+              class="inline-block max-w-[8rem] truncate rounded bg-gray-100 px-1.5 py-0.5 align-middle text-xs text-gray-700 dark:bg-dark-700 dark:text-gray-300"
+            >{{ row.accounts[0].name }}<template v-if="row.accounts[0].is_shadow"> · {{ t('admin.clash.nodes.shadowTag') }}</template></span>
+            <span v-if="row.accounts.length > 1" class="flex-shrink-0 text-xs text-gray-500 dark:text-dark-400">+{{ row.accounts.length - 1 }}</span>
+          </template>
+          <span v-else class="text-sm text-gray-400 dark:text-dark-500">-</span>
+        </button>
       </template>
 
       <template #cell-actions="{ row }">
@@ -248,9 +450,19 @@
             :title="t('admin.clash.actions.testLatency')"
             :aria-label="t('admin.clash.actions.testLatency')"
             data-testid="clash-node-latency"
-            @click="runLatencyTest([row.id])"
+            @click="testOne(row)"
           >
             <Icon name="bolt" size="sm" :class="busyIds.has(row.id) ? 'animate-pulse' : ''" />
+          </button>
+          <button
+            type="button"
+            class="row-action px-1.5"
+            :title="t('admin.clash.nodes.card.manageBindings')"
+            :aria-label="t('admin.clash.nodes.card.manageBindings')"
+            data-testid="clash-node-bindings"
+            @click="openBindings(row)"
+          >
+            <Icon name="link" size="sm" />
           </button>
           <button
             v-if="row.status === 'disabled'"
@@ -330,11 +542,19 @@
       @confirm="confirmAcceptExit"
       @cancel="pendingAccept = null"
     />
+
+    <ClashNodeBindingsDialog
+      :show="bindingNode !== null"
+      :node="bindingNode"
+      :readonly="readonly"
+      @close="bindingNode = null"
+      @changed="handleBindingsChanged"
+    />
   </section>
 </template>
 
 <script setup lang="ts">
-import { computed, onMounted, onUnmounted, reactive, ref } from 'vue'
+import { computed, onMounted, onUnmounted, reactive, ref, watchEffect } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { adminAPI } from '@/api/admin'
 import { useAppStore } from '@/stores/app'
@@ -345,62 +565,113 @@ import SegmentedControl from '@/components/common/SegmentedControl.vue'
 import ConfirmDialog from '@/components/common/ConfirmDialog.vue'
 import EmptyState from '@/components/common/EmptyState.vue'
 import CountryFlag from '@/components/common/CountryFlag.vue'
+import AutoRefreshButton from '@/components/common/AutoRefreshButton.vue'
 import Icon from '@/components/icons/Icon.vue'
+import ClashNodeCard from './ClashNodeCard.vue'
+import ClashNodeBindingsDialog from './ClashNodeBindingsDialog.vue'
 import type { Column } from '@/components/common/types'
 import type {
+  ClashExitProbeResult,
   ClashHealthStatus,
+  ClashLatencyResult,
   ClashNode,
   ClashNodeListFilters,
+  ClashNodeSort,
   ClashNodeStatus,
-  ClashPlatform,
-  ClashPlatformCheckResult,
   ClashProfile
 } from '@/types'
 import { getPersistedPageSize } from '@/composables/usePersistedPageSize'
+import { useAutoRefresh } from '@/composables/useAutoRefresh'
+import { useClashBatchTest, type ClashBatchKind, type ClashBatchProgress } from '@/composables/useClashBatchTest'
 import { extractApiErrorMessage } from '@/utils/apiError'
-import { clashErrorMessage, localizeClashUnavailableReason } from '@/utils/clash'
+import {
+  clashErrorMessage,
+  clashTrafficToday,
+  clashTrafficTotal,
+  formatTrafficBytes,
+  formatTrafficRate,
+  localizeClashUnavailableReason
+} from '@/utils/clash'
 import { formatDateTime, formatRelativeTime } from '@/utils/format'
+import {
+  CLASH_CHECK_PLATFORMS,
+  CLASH_PLATFORM_LABELS,
+  CLASH_TYPE_BADGE_CLASS,
+  useClashNodeDisplay
+} from './useClashNodeDisplay'
 
 type BoundFilter = 'all' | 'bound' | 'unbound'
+type ViewMode = 'card' | 'table'
+
+const VIEW_MODE_KEY = 'clash-nodes-view-mode'
 
 const props = withDefaults(
   defineProps<{
     profiles: ClashProfile[]
     readonly?: boolean
+    /** Per-exit account limit from the pool settings (null while unknown). */
+    maxAccountsPerExit?: number | null
   }>(),
-  { readonly: false }
+  { readonly: false, maxAccountsPerExit: null }
 )
 
 const emit = defineEmits<{ (e: 'changed'): void }>()
 
 const { t } = useI18n()
 const appStore = useAppStore()
-
-const CHECK_PLATFORMS: ClashPlatform[] = ['openai', 'anthropic', 'gemini', 'grok']
-const PLATFORM_LABELS: Record<ClashPlatform, string> = {
-  openai: 'OpenAI',
-  anthropic: 'Anthropic',
-  gemini: 'Gemini',
-  grok: 'Grok'
-}
+const {
+  statusLabel,
+  statusPillClass,
+  statusDotClass,
+  healthLabel,
+  healthDotClass,
+  healthTextClass,
+  healthTitle,
+  exitLocation,
+  platformBadgeClass,
+  platformTitle,
+  accountNames
+} = useClashNodeDisplay()
 
 const rootRef = ref<HTMLElement | null>(null)
 const nodes = ref<ClashNode[]>([])
 const loading = ref(false)
 const loadError = ref('')
 const selectedIds = ref<number[]>([])
-const bulkTesting = ref(false)
-const bulkProbing = ref(false)
 const busyIds = ref(new Set<number>())
 const pendingDisable = ref<ClashNode | null>(null)
 const pendingAccept = ref<ClashNode | null>(null)
+const bindingNode = ref<ClashNode | null>(null)
+const batchMenuOpen = ref(false)
+const batchMenuRef = ref<HTMLElement | null>(null)
+const selectPageRef = ref<HTMLInputElement | null>(null)
+
+function readViewMode(): ViewMode {
+  try {
+    return localStorage.getItem(VIEW_MODE_KEY) === 'table' ? 'table' : 'card'
+  } catch {
+    return 'card'
+  }
+}
+
+const viewMode = ref<ViewMode>(readViewMode())
+
+function setViewMode(mode: ViewMode) {
+  viewMode.value = mode
+  try {
+    localStorage.setItem(VIEW_MODE_KEY, mode)
+  } catch {
+    // Private mode: the choice just isn't remembered.
+  }
+}
 
 const filters = reactive({
   search: '',
   profileId: null as number | null,
   status: '' as '' | ClashNodeStatus,
   health: '' as '' | ClashHealthStatus,
-  bound: 'all' as BoundFilter
+  bound: 'all' as BoundFilter,
+  sort: '' as ClashNodeSort
 })
 
 const pagination = reactive({
@@ -410,12 +681,18 @@ const pagination = reactive({
   pages: 0
 })
 
-// Type, server:port and the listener port live in the node cell; health shares the status cell.
+const viewOptions = computed(() => [
+  { value: 'card' as ViewMode, icon: 'grid' as const, title: t('admin.clash.nodes.view.card') },
+  { value: 'table' as ViewMode, icon: 'menu' as const, title: t('admin.clash.nodes.view.table') }
+])
+
+// Type, server:port and the listener port live in the node cell; health shares the status cell and
+// platform reachability the exit cell, so the table fits beside the sidebar without scrolling.
 const columns = computed<Column[]>(() => [
   { key: 'name', label: t('admin.clash.nodes.columns.name') },
   { key: 'status', label: t('admin.clash.nodes.columns.status') },
   { key: 'exit', label: t('admin.clash.nodes.columns.exit') },
-  { key: 'platforms', label: t('admin.clash.nodes.columns.platforms') },
+  { key: 'traffic', label: t('admin.clash.nodes.columns.traffic') },
   { key: 'accounts', label: t('admin.clash.nodes.columns.accounts') },
   { key: 'actions', label: t('admin.clash.nodes.columns.actions') }
 ])
@@ -446,6 +723,28 @@ const boundOptions = computed(() => [
   { value: 'unbound' as BoundFilter, label: t('admin.clash.nodes.filters.unboundOnly') }
 ])
 
+const sortOptions = computed(() => [
+  { value: '', label: t('admin.clash.nodes.sort.default') },
+  { value: 'latency', label: t('admin.clash.nodes.sort.latency') },
+  { value: 'traffic_today', label: t('admin.clash.nodes.sort.trafficToday') },
+  { value: 'traffic_total', label: t('admin.clash.nodes.sort.trafficTotal') },
+  { value: 'name', label: t('admin.clash.nodes.sort.name') }
+])
+
+const batchMenuItems = computed(() => [
+  { kind: 'latency' as ClashBatchKind, label: t('admin.clash.actions.testLatency'), hint: t('admin.clash.nodes.batch.latencyHint') },
+  { kind: 'exit' as ClashBatchKind, label: t('admin.clash.actions.probeExit'), hint: t('admin.clash.nodes.batch.exitHint') },
+  { kind: 'full' as ClashBatchKind, label: t('admin.clash.actions.fullCheck'), hint: t('admin.clash.nodes.batch.fullHint') }
+])
+
+const selectedSet = computed(() => new Set(selectedIds.value))
+const pageFullySelected = computed(() => nodes.value.length > 0 && nodes.value.every((node) => selectedSet.value.has(node.id)))
+const pagePartiallySelected = computed(() => !pageFullySelected.value && nodes.value.some((node) => selectedSet.value.has(node.id)))
+
+watchEffect(() => {
+  if (selectPageRef.value) selectPageRef.value.indeterminate = pagePartiallySelected.value
+})
+
 const describeError = (error: unknown, fallbackKey: string) =>
   clashErrorMessage(error, t) ?? extractApiErrorMessage(error, t(fallbackKey))
 
@@ -454,7 +753,8 @@ const buildFilters = (): ClashNodeListFilters => ({
   status: filters.status || undefined,
   health: filters.health || undefined,
   bound: filters.bound === 'all' ? undefined : filters.bound === 'bound',
-  search: filters.search.trim() || undefined
+  search: filters.search.trim() || undefined,
+  sort: filters.sort || undefined
 })
 
 let abortController: AbortController | null = null
@@ -465,11 +765,12 @@ const isAbortError = (error: unknown) => {
   return maybe.name === 'AbortError' || maybe.code === 'ERR_CANCELED' || maybe.name === 'CanceledError'
 }
 
-async function load() {
+/** silent keeps the current rows on screen (auto refresh, after tests). */
+async function load(options: { silent?: boolean } = {}) {
   abortController?.abort()
   const controller = new AbortController()
   abortController = controller
-  loading.value = true
+  if (!options.silent) loading.value = true
   try {
     const response = await adminAPI.clash.listNodes(pagination.page, pagination.page_size, buildFilters(), {
       signal: controller.signal
@@ -479,6 +780,10 @@ async function load() {
     pagination.total = response?.total ?? 0
     pagination.pages = response?.pages ?? 0
     loadError.value = ''
+    if (bindingNode.value) {
+      // Hand the reloaded node to the open bindings dialog.
+      bindingNode.value = nodes.value.find((node) => node.id === bindingNode.value?.id) ?? bindingNode.value
+    }
   } catch (error) {
     if (isAbortError(error)) return
     loadError.value = describeError(error, 'admin.clash.nodes.loadFailed')
@@ -486,9 +791,18 @@ async function load() {
     if (abortController === controller) {
       loading.value = false
       abortController = null
+      autoRefresh.resetCountdown()
     }
   }
 }
+
+const autoRefresh = useAutoRefresh({
+  storageKey: 'clash-nodes-auto-refresh',
+  intervals: [10, 30, 60] as const,
+  defaultInterval: 30,
+  onRefresh: () => load({ silent: true }),
+  shouldPause: () => document.hidden || loading.value || batch.running.value || bindingNode.value !== null
+})
 
 function applyFilters() {
   pagination.page = 1
@@ -522,6 +836,22 @@ function onSelectionChange(keys: Array<string | number>) {
   selectedIds.value = keys.map((key) => Number(key)).filter((id) => Number.isFinite(id))
 }
 
+function toggleSelected(id: number) {
+  selectedIds.value = selectedSet.value.has(id)
+    ? selectedIds.value.filter((item) => item !== id)
+    : [...selectedIds.value, id]
+}
+
+function togglePageSelection() {
+  const pageIds = nodes.value.map((node) => node.id)
+  if (pageFullySelected.value) {
+    const onPage = new Set(pageIds)
+    selectedIds.value = selectedIds.value.filter((id) => !onPage.has(id))
+  } else {
+    selectedIds.value = [...new Set([...selectedIds.value, ...pageIds])]
+  }
+}
+
 function markBusy(ids: number[], busy: boolean) {
   const next = new Set(busyIds.value)
   for (const id of ids) {
@@ -531,53 +861,155 @@ function markBusy(ids: number[], busy: boolean) {
   busyIds.value = next
 }
 
-async function runLatencyTest(ids: number[]) {
-  if (ids.length === 0 || props.readonly) return
-  const bulk = ids.length > 1 || ids === selectedIds.value
-  if (bulk) bulkTesting.value = true
+function findNode(id: number) {
+  return nodes.value.find((node) => node.id === id)
+}
+
+/** Updates the visible rows as results arrive, before the final reload. */
+function applyLatencyResults(results: ClashLatencyResult[]) {
+  const now = new Date().toISOString()
+  for (const result of results) {
+    const node = findNode(result.node_id)
+    if (!node) continue
+    node.health_status = result.health_status
+    if (result.success && typeof result.latency_ms === 'number') node.latency_ms = result.latency_ms
+    node.last_checked_at = now
+    node.last_check_error = result.error ?? ''
+  }
+}
+
+function applyExitResults(results: ClashExitProbeResult[]) {
+  const now = new Date().toISOString()
+  for (const result of results) {
+    const node = findNode(result.node_id)
+    if (!node) continue
+    node.exit_status = result.exit_status
+    node.exit_checked_at = now
+    if (!result.success || !result.exit_ip) continue
+    if (result.exit_status === 'changed') {
+      node.exit_pending_ip = result.exit_ip
+    } else {
+      node.exit_ip = result.exit_ip
+      if (result.country) node.exit_country = result.country
+    }
+  }
+}
+
+const batch = useClashBatchTest({ onLatency: applyLatencyResults, onExit: applyExitResults })
+const runningKind = computed(() => (batch.running.value ? batch.progress.value?.kind ?? null : null))
+const batchPercent = computed(() => {
+  const progress = batch.progress.value
+  if (!progress || progress.total === 0) return 0
+  return Math.round((progress.done / progress.total) * 100)
+})
+
+function batchKindLabel(kind: ClashBatchKind) {
+  switch (kind) {
+    case 'latency':
+      return t('admin.clash.actions.testLatency')
+    case 'exit':
+      return t('admin.clash.actions.probeExit')
+    default:
+      return t('admin.clash.actions.fullCheck')
+  }
+}
+
+function notifyBatch(result: ClashBatchProgress) {
+  const { success, failed, changed } = result
+  if (result.cancelled) {
+    appStore.showInfo(t('admin.clash.nodes.batch.stopped', { done: result.done, total: result.total }))
+    return
+  }
+  if (result.kind === 'latency') {
+    const message = t('admin.clash.nodes.latencyDone', { success, failed })
+    if (failed === 0) appStore.showSuccess(message)
+    else appStore.showWarning(message)
+    return
+  }
+  const full = result.kind === 'full'
+  if (changed > 0) {
+    appStore.showWarning(full
+      ? t('admin.clash.nodes.batch.fullChanged', { success, failed, changed })
+      : t('admin.clash.nodes.probeChanged', { success, failed, changed }))
+    return
+  }
+  const message = full
+    ? t('admin.clash.nodes.batch.fullDone', { success, failed })
+    : t('admin.clash.nodes.probeDone', { success, failed })
+  if (failed > 0) appStore.showWarning(message)
+  else appStore.showSuccess(message)
+}
+
+/** Tests the selected nodes, or every node matching the filters (all pages). */
+async function startBatch(kind: ClashBatchKind, scope: 'selected' | 'filtered') {
+  batchMenuOpen.value = false
+  if (props.readonly || batch.running.value) return
+  let ids: number[]
+  if (scope === 'selected') {
+    ids = [...selectedIds.value]
+  } else {
+    try {
+      ids = await adminAPI.clash.listNodeIds(buildFilters(), { live: true })
+    } catch (error) {
+      appStore.showError(describeError(error, 'admin.clash.nodes.batch.loadIdsFailed'))
+      return
+    }
+  }
+  if (ids.length === 0) {
+    appStore.showInfo(t('admin.clash.nodes.batch.empty'))
+    return
+  }
   markBusy(ids, true)
+  let result: ClashBatchProgress | null = null
   try {
-    const results = await adminAPI.clash.testNodesLatency({ node_ids: [...ids] })
+    result = await batch.run(kind, ids)
+  } finally {
+    markBusy(ids, false)
+  }
+  if (!result) return
+  notifyBatch(result)
+  await load({ silent: true })
+  emit('changed')
+}
+
+async function testOne(node: ClashNode) {
+  if (props.readonly || busyIds.value.has(node.id)) return
+  markBusy([node.id], true)
+  try {
+    const results = await adminAPI.clash.testNodesLatency({ node_ids: [node.id] })
+    applyLatencyResults(results)
     const success = results.filter((result) => result.success).length
     const failed = results.length - success
-    if (failed === 0) {
-      appStore.showSuccess(t('admin.clash.nodes.latencyDone', { success, failed }))
-    } else {
-      appStore.showWarning(t('admin.clash.nodes.latencyDone', { success, failed }))
-    }
-    await load()
+    const message = t('admin.clash.nodes.latencyDone', { success, failed })
+    if (failed === 0) appStore.showSuccess(message)
+    else appStore.showWarning(message)
+    await load({ silent: true })
     emit('changed')
   } catch (error) {
     appStore.showError(describeError(error, 'admin.clash.nodes.latencyFailed'))
   } finally {
-    markBusy(ids, false)
-    if (bulk) bulkTesting.value = false
+    markBusy([node.id], false)
   }
 }
 
-async function runExitProbe(ids: number[]) {
-  if (ids.length === 0 || props.readonly) return
-  bulkProbing.value = true
-  markBusy(ids, true)
+async function probeOne(node: ClashNode) {
+  if (props.readonly || busyIds.value.has(node.id)) return
+  markBusy([node.id], true)
   try {
-    const results = await adminAPI.clash.probeNodesExit({ node_ids: [...ids] })
+    const results = await adminAPI.clash.probeNodesExit({ node_ids: [node.id] })
+    applyExitResults(results)
     const success = results.filter((result) => result.success).length
     const failed = results.length - success
     const changed = results.filter((result) => result.exit_status === 'changed').length
-    if (changed > 0) {
-      appStore.showWarning(t('admin.clash.nodes.probeChanged', { success, failed, changed }))
-    } else if (failed > 0) {
-      appStore.showWarning(t('admin.clash.nodes.probeDone', { success, failed }))
-    } else {
-      appStore.showSuccess(t('admin.clash.nodes.probeDone', { success, failed }))
-    }
-    await load()
+    if (changed > 0) appStore.showWarning(t('admin.clash.nodes.probeChanged', { success, failed, changed }))
+    else if (failed > 0) appStore.showWarning(t('admin.clash.nodes.probeDone', { success, failed }))
+    else appStore.showSuccess(t('admin.clash.nodes.probeDone', { success, failed }))
+    await load({ silent: true })
     emit('changed')
   } catch (error) {
     appStore.showError(describeError(error, 'admin.clash.nodes.probeFailed'))
   } finally {
-    markBusy(ids, false)
-    bulkProbing.value = false
+    markBusy([node.id], false)
   }
 }
 
@@ -619,6 +1051,15 @@ async function confirmAcceptExit() {
   }
 }
 
+function openBindings(node: ClashNode) {
+  bindingNode.value = node
+}
+
+function handleBindingsChanged() {
+  void load({ silent: true })
+  emit('changed')
+}
+
 /** Filters the table to one subscription and brings the panel into view. */
 function focusProfile(profileId: number | null) {
   filters.profileId = profileId
@@ -626,137 +1067,24 @@ function focusProfile(profileId: number | null) {
   rootRef.value?.scrollIntoView?.({ behavior: 'smooth', block: 'start' })
 }
 
-const statusLabel = (status: ClashNodeStatus) => {
-  switch (status) {
-    case 'active':
-      return t('admin.clash.nodeStatus.active')
-    case 'missing':
-      return t('admin.clash.nodeStatus.missing')
-    case 'disabled':
-      return t('admin.clash.nodeStatus.disabled')
-    default:
-      return t('admin.clash.nodeStatus.invalid')
+function handleDocumentClick(event: MouseEvent) {
+  if (batchMenuOpen.value && batchMenuRef.value && !batchMenuRef.value.contains(event.target as Node)) {
+    batchMenuOpen.value = false
   }
-}
-
-const statusPillClass = (status: ClashNodeStatus) => {
-  switch (status) {
-    case 'active':
-      return 'bg-emerald-50 text-emerald-700 ring-emerald-600/20 dark:bg-emerald-500/10 dark:text-emerald-300 dark:ring-emerald-400/20'
-    case 'disabled':
-      return 'bg-amber-50 text-amber-700 ring-amber-600/20 dark:bg-amber-500/10 dark:text-amber-300 dark:ring-amber-400/20'
-    case 'invalid':
-      return 'bg-red-50 text-red-700 ring-red-600/20 dark:bg-red-500/10 dark:text-red-300 dark:ring-red-400/20'
-    default:
-      return 'bg-gray-100 text-gray-600 ring-gray-500/20 dark:bg-dark-700 dark:text-dark-300 dark:ring-dark-500/30'
-  }
-}
-
-const statusDotClass = (status: ClashNodeStatus) => {
-  switch (status) {
-    case 'active':
-      return 'bg-emerald-500'
-    case 'disabled':
-      return 'bg-amber-500'
-    case 'invalid':
-      return 'bg-red-500'
-    default:
-      return 'bg-gray-400'
-  }
-}
-
-const healthLabel = (node: ClashNode) => {
-  if (node.health_status === 'healthy') {
-    return typeof node.latency_ms === 'number' ? `${node.latency_ms} ms` : t('admin.clash.health.healthy')
-  }
-  return node.health_status === 'unhealthy' ? t('admin.clash.health.unhealthy') : t('admin.clash.health.unknown')
-}
-
-const healthDotClass = (node: ClashNode) => {
-  if (node.health_status === 'unhealthy') return 'bg-red-500'
-  if (node.health_status !== 'healthy') return 'bg-gray-400'
-  const latency = node.latency_ms ?? 0
-  if (latency >= 1000) return 'bg-red-500'
-  if (latency >= 300) return 'bg-amber-500'
-  return 'bg-emerald-500'
-}
-
-const healthTextClass = (node: ClashNode) => {
-  if (node.health_status === 'unhealthy') return 'font-medium text-red-600 dark:text-red-400'
-  if (node.health_status === 'healthy') return 'font-medium tabular-nums text-gray-800 dark:text-gray-100'
-  return 'text-gray-500 dark:text-dark-400'
-}
-
-const healthTitle = (node: ClashNode) => {
-  const parts: string[] = []
-  if (node.last_checked_at) parts.push(t('admin.clash.nodes.checkedAt', { time: formatDateTime(node.last_checked_at) }))
-  if (node.last_check_error) parts.push(node.last_check_error)
-  return parts.join('\n') || undefined
-}
-
-const accountNames = (node: ClashNode) => node.accounts.map((account) => account.name).join(', ')
-
-const exitLocation = (node: ClashNode) =>
-  [node.exit_country, node.exit_region, node.exit_city].filter(Boolean).filter((value, index, all) => all.indexOf(value) === index).join(' · ')
-
-const platformBadgeClass = (result: ClashPlatformCheckResult | undefined) => {
-  switch (result) {
-    case 'pass':
-      return 'bg-emerald-50 text-emerald-700 ring-emerald-600/20 dark:bg-emerald-500/10 dark:text-emerald-300 dark:ring-emerald-400/20'
-    case 'warn':
-      return 'bg-amber-50 text-amber-700 ring-amber-600/20 dark:bg-amber-500/10 dark:text-amber-300 dark:ring-amber-400/20'
-    case 'fail':
-    case 'challenge':
-      return 'bg-red-50 text-red-700 ring-red-600/20 dark:bg-red-500/10 dark:text-red-300 dark:ring-red-400/20'
-    default:
-      return 'bg-gray-50 text-gray-400 ring-gray-400/20 dark:bg-dark-800 dark:text-dark-500 dark:ring-dark-600/40'
-  }
-}
-
-const platformResultLabel = (result: ClashPlatformCheckResult | undefined) => {
-  switch (result) {
-    case 'pass':
-      return t('admin.clash.platformResult.pass')
-    case 'warn':
-      return t('admin.clash.platformResult.warn')
-    case 'fail':
-      return t('admin.clash.platformResult.fail')
-    case 'challenge':
-      return t('admin.clash.platformResult.challenge')
-    default:
-      return t('admin.clash.platformResult.unchecked')
-  }
-}
-
-const platformTitle = (node: ClashNode, platform: ClashPlatform) => {
-  const label = `${PLATFORM_LABELS[platform]}: ${platformResultLabel(node.platform_checks.results[platform])}`
-  const checkedAt = node.platform_checks.checked_at
-  return checkedAt ? `${label}\n${t('admin.clash.nodes.checkedAt', { time: formatDateTime(checkedAt) })}` : label
 }
 
 onMounted(() => {
   void load()
+  autoRefresh.setEnabled(autoRefresh.enabled.value)
+  document.addEventListener('click', handleDocumentClick)
 })
 
 onUnmounted(() => {
   clearTimeout(searchTimer)
   abortController?.abort()
+  batch.stop()
+  document.removeEventListener('click', handleDocumentClick)
 })
 
 defineExpose({ reload: load, focusProfile })
 </script>
-
-<style scoped>
-.status-pill {
-  @apply inline-flex items-center gap-1.5 whitespace-nowrap rounded-full px-2 py-0.5 text-xs font-medium ring-1 ring-inset;
-}
-
-.type-badge {
-  @apply inline-flex flex-shrink-0 items-center rounded px-1.5 py-px font-mono text-[10px] font-medium uppercase;
-  @apply bg-gray-100 text-gray-600 dark:bg-dark-700 dark:text-dark-300;
-}
-
-.platform-badge {
-  @apply inline-flex items-center rounded px-1.5 py-px text-[11px] font-medium ring-1 ring-inset;
-}
-</style>

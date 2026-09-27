@@ -223,11 +223,31 @@ func TestEngineInProcessRouting(t *testing.T) {
 	require.Eventually(t, func() bool { return sink.contains("l-9") }, 3*time.Second, 20*time.Millisecond,
 		"listener bind failure must surface through the log bridge")
 
-	// Closing inbound connections by listener name.
+	// Per-listener byte counters, then closing inbound connections by name.
 	longConn, err := net.Dial("tcp", fmt.Sprintf("127.0.0.1:%d", p1))
 	require.NoError(t, err)
 	defer func() { _ = longConn.Close() }()
-	require.NoError(t, socks5Connect(longConn, "u1", "p1", strings.TrimPrefix(upstream.URL, "http://")))
+	target := strings.TrimPrefix(upstream.URL, "http://")
+	require.NoError(t, socks5Connect(longConn, "u1", "p1", target))
+	_, err = fmt.Fprintf(longConn, "GET / HTTP/1.1\r\nHost: %s\r\n\r\n", target)
+	require.NoError(t, err)
+	_ = longConn.SetReadDeadline(time.Now().Add(5 * time.Second))
+	tunneled, err := http.ReadResponse(bufio.NewReader(longConn), nil)
+	require.NoError(t, err)
+	_, _ = io.Copy(io.Discard, tunneled.Body)
+	_ = tunneled.Body.Close()
+	_ = longConn.SetReadDeadline(time.Time{})
+	require.Eventually(t, func() bool {
+		for _, c := range engine.Connections() {
+			if c.Inbound == "l-1" && c.ID != "" && c.Upload > 0 && c.Download > 0 && !c.Start.IsZero() {
+				return true
+			}
+		}
+		return false
+	}, 3*time.Second, 20*time.Millisecond, "connections report their listener and byte counters")
+	for _, c := range engine.Connections() {
+		require.NotEqual(t, "l-2", c.Inbound, "REJECT placeholders carry no connections")
+	}
 	require.Eventually(t, func() bool { return engine.CloseInboundConnections([]string{"l-1"}) > 0 }, 3*time.Second, 20*time.Millisecond)
 }
 

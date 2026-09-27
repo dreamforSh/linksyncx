@@ -52,6 +52,8 @@ type ClashManager struct {
 	listenerFails     int
 	lastListenerCheck time.Time
 	lastReclaim       time.Time
+	// trafficLive is this instance's latest throughput sample.
+	trafficLive *ClashTrafficLive
 
 	trigger chan struct{}
 	cancel  context.CancelFunc
@@ -79,6 +81,7 @@ func NewClashManager(svc *ClashService, runtime ClashRuntime, notifier ClashRunt
 	}
 	if svc != nil {
 		svc.onStructuralChange = m.Trigger
+		svc.localTrafficLive = m.localTrafficLive
 	}
 	return m
 }
@@ -131,6 +134,8 @@ func (m *ClashManager) Start(ctx context.Context) error {
 		go m.syncLoop(loopCtx)
 		m.wg.Add(1)
 		go m.leaderLoop(loopCtx)
+		m.wg.Add(1)
+		go m.trafficLoop(loopCtx)
 		return startErr
 	}
 

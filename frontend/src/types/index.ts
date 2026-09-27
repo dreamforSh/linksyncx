@@ -954,6 +954,14 @@ export interface ClashProfileStats {
   bound_accounts: number
 }
 
+/** 经本服务各节点实际转发的流量（本地采样），与机场上报的 upload/download_bytes 不同 */
+export interface ClashProfileTraffic {
+  upload_bytes: number
+  download_bytes: number
+  today_upload_bytes: number
+  today_download_bytes: number
+}
+
 export interface ClashProfile {
   id: number
   name: string
@@ -978,6 +986,8 @@ export interface ClashProfile {
   expire_at: string | null
   node_count: number
   stats: ClashProfileStats
+  /** 旧版后端不返回 */
+  measured_traffic?: ClashProfileTraffic
   created_at: string
   updated_at: string
 }
@@ -1061,6 +1071,28 @@ export interface ClashPlatformChecks {
   results: Partial<Record<ClashPlatform, ClashPlatformCheckResult>>
 }
 
+export interface ClashTrafficDay {
+  /** YYYY-MM-DD（服务端时区） */
+  date: string
+  upload_bytes: number
+  download_bytes: number
+}
+
+/** 按连接采样统计的节点流量（近似值：连接关闭前最后一个采样周期内的流量不计入） */
+export interface ClashNodeTraffic {
+  upload_bytes: number
+  download_bytes: number
+  today_upload_bytes: number
+  today_download_bytes: number
+  /** 近 7 天，旧 → 新，含今天 */
+  daily: ClashTrafficDay[]
+  updated_at: string | null
+  /** 最近一个采样窗口的速率（字节/秒，各实例求和） */
+  upload_rate: number
+  download_rate: number
+  connections: number
+}
+
 export interface ClashNode {
   id: number
   profile_id: number
@@ -1093,9 +1125,14 @@ export interface ClashNode {
   available: boolean
   unavailable_reason: string
   accounts: ClashBoundAccount[]
+  /** 旧版后端不返回 */
+  traffic?: ClashNodeTraffic
   created_at: string
   updated_at: string
 }
+
+/** '' = 按订阅、节点 ID */
+export type ClashNodeSort = '' | 'name' | 'latency' | 'traffic_today' | 'traffic_total'
 
 export interface ClashNodeListFilters {
   profile_id?: number
@@ -1103,6 +1140,7 @@ export interface ClashNodeListFilters {
   health?: ClashHealthStatus
   bound?: boolean
   search?: string
+  sort?: ClashNodeSort
 }
 
 /** 测延迟/探测出口的节点范围：node_ids 或 profile_id */

@@ -33,6 +33,9 @@ type fakeClashRepo struct {
 	accounts  map[int64]*fakeClashAccount
 	nextID    int64
 	refreshes []ClashRefreshRecord
+	// traffic holds daily buckets per node and day; trafficErr fails flushes.
+	traffic    map[int64]map[string]*ClashTrafficDay
+	trafficErr error
 }
 
 func newFakeClashRepo() *fakeClashRepo {
@@ -43,6 +46,7 @@ func newFakeClashRepo() *fakeClashRepo {
 		proxies:  map[int64]*Proxy{},
 		accounts: map[int64]*fakeClashAccount{},
 		nextID:   100,
+		traffic:  map[int64]map[string]*ClashTrafficDay{},
 	}
 }
 
@@ -249,9 +253,7 @@ func (r *fakeClashRepo) viewsLocked() []ClashNodeView {
 	return views
 }
 
-func (r *fakeClashRepo) ListNodeViews(_ context.Context, filter ClashNodeFilter, params pagination.PaginationParams) ([]ClashNodeView, *pagination.PaginationResult, error) {
-	r.mu.Lock()
-	defer r.mu.Unlock()
+func (r *fakeClashRepo) filteredViewsLocked(filter ClashNodeFilter) []ClashNodeView {
 	out := make([]ClashNodeView, 0)
 	for _, v := range r.viewsLocked() {
 		if filter.ProfileID != nil && v.ProfileID != *filter.ProfileID {
@@ -263,9 +265,110 @@ func (r *fakeClashRepo) ListNodeViews(_ context.Context, filter ClashNodeFilter,
 		if filter.Search != "" && !strings.Contains(v.Name, filter.Search) {
 			continue
 		}
+		if filter.LiveOnly && !clashNodeLive(&v) {
+			continue
+		}
 		out = append(out, v)
 	}
+	return out
+}
+
+func (r *fakeClashRepo) ListNodeViews(_ context.Context, filter ClashNodeFilter, params pagination.PaginationParams) ([]ClashNodeView, *pagination.PaginationResult, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	out := r.filteredViewsLocked(filter)
 	return out, &pagination.PaginationResult{Total: int64(len(out)), Page: 1, PageSize: len(out)}, nil
+}
+
+func (r *fakeClashRepo) ListNodeIDs(_ context.Context, filter ClashNodeFilter) ([]int64, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	ids := make([]int64, 0)
+	for _, v := range r.filteredViewsLocked(filter) {
+		ids = append(ids, v.ID)
+	}
+	return ids, nil
+}
+
+func (r *fakeClashRepo) AddNodeTraffic(_ context.Context, incs []ClashTrafficIncrement, _ time.Time) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.trafficErr != nil {
+		return r.trafficErr
+	}
+	for _, inc := range incs {
+		if _, ok := r.nodes[inc.NodeID]; !ok {
+			continue
+		}
+		days := r.traffic[inc.NodeID]
+		if days == nil {
+			days = map[string]*ClashTrafficDay{}
+			r.traffic[inc.NodeID] = days
+		}
+		day := days[inc.Date]
+		if day == nil {
+			day = &ClashTrafficDay{Date: inc.Date}
+			days[inc.Date] = day
+		}
+		day.Upload += inc.Upload
+		day.Download += inc.Download
+	}
+	return nil
+}
+
+func (r *fakeClashRepo) trafficDay(nodeID int64, date string) ClashTrafficDay {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if day := r.traffic[nodeID][date]; day != nil {
+		return *day
+	}
+	return ClashTrafficDay{Date: date}
+}
+
+func (r *fakeClashRepo) ListNodeTraffic(_ context.Context, nodeIDs []int64, since string) (map[int64]*ClashNodeTrafficTotals, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	out := map[int64]*ClashNodeTrafficTotals{}
+	for _, id := range nodeIDs {
+		days := r.traffic[id]
+		if len(days) == 0 {
+			continue
+		}
+		totals := &ClashNodeTrafficTotals{}
+		for _, day := range days {
+			totals.Upload += day.Upload
+			totals.Download += day.Download
+			if day.Date >= since {
+				totals.Days = append(totals.Days, *day)
+			}
+		}
+		sort.Slice(totals.Days, func(i, j int) bool { return totals.Days[i].Date < totals.Days[j].Date })
+		out[id] = totals
+	}
+	return out, nil
+}
+
+func (r *fakeClashRepo) ListProfileTraffic(_ context.Context, today string) (map[int64]ClashProfileTraffic, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	out := map[int64]ClashProfileTraffic{}
+	for id, days := range r.traffic {
+		node := r.nodes[id]
+		if node == nil {
+			continue
+		}
+		sum := out[node.ProfileID]
+		for _, day := range days {
+			sum.Upload += day.Upload
+			sum.Download += day.Download
+			if day.Date == today {
+				sum.TodayUpload += day.Upload
+				sum.TodayDownload += day.Download
+			}
+		}
+		out[node.ProfileID] = sum
+	}
+	return out, nil
 }
 
 func (r *fakeClashRepo) ListAllNodeViews(_ context.Context) ([]ClashNodeView, error) {
@@ -545,6 +648,9 @@ type fakeClashRuntime struct {
 	delays    map[string]error
 	flaky     map[string]int
 	attempts  map[string]int
+	// conns is the connection table returned by Connections.
+	conns    []ClashConnection
+	connsErr error
 }
 
 func newFakeClashRuntime() *fakeClashRuntime {
@@ -608,6 +714,21 @@ func (f *fakeClashRuntime) CloseInboundConnections(context.Context, []string) (i
 	return 0, nil
 }
 
+func (f *fakeClashRuntime) Connections(context.Context) ([]ClashConnection, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.connsErr != nil {
+		return nil, f.connsErr
+	}
+	return append([]ClashConnection(nil), f.conns...), nil
+}
+
+func (f *fakeClashRuntime) setConnections(conns ...ClashConnection) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.conns = conns
+}
+
 func (f *fakeClashRuntime) appliedCount() int {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -619,7 +740,9 @@ type fakeExitProber struct {
 	mu       sync.Mutex
 	directIP string
 	byPort   map[string]string
-	calls    int
+	// bare ports answer like the fallback service: the IP without a location.
+	bare  map[string]bool
+	calls int
 }
 
 func (f *fakeExitProber) ProbeProxy(_ context.Context, proxyURL string) (*ProxyExitInfo, int64, error) {
@@ -633,6 +756,9 @@ func (f *fakeExitProber) ProbeProxy(_ context.Context, proxyURL string) (*ProxyE
 		if strings.HasSuffix(proxyURL, ":"+port) {
 			if ip == "" {
 				return nil, 0, errors.New("probe failed")
+			}
+			if f.bare[port] {
+				return &ProxyExitInfo{IP: ip}, 10, nil
 			}
 			return &ProxyExitInfo{IP: ip, Country: "US", CountryCode: "US"}, 10, nil
 		}

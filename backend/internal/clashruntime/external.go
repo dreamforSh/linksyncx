@@ -174,6 +174,39 @@ func (r *externalRuntime) CloseInboundConnections(ctx context.Context, listenerN
 	return closed, nil
 }
 
+func (r *externalRuntime) Connections(ctx context.Context) ([]service.ClashConnection, error) {
+	var body struct {
+		Connections []struct {
+			ID       string `json:"id"`
+			Upload   int64  `json:"upload"`
+			Download int64  `json:"download"`
+			Start    string `json:"start"`
+			Metadata struct {
+				InboundName string `json:"inboundName"`
+			} `json:"metadata"`
+		} `json:"connections"`
+	}
+	if _, err := r.do(ctx, http.MethodGet, "/connections", nil, &body, externalRequestTimeout); err != nil {
+		return nil, err
+	}
+	out := make([]service.ClashConnection, 0, len(body.Connections))
+	for _, conn := range body.Connections {
+		if conn.ID == "" || conn.Metadata.InboundName == "" {
+			continue
+		}
+		// A malformed start time only costs the pre-sampler baseline check.
+		start, _ := time.Parse(time.RFC3339Nano, conn.Start)
+		out = append(out, service.ClashConnection{
+			ID:       conn.ID,
+			Inbound:  conn.Metadata.InboundName,
+			Upload:   conn.Upload,
+			Download: conn.Download,
+			Start:    start,
+		})
+	}
+	return out, nil
+}
+
 type controllerError struct {
 	Status  int
 	Message string

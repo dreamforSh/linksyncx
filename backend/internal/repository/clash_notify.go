@@ -14,6 +14,7 @@ import (
 const (
 	clashConfigChangedChannel = "clash_pool:config_changed"
 	clashInstanceKeyPrefix    = "clash_pool:instance:"
+	clashTrafficLiveKeyPrefix = "clash_pool:traffic_live:"
 )
 
 type clashRuntimeNotifier struct {
@@ -80,12 +81,59 @@ func (n *clashRuntimeNotifier) ListInstanceStatuses(ctx context.Context) ([]serv
 	if n == nil || n.rdb == nil {
 		return nil, nil
 	}
+	values, err := n.scanValues(ctx, clashInstanceKeyPrefix)
+	if err != nil || len(values) == 0 {
+		return nil, err
+	}
+	out := make([]service.ClashInstanceStatus, 0, len(values))
+	for _, text := range values {
+		var status service.ClashInstanceStatus
+		if json.Unmarshal([]byte(text), &status) == nil {
+			out = append(out, status)
+		}
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].InstanceID < out[j].InstanceID })
+	return out, nil
+}
+
+func (n *clashRuntimeNotifier) PublishTrafficLive(ctx context.Context, live service.ClashTrafficLive, ttl time.Duration) error {
+	if n == nil || n.rdb == nil || live.InstanceID == "" {
+		return nil
+	}
+	raw, err := json.Marshal(live)
+	if err != nil {
+		return err
+	}
+	return n.rdb.Set(ctx, clashTrafficLiveKeyPrefix+live.InstanceID, raw, ttl).Err()
+}
+
+func (n *clashRuntimeNotifier) ListTrafficLive(ctx context.Context) ([]service.ClashTrafficLive, error) {
+	if n == nil || n.rdb == nil {
+		return nil, nil
+	}
+	values, err := n.scanValues(ctx, clashTrafficLiveKeyPrefix)
+	if err != nil || len(values) == 0 {
+		return nil, err
+	}
+	out := make([]service.ClashTrafficLive, 0, len(values))
+	for _, text := range values {
+		var live service.ClashTrafficLive
+		if json.Unmarshal([]byte(text), &live) == nil {
+			out = append(out, live)
+		}
+	}
+	return out, nil
+}
+
+// scanValues returns the string values of every key under prefix; keys that
+// expire between SCAN and MGET are skipped.
+func (n *clashRuntimeNotifier) scanValues(ctx context.Context, prefix string) ([]string, error) {
 	var (
 		cursor uint64
 		keys   []string
 	)
 	for {
-		batch, next, err := n.rdb.Scan(ctx, cursor, clashInstanceKeyPrefix+"*", 100).Result()
+		batch, next, err := n.rdb.Scan(ctx, cursor, prefix+"*", 100).Result()
 		if err != nil {
 			return nil, err
 		}
@@ -102,17 +150,11 @@ func (n *clashRuntimeNotifier) ListInstanceStatuses(ctx context.Context) ([]serv
 	if err != nil {
 		return nil, err
 	}
-	out := make([]service.ClashInstanceStatus, 0, len(values))
+	out := make([]string, 0, len(values))
 	for _, value := range values {
-		text, ok := value.(string)
-		if !ok {
-			continue
-		}
-		var status service.ClashInstanceStatus
-		if json.Unmarshal([]byte(text), &status) == nil {
-			out = append(out, status)
+		if text, ok := value.(string); ok {
+			out = append(out, text)
 		}
 	}
-	sort.Slice(out, func(i, j int) bool { return out[i].InstanceID < out[j].InstanceID })
 	return out, nil
 }

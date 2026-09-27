@@ -43,8 +43,19 @@ type ClashProfile struct {
 	ExpireAt               *time.Time        `json:"expire_at"`
 	NodeCount              int               `json:"node_count"`
 	Stats                  ClashProfileStats `json:"stats"`
-	CreatedAt              time.Time         `json:"created_at"`
-	UpdatedAt              time.Time         `json:"updated_at"`
+	// MeasuredTraffic is what went through the profile's nodes here; the
+	// byte fields above are the provider-reported quota usage.
+	MeasuredTraffic ClashProfileTraffic `json:"measured_traffic"`
+	CreatedAt       time.Time           `json:"created_at"`
+	UpdatedAt       time.Time           `json:"updated_at"`
+}
+
+// ClashProfileTraffic sums the traffic measured through a profile's nodes.
+type ClashProfileTraffic struct {
+	UploadBytes        int64 `json:"upload_bytes"`
+	DownloadBytes      int64 `json:"download_bytes"`
+	TodayUploadBytes   int64 `json:"today_upload_bytes"`
+	TodayDownloadBytes int64 `json:"today_download_bytes"`
 }
 
 func ClashProfileFromService(p *service.ClashProfileSummary) *ClashProfile {
@@ -75,6 +86,10 @@ func ClashProfileFromService(p *service.ClashProfileSummary) *ClashProfile {
 			Total: p.Stats.Total, Active: p.Stats.Active, Healthy: p.Stats.Healthy, Unhealthy: p.Stats.Unhealthy,
 			Missing: p.Stats.Missing, Invalid: p.Stats.Invalid, Disabled: p.Stats.Disabled, Bound: p.Stats.Bound,
 			BoundAccounts: p.Stats.BoundAccounts,
+		},
+		MeasuredTraffic: ClashProfileTraffic{
+			UploadBytes: p.Traffic.Upload, DownloadBytes: p.Traffic.Download,
+			TodayUploadBytes: p.Traffic.TodayUpload, TodayDownloadBytes: p.Traffic.TodayDownload,
 		},
 		CreatedAt: p.CreatedAt,
 		UpdatedAt: p.UpdatedAt,
@@ -143,8 +158,48 @@ type ClashNode struct {
 	Available           bool                `json:"available"`
 	UnavailableReason   string              `json:"unavailable_reason"`
 	Accounts            []ClashBoundAccount `json:"accounts"`
+	Traffic             ClashNodeTraffic    `json:"traffic"`
 	CreatedAt           time.Time           `json:"created_at"`
 	UpdatedAt           time.Time           `json:"updated_at"`
+}
+
+// ClashTrafficDay is one daily traffic bucket.
+type ClashTrafficDay struct {
+	Date          string `json:"date"`
+	UploadBytes   int64  `json:"upload_bytes"`
+	DownloadBytes int64  `json:"download_bytes"`
+}
+
+// ClashNodeTraffic is the traffic sampled through a node's listener. The rates
+// and connection count come from the latest sample of every instance.
+type ClashNodeTraffic struct {
+	UploadBytes        int64             `json:"upload_bytes"`
+	DownloadBytes      int64             `json:"download_bytes"`
+	TodayUploadBytes   int64             `json:"today_upload_bytes"`
+	TodayDownloadBytes int64             `json:"today_download_bytes"`
+	Daily              []ClashTrafficDay `json:"daily"`
+	UpdatedAt          *time.Time        `json:"updated_at"`
+	UploadRate         int64             `json:"upload_rate"`
+	DownloadRate       int64             `json:"download_rate"`
+	Connections        int               `json:"connections"`
+}
+
+func clashNodeTraffic(t service.ClashNodeTraffic) ClashNodeTraffic {
+	daily := make([]ClashTrafficDay, 0, len(t.Daily))
+	for _, day := range t.Daily {
+		daily = append(daily, ClashTrafficDay{Date: day.Date, UploadBytes: day.Upload, DownloadBytes: day.Download})
+	}
+	return ClashNodeTraffic{
+		UploadBytes:        t.Upload,
+		DownloadBytes:      t.Download,
+		TodayUploadBytes:   t.TodayUpload,
+		TodayDownloadBytes: t.TodayDownload,
+		Daily:              daily,
+		UpdatedAt:          t.UpdatedAt,
+		UploadRate:         t.UploadRate,
+		DownloadRate:       t.DownloadRate,
+		Connections:        t.Connections,
+	}
 }
 
 func ClashNodeFromService(v *service.ClashNodeView) *ClashNode {
@@ -182,6 +237,7 @@ func ClashNodeFromService(v *service.ClashNodeView) *ClashNode {
 		Available:           v.Available(),
 		UnavailableReason:   v.UnavailableReason(),
 		Accounts:            clashAccountsFromService(v.Accounts),
+		Traffic:             clashNodeTraffic(v.Traffic),
 		CreatedAt:           v.CreatedAt,
 		UpdatedAt:           v.UpdatedAt,
 	}

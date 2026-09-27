@@ -55,7 +55,10 @@ func TestExternalRuntimeAgainstFakeController(t *testing.T) {
 			w.WriteHeader(http.StatusNotFound)
 			_, _ = io.WriteString(w, `{"message":"resource not found"}`)
 		case r.Method == http.MethodGet && r.URL.Path == "/connections":
-			_, _ = io.WriteString(w, `{"connections":[{"id":"c1","metadata":{"inboundName":"l-7"}},{"id":"c2","metadata":{"inboundName":"l-8"}}]}`)
+			_, _ = io.WriteString(w, `{"downloadTotal":9,"uploadTotal":9,"memory":0,"connections":[`+
+				`{"id":"c1","upload":120,"download":4096,"start":"2026-09-27T10:00:00.5Z","chains":["n-7"],"metadata":{"network":"tcp","type":"Socks5","inboundName":"l-7","inboundPort":"20001","specialProxy":"n-7"}},`+
+				`{"id":"c2","upload":1,"download":2,"start":"not-a-time","metadata":{"inboundName":"l-8"}},`+
+				`{"id":"dns","upload":5,"download":5,"start":"2026-09-27T10:00:00Z","metadata":{"type":"Inner","inboundName":""}}]}`)
 		case r.Method == http.MethodDelete && strings.HasPrefix(r.URL.Path, "/connections/"):
 			deleted <- strings.TrimPrefix(r.URL.Path, "/connections/")
 			w.WriteHeader(http.StatusNoContent)
@@ -90,6 +93,13 @@ func TestExternalRuntimeAgainstFakeController(t *testing.T) {
 	delay, err := rt.DelayTest(ctx, "n-1", "https://probe.example/204", 3*time.Second)
 	require.NoError(t, err)
 	require.Equal(t, 88*time.Millisecond, delay)
+
+	conns, err := rt.Connections(ctx)
+	require.NoError(t, err)
+	require.Equal(t, []service.ClashConnection{
+		{ID: "c1", Inbound: "l-7", Upload: 120, Download: 4096, Start: time.Date(2026, 9, 27, 10, 0, 0, 500_000_000, time.UTC)},
+		{ID: "c2", Inbound: "l-8", Upload: 1, Download: 2},
+	}, conns, "internal connections without an inbound are skipped; a bad start time is tolerated")
 
 	closed, err := rt.CloseInboundConnections(ctx, []string{"l-7"})
 	require.NoError(t, err)
@@ -205,6 +215,27 @@ func TestEmbeddedRuntimeRendersWorkingExits(t *testing.T) {
 	_, err = client(placeholderPort, "sub2api-b", "pb").Get(upstream.URL)
 	require.Error(t, err, "placeholder listeners must fail closed")
 	require.EqualValues(t, 1, hits.Load())
+
+	// Traffic sampling attributes open connections to the rendered listener.
+	proxyURL := &url.URL{Scheme: "socks5", User: url.UserPassword("sub2api-a", "pa"), Host: fmt.Sprintf("127.0.0.1:%d", livePort)}
+	keepAlive := &http.Client{Timeout: 5 * time.Second, Transport: &http.Transport{Proxy: http.ProxyURL(proxyURL)}}
+	defer keepAlive.CloseIdleConnections()
+	resp, err = keepAlive.Get(upstream.URL)
+	require.NoError(t, err)
+	_, _ = io.Copy(io.Discard, resp.Body)
+	_ = resp.Body.Close()
+	require.Eventually(t, func() bool {
+		conns, err := rt.Connections(ctx)
+		if err != nil {
+			return false
+		}
+		for _, conn := range conns {
+			if nodeID, ok := service.ParseClashListenerName(conn.Inbound); ok && nodeID == 1 && conn.Download > 0 {
+				return true
+			}
+		}
+		return false
+	}, 3*time.Second, 20*time.Millisecond)
 
 	delay, err := rt.DelayTest(ctx, service.ClashProxyName(1), upstream.URL, 5*time.Second)
 	require.NoError(t, err)

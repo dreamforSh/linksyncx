@@ -321,13 +321,13 @@ func (s *ClashService) probeOneExit(ctx context.Context, node *ClashNodeView, pr
 	bound := len(node.Accounts) > 0
 	switch {
 	case update.ExitIP == "" || update.ExitIP == ip:
+		applyClashExitGeo(&update, info, update.ExitIP == ip)
 		update.ExitIP, update.ExitStatus, update.PendingIP = ip, ClashExitOK, ""
-		update.Country, update.CountryCode, update.Region, update.City = info.Country, info.CountryCode, info.Region, info.City
 	case update.ExitStatus == ClashExitChanged && update.PendingIP == ip:
 		// Still waiting for the admin to accept the same new address.
 	case settings.ExitChangePolicy == ClashExitChangeAccept || !bound:
+		applyClashExitGeo(&update, info, false)
 		update.ExitIP, update.ExitStatus, update.PendingIP = ip, ClashExitOK, ""
-		update.Country, update.CountryCode, update.Region, update.City = info.Country, info.CountryCode, info.Region, info.City
 		update.ChangedAt = &now
 	default:
 		update.ExitStatus, update.PendingIP = ClashExitChanged, ip
@@ -350,13 +350,27 @@ func (s *ClashService) probeOneExit(ctx context.Context, node *ClashNodeView, pr
 	}
 	if s.latencyCache != nil {
 		latency := latencyMs
+		geo := ClashNodeExitUpdate{Country: info.Country, CountryCode: info.CountryCode, Region: info.Region, City: info.City}
+		if update.ExitIP == ip {
+			geo = update
+		}
 		_ = s.latencyCache.SetProxyLatency(ctx, proxy.ID, &ProxyLatencyInfo{
 			Success: true, LatencyMs: &latency, Message: "clash exit probe",
-			IPAddress: ip, Country: info.Country, CountryCode: info.CountryCode,
-			Region: info.Region, City: info.City, UpdatedAt: now,
+			IPAddress: ip, Country: geo.Country, CountryCode: geo.CountryCode,
+			Region: geo.Region, City: geo.City, UpdatedAt: now,
 		})
 	}
 	return res
+}
+
+// applyClashExitGeo records the probed location. The fallback probe service
+// reports the address without a location; an unchanged address then keeps
+// its known location instead of being blanked.
+func applyClashExitGeo(update *ClashNodeExitUpdate, info *ProxyExitInfo, sameIP bool) {
+	if sameIP && strings.TrimSpace(info.Country) == "" && strings.TrimSpace(info.CountryCode) == "" {
+		return
+	}
+	update.Country, update.CountryCode, update.Region, update.City = info.Country, info.CountryCode, info.Region, info.City
 }
 
 func normalizeClashExitIP(raw string) string {

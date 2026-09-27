@@ -43,6 +43,9 @@ type ClashService struct {
 
 	// onStructuralChange lets the manager resync the local core immediately.
 	onStructuralChange func()
+	// localTrafficLive reads this instance's throughput when no notifier
+	// shares the snapshots of every instance.
+	localTrafficLive func() *ClashTrafficLive
 }
 
 // NewClashService wires the Clash pool facade. runtime is nil when the pool is disabled.
@@ -136,6 +139,8 @@ type ClashProfileInput struct {
 type ClashProfileSummary struct {
 	ClashProfile
 	Stats ClashProfileStats
+	// Traffic is measured locally, unlike the provider-reported usage.
+	Traffic ClashProfileTraffic
 }
 
 // ClashRefreshResult reports one refresh attempt.
@@ -193,6 +198,7 @@ func (s *ClashService) ListProfiles(ctx context.Context) ([]ClashProfileSummary,
 	for _, profile := range profiles {
 		out = append(out, ClashProfileSummary{ClashProfile: profile, Stats: stats[profile.ID]})
 	}
+	s.attachProfileTraffic(ctx, out)
 	return out, nil
 }
 
@@ -205,7 +211,9 @@ func (s *ClashService) GetProfile(ctx context.Context, id int64) (*ClashProfileS
 	if err != nil {
 		return nil, err
 	}
-	return &ClashProfileSummary{ClashProfile: *profile, Stats: stats[id]}, nil
+	summaries := []ClashProfileSummary{{ClashProfile: *profile, Stats: stats[id]}}
+	s.attachProfileTraffic(ctx, summaries)
+	return &summaries[0], nil
 }
 
 func (s *ClashService) requireEncryption() error {
@@ -628,9 +636,29 @@ func randomClashToken(bytes int) string {
 	return hex.EncodeToString(buf)
 }
 
-// ListNodes returns a page of nodes with their bindings.
+// ListNodes returns a page of nodes with their bindings and traffic.
 func (s *ClashService) ListNodes(ctx context.Context, filter ClashNodeFilter, params pagination.PaginationParams) ([]ClashNodeView, *pagination.PaginationResult, error) {
-	return s.repo.ListNodeViews(ctx, filter, params)
+	filter = s.prepareNodeFilter(filter)
+	views, result, err := s.repo.ListNodeViews(ctx, filter, params)
+	if err != nil {
+		return nil, nil, err
+	}
+	s.attachNodeTraffic(ctx, views)
+	return views, result, nil
+}
+
+// ListNodeIDs returns every node matching filter, in listing order, so the
+// admin page can test all filtered nodes rather than one page.
+func (s *ClashService) ListNodeIDs(ctx context.Context, filter ClashNodeFilter) ([]int64, error) {
+	return s.repo.ListNodeIDs(ctx, s.prepareNodeFilter(filter))
+}
+
+func (s *ClashService) prepareNodeFilter(filter ClashNodeFilter) ClashNodeFilter {
+	filter.Sort = NormalizeClashNodeSort(filter.Sort)
+	if filter.Sort == ClashNodeSortTrafficToday {
+		filter.TrafficDate = clashTrafficDate(time.Now())
+	}
+	return filter
 }
 
 // SetNodeEnabled toggles an admin disable. Disabling immediately drops the

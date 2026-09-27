@@ -155,3 +155,22 @@ func (r *embeddedRuntime) CloseInboundConnections(_ context.Context, listenerNam
 	}
 	return engine.CloseInboundConnections(listenerNames), nil
 }
+
+func (r *embeddedRuntime) Connections(context.Context) ([]service.ClashConnection, error) {
+	engine, err := r.current()
+	if err != nil {
+		return nil, err
+	}
+	conns := engine.Connections()
+	out := make([]service.ClashConnection, 0, len(conns))
+	for _, conn := range conns {
+		out = append(out, service.ClashConnection{
+			ID:       conn.ID,
+			Inbound:  conn.Inbound,
+			Upload:   conn.Upload,
+			Download: conn.Download,
+			Start:    conn.Start,
+		})
+	}
+	return out, nil
+}

@@ -27,6 +27,19 @@ func ClashListenerName(nodeID int64) string {
 	return clashListenerNamePrefix + strconv.FormatInt(nodeID, 10)
 }
 
+// ParseClashListenerName returns the node behind a listener name ("l-<id>").
+func ParseClashListenerName(name string) (int64, bool) {
+	raw, ok := strings.CutPrefix(name, clashListenerNamePrefix)
+	if !ok {
+		return 0, false
+	}
+	id, err := strconv.ParseInt(raw, 10, 64)
+	if err != nil || id <= 0 {
+		return 0, false
+	}
+	return id, true
+}
+
 // ClashRenderOptions tunes RenderClashConfig.
 type ClashRenderOptions struct {
 	ListenAddress string

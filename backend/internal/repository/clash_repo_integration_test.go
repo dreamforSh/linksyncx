@@ -168,3 +168,94 @@ func TestClashRepositoryLifecycle(t *testing.T) {
 	_, err = repo.GetProfile(ctx, profile.ID)
 	require.ErrorIs(t, err, service.ErrClashProfileNotFound)
 }
+
+func TestClashRepositoryTraffic(t *testing.T) {
+	ctx := context.Background()
+	repo := NewClashRepository(integrationDB)
+	suffix := time.Now().Format("150405.000000")
+
+	profile := &service.ClashProfile{
+		Name: "clash-traffic-" + suffix, URLEncrypted: "enc", URLFingerprint: "fp-traffic-" + suffix, URLMasked: "https://x/***",
+		UserAgent: "clash.meta", Enabled: true, RefreshIntervalMinutes: 360,
+	}
+	require.NoError(t, repo.CreateProfile(ctx, profile))
+	t.Cleanup(func() {
+		rows, _ := integrationDB.QueryContext(ctx, `SELECT proxy_id FROM clash_nodes WHERE profile_id = $1`, profile.ID)
+		var proxyIDs []int64
+		for rows != nil && rows.Next() {
+			var id int64
+			_ = rows.Scan(&id)
+			proxyIDs = append(proxyIDs, id)
+		}
+		if rows != nil {
+			_ = rows.Close()
+		}
+		_, _ = integrationDB.ExecContext(ctx, `DELETE FROM clash_nodes WHERE profile_id = $1`, profile.ID)
+		for _, id := range proxyIDs {
+			_, _ = integrationDB.ExecContext(ctx, `DELETE FROM proxies WHERE id = $1`, id)
+		}
+		_, _ = integrationDB.ExecContext(ctx, `DELETE FROM clash_profiles WHERE id = $1`, profile.ID)
+	})
+
+	cfg := func(name string) map[string]any {
+		return map[string]any{"name": name, "type": "trojan", "server": strings.ToLower(name) + ".example.com", "port": 443, "password": "pw"}
+	}
+	n := 0
+	_, err := repo.ApplyNodeSync(ctx, profile.ID, &service.ClashNodeSyncPlan{Inserts: []service.ClashSyncNewNode{
+		{Name: "T-HK", Type: "trojan", Server: "hk.example.com", ServerPort: 443, Config: cfg("T-HK"), ConfigHash: "t1", Status: service.ClashNodeStatusActive, ProxyName: "Clash·t·HK"},
+		{Name: "T-US", Type: "trojan", Server: "us.example.com", ServerPort: 443, Config: cfg("T-US"), ConfigHash: "t2", Status: service.ClashNodeStatusActive, ProxyName: "Clash·t·US"},
+	}}, service.ClashPortRange{Start: 63000, End: 63999}, func() service.ClashManagedProxySpec {
+		n++
+		return service.ClashManagedProxySpec{Host: "127.0.0.1", Username: fmt.Sprintf("t%d", n), Password: "p"}
+	})
+	require.NoError(t, err)
+	nodes, err := repo.ListNodesByProfile(ctx, profile.ID)
+	require.NoError(t, err)
+	hk, us := nodes[0], nodes[1]
+
+	at := time.Now().UTC()
+	// Duplicate keys are grouped; nodes that disappeared are dropped.
+	require.NoError(t, repo.AddNodeTraffic(ctx, []service.ClashTrafficIncrement{
+		{NodeID: hk.ID, Date: "2026-09-20", Upload: 5, Download: 50},
+		{NodeID: hk.ID, Date: "2026-09-27", Upload: 10, Download: 100},
+		{NodeID: hk.ID, Date: "2026-09-27", Upload: 1, Download: 1},
+		{NodeID: us.ID, Date: "2026-09-27", Upload: 1000, Download: 1000},
+		{NodeID: -1, Date: "2026-09-27", Upload: 1, Download: 1},
+	}, at))
+	// A second flush accumulates.
+	require.NoError(t, repo.AddNodeTraffic(ctx, []service.ClashTrafficIncrement{
+		{NodeID: hk.ID, Date: "2026-09-27", Upload: 4, Download: 9},
+	}, at))
+
+	traffic, err := repo.ListNodeTraffic(ctx, []int64{hk.ID, us.ID}, "2026-09-21")
+	require.NoError(t, err)
+	require.Equal(t, int64(20), traffic[hk.ID].Upload)
+	require.Equal(t, int64(160), traffic[hk.ID].Download)
+	require.NotNil(t, traffic[hk.ID].UpdatedAt)
+	require.Equal(t, []service.ClashTrafficDay{{Date: "2026-09-27", Upload: 15, Download: 110}}, traffic[hk.ID].Days)
+
+	profiles, err := repo.ListProfileTraffic(ctx, "2026-09-27")
+	require.NoError(t, err)
+	require.Equal(t, service.ClashProfileTraffic{Upload: 1020, Download: 1160, TodayUpload: 1015, TodayDownload: 1110}, profiles[profile.ID])
+
+	page := pagination.PaginationParams{Page: 1, PageSize: 10}
+	views, _, err := repo.ListNodeViews(ctx, service.ClashNodeFilter{ProfileID: &profile.ID, Sort: service.ClashNodeSortTrafficTotal}, page)
+	require.NoError(t, err)
+	require.Equal(t, []int64{us.ID, hk.ID}, []int64{views[0].ID, views[1].ID})
+	ids, err := repo.ListNodeIDs(ctx, service.ClashNodeFilter{ProfileID: &profile.ID, Sort: service.ClashNodeSortTrafficToday, TrafficDate: "2026-09-20"})
+	require.NoError(t, err)
+	require.Equal(t, []int64{hk.ID, us.ID}, ids)
+
+	require.NoError(t, repo.SetNodeStatus(ctx, us.ID, service.ClashNodeStatusDisabled, "disabled by admin"))
+	ids, err = repo.ListNodeIDs(ctx, service.ClashNodeFilter{ProfileID: &profile.ID, LiveOnly: true})
+	require.NoError(t, err)
+	require.Equal(t, []int64{hk.ID}, ids)
+
+	// Reclaimed nodes take their buckets with them.
+	require.NoError(t, repo.SetNodeStatus(ctx, us.ID, service.ClashNodeStatusMissing, "gone"))
+	_, err = repo.ReclaimNodes(ctx, time.Now().Add(time.Hour))
+	require.NoError(t, err)
+	var left int
+	require.NoError(t, integrationDB.QueryRowContext(ctx, `SELECT COUNT(*) FROM clash_node_traffic_daily WHERE node_id = $1`, us.ID).Scan(&left))
+	require.Zero(t, left)
+}

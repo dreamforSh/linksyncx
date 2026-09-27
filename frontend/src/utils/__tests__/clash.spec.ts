@@ -4,17 +4,22 @@ import zh from '@/i18n/locales/zh'
 import {
   clashCheckPlatformFor,
   clashErrorMessage,
+  clashTrafficToday,
+  clashTrafficTotal,
+  clashTrafficTrend,
   countryFlagUrl,
   describeClashExitPause,
   estimateCodexImportCount,
   exitPlatformCheck,
   findClashExit,
+  formatTrafficBytes,
+  formatTrafficRate,
   isBlockingPlatformCheck,
   isClashExitPauseReason,
   localizeClashUnavailableReason,
   stripClashExitPauseReason
 } from '../clash'
-import type { ClashExitList } from '@/types'
+import type { ClashExitList, ClashNodeTraffic } from '@/types'
 
 const t = (key: string, params?: Record<string, unknown>) => (params ? `${key} ${JSON.stringify(params)}` : key)
 
@@ -22,6 +27,44 @@ const t = (key: string, params?: Record<string, unknown>) => (params ? `${key} $
 function lookup(messages: unknown, key: string): unknown {
   return key.split('.').reduce<unknown>((node, segment) => (node as Record<string, unknown> | undefined)?.[segment], messages)
 }
+
+describe('clash node traffic', () => {
+  it('formats byte counts compactly and never shows negatives or NaN', () => {
+    expect(formatTrafficBytes(0)).toBe('0 B')
+    expect(formatTrafficBytes(-5)).toBe('0 B')
+    expect(formatTrafficBytes(undefined)).toBe('0 B')
+    expect(formatTrafficBytes(Number.NaN)).toBe('0 B')
+    expect(formatTrafficBytes(512)).toBe('512 B')
+    expect(formatTrafficBytes(1536)).toBe('1.5 KB')
+    expect(formatTrafficBytes(1024 ** 3)).toBe('1 GB')
+    expect(formatTrafficBytes(5 * 1024 ** 3 + 1024 ** 3 / 4)).toBe('5.25 GB')
+    expect(formatTrafficBytes(3 * 1024 ** 6)).toBe('3072 PB')
+    expect(formatTrafficRate(10 * 1024)).toBe('10 KB/s')
+  })
+
+  it('sums totals, today and the daily trend, tolerating older payloads', () => {
+    const traffic: ClashNodeTraffic = {
+      upload_bytes: 10,
+      download_bytes: 90,
+      today_upload_bytes: 1,
+      today_download_bytes: 4,
+      daily: [
+        { date: '2026-09-26', upload_bytes: 2, download_bytes: 3 },
+        { date: '2026-09-27', upload_bytes: 1, download_bytes: 4 }
+      ],
+      updated_at: null,
+      upload_rate: 0,
+      download_rate: 0,
+      connections: 0
+    }
+    expect(clashTrafficTotal(traffic)).toBe(100)
+    expect(clashTrafficToday(traffic)).toBe(5)
+    expect(clashTrafficTrend(traffic)).toEqual([5, 5])
+    expect(clashTrafficTotal(undefined)).toBe(0)
+    expect(clashTrafficToday(undefined)).toBe(0)
+    expect(clashTrafficTrend(undefined)).toEqual([])
+  })
+})
 
 describe('clash pause reasons', () => {
   it('recognises the [clash-exit] prefix only', () => {

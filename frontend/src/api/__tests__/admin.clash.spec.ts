@@ -26,6 +26,7 @@ import {
   getRuntime,
   getSettings,
   listExits,
+  listNodeIds,
   listNodes,
   listProfiles,
   previewProfile,
@@ -120,6 +121,25 @@ describe('admin Clash API — nodes', () => {
       params: { page: 1, page_size: 20, bound: 'true' },
       signal: undefined
     })
+
+    await listNodes(1, 20, { sort: 'traffic_today' })
+    expect(get).toHaveBeenLastCalledWith('/admin/clash/nodes', {
+      params: { page: 1, page_size: 20, sort: 'traffic_today' },
+      signal: undefined
+    })
+  })
+
+  it('lists the ids of every filtered node for batch tests', async () => {
+    get.mockResolvedValueOnce({ data: { ids: [3, 1, 2] } })
+    await expect(listNodeIds({ profile_id: 9, bound: false, sort: 'latency' }, { live: true })).resolves.toEqual([3, 1, 2])
+    expect(get).toHaveBeenLastCalledWith('/admin/clash/nodes/ids', {
+      params: { profile_id: 9, bound: 'false', sort: 'latency', live: 'true' }
+    })
+    expect(clashAPI.listNodeIds).toBe(listNodeIds)
+
+    get.mockResolvedValueOnce({ data: null })
+    await expect(listNodeIds()).resolves.toEqual([])
+    expect(get).toHaveBeenLastCalledWith('/admin/clash/nodes/ids', { params: {} })
   })
 
   it('toggles nodes and accepts exit changes', async () => {

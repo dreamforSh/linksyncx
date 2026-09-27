@@ -360,7 +360,8 @@ func (r *clashRepository) attachBoundAccounts(ctx context.Context, views []servi
 	return rows.Err()
 }
 
-func (r *clashRepository) ListNodeViews(ctx context.Context, filter service.ClashNodeFilter, params pagination.PaginationParams) ([]service.ClashNodeView, *pagination.PaginationResult, error) {
+// clashNodeWhere renders the listing filter over clashNodeViewFrom.
+func clashNodeWhere(filter service.ClashNodeFilter) (string, []any) {
 	conds := []string{"TRUE"}
 	args := make([]any, 0, 6)
 	add := func(cond string, value any) {
@@ -384,24 +385,179 @@ func (r *clashRepository) ListNodeViews(ctx context.Context, filter service.Clas
 			conds = append(conds, "NOT "+exists)
 		}
 	}
+	if filter.LiveOnly {
+		conds = append(conds, "n.status = 'active' AND p.enabled AND p.deleted_at IS NULL")
+	}
 	if search := strings.TrimSpace(filter.Search); search != "" {
 		args = append(args, "%"+escapeLike(search)+"%")
 		ph := fmt.Sprintf("$%d", len(args))
 		conds = append(conds, "(n.name ILIKE "+ph+" OR n.server ILIKE "+ph+" OR n.exit_ip ILIKE "+ph+" OR p.name ILIKE "+ph+")")
 	}
-	where := " WHERE " + strings.Join(conds, " AND ")
+	return " WHERE " + strings.Join(conds, " AND "), args
+}
 
+// clashNodeOrder renders the listing order; the node id breaks ties so pages
+// stay stable.
+func clashNodeOrder(filter service.ClashNodeFilter, args []any) (string, []any) {
+	switch filter.Sort {
+	case service.ClashNodeSortName:
+		return " ORDER BY n.name, n.id", args
+	case service.ClashNodeSortLatency:
+		// Unhealthy nodes keep their last good latency; list them after the rest.
+		return " ORDER BY (n.health_status = 'unhealthy'), n.latency_ms ASC NULLS LAST, n.id", args
+	case service.ClashNodeSortTrafficToday:
+		if filter.TrafficDate != "" {
+			args = append(args, filter.TrafficDate)
+			return fmt.Sprintf(` ORDER BY COALESCE((SELECT d.upload_bytes + d.download_bytes FROM clash_node_traffic_daily d
+				WHERE d.node_id = n.id AND d.bucket_date = $%d::date), 0) DESC, n.id`, len(args)), args
+		}
+	case service.ClashNodeSortTrafficTotal:
+		return ` ORDER BY COALESCE((SELECT SUM(d.upload_bytes + d.download_bytes) FROM clash_node_traffic_daily d
+			WHERE d.node_id = n.id), 0) DESC, n.id`, args
+	}
+	return " ORDER BY n.profile_id, n.id", args
+}
+
+func (r *clashRepository) ListNodeViews(ctx context.Context, filter service.ClashNodeFilter, params pagination.PaginationParams) ([]service.ClashNodeView, *pagination.PaginationResult, error) {
+	where, args := clashNodeWhere(filter)
 	var total int64
 	if err := r.db.QueryRowContext(ctx, `SELECT COUNT(*)`+clashNodeViewFrom+where, args...).Scan(&total); err != nil {
 		return nil, nil, err
 	}
+	order, args := clashNodeOrder(filter, args)
 	args = append(args, params.Limit(), params.Offset())
-	page := fmt.Sprintf(" ORDER BY n.profile_id, n.id LIMIT $%d OFFSET $%d", len(args)-1, len(args))
-	views, err := r.queryNodeViews(ctx, where+page, args...)
+	page := fmt.Sprintf(" LIMIT $%d OFFSET $%d", len(args)-1, len(args))
+	views, err := r.queryNodeViews(ctx, where+order+page, args...)
 	if err != nil {
 		return nil, nil, err
 	}
 	return views, paginationResultFromTotal(total, params), nil
+}
+
+func (r *clashRepository) ListNodeIDs(ctx context.Context, filter service.ClashNodeFilter) ([]int64, error) {
+	where, args := clashNodeWhere(filter)
+	order, args := clashNodeOrder(filter, args)
+	rows, err := r.db.QueryContext(ctx, `SELECT n.id`+clashNodeViewFrom+where+order, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = rows.Close() }()
+	ids := make([]int64, 0)
+	for rows.Next() {
+		var id int64
+		if err := rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		ids = append(ids, id)
+	}
+	return ids, rows.Err()
+}
+
+func (r *clashRepository) AddNodeTraffic(ctx context.Context, incs []service.ClashTrafficIncrement, at time.Time) error {
+	if len(incs) == 0 {
+		return nil
+	}
+	ids := make([]int64, len(incs))
+	dates := make([]string, len(incs))
+	uploads := make([]int64, len(incs))
+	downloads := make([]int64, len(incs))
+	for i, inc := range incs {
+		ids[i], dates[i], uploads[i], downloads[i] = inc.NodeID, inc.Date, inc.Upload, inc.Download
+	}
+	// One statement keeps a retried flush from double counting; grouping first
+	// keeps ON CONFLICT from touching a row twice.
+	_, err := r.db.ExecContext(ctx, `
+		INSERT INTO clash_node_traffic_daily AS t (node_id, bucket_date, upload_bytes, download_bytes, updated_at)
+		SELECT d.id, d.bucket::date, SUM(d.up), SUM(d.down), $5::timestamptz
+		FROM unnest($1::bigint[], $2::text[], $3::bigint[], $4::bigint[]) AS d(id, bucket, up, down)
+		WHERE EXISTS (SELECT 1 FROM clash_nodes n WHERE n.id = d.id)
+		GROUP BY d.id, d.bucket
+		ORDER BY d.id, d.bucket
+		ON CONFLICT (node_id, bucket_date) DO UPDATE SET
+			upload_bytes = t.upload_bytes + EXCLUDED.upload_bytes,
+			download_bytes = t.download_bytes + EXCLUDED.download_bytes,
+			updated_at = EXCLUDED.updated_at`,
+		pq.Array(ids), pq.Array(dates), pq.Array(uploads), pq.Array(downloads), at)
+	return err
+}
+
+func (r *clashRepository) ListNodeTraffic(ctx context.Context, nodeIDs []int64, since string) (map[int64]*service.ClashNodeTrafficTotals, error) {
+	out := make(map[int64]*service.ClashNodeTrafficTotals)
+	if len(nodeIDs) == 0 {
+		return out, nil
+	}
+	rows, err := r.db.QueryContext(ctx, `
+		SELECT node_id, COALESCE(SUM(upload_bytes), 0)::bigint, COALESCE(SUM(download_bytes), 0)::bigint, MAX(updated_at)
+		FROM clash_node_traffic_daily WHERE node_id = ANY($1) GROUP BY node_id`, pq.Array(nodeIDs))
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = rows.Close() }()
+	for rows.Next() {
+		var (
+			id        int64
+			totals    service.ClashNodeTrafficTotals
+			updatedAt sql.NullTime
+		)
+		if err := rows.Scan(&id, &totals.Upload, &totals.Download, &updatedAt); err != nil {
+			return nil, err
+		}
+		totals.UpdatedAt = nullTimePtr(updatedAt)
+		out[id] = &totals
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+
+	dayRows, err := r.db.QueryContext(ctx, `
+		SELECT node_id, to_char(bucket_date, 'YYYY-MM-DD'), upload_bytes, download_bytes
+		FROM clash_node_traffic_daily WHERE node_id = ANY($1) AND bucket_date >= $2::date
+		ORDER BY node_id, bucket_date`, pq.Array(nodeIDs), since)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = dayRows.Close() }()
+	for dayRows.Next() {
+		var (
+			id  int64
+			day service.ClashTrafficDay
+		)
+		if err := dayRows.Scan(&id, &day.Date, &day.Upload, &day.Download); err != nil {
+			return nil, err
+		}
+		if totals := out[id]; totals != nil {
+			totals.Days = append(totals.Days, day)
+		}
+	}
+	return out, dayRows.Err()
+}
+
+func (r *clashRepository) ListProfileTraffic(ctx context.Context, today string) (map[int64]service.ClashProfileTraffic, error) {
+	rows, err := r.db.QueryContext(ctx, `
+		SELECT n.profile_id,
+			COALESCE(SUM(d.upload_bytes), 0)::bigint,
+			COALESCE(SUM(d.download_bytes), 0)::bigint,
+			COALESCE(SUM(d.upload_bytes) FILTER (WHERE d.bucket_date = $1::date), 0)::bigint,
+			COALESCE(SUM(d.download_bytes) FILTER (WHERE d.bucket_date = $1::date), 0)::bigint
+		FROM clash_node_traffic_daily d
+		JOIN clash_nodes n ON n.id = d.node_id
+		GROUP BY n.profile_id`, today)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = rows.Close() }()
+	out := make(map[int64]service.ClashProfileTraffic)
+	for rows.Next() {
+		var (
+			id      int64
+			traffic service.ClashProfileTraffic
+		)
+		if err := rows.Scan(&id, &traffic.Upload, &traffic.Download, &traffic.TodayUpload, &traffic.TodayDownload); err != nil {
+			return nil, err
+		}
+		out[id] = traffic
+	}
+	return out, rows.Err()
 }
 
 func (r *clashRepository) ListAllNodeViews(ctx context.Context) ([]service.ClashNodeView, error) {

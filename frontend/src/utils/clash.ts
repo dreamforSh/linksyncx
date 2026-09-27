@@ -6,6 +6,7 @@
 import type {
   ClashExitList,
   ClashExitOption,
+  ClashNodeTraffic,
   ClashPlatform,
   ClashPlatformCheckResult
 } from '@/types'
@@ -122,6 +123,43 @@ export function exitPlatformCheck(
 export function findClashExit(list: ClashExitList | null | undefined, proxyId: number | null | undefined) {
   if (!list || proxyId == null) return undefined
   return list.exits.find((exit) => exit.proxy_id === proxyId)
+}
+
+// ==================== Node traffic ====================
+
+const TRAFFIC_UNITS = ['B', 'KB', 'MB', 'GB', 'TB', 'PB']
+
+/**
+ * Compact 1024-based byte count for traffic figures ("0 B", "12.5 MB", "1.25 GB").
+ * Kept free of '@/utils/format', which initializes i18n on import.
+ */
+export function formatTrafficBytes(bytes: number | null | undefined): string {
+  const value = Math.round(Number(bytes))
+  if (!Number.isFinite(value) || value <= 0) return '0 B'
+  let unit = 0
+  let scaled = value
+  while (scaled >= 1024 && unit < TRAFFIC_UNITS.length - 1) {
+    scaled /= 1024
+    unit++
+  }
+  return `${parseFloat(scaled.toFixed(unit >= 3 ? 2 : 1))} ${TRAFFIC_UNITS[unit]}`
+}
+
+export function formatTrafficRate(bytesPerSecond: number | null | undefined): string {
+  return `${formatTrafficBytes(bytesPerSecond)}/s`
+}
+
+export function clashTrafficTotal(traffic: ClashNodeTraffic | null | undefined): number {
+  return (traffic?.upload_bytes ?? 0) + (traffic?.download_bytes ?? 0)
+}
+
+export function clashTrafficToday(traffic: ClashNodeTraffic | null | undefined): number {
+  return (traffic?.today_upload_bytes ?? 0) + (traffic?.today_download_bytes ?? 0)
+}
+
+/** Daily totals of the trend window, oldest first. */
+export function clashTrafficTrend(traffic: ClashNodeTraffic | null | undefined): number[] {
+  return (traffic?.daily ?? []).map((day) => day.upload_bytes + day.download_bytes)
 }
 
 export function countryFlagUrl(code: string | null | undefined): string {

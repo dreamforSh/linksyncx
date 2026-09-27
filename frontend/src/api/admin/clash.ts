@@ -85,24 +85,40 @@ export async function previewProfile(
   return data
 }
 
-export async function listNodes(
-  page: number = 1,
-  pageSize: number = 20,
-  filters?: ClashNodeListFilters,
-  options?: { signal?: AbortSignal }
-): Promise<PaginatedResponse<ClashNode>> {
-  const params: Record<string, string | number> = { page, page_size: pageSize }
+function nodeFilterParams(filters?: ClashNodeListFilters): Record<string, string | number> {
+  const params: Record<string, string | number> = {}
   if (filters?.profile_id) params.profile_id = filters.profile_id
   if (filters?.status) params.status = filters.status
   if (filters?.health) params.health = filters.health
   if (typeof filters?.bound === 'boolean') params.bound = filters.bound ? 'true' : 'false'
   const search = filters?.search?.trim()
   if (search) params.search = search
+  if (filters?.sort) params.sort = filters.sort
+  return params
+}
+
+export async function listNodes(
+  page: number = 1,
+  pageSize: number = 20,
+  filters?: ClashNodeListFilters,
+  options?: { signal?: AbortSignal }
+): Promise<PaginatedResponse<ClashNode>> {
   const { data } = await apiClient.get<PaginatedResponse<ClashNode>>('/admin/clash/nodes', {
-    params,
+    params: { page, page_size: pageSize, ...nodeFilterParams(filters) },
     signal: options?.signal
   })
   return data
+}
+
+/**
+ * IDs of every node matching the filters (all pages), in listing order.
+ * live=true keeps only nodes that latency tests and exit probes accept.
+ */
+export async function listNodeIds(filters?: ClashNodeListFilters, options?: { live?: boolean }): Promise<number[]> {
+  const params = nodeFilterParams(filters)
+  if (options?.live) params.live = 'true'
+  const { data } = await apiClient.get<{ ids: number[] }>('/admin/clash/nodes/ids', { params })
+  return Array.isArray(data?.ids) ? data.ids : []
 }
 
 export async function enableNode(id: number): Promise<{ enabled: boolean }> {
@@ -196,6 +212,7 @@ export const clashAPI = {
   refreshProfile,
   previewProfile,
   listNodes,
+  listNodeIds,
   enableNode,
   disableNode,
   acceptNodeExit,

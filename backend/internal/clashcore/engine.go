@@ -184,6 +184,40 @@ func (e *Engine) CloseInboundConnections(inboundNames []string) int {
 	return closed
 }
 
+// Connection is a tracked connection with its cumulative byte counters.
+type Connection struct {
+	ID       string
+	Inbound  string
+	Upload   int64
+	Download int64
+	Start    time.Time
+}
+
+// Connections snapshots the tracked connections accepted by named inbound
+// listeners. Internal dialers (DNS, multiplexing) carry no inbound name and are
+// left out.
+func (e *Engine) Connections() []Connection {
+	if e.isClosed() {
+		return nil
+	}
+	out := make([]Connection, 0)
+	statistic.DefaultManager.Range(func(c statistic.Tracker) bool {
+		info := c.Info()
+		if info == nil || info.Metadata == nil || info.Metadata.InName == "" {
+			return true
+		}
+		out = append(out, Connection{
+			ID:       info.UUID.String(),
+			Inbound:  info.Metadata.InName,
+			Upload:   info.UploadTotal.Load(),
+			Download: info.DownloadTotal.Load(),
+			Start:    info.Start,
+		})
+		return true
+	})
+	return out
+}
+
 // Close stops every listener and releases the engine slot.
 func (e *Engine) Close() error {
 	e.mu.Lock()

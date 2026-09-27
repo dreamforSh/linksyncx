@@ -14,7 +14,7 @@
         </div>
       </div>
 
-      <div class="grid grid-cols-2 gap-4 xl:grid-cols-4">
+      <div class="grid grid-cols-2 gap-4 md:grid-cols-3 xl:grid-cols-5">
         <StatTile
           :label="t('admin.clash.stats.profiles')"
           icon="cloud"
@@ -48,6 +48,17 @@
           :loading="profilesLoading && !profilesLoaded"
         >
           {{ settings ? t('admin.clash.stats.boundHint', { max: settings.max_accounts_per_exit }) : t('admin.clash.stats.boundHintUnknown') }}
+        </StatTile>
+        <StatTile
+          :label="t('admin.clash.stats.trafficToday')"
+          icon="chartBar"
+          :value="formatTrafficBytes(totals.trafficToday)"
+          :loading="profilesLoading && !profilesLoaded"
+          data-testid="clash-stat-traffic"
+        >
+          <span :title="t('admin.clash.nodes.traffic.approxHint')">
+            {{ t('admin.clash.stats.trafficTotalHint', { total: formatTrafficBytes(totals.trafficTotal) }) }}
+          </span>
         </StatTile>
       </div>
 
@@ -108,6 +119,7 @@
         ref="nodesPanelRef"
         :profiles="profiles"
         :readonly="isPoolDisabled"
+        :max-accounts-per-exit="settings?.max_accounts_per_exit ?? null"
         @changed="handleNodesChanged"
       />
     </div>
@@ -208,7 +220,7 @@ import ClashProfileFormDialog from '@/components/admin/clash/ClashProfileFormDia
 import ClashSettingsDialog from '@/components/admin/clash/ClashSettingsDialog.vue'
 import type { ClashPoolSettings, ClashProfile, ClashRuntimeStatus, Proxy } from '@/types'
 import { extractApiErrorMessage } from '@/utils/apiError'
-import { clashErrorAccounts, clashErrorCode, clashErrorMessage } from '@/utils/clash'
+import { clashErrorAccounts, clashErrorCode, clashErrorMessage, formatTrafficBytes } from '@/utils/clash'
 
 const { t } = useI18n()
 const appStore = useAppStore()
@@ -252,9 +264,13 @@ const totals = computed(() =>
       active: acc.active + (profile.stats?.active ?? 0),
       healthy: acc.healthy + (profile.stats?.healthy ?? 0),
       unhealthy: acc.unhealthy + (profile.stats?.unhealthy ?? 0),
-      boundAccounts: acc.boundAccounts + boundAccountsOf(profile)
+      boundAccounts: acc.boundAccounts + boundAccountsOf(profile),
+      trafficToday: acc.trafficToday + (profile.measured_traffic?.today_upload_bytes ?? 0) +
+        (profile.measured_traffic?.today_download_bytes ?? 0),
+      trafficTotal: acc.trafficTotal + (profile.measured_traffic?.upload_bytes ?? 0) +
+        (profile.measured_traffic?.download_bytes ?? 0)
     }),
-    { total: 0, active: 0, healthy: 0, unhealthy: 0, boundAccounts: 0 }
+    { total: 0, active: 0, healthy: 0, unhealthy: 0, boundAccounts: 0, trafficToday: 0, trafficTotal: 0 }
   )
 )
 

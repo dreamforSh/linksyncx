@@ -72,7 +72,18 @@
             <div class="h-full rounded-full" :class="trafficBarClass(row)" :style="{ width: `${trafficPercent(row)}%` }"></div>
           </div>
         </div>
-        <span v-else class="text-sm text-gray-400 dark:text-dark-500">-</span>
+        <div
+          v-if="measuredTotal(row) > 0"
+          class="mt-1 w-40 whitespace-nowrap text-xs text-gray-500 dark:text-dark-400"
+          :title="t('admin.clash.profiles.measuredHint')"
+          data-testid="clash-profile-measured"
+        >
+          {{ t('admin.clash.profiles.measuredValue', {
+            today: formatTrafficBytes(measuredToday(row)),
+            total: formatTrafficBytes(measuredTotal(row))
+          }) }}
+        </div>
+        <span v-if="row.total_bytes <= 0 && measuredTotal(row) <= 0" class="text-sm text-gray-400 dark:text-dark-500">-</span>
       </template>
 
       <template #cell-expire_at="{ row }">
@@ -196,6 +207,7 @@ import Icon from '@/components/icons/Icon.vue'
 import type { Column } from '@/components/common/types'
 import type { ClashProfile, ClashRefreshStatus, ClashSubscriptionFormat } from '@/types'
 import { formatBytes, formatDateOnly, formatDateTime, formatRelativeTime } from '@/utils/format'
+import { formatTrafficBytes } from '@/utils/clash'
 import { daysUntil } from '@/utils/proxyExpiry'
 
 withDefaults(
@@ -253,6 +265,12 @@ const formatLabel = (format: ClashSubscriptionFormat) => {
 const boundAccounts = (profile: ClashProfile) => profile.stats.bound_accounts ?? profile.stats.bound
 
 const usedBytes = (profile: ClashProfile) => Math.max(0, profile.upload_bytes + profile.download_bytes)
+
+// Measured locally through the profile's nodes, unlike the provider-reported usage above.
+const measuredTotal = (profile: ClashProfile) =>
+  (profile.measured_traffic?.upload_bytes ?? 0) + (profile.measured_traffic?.download_bytes ?? 0)
+const measuredToday = (profile: ClashProfile) =>
+  (profile.measured_traffic?.today_upload_bytes ?? 0) + (profile.measured_traffic?.today_download_bytes ?? 0)
 
 const trafficPercent = (profile: ClashProfile) => {
   if (profile.total_bytes <= 0) return 0

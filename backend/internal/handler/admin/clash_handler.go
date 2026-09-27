@@ -176,13 +176,14 @@ func (h *ClashHandler) PreviewProfile(c *gin.Context) {
 	response.Success(c, result)
 }
 
-// ListNodes GET /admin/clash/nodes
-func (h *ClashHandler) ListNodes(c *gin.Context) {
-	page, pageSize := response.ParsePagination(c)
+// parseClashNodeFilter reads the node listing filters shared by ListNodes and
+// ListNodeIDs; it answers 400 itself when they are invalid.
+func parseClashNodeFilter(c *gin.Context) (service.ClashNodeFilter, bool) {
 	filter := service.ClashNodeFilter{
 		Status: strings.TrimSpace(c.Query("status")),
 		Health: strings.TrimSpace(c.Query("health")),
 		Search: strings.TrimSpace(c.Query("search")),
+		Sort:   service.NormalizeClashNodeSort(strings.TrimSpace(c.Query("sort"))),
 	}
 	if len(filter.Search) > 100 {
 		filter.Search = filter.Search[:100]
@@ -191,7 +192,7 @@ func (h *ClashHandler) ListNodes(c *gin.Context) {
 		id, err := strconv.ParseInt(raw, 10, 64)
 		if err != nil || id <= 0 {
 			response.BadRequest(c, "Invalid profile_id")
-			return
+			return filter, false
 		}
 		filter.ProfileID = &id
 	}
@@ -203,6 +204,16 @@ func (h *ClashHandler) ListNodes(c *gin.Context) {
 		bound := false
 		filter.Bound = &bound
 	}
+	return filter, true
+}
+
+// ListNodes GET /admin/clash/nodes
+func (h *ClashHandler) ListNodes(c *gin.Context) {
+	page, pageSize := response.ParsePagination(c)
+	filter, ok := parseClashNodeFilter(c)
+	if !ok {
+		return
+	}
 	nodes, result, err := h.svc.ListNodes(c.Request.Context(), filter, pagination.PaginationParams{Page: page, PageSize: pageSize})
 	if err != nil {
 		response.ErrorFrom(c, err)
@@ -213,6 +224,22 @@ func (h *ClashHandler) ListNodes(c *gin.Context) {
 		out = append(out, dto.ClashNodeFromService(&nodes[i]))
 	}
 	response.Paginated(c, out, result.Total, page, pageSize)
+}
+
+// ListNodeIDs GET /admin/clash/nodes/ids?live=true — every node matching the
+// listing filters; live=true keeps only nodes that tests can reach.
+func (h *ClashHandler) ListNodeIDs(c *gin.Context) {
+	filter, ok := parseClashNodeFilter(c)
+	if !ok {
+		return
+	}
+	filter.LiveOnly = c.Query("live") == "true"
+	ids, err := h.svc.ListNodeIDs(c.Request.Context(), filter)
+	if err != nil {
+		response.ErrorFrom(c, err)
+		return
+	}
+	response.Success(c, gin.H{"ids": ids})
 }
 
 // EnableNode POST /admin/clash/nodes/:id/enable
