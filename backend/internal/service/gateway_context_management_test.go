@@ -163,15 +163,16 @@ func TestComputeFinalAnthropicBeta_OAuthMimic_NonHaiku_IncludesContextManagement
 	require.True(t, anthropicBetaTokensContains(final, claude.BetaOAuth))
 	require.True(t, anthropicBetaTokensContains(final, claude.BetaClaudeCode))
 	require.True(t, anthropicBetaTokensContains(final, claude.BetaThinkingBindingControls),
-		"OAuth mimic 必须注入 thinking block binding 所需的 beta")
+		"OAuth mimic 非 haiku 必须注入 thinking-binding-controls beta（2.1.280 抓包实证）")
 }
 
 func TestComputeFinalAnthropicBeta_OAuthMimic_Haiku_IncludesFullClaudeCodeBetas(t *testing.T) {
 	s := newTestGatewayServiceForBeta(false)
 	final, ok := s.computeFinalAnthropicBeta("oauth", true, "claude-haiku-4-5", http.Header{}, []byte(`{}`), nil)
 	require.True(t, ok)
-	require.Equal(t, strings.Join(claude.FullClaudeCodeMimicryBetas(), ","), final)
-	for _, beta := range claude.FullClaudeCodeMimicryBetas() {
+	// 2.1.280 抓包实证：haiku 的 claude-code 挪到末尾而非缺席，oauth 居首。
+	require.Equal(t, strings.Join(claude.ClaudeCodeMimicryBetas("claude-haiku-4-5", false), ","), final)
+	for _, beta := range claude.ClaudeCodeMimicryBetas("claude-haiku-4-5", false) {
 		require.Truef(t, anthropicBetaTokensContains(final, beta),
 			"OAuth mimic Haiku 必须包含完整 Claude Code beta 集合，缺少 %s", beta)
 	}
@@ -186,15 +187,15 @@ func TestComputeFinalAnthropicBeta_OAuthMimic_IgnoresClientBeta(t *testing.T) {
 	require.True(t, ok)
 	require.False(t, strings.Contains(final, "custom-experimental-beta"),
 		"mimic 路径必须忽略客户端 anthropic-beta header")
-	require.True(t, anthropicBetaTokensContains(final, claude.BetaMidConversationOutputConfig),
-		"mimic 必须注入 mid-conversation output_config 控制所需的 beta")
+	require.True(t, anthropicBetaTokensContains(final, claude.BetaPromptCachingScope),
+		"mimic 必须注入 2.1.280 注册表序的恒定 beta")
 
-	// 显式 dropSet 仍能移除 mimic 注入的该 beta，且不会因此放行客户端未知 beta。
+	// 显式 dropSet 仍能移除 mimic 注入的 beta，且不会因此放行客户端未知 beta。
 	dropped, ok := s.computeFinalAnthropicBeta("oauth", true, "claude-sonnet-4-6", hdr, []byte(`{}`),
-		map[string]struct{}{claude.BetaMidConversationOutputConfig: {}})
+		map[string]struct{}{claude.BetaPromptCachingScope: {}})
 	require.True(t, ok)
-	require.False(t, anthropicBetaTokensContains(dropped, claude.BetaMidConversationOutputConfig),
-		"显式 dropSet 必须能移除新增的 mimic beta")
+	require.False(t, anthropicBetaTokensContains(dropped, claude.BetaPromptCachingScope),
+		"显式 dropSet 必须能移除 mimic 注入的 beta")
 	require.False(t, strings.Contains(dropped, "custom-experimental-beta"),
 		"dropSet 存在时 mimic 路径仍必须忽略客户端 anthropic-beta header")
 }
@@ -245,7 +246,9 @@ func TestComputeFinalAnthropicBeta_APIKeyHaiku_StillUsesAPIKeyBetas(t *testing.T
 	require.True(t, ok)
 	require.Equal(t, claude.APIKeyHaikuBetaHeader, final)
 	require.False(t, anthropicBetaTokensContains(final, claude.BetaOAuth))
-	require.False(t, anthropicBetaTokensContains(final, claude.BetaClaudeCode))
+	// 2.1.280 抓包实证：haiku 的 claude-code 在末尾而非缺席。
+	parts := strings.Split(final, ",")
+	require.Equal(t, claude.BetaClaudeCode, parts[len(parts)-1])
 }
 
 // ============================================================================
@@ -263,29 +266,24 @@ func TestComputeFinalCountTokensAnthropicBeta_OAuthMimic_AlwaysIncludesContextMa
 		"count_tokens 路径必须含 token-counting beta")
 }
 
-// 重构等价性回归：
-// 原 main buildCountTokensRequest 在 count_tokens mimic 分支上不跳过白名单透传
-// （与 messages mimic 不同），incomingBeta 取自客户端透传。重构后必须从 clientHeaders
-// 拿同一个值并 merge，否则会丢失客户端 beta。
-func TestComputeFinalCountTokensAnthropicBeta_OAuthMimic_PreservesClientBeta(t *testing.T) {
+// count_tokens mimic 与 messages mimic 对齐：不信任客户端透传的 beta，
+// 使用实测固定集合（CountTokensBetaHeader）。
+func TestComputeFinalCountTokensAnthropicBeta_OAuthMimic_IgnoresClientBeta(t *testing.T) {
 	s := newTestGatewayServiceForBeta(false)
 	hdr := http.Header{}
 	hdr.Set("anthropic-beta", "custom-experimental-beta,context-1m-2025-08-07")
 	final, ok := s.computeFinalCountTokensAnthropicBeta("oauth", true, "claude-haiku-4-5", hdr, []byte(`{}`), nil)
 	require.True(t, ok)
-	require.True(t, anthropicBetaTokensContains(final, "custom-experimental-beta"),
-		"count_tokens mimic 不同于 messages mimic：原代码会保留客户端透传的 beta")
-	require.True(t, anthropicBetaTokensContains(final, "context-1m-2025-08-07"),
-		"客户端透传的其他 beta token 同样需要保留")
-	require.True(t, anthropicBetaTokensContains(final, claude.BetaContextManagement),
-		"同时 FullClaudeCodeMimicryBetas 不打折扣")
+	require.Equal(t, claude.CountTokensBetaHeader, final)
+	require.False(t, anthropicBetaTokensContains(final, "custom-experimental-beta"),
+		"count_tokens mimic 与 messages mimic 同设计：忽略客户端 beta")
+	require.False(t, anthropicBetaTokensContains(final, "context-1m-2025-08-07"))
+	require.True(t, anthropicBetaTokensContains(final, claude.BetaContextManagement))
 	require.True(t, anthropicBetaTokensContains(final, claude.BetaTokenCounting),
 		"同时补齐 token-counting beta")
 }
 
-// messages mimic 路径反向验证：原代码会跳过白名单透传，
-// 客户端 beta 不会进入 mimic 计算。重构后 messages computeFinalAnthropicBeta
-// mimic 分支依然不该使用 clientBeta。
+// messages 与 count_tokens 的 mimic 路径同设计：都忽略客户端 beta。
 func TestComputeFinalAnthropicBeta_OAuthMimic_IgnoresClientBetaExplicit(t *testing.T) {
 	s := newTestGatewayServiceForBeta(false)
 	hdr := http.Header{}
@@ -293,8 +291,7 @@ func TestComputeFinalAnthropicBeta_OAuthMimic_IgnoresClientBetaExplicit(t *testi
 	final, ok := s.computeFinalAnthropicBeta("oauth", true, "claude-sonnet-4-6", hdr, []byte(`{}`), nil)
 	require.True(t, ok)
 	require.False(t, anthropicBetaTokensContains(final, "custom-experimental-beta"),
-		"messages mimic 原代码跳过白名单透传 → 客户端 beta 不进入计算。"+
-			"与 count_tokens mimic 是不同的设计，不能合并为同一函数。")
+		"messages mimic 跳过白名单透传 → 客户端 beta 不进入计算")
 }
 
 func TestComputeFinalCountTokensAnthropicBeta_OAuthTransparent_NoClientBetaInjectsDefault(t *testing.T) {
@@ -303,8 +300,8 @@ func TestComputeFinalCountTokensAnthropicBeta_OAuthTransparent_NoClientBetaInjec
 	final, ok := s.computeFinalCountTokensAnthropicBeta("oauth", false, "claude-haiku-4-5", http.Header{}, []byte(`{}`), nil)
 	require.True(t, ok)
 	require.Equal(t, claude.CountTokensBetaHeader, final)
-	// CountTokensBetaHeader 不含 context-management beta
-	require.False(t, anthropicBetaTokensContains(final, claude.BetaContextManagement))
+	// 2.1.280 实测 count_tokens 固定集合含 context-management
+	require.True(t, anthropicBetaTokensContains(final, claude.BetaContextManagement))
 }
 
 func TestComputeFinalCountTokensAnthropicBeta_OAuthTransparent_AppendsBetaTokenCounting(t *testing.T) {
@@ -381,9 +378,13 @@ func TestApplyClaudeCodeOAuthMimicryToBody_HaikuRewritesSystem(t *testing.T) {
 	)
 
 	system := gjson.GetBytes(out, "system").Array()
-	require.Len(t, system, 3)
+	// 2.1.280 4-block 形态：billing / 身份 / "# Reporting outcomes" / 静态核心
+	require.Len(t, system, 4)
 	require.Contains(t, system[0].Get("text").String(), "x-anthropic-billing-header:")
 	require.Equal(t, claudeCodeSystemPrompt, system[1].Get("text").String())
+	require.Equal(t, claudeCodeReportingOutcomesPrompt, system[2].Get("text").String())
+	require.False(t, system[2].Get("cache_control").Exists(), "# Reporting outcomes 块不带 cache_control")
+	require.Equal(t, "global", system[3].Get("cache_control.scope").String(), "静态核心块 cache_control 带 scope:global")
 	require.Contains(t, gjson.GetBytes(out, "messages.0.content.0.text").String(), "Pi project instructions")
 	require.Equal(t, "claude-haiku-4-5-20251001", gjson.GetBytes(out, "model").String())
 }
@@ -616,8 +617,10 @@ func TestBuildUpstreamRequest_OAuthTransparentHaikuWithRealCCBeta_PreservesField
 
 // count_tokens 主路径 E2E 集成测试
 func TestBuildCountTokensRequest_OAuthMimicHaiku_PreservesContextManagementEndToEnd(t *testing.T) {
-	// count_tokens 继续注入 BetaContextManagement 和 BetaTokenCounting；
-	// sanitize 看到最终 beta header 含 context-management beta 后保留字段。
+	// count_tokens 仍注入 BetaContextManagement 和 BetaTokenCounting（header 层）。
+	// 但 2.1.280 二进制实证：真实 CLI 的 messages.countTokens({...}) 仅传 model/messages/
+	// tools/betas?/thinking?，body 不含 system/metadata/context_management/max_tokens，
+	// 故 OAuth 路径会剥离 context_management（详见 stripCountTokensOAuthOnlyFields）。
 	gin.SetMode(gin.TestMode)
 	rec := httptest.NewRecorder()
 	c, _ := gin.CreateTestContext(rec)
@@ -640,8 +643,8 @@ func TestBuildCountTokensRequest_OAuthMimicHaiku_PreservesContextManagementEndTo
 
 	require.True(t, anthropicBetaTokensContains(outBeta, claude.BetaContextManagement),
 		"count_tokens mimic 始终注入 context-management beta")
-	require.True(t, gjson.GetBytes(outBody, "context_management").Exists(),
-		"对称约束：final beta 含 token 时 body 字段保留")
+	require.False(t, gjson.GetBytes(outBody, "context_management").Exists(),
+		"真实 CLI count_tokens body 不含 context_management（OAuth 路径剥离）")
 	require.True(t, anthropicBetaTokensContains(outBeta, claude.BetaTokenCounting),
 		"count_tokens 路径必须含 token-counting beta")
 }

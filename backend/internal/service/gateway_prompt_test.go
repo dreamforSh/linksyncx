@@ -403,13 +403,14 @@ func TestRewriteSystemForNonClaudeCode(t *testing.T) {
 			err := json.Unmarshal(result, &parsed)
 			require.NoError(t, err)
 
-			// system 应为 array 格式，对齐真实 Claude Code CLI 的 3-block 形态：
+			// system 应为 array 格式，对齐真实 Claude Code CLI 2.1.280 的 4-block 形态：
 			//   [0] billing attribution block (x-anthropic-billing-header: cc_version=...;)
 			//   [1] Claude Code 身份前缀 block (不带 cache_control)
-			//   [2] 工具无关的通用提示词扩充 block (带 cache_control，作为缓存断点)
+			//   [2] "# Reporting outcomes" 块 (真实文本；不带 cache_control)
+			//   [3] 工具无关的通用提示词扩充 block (ephemeral + scope:global 缓存断点)
 			systemArr, ok := parsed["system"].([]any)
 			require.True(t, ok, "system should be an array, got %T", parsed["system"])
-			require.Len(t, systemArr, 3, "system array should have exactly 3 blocks (billing + cc prompt + expansion)")
+			require.Len(t, systemArr, 4, "system array should have exactly 4 blocks (billing + cc prompt + reporting outcomes + expansion)")
 
 			billingBlock, ok := systemArr[0].(map[string]any)
 			require.True(t, ok)
@@ -417,8 +418,8 @@ func TestRewriteSystemForNonClaudeCode(t *testing.T) {
 			require.Contains(t, billingBlock["text"], "x-anthropic-billing-header:")
 			require.Contains(t, billingBlock["text"], "cc_version=")
 			require.Contains(t, billingBlock["text"], "cc_entrypoint=cli")
-			// 新版 CLI 已取消 cch=... 签名字段，注入的 billing block 不应再带 cch。
-			require.NotContains(t, billingBlock["text"], "cch=")
+			// 2.1.280 实证：cch 是字面量占位符（无签名），第一方请求恒带。
+			require.Contains(t, billingBlock["text"], "cch=00000;")
 
 			systemBlock, ok := systemArr[1].(map[string]any)
 			require.True(t, ok)
@@ -427,13 +428,21 @@ func TestRewriteSystemForNonClaudeCode(t *testing.T) {
 			_, hasCC := systemBlock["cache_control"]
 			require.False(t, hasCC, "身份前缀 block 不应带 cache_control（断点落在扩充块）")
 
-			expansionBlock, ok := systemArr[2].(map[string]any)
+			reportingBlock, ok := systemArr[2].(map[string]any)
+			require.True(t, ok)
+			require.Equal(t, "text", reportingBlock["type"])
+			require.Equal(t, claudeCodeReportingOutcomesPrompt, reportingBlock["text"])
+			_, hasReportingCC := reportingBlock["cache_control"]
+			require.False(t, hasReportingCC, "Reporting outcomes 块不应带 cache_control")
+
+			expansionBlock, ok := systemArr[3].(map[string]any)
 			require.True(t, ok)
 			require.Equal(t, "text", expansionBlock["type"])
 			require.Equal(t, claudeCodeSystemPromptExpansion, expansionBlock["text"])
 			cc, ok := expansionBlock["cache_control"].(map[string]any)
 			require.True(t, ok, "expansion block should have cache_control")
 			require.Equal(t, "ephemeral", cc["type"])
+			require.Equal(t, "global", cc["scope"], "对齐真实 CLI 静态核心块的 scope:global")
 
 			// 检查 messages
 			messages, ok := parsed["messages"].([]any)
@@ -477,9 +486,10 @@ func TestRewriteSystemForNonClaudeCodeWithPrompt_UsesCustomExpansionPrompt(t *te
 
 	system := gjson.GetBytes(result, "system")
 	require.True(t, system.IsArray())
-	require.Len(t, system.Array(), 3)
-	require.Equal(t, customPrompt, system.Array()[2].Get("text").String())
-	require.Equal(t, "ephemeral", system.Array()[2].Get("cache_control.type").String())
+	require.Len(t, system.Array(), 4)
+	require.Equal(t, customPrompt, system.Array()[3].Get("text").String())
+	require.Equal(t, "ephemeral", system.Array()[3].Get("cache_control.type").String())
+	require.Equal(t, "global", system.Array()[3].Get("cache_control.scope").String())
 }
 
 func TestRewriteSystemForNonClaudeCode_PreservesSystemCacheControlOnMigratedMessage(t *testing.T) {

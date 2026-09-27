@@ -124,17 +124,58 @@ func TestMergeAnthropicBetaDropping_DroppedBetas(t *testing.T) {
 	require.Contains(t, got, "fast-mode-2026-02-01")
 }
 
-func TestFullClaudeCodeMimicryBetas_DoesNotDefaultRedactThinking(t *testing.T) {
-	required := claude.FullClaudeCodeMimicryBetas()
+func TestClaudeCodeMimicryBetas_ThinkingGatesInterleavedAndEffort(t *testing.T) {
+	off := claude.ClaudeCodeMimicryBetas("claude-sonnet-4-5-20250929", false)
+	require.NotContains(t, off, claude.BetaInterleavedThinking)
+	require.NotContains(t, off, claude.BetaEffort)
 
-	require.NotContains(t, required, claude.BetaRedactThinking)
-	require.Contains(t, required, claude.BetaClaudeCode)
-	require.Contains(t, required, claude.BetaOAuth)
-	require.Contains(t, required, claude.BetaInterleavedThinking)
+	on := claude.ClaudeCodeMimicryBetas("claude-sonnet-4-5-20250929", true)
+	require.Contains(t, on, claude.BetaInterleavedThinking)
+	require.Contains(t, on, claude.BetaEffort)
+	require.Contains(t, on, claude.BetaClaudeCode)
+	require.Contains(t, on, claude.BetaOAuth)
+	// 2.1.280 抓包实证：display=omitted 时不带 redact-thinking，故 mimic 不含。
+	require.NotContains(t, on, claude.BetaRedactThinking)
+}
+
+// 2.1.280 第一方抓包实证（多次 /v1/messages?beta=true）：非 haiku 请求携带 kw/Aw 基础位 +
+// SDK 能力位（advanced-tool-use / mid-conversation-system-clear-at / effort /
+// fallback-credit-2026-06-01 / thinking-binding-controls / cache-diagnosis）；
+// 从未出现 prompt-caching-evict / extended-cache-ttl / mid-conversation-output-config /
+// redact-thinking。
+func TestClaudeCodeMimicryBetas_MatchesCapturedFirstPartySet(t *testing.T) {
+	nonHaiku := claude.ClaudeCodeMimicryBetas("claude-opus-5", true)
+	for _, want := range []string{
+		claude.BetaClaudeCode, claude.BetaOAuth, claude.BetaInterleavedThinking,
+		claude.BetaThinkingTokenCount, claude.BetaContextManagement, claude.BetaPromptCachingScope,
+		claude.BetaMidConversationSystem, claude.BetaMidConversationToolChanges,
+		claude.BetaAdvancedToolUse, claude.BetaMidConversationSystemClearAt,
+		claude.BetaEffort, claude.BetaFallbackCreditLegacy,
+		claude.BetaThinkingBindingControls, claude.BetaCacheDiagnosis,
+	} {
+		require.Containsf(t, nonHaiku, want, "非 haiku 抓包集合缺 %s", want)
+	}
+	for _, model := range []string{"claude-opus-5", "claude-haiku-4-5-20251001"} {
+		for _, thinking := range []bool{false, true} {
+			got := claude.ClaudeCodeMimicryBetas(model, thinking)
+			require.NotContains(t, got, claude.BetaPromptCachingEvict, "model=%s thinking=%v", model, thinking)
+			require.NotContains(t, got, claude.BetaExtendedCacheTTL, "model=%s thinking=%v", model, thinking)
+			require.NotContains(t, got, claude.BetaMidConversationOutputConfig, "model=%s thinking=%v", model, thinking)
+			require.NotContains(t, got, claude.BetaRedactThinking, "model=%s thinking=%v", model, thinking)
+		}
+	}
+}
+
+func TestClaudeCodeMimicryBetas_HaikuMovesClaudeCodeToEnd(t *testing.T) {
+	// 2.1.280 反编译实证：haiku 的 claude-code 从头部剔除，agentic 请求在末尾补回；oauth 居首。
+	got := claude.ClaudeCodeMimicryBetas("claude-haiku-4-5-20251001", true)
+	require.Equal(t, claude.BetaOAuth, got[0])
+	require.Equal(t, claude.BetaClaudeCode, got[len(got)-1])
+	require.NotContains(t, got, claude.BetaMidConversationSystem)
 }
 
 func TestMergeAnthropicBetaDropping_PreservesIncomingRedactThinking(t *testing.T) {
-	required := claude.FullClaudeCodeMimicryBetas()
+	required := claude.ClaudeCodeMimicryBetas("claude-sonnet-4-5-20250929", false)
 	incoming := claude.BetaRedactThinking
 
 	got := mergeAnthropicBetaDropping(required, incoming, droppedBetaSet())

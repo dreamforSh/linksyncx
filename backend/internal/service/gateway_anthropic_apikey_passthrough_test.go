@@ -909,11 +909,18 @@ func TestGatewayService_AnthropicOAuthMimic_RewritesSystemWithBillingBlock(t *te
 			require.NotNil(t, upstream.lastReq)
 			require.Equal(t, "Bearer oauth-token", getHeaderRaw(upstream.lastReq.Header, "authorization"))
 			finalBeta := getHeaderRaw(upstream.lastReq.Header, "anthropic-beta")
-			for _, beta := range claude.FullClaudeCodeMimicryBetas() {
+			// 期望集合按上游实际 body 的模型/thinking/TTL 计算（2.1.280 注册表序规则）
+			upModel := gjson.GetBytes(upstream.lastBody, "model").String()
+			upThinkingType := gjson.GetBytes(upstream.lastBody, "thinking.type").String()
+			upThinking := upThinkingType == "enabled" || upThinkingType == "adaptive"
+			for _, beta := range claude.ClaudeCodeMimicryBetas(upModel, upThinking) {
 				require.Truef(t, anthropicBetaTokensContains(finalBeta, beta), "missing mimic beta %s", beta)
 			}
 			require.False(t, anthropicBetaTokensContains(finalBeta, "client-only-beta"))
 			for key, value := range claude.DefaultHeaders() {
+				if key == "X-Stainless-Timeout" {
+					value = "300" // 本组用例均为非流式；真实 CLI 非流式 timeout=300（流式 600）
+				}
 				require.Equal(t, value, getHeaderRaw(upstream.lastReq.Header, key), "mimic fingerprint header %s", key)
 			}
 			require.NotEmpty(t, getHeaderRaw(upstream.lastReq.Header, "x-client-request-id"))
@@ -923,7 +930,7 @@ func TestGatewayService_AnthropicOAuthMimic_RewritesSystemWithBillingBlock(t *te
 			require.True(t, system.Exists())
 			require.True(t, system.IsArray(), "system should be an array")
 			arr := system.Array()
-			require.Len(t, arr, 3, "system array should have billing block + cc prompt block + expansion block")
+			require.Len(t, arr, 4, "system array should have billing block + cc prompt block + reporting outcomes block + expansion block")
 
 			billingText := arr[0].Get("text").String()
 			require.Contains(t, billingText, "x-anthropic-billing-header:")
@@ -933,8 +940,12 @@ func TestGatewayService_AnthropicOAuthMimic_RewritesSystemWithBillingBlock(t *te
 			require.Equal(t, claudeCodeSystemPrompt, arr[1].Get("text").String())
 			require.False(t, arr[1].Get("cache_control").Exists(), "身份前缀 block 不应带 cache_control")
 
-			require.Equal(t, claudeCodeSystemPromptExpansion, arr[2].Get("text").String())
-			require.Equal(t, "ephemeral", arr[2].Get("cache_control.type").String())
+			require.Equal(t, claudeCodeReportingOutcomesPrompt, arr[2].Get("text").String())
+			require.False(t, arr[2].Get("cache_control").Exists(), "Reporting outcomes 块不应带 cache_control")
+
+			require.Equal(t, claudeCodeSystemPromptExpansion, arr[3].Get("text").String())
+			require.Equal(t, "ephemeral", arr[3].Get("cache_control.type").String())
+			require.Equal(t, "global", arr[3].Get("cache_control.scope").String())
 
 			// 原始 system prompt 应迁移至 messages 中。
 			messages := gjson.GetBytes(upstream.lastBody, "messages")

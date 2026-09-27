@@ -780,6 +780,7 @@ func expandClaudeOAuthSystemPromptTextTemplate(body []byte, text string, expansi
 		"{cc_version}", cliVersion,
 		"{fp}", fp,
 		"{claude_code_system_prompt}", claudeCodeSystemPrompt,
+		"{claude_code_reporting_outcomes_prompt}", claudeCodeReportingOutcomesPrompt,
 		"{claude_code_expansion_prompt}", expansionPrompt,
 	)
 	return replacer.Replace(text), nil
@@ -799,11 +800,20 @@ func defaultClaudeOAuthSystemPromptBlockConfig() []claudeOAuthSystemPromptBlockC
 			Text:    "{claude_code_system_prompt}",
 		},
 		{
+			// 真实 CLI 2.1.280 的 "# Reporting outcomes" 块：位于身份行之后、
+			// 静态缓存核心之前，自身不带 cache_control。
+			Enabled: &enabled,
+			Type:    "text",
+			Text:    "{claude_code_reporting_outcomes_prompt}",
+		},
+		{
 			Enabled: &enabled,
 			Type:    "text",
 			Text:    "{claude_code_expansion_prompt}",
+			// 对齐真实 CLI 静态核心块的 cache 形态：ephemeral + scope:"global"
+			// （与 prompt-caching-scope-2026-01-05 beta 配套）。
 			CacheControl: json.RawMessage(
-				fmt.Sprintf(`{"type":"ephemeral","ttl":%q}`, claude.DefaultCacheControlTTL),
+				fmt.Sprintf(`{"type":"ephemeral","scope":"global","ttl":%q}`, claude.DefaultCacheControlTTL),
 			),
 		},
 	}
@@ -910,10 +920,12 @@ func rewriteSystemForNonClaudeCodeWithPromptBlocks(body []byte, system any, expa
 	// 1. 提取原始 system prompt 文本及其缓存断点
 	originalSystemText, originalSystemCacheControl := extractSystemTextAndCacheControl(system)
 
-	// 2. 构造 system 数组，对齐真实 Claude Code CLI 的 3-block 形态：
-	//    [0] billing attribution block（cc_version={cliVer}.{fp}; cc_entrypoint=cli;）
-	//    [1] "You are Claude Code..." 身份前缀 block（默认不带 cache_control）
-	//    [2] 工具无关的通用提示词扩充 block（带 cache_control 作为稳定缓存断点）
+	// 2. 构造 system 数组，对齐真实 Claude Code CLI 2.1.280 的 4-block 形态：
+	//    [0] billing attribution block（cc_version={cliVer}.{fp}; cc_entrypoint=cli; cch=00000;）
+	//    [1] "You are Claude Code..." 身份前缀 block（不带 cache_control）
+	//    [2] "# Reporting outcomes" 块（真实文本逐字取自二进制；不带 cache_control）
+	//    [3] 工具无关的通用提示词扩充 block（ephemeral + scope:"global" 缓存断点，
+	//        与 prompt-caching-scope beta 配套）
 	//
 	//    真实 CC 的 system 在身份前缀之后还有大段提示词，仅有 2 块会在块数/体量上明显
 	//    区别于真实 CLI。这里注入 claudeCodeSystemPromptExpansion（中性段落）把形态做到

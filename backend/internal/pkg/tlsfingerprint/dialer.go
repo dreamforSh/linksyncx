@@ -29,7 +29,7 @@ type Profile struct {
 	SupportedVersions   []uint16 // Empty uses [TLS1.3, TLS1.2]
 	KeyShareGroups      []uint16 // Empty uses [X25519]
 	PSKModes            []uint16 // Empty uses [psk_dhe_ke]
-	Extensions          []uint16 // Extension type IDs in order; empty uses default Node.js 24.x order
+	Extensions          []uint16 // Extension type IDs in order; empty uses default Claude Code 2.1.280 (Bun) order
 }
 
 // Dialer creates TLS connections with custom fingerprints.
@@ -52,10 +52,12 @@ type SOCKS5ProxyDialer struct {
 	proxyURL *url.URL
 }
 
-// Default TLS fingerprint values captured from Claude Code (Node.js 24.x)
-// Captured via tls-fingerprint-web capture server
-// JA3 Hash: 44f88fca027f27bab4bb08d4af15f23e
-// JA4:      t13d1714h1_5b57614c22b0_7baf387fc6ff
+// Default TLS fingerprint values captured from real Claude Code 2.1.280 (Bun/1.4.3)
+// via claude-gw tlscap (本机 claude.exe 实测抓包).
+// JA3 (域名 SNI):  1523504b38f0fae0d881d4b6554aac1b   JA4: t13d1713h1_5b57614c22b0_6a3d802a7139
+// JA3 (IP 直连):   5260242a2eb12c71995767c24569bff5
+// 与早前 Node.js 24.x 采集的差异：supported_groups/key_share 首位为 X25519MLKEM768
+// （后量子混合密钥交换），无 GREASE ECH 扩展。
 var (
 	// defaultCipherSuites contains the 17 cipher suites from Node.js 24.x
 	// Order is critical for JA3 fingerprint matching
@@ -90,11 +92,13 @@ var (
 		0x0035, // TLS_RSA_WITH_AES_256_CBC_SHA
 	}
 
-	// defaultCurves contains the 3 supported groups from Node.js 24.x
+	// defaultCurves contains the 4 supported groups from Claude Code 2.1.280 (Bun)
+	// —— 首位为后量子混合组 X25519MLKEM768
 	defaultCurves = []utls.CurveID{
-		utls.X25519,    // 0x001d
-		utls.CurveP256, // 0x0017 (secp256r1)
-		utls.CurveP384, // 0x0018 (secp384r1)
+		utls.X25519MLKEM768, // 0x11ec
+		utls.X25519,         // 0x001d
+		utls.CurveP256,      // 0x0017 (secp256r1)
+		utls.CurveP384,      // 0x0018 (secp384r1)
 	}
 
 	// defaultPointFormats contains point formats from Node.js 24.x
@@ -266,6 +270,10 @@ func (d *Dialer) DialTLSContext(ctx context.Context, network, addr string) (net.
 	return performTLSHandshake(ctx, conn, d.profile, addr)
 }
 
+// tlsSessionCache 复用 TLS 会话票据（真实 Node/Bun 客户端会复用；
+// 每次连接都完整握手是弱信号）。
+var tlsSessionCache = utls.NewLRUClientSessionCache(128)
+
 // performTLSHandshake performs the uTLS handshake on an established connection.
 // It builds a ClientHello spec from the profile, applies it, and completes the handshake.
 // On failure, conn is closed and an error is returned.
@@ -276,7 +284,11 @@ func performTLSHandshake(ctx context.Context, conn net.Conn, profile *Profile, a
 	}
 
 	spec := buildClientHelloSpecFromProfile(profile)
-	tlsConn := utls.UClient(conn, &utls.Config{ServerName: host}, utls.HelloCustom)
+	tlsConn := utls.UClient(conn, &utls.Config{
+		ServerName:         host,
+		ClientSessionCache: tlsSessionCache,
+		OmitEmptyPsk:       true, // 未命中复用时 hello 与首次抓包逐字节一致
+	}, utls.HelloCustom)
 
 	if err := tlsConn.ApplyPreset(spec); err != nil {
 		_ = conn.Close()
@@ -307,11 +319,10 @@ func toUTLSCurves(curves []uint16) []utls.CurveID {
 	return result
 }
 
-// defaultExtensionOrder is the Node.js 24.x extension order.
+// defaultExtensionOrder is the Claude Code 2.1.280 (Bun) extension order.
 // Used when Profile.Extensions is empty.
 var defaultExtensionOrder = []uint16{
 	0,     // server_name
-	65037, // encrypted_client_hello
 	23,    // extended_master_secret
 	65281, // renegotiation_info
 	10,    // supported_groups
@@ -368,7 +379,7 @@ func buildClientHelloSpecFromProfile(profile *Profile) *utls.ClientHelloSpec {
 		supportedVersions = profile.SupportedVersions
 	}
 
-	keyShareGroups := []utls.CurveID{utls.X25519}
+	keyShareGroups := []utls.CurveID{utls.X25519MLKEM768, utls.X25519} // 2.1.280 实测：MLKEM + X25519 双份额
 	if profile != nil && len(profile.KeyShareGroups) > 0 {
 		keyShareGroups = toUTLSCurves(profile.KeyShareGroups)
 	}

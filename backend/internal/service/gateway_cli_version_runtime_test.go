@@ -60,14 +60,21 @@ func TestBuildOAuthMimicRequest_RuntimeVersionConsistentBetweenHeaderAndBilling(
 			require.Equal(t, wantUA, outboundUA)
 
 			billingText := gjson.GetBytes(wireBody, "system.0.text").String()
-			require.Contains(t, billingText, "x-anthropic-billing-header")
-			require.Contains(t, billingText, "cc_version="+upgraded+"."+computeClaudeCodeFingerprint(wireBody, upgraded)+";")
-			require.NotContains(t, billingText, "cc_version=2.1.81")
+			if endpoint == "count_tokens" {
+				// 真实 CLI 2.1.280 的 count_tokens 不带 system/billing 块
+				require.False(t, gjson.GetBytes(wireBody, "system").Exists())
+			} else {
+				require.Contains(t, billingText, "x-anthropic-billing-header")
+				require.Contains(t, billingText, "cc_version="+upgraded+"."+computeClaudeCodeFingerprint(wireBody, upgraded)+";")
+				require.NotContains(t, billingText, "cc_version=2.1.81")
+			}
 
 			// 头/体版本号必须来自同一字符串。
 			headerVersion := ExtractCLIVersion(outboundUA)
 			require.Equal(t, upgraded, headerVersion)
-			require.Contains(t, billingText, "cc_version="+headerVersion+".")
+			if endpoint != "count_tokens" {
+				require.Contains(t, billingText, "cc_version="+headerVersion+".")
+			}
 		})
 	}
 }

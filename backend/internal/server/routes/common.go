@@ -13,8 +13,15 @@ func RegisterCommonRoutes(r *gin.Engine) {
 		c.JSON(http.StatusOK, gin.H{"status": "ok"})
 	})
 
-	// Claude Code 遥测日志（忽略，直接返回200）
+	// Claude Code 遥测日志（忽略，直接返回200）。
+	// 真实 CLI 2.1.280 的遥测路径带 /v2/（/api/event_logging/v2/batch，skipAuth
+	// 默认 false 即带认证上报）；旧路径仅为向后兼容保留。
+	// 不上游转发：多账号 relay 场景下把终端用户的设备遥测绑定到任一上游账号
+	// 都是隐私与关联性风险；且遥测缺失本身是合法客户端配置（DISABLE_TELEMETRY）。
 	r.POST("/api/event_logging/batch", func(c *gin.Context) {
+		c.Status(http.StatusOK)
+	})
+	r.POST("/api/event_logging/v2/batch", func(c *gin.Context) {
 		c.Status(http.StatusOK)
 	})
 

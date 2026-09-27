@@ -55,6 +55,11 @@ IMPORTANT: You must NEVER generate or guess URLs for the user unless you are con
  - When referencing specific functions or pieces of code include the pattern file_path:line_number to allow the user to easily navigate to the source code location.
  - When referencing GitHub issues or pull requests, use the owner/repo#123 format (e.g. anthropics/claude-code#100) so they render as clickable links.
  - Do not use a colon before tool calls. Your tool calls may not be shown directly in the output, so text like "Let me read the file:" followed by a read tool call should just be "Let me read the file." with a period.`
+	// claudeCodeReportingOutcomesPrompt 是真实 Claude Code 2.1.280 主系统提示词中
+	// "# Reporting outcomes" 块的完整文本（逐字取自本机二进制，含 em-dash）。
+	// 位于身份主提示之后、静态缓存核心之前，自身不带 cache_control。
+	claudeCodeReportingOutcomesPrompt = `# Reporting outcomes
+Report what actually happened, not what you intended. When you say something is done, sent, saved, fixed, or verified, that claim must rest on a result you observed in this session — tool output, the file as it now reads, the page as it now loads — not on what the step should have produced. If you did not check, say you did not check. If any step failed, was skipped, or came back different from what you expected, say so in the first sentence of your report, before anything else, even when the rest of the work succeeded. Never quietly work around a failure in a way that makes it look resolved; a problem the user can see is recoverable, one your summary hides is not. When you stop before the task is complete, your first line says so plainly and names what is left. Do not describe partial work as done, and do not let a summary read as more certain than the evidence behind it.`
 	maxCacheControlBlocks = 4 // Anthropic API 允许的最大 cache_control 块数量
 
 	defaultUserGroupRateCacheTTL           = 30 * time.Second

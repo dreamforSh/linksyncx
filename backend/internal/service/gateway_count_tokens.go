@@ -10,6 +10,7 @@ import (
 
 	"github.com/Wei-Shaw/sub2api/internal/pkg/claude"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/logger"
+	"github.com/google/uuid"
 	"github.com/tidwall/gjson"
 
 	"github.com/gin-gonic/gin"
@@ -533,29 +534,46 @@ func (s *GatewayService) buildCountTokensRequest(ctx context.Context, c *gin.Con
 		body = sanitized
 	}
 
+	// 真实 CLI 2.1.280 的 count_tokens 只带 model/messages/tools/betas/thinking：
+	// 无 system/metadata/context_management。session 头恒带但 body 无 metadata，
+	// 先取出再放行剥离。
+	ctSessionID := ""
+	if tokenType == "oauth" {
+		if uid := gjson.GetBytes(body, "metadata.user_id").String(); uid != "" {
+			if parsed := ParseMetadataUserID(uid); parsed != nil {
+				ctSessionID = parsed.SessionID
+			}
+		}
+	}
 	body = sanitizeCountTokensRequestBody(body)
+	if tokenType == "oauth" {
+		body = stripCountTokensOAuthOnlyFields(body)
+	}
 
 	req, err := http.NewRequestWithContext(ctx, "POST", targetURL, bytes.NewReader(body))
 	if err != nil {
 		return nil, nil, err
 	}
 
-	// 设置认证头（保持原始大小写）
+	// 设置认证头（2.1.280 抓包为 Canonical 形态）
 	if tokenType == "oauth" {
-		setHeaderRaw(req.Header, "authorization", "Bearer "+token)
+		setHeaderRaw(req.Header, "Authorization", "Bearer "+token)
 	} else {
 		// Ollama Cloud Anthropic 兼容端点按实际 base_url 强制 Bearer（同上方
 		// targetURL 的 base 取值），其余保持 extra/default 行为。
 		setAnthropicAPIKeyAuthHeader(req.Header, account, token, account.GetBaseURL())
 	}
 
-	// 白名单透传 headers（恢复真实 wire casing）
-	for key, values := range clientHeaders {
-		lowerKey := strings.ToLower(key)
-		if allowedHeaders[lowerKey] {
-			wireKey := resolveWireCasing(key)
-			for _, v := range values {
-				addHeaderRaw(req.Header, wireKey, v)
+	// 白名单透传 headers（恢复真实 wire casing）。
+	// OAuth mimic 路径跳过（与 messages mimic 对齐：不信任客户端头）。
+	if tokenType != "oauth" || !mimicClaudeCode {
+		for key, values := range clientHeaders {
+			lowerKey := strings.ToLower(key)
+			if allowedHeaders[lowerKey] {
+				wireKey := resolveWireCasing(key)
+				for _, v := range values {
+					addHeaderRaw(req.Header, wireKey, v)
+				}
 			}
 		}
 	}
@@ -565,9 +583,9 @@ func (s *GatewayService) buildCountTokensRequest(ctx context.Context, c *gin.Con
 		s.identityService.ApplyFingerprint(req, ctFingerprint)
 	}
 
-	// 确保必要的 headers 存在（保持原始大小写）
+	// 确保必要的 headers 存在（2.1.280 抓包为 Canonical 形态）
 	if getHeaderRaw(req.Header, "content-type") == "" {
-		setHeaderRaw(req.Header, "content-type", "application/json")
+		setHeaderRaw(req.Header, "Content-Type", "application/json")
 	}
 	if getHeaderRaw(req.Header, "anthropic-version") == "" {
 		setHeaderRaw(req.Header, "anthropic-version", "2023-06-01")
@@ -578,7 +596,14 @@ func (s *GatewayService) buildCountTokensRequest(ctx context.Context, c *gin.Con
 
 	// OAuth + mimic Claude Code：强制注入 CLI 指纹 header
 	if tokenType == "oauth" && mimicClaudeCode {
-		applyClaudeCodeMimicHeaders(req, false, ctMimicUserAgent)
+		applyClaudeCodeMimicHeaders(req, ctMimicUserAgent, targetURL == claudeAPICountTokensURL)
+		// 真实 CLI 的 count_tokens 不传自定义 timeout → 不带 X-Stainless-Timeout
+		deleteHeaderAllForms(req.Header, "x-stainless-timeout")
+	}
+
+	// Accept-Encoding：同 messages 路径，对齐真实客户端的恒定默认值。
+	if getHeaderRaw(req.Header, "Accept-Encoding") == "" {
+		setHeaderRaw(req.Header, "Accept-Encoding", "gzip, deflate, br, zstd")
 	}
 
 	// 写入最终 anthropic-beta header（Del 一次避免白名单透传值残留）
@@ -587,12 +612,13 @@ func (s *GatewayService) buildCountTokensRequest(ctx context.Context, c *gin.Con
 		setHeaderRaw(req.Header, "anthropic-beta", finalBetaHeader)
 	}
 
-	// 同步 X-Claude-Code-Session-Id 头：取 body 中已处理的 metadata.user_id 的 session_id 覆盖
-	if sessionHeader := getHeaderRaw(req.Header, "X-Claude-Code-Session-Id"); sessionHeader != "" {
-		if uid := gjson.GetBytes(body, "metadata.user_id").String(); uid != "" {
-			if parsed := ParseMetadataUserID(uid); parsed != nil {
-				setHeaderRaw(req.Header, "X-Claude-Code-Session-Id", parsed.SessionID)
-			}
+	// 同步 X-Claude-Code-Session-Id（真实 CLI 恒带，即使 count_tokens body 无 metadata）
+	if tokenType == "oauth" {
+		switch {
+		case ctSessionID != "":
+			setHeaderRaw(req.Header, "X-Claude-Code-Session-Id", ctSessionID)
+		case mimicClaudeCode && getHeaderRaw(req.Header, "X-Claude-Code-Session-Id") == "":
+			setHeaderRaw(req.Header, "X-Claude-Code-Session-Id", uuid.NewString())
 		}
 	}
 
@@ -623,6 +649,20 @@ func sanitizeCountTokensRequestBody(body []byte) []byte {
 		// resemble Claude Code messages requests, so it must never reach this endpoint.
 		"max_tokens",
 	} {
+		if gjson.GetBytes(out, path).Exists() {
+			if next, ok := deleteJSONPathBytes(out, path); ok {
+				out = next
+			}
+		}
+	}
+	return out
+}
+
+// stripCountTokensOAuthOnlyFields 删除真实 CLI 2.1.280 的 count_tokens 从不携带的
+// 上下文字段（仅 OAuth 路径调用）：system、metadata、context_management。
+func stripCountTokensOAuthOnlyFields(body []byte) []byte {
+	out := body
+	for _, path := range []string{"system", "metadata", "context_management"} {
 		if gjson.GetBytes(out, path).Exists() {
 			if next, ok := deleteJSONPathBytes(out, path); ok {
 				out = next
