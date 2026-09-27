@@ -543,10 +543,12 @@ type fakeClashRuntime struct {
 	applyErrs []error
 	proxies   map[string]bool
 	delays    map[string]error
+	flaky     map[string]int
+	attempts  map[string]int
 }
 
 func newFakeClashRuntime() *fakeClashRuntime {
-	return &fakeClashRuntime{ready: true, proxies: map[string]bool{}, delays: map[string]error{}}
+	return &fakeClashRuntime{ready: true, proxies: map[string]bool{}, delays: map[string]error{}, flaky: map[string]int{}, attempts: map[string]int{}}
 }
 
 func (f *fakeClashRuntime) Mode() string                { return "embedded" }
@@ -588,6 +590,14 @@ func (f *fakeClashRuntime) HasProxy(_ context.Context, name string) (bool, error
 func (f *fakeClashRuntime) DelayTest(_ context.Context, name, _ string, _ time.Duration) (time.Duration, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	if f.attempts == nil {
+		f.attempts = map[string]int{}
+	}
+	f.attempts[name]++
+	if f.flaky != nil && f.flaky[name] > 0 {
+		f.flaky[name]--
+		return 0, errors.New("timeout")
+	}
 	if err := f.delays[name]; err != nil {
 		return 0, err
 	}

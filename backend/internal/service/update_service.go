@@ -31,7 +31,7 @@ const (
 	updateCacheKey     = "update_check_cache"
 	updateCacheTTL     = 1200 // 20 minutes
 	upstreamGitHubRepo = "Wei-Shaw/sub2api"
-	customGitHubRepo   = "LinkSyncX/linksyncx"
+	customGitHubRepo   = "dreamforSh/linksyncx"
 	customTagPrefix    = "custom-v"
 
 	// Security: allowed download domains for updates
@@ -116,6 +116,7 @@ type ReleaseInfo struct {
 type Asset struct {
 	Name        string `json:"name"`
 	DownloadURL string `json:"download_url"`
+	APIURL      string `json:"api_url,omitempty"`
 	Size        int64  `json:"size"`
 }
 
@@ -140,6 +141,7 @@ type RollbackVersion struct {
 
 type GitHubAsset struct {
 	Name               string `json:"name"`
+	URL                string `json:"url"`
 	BrowserDownloadURL string `json:"browser_download_url"`
 	Size               int64  `json:"size"`
 }
@@ -213,29 +215,28 @@ func (s *UpdateService) PerformUpdate(ctx context.Context) error {
 // verifies its checksum, and atomically swaps the running binary.
 // Shared by PerformUpdate (latest) and RollbackToVersion (specific older version).
 func (s *UpdateService) applyReleaseAssets(ctx context.Context, releaseAssets []Asset) error {
-	// Find matching archive and checksum for current platform
 	archiveName := s.getArchiveName()
-	var downloadURL string
-	var checksumURL string
-
-	for _, asset := range releaseAssets {
+	var archive *Asset
+	var checksum *Asset
+	for i := range releaseAssets {
+		asset := &releaseAssets[i]
 		if strings.Contains(asset.Name, archiveName) && !strings.HasSuffix(asset.Name, ".txt") {
-			downloadURL = asset.DownloadURL
+			archive = asset
 		}
 		if asset.Name == "checksums.txt" {
-			checksumURL = asset.DownloadURL
+			checksum = asset
 		}
 	}
-
-	if downloadURL == "" {
+	if archive == nil {
 		return fmt.Errorf("no compatible release found for %s/%s", runtime.GOOS, runtime.GOARCH)
 	}
-
-	// SECURITY: Validate download URL is from trusted domain
+	downloadURL := archive.authenticatedURL()
 	if err := validateDownloadURL(downloadURL); err != nil {
 		return fmt.Errorf("invalid download URL: %w", err)
 	}
-	if checksumURL != "" {
+	var checksumURL string
+	if checksum != nil {
+		checksumURL = checksum.authenticatedURL()
 		if err := validateDownloadURL(checksumURL); err != nil {
 			return fmt.Errorf("invalid checksum URL: %w", err)
 		}
@@ -262,7 +263,7 @@ func (s *UpdateService) applyReleaseAssets(ctx context.Context, releaseAssets []
 	defer func() { _ = os.RemoveAll(tempDir) }()
 
 	// Download archive
-	archivePath := filepath.Join(tempDir, filepath.Base(downloadURL))
+	archivePath := filepath.Join(tempDir, releaseAssetFileName(archive.Name, downloadURL))
 	if err := s.downloadFile(ctx, downloadURL, archivePath); err != nil {
 		return fmt.Errorf("download failed: %w", err)
 	}
@@ -384,16 +385,7 @@ func (s *UpdateService) RollbackToVersion(ctx context.Context, version string) e
 		return ErrRollbackVersionNotAllowed
 	}
 
-	assets := make([]Asset, len(match.Assets))
-	for i, a := range match.Assets {
-		assets[i] = Asset{
-			Name:        a.Name,
-			DownloadURL: a.BrowserDownloadURL,
-			Size:        a.Size,
-		}
-	}
-
-	return s.applyReleaseAssets(ctx, assets)
+	return s.applyReleaseAssets(ctx, releaseAssetsFromGitHub(match.Assets))
 }
 
 // fetchRollbackCandidates fetches recent releases and keeps the newest
@@ -482,15 +474,6 @@ func (s *UpdateService) buildChannelInfo(
 	compare func(string, string) int,
 ) *UpdateChannelInfo {
 
-	assets := make([]Asset, len(release.Assets))
-	for i, a := range release.Assets {
-		assets[i] = Asset{
-			Name:        a.Name,
-			DownloadURL: a.BrowserDownloadURL,
-			Size:        a.Size,
-		}
-	}
-
 	return &UpdateChannelInfo{
 		CurrentVersion: currentVersion,
 		LatestVersion:  latestVersion,
@@ -500,9 +483,40 @@ func (s *UpdateService) buildChannelInfo(
 			Body:        release.Body,
 			PublishedAt: release.PublishedAt,
 			HTMLURL:     release.HTMLURL,
-			Assets:      assets,
+			Assets:      releaseAssetsFromGitHub(release.Assets),
 		},
 	}
+}
+
+func releaseAssetsFromGitHub(in []GitHubAsset) []Asset {
+	out := make([]Asset, len(in))
+	for i, asset := range in {
+		out[i] = Asset{
+			Name:        asset.Name,
+			DownloadURL: asset.BrowserDownloadURL,
+			APIURL:      asset.URL,
+			Size:        asset.Size,
+		}
+	}
+	return out
+}
+
+func (a Asset) authenticatedURL() string {
+	if strings.TrimSpace(a.APIURL) != "" {
+		return a.APIURL
+	}
+	return a.DownloadURL
+}
+
+func releaseAssetFileName(name, rawURL string) string {
+	fileName := filepath.Base(strings.TrimSpace(name))
+	if fileName == "." || fileName == ".." || fileName == "" {
+		fileName = filepath.Base(rawURL)
+	}
+	if fileName == "." || fileName == ".." || fileName == "" {
+		return "update-archive"
+	}
+	return fileName
 }
 
 func (s *UpdateService) downloadFile(ctx context.Context, downloadURL, dest string) error {

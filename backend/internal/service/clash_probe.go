@@ -26,6 +26,9 @@ const (
 	// node is marked unhealthy.
 	clashGlobalFailureRatio   = 0.8
 	clashGlobalFailureMinimum = 5
+	// clashLatencyRetryDelay is the pause before one more attempt. A single
+	// cold-start failure should not be the recorded result.
+	clashLatencyRetryDelay = 200 * time.Millisecond
 )
 
 func mustParseURL(raw string) *url.URL {
@@ -64,7 +67,7 @@ func (s *ClashService) probeLatency(ctx context.Context, nodes []ClashNodeView, 
 			defer func() { <-sem }()
 			node := &nodes[i]
 			res := ClashLatencyResult{NodeID: node.ID}
-			delay, err := s.runtime.DelayTest(ctx, ClashProxyName(node.ID), settings.HealthTestURL, timeout)
+			delay, err := s.measureNodeDelay(ctx, ClashProxyName(node.ID), settings.HealthTestURL, timeout)
 			if err != nil {
 				res.Error = err.Error()
 			} else {
@@ -124,6 +127,23 @@ func (s *ClashService) probeLatency(ctx context.Context, nodes []ClashNodeView, 
 		return results, err
 	}
 	return results, nil
+}
+
+// measureNodeDelay probes once, then once more after clashLatencyRetryDelay
+// when the first attempt fails and the caller is still waiting.
+func (s *ClashService) measureNodeDelay(ctx context.Context, name, testURL string, timeout time.Duration) (time.Duration, error) {
+	delay, err := s.runtime.DelayTest(ctx, name, testURL, timeout)
+	if err == nil || ctx.Err() != nil {
+		return delay, err
+	}
+	timer := time.NewTimer(clashLatencyRetryDelay)
+	defer timer.Stop()
+	select {
+	case <-ctx.Done():
+		return 0, ctx.Err()
+	case <-timer.C:
+	}
+	return s.runtime.DelayTest(ctx, name, testURL, timeout)
 }
 
 // TestNodesLatency runs an on-demand latency round for the given nodes (or a
