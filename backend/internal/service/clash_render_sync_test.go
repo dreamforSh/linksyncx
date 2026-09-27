@@ -34,6 +34,8 @@ func TestRenderClashConfigDeterministicAndFailClosed(t *testing.T) {
 	var doc map[string]any
 	require.NoError(t, yaml.Unmarshal(first.Payload, &doc))
 	require.Equal(t, []any{"MATCH,REJECT"}, doc["rules"])
+	require.Equal(t, true, doc["unified-delay"])
+	require.Equal(t, true, doc["tcp-concurrent"])
 	require.NotContains(t, strings.ToUpper(string(first.Payload)), "DIRECT")
 
 	listeners := doc["listeners"].([]any)

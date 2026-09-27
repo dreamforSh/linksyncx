@@ -96,9 +96,12 @@ func RenderClashConfig(nodes []ClashRenderNode, opts ClashRenderOptions) (*Clash
 	}
 
 	doc := mihomoDocument{
-		Mode:            "rule",
-		LogLevel:        "warning",
-		IPv6:            true,
+		Mode:     "rule",
+		LogLevel: "warning",
+		IPv6:     true,
+		// Time the second request on the already open connection so the
+		// reported delay excludes the proxy handshake.
+		UnifiedDelay:    true,
 		TCPConcurrent:   true,
 		FindProcessMode: "off",
 		Proxies:         make([]map[string]any, 0, len(sorted)),

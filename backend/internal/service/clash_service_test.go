@@ -234,6 +234,31 @@ func TestClashProbeLatencyHysteresisAndGlobalGuard(t *testing.T) {
 	}
 }
 
+func TestClashProbeLatencyRetriesOnce(t *testing.T) {
+	env := newClashTestEnv(t, nil)
+	profile := env.repo.addProfile("A", true)
+	node := env.repo.addNode(profile.ID, "flaky", "198.51.100.9")
+	name := ClashProxyName(node.ID)
+	env.runtime.flaky[name] = 1
+	ctx := context.Background()
+	views, err := env.repo.ListAllNodeViews(ctx)
+	require.NoError(t, err)
+
+	results, err := env.svc.probeLatency(ctx, views, defaultClashPoolSettings(), false)
+	require.NoError(t, err)
+	require.Len(t, results, 1)
+	require.True(t, results[0].Success)
+	require.NotNil(t, results[0].LatencyMs)
+	require.Equal(t, 42, *results[0].LatencyMs)
+	require.Equal(t, 2, env.runtime.attempts[name])
+
+	env.runtime.delays[name] = errors.New("down")
+	results, err = env.svc.probeLatency(ctx, views, defaultClashPoolSettings(), false)
+	require.NoError(t, err)
+	require.False(t, results[0].Success)
+	require.Equal(t, 4, env.runtime.attempts[name], "a hard failure is tried twice, not more")
+}
+
 func TestClashProbeExitPolicies(t *testing.T) {
 	env := newClashTestEnv(t, nil)
 	profile := env.repo.addProfile("A", true)

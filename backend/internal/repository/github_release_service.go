@@ -61,6 +61,7 @@ func NewGitHubReleaseClient(proxyURL string, allowDirectOnProxyError bool) servi
 		downloadClient = &http.Client{Timeout: 10 * time.Minute}
 	}
 	downloadClient = cloneHTTPClient(downloadClient)
+	downloadClient.CheckRedirect = githubAPICheckRedirect(downloadClient.CheckRedirect)
 
 	return &githubReleaseClient{
 		httpClient:         apiClient,
@@ -79,9 +80,16 @@ func isGitHubAPIURL(url *url.URL) bool {
 		strings.EqualFold(url.Host, "api.github.com")
 }
 
+func isGitHubWebURL(url *url.URL) bool {
+	return url != nil && strings.EqualFold(url.Scheme, "https") && url.User == nil &&
+		strings.EqualFold(url.Host, "github.com")
+}
+
 func githubAPICheckRedirect(previous func(*http.Request, []*http.Request) error) func(*http.Request, []*http.Request) error {
 	return func(req *http.Request, via []*http.Request) error {
-		if !isGitHubAPIURL(req.URL) {
+		// Keep the token only on GitHub itself. Asset downloads redirect to a
+		// signed object URL that must not receive the credential.
+		if !isGitHubAPIURL(req.URL) && !isGitHubWebURL(req.URL) {
 			req.Header.Del("Authorization")
 		}
 		if previous != nil {
@@ -178,12 +186,12 @@ func (c *githubReleaseClient) FetchRecentReleases(ctx context.Context, repo stri
 	return releases, nil
 }
 
-func (c *githubReleaseClient) DownloadFile(ctx context.Context, url, dest string, maxSize int64) error {
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+func (c *githubReleaseClient) DownloadFile(ctx context.Context, rawURL, dest string, maxSize int64) error {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, rawURL, nil)
 	if err != nil {
 		return err
 	}
-
+	c.prepareDownloadRequest(req)
 	// 使用预配置的下载客户端（已包含代理配置）
 	resp, err := c.downloadHTTPClient.Do(req)
 	if err != nil {
@@ -226,11 +234,12 @@ func (c *githubReleaseClient) DownloadFile(ctx context.Context, url, dest string
 	return nil
 }
 
-func (c *githubReleaseClient) FetchChecksumFile(ctx context.Context, url string) ([]byte, error) {
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+func (c *githubReleaseClient) FetchChecksumFile(ctx context.Context, rawURL string) ([]byte, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, rawURL, nil)
 	if err != nil {
 		return nil, err
 	}
+	c.prepareDownloadRequest(req)
 
 	resp, err := c.httpClient.Do(req)
 	if err != nil {
@@ -243,4 +252,13 @@ func (c *githubReleaseClient) FetchChecksumFile(ctx context.Context, url string)
 	}
 
 	return io.ReadAll(resp.Body)
+}
+
+func (c *githubReleaseClient) prepareDownloadRequest(req *http.Request) {
+	if isGitHubAPIURL(req.URL) {
+		req.Header.Set("Accept", "application/octet-stream")
+	}
+	if c.updateGitHubToken != "" && (isGitHubAPIURL(req.URL) || isGitHubWebURL(req.URL)) {
+		req.Header.Set("Authorization", "Bearer "+c.updateGitHubToken)
+	}
 }
