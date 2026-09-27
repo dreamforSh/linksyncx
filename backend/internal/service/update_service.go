@@ -31,7 +31,7 @@ const (
 	updateCacheKey     = "update_check_cache"
 	updateCacheTTL     = 1200 // 20 minutes
 	upstreamGitHubRepo = "Wei-Shaw/sub2api"
-	customGitHubRepo   = "LinkSyncX/linksyncx"
+	customGitHubRepo   = "dreamforSh/linksyncx"
 	customTagPrefix    = "custom-v"
 
 	// Security: allowed download domains for updates
