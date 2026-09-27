@@ -758,12 +758,13 @@ const router = createRouter({
   history: createWebHistory(import.meta.env.BASE_URL),
   routes,
   scrollBehavior(_to, _from, savedPosition) {
+    // html 开启了 scroll-behavior: smooth，路由切换需显式 instant，否则新页面渲染后还会平滑滚动一段
     // Scroll to saved position when using browser back/forward
     if (savedPosition) {
-      return savedPosition
+      return { ...savedPosition, behavior: 'instant' }
     }
     // Scroll to top for new routes
-    return { top: 0 }
+    return { top: 0, behavior: 'instant' }
   }
 })
 

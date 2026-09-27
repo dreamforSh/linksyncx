@@ -500,6 +500,7 @@ import { useAuthStore, useAppStore } from '@/stores'
 import LocaleSwitcher from '@/components/common/LocaleSwitcher.vue'
 import Icon from '@/components/icons/Icon.vue'
 import { sanitizeUrl } from '@/utils/url'
+import { applyTheme, themeOriginFromEvent } from '@/utils/themeTransition'
 import { FeatureFlags, isFeatureFlagEnabled } from '@/utils/featureFlags'
 
 const { t } = useI18n()
@@ -549,10 +550,9 @@ const userInitial = computed(() => {
 const currentYear = computed(() => new Date().getFullYear())
 
 // Toggle theme
-function toggleTheme() {
+function toggleTheme(event?: MouseEvent) {
   isDark.value = !isDark.value
-  document.documentElement.classList.toggle('dark', isDark.value)
-  localStorage.setItem('theme', isDark.value ? 'dark' : 'light')
+  applyTheme(isDark.value, themeOriginFromEvent(event))
 }
 
 // Initialize theme

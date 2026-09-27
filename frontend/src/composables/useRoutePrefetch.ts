@@ -8,7 +8,7 @@
  * - 只在实际需要预加载时才执行
  */
 import { ref, readonly } from 'vue'
-import type { RouteLocationNormalized, Router } from 'vue-router'
+import type { RouteLocationNormalized, RouteRecordNormalized, Router } from 'vue-router'
 
 /**
  * 组件导入函数类型
@@ -200,3 +200,26 @@ export function useRoutePrefetch(router?: Router) {
 // 兼容旧测试的导出
 export const _adminPrefetchMap = PREFETCH_ADJACENCY
 export const _userPrefetchMap = PREFETCH_ADJACENCY
+
+/**
+ * 按目标地址预加载懒加载路由组件（用于菜单悬停/聚焦时的意图预取）。
+ * 已加载过的分包由模块缓存直接返回，重复调用开销可忽略。
+ */
+export function prefetchRouteComponents(router: Router, to: string): void {
+  let matched: RouteRecordNormalized[]
+  try {
+    matched = router.resolve(to).matched
+  } catch {
+    return
+  }
+  for (const record of matched) {
+    const component = record.components?.default
+    if (typeof component === 'function') {
+      Promise.resolve()
+        .then(() => (component as ComponentImportFn)())
+        .catch(() => {
+          // 预取失败不影响后续正常导航
+        })
+    }
+  }
+}

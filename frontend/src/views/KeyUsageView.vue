@@ -426,6 +426,7 @@ import Icon from '@/components/icons/Icon.vue'
 import { buildGatewayUrl } from '@/api/client'
 import { formatDateLocalInput } from '@/utils/format'
 import { sanitizeUrl } from '@/utils/url'
+import { applyTheme, themeOriginFromEvent } from '@/utils/themeTransition'
 
 const { t, locale } = useI18n()
 const appStore = useAppStore()
@@ -442,10 +443,9 @@ const githubUrl = 'https://github.com/Wei-Shaw/sub2api'
 
 const isDark = ref(document.documentElement.classList.contains('dark'))
 
-function toggleTheme() {
+function toggleTheme(event?: MouseEvent) {
   isDark.value = !isDark.value
-  document.documentElement.classList.toggle('dark', isDark.value)
-  localStorage.setItem('theme', isDark.value ? 'dark' : 'light')
+  applyTheme(isDark.value, themeOriginFromEvent(event))
 }
 
 const currentYear = computed(() => new Date().getFullYear())

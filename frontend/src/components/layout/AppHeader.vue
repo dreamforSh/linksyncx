@@ -254,7 +254,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed, onMounted, onBeforeUnmount } from 'vue'
+import { ref, computed, onMounted, onBeforeUnmount, watch } from 'vue'
 import { useRouter, useRoute } from 'vue-router'
 import { useI18n } from 'vue-i18n'
 import { useAppStore, useAuthStore, useOnboardingStore } from '@/stores'
@@ -380,6 +380,12 @@ function formatHeaderMoney(value: number) {
   return `$${value.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
 }
 
+// 布局常驻后顶栏不再随页面重建：导航（含浏览器前进/后退）时收起用户菜单
+watch(
+  () => route.fullPath,
+  () => closeDropdown()
+)
+
 function handleClickOutside(event: MouseEvent) {
   if (dropdownRef.value && !dropdownRef.value.contains(event.target as Node)) {
     closeDropdown()
@@ -396,14 +402,33 @@ onBeforeUnmount(() => {
 </script>
 
 <style scoped>
-.dropdown-enter-active,
+.dropdown-enter-active {
+  transition:
+    opacity 0.16s ease-out,
+    transform 0.16s cubic-bezier(0.2, 0, 0, 1);
+}
+
 .dropdown-leave-active {
-  transition: all 0.2s ease;
+  transition:
+    opacity 0.1s ease-in,
+    transform 0.1s ease-in;
 }
 
 .dropdown-enter-from,
 .dropdown-leave-to {
   opacity: 0;
-  transform: scale(0.95) translateY(-4px);
+  transform: scale(0.96) translateY(-4px);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .dropdown-enter-active,
+  .dropdown-leave-active {
+    transition: opacity 0.1s linear;
+  }
+
+  .dropdown-enter-from,
+  .dropdown-leave-to {
+    transform: none;
+  }
 }
 </style>
