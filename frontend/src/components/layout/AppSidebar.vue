@@ -53,7 +53,12 @@
     </div>
 
     <!-- Navigation -->
-    <nav ref="sidebarNavRef" class="sidebar-nav scrollbar-hide">
+    <nav
+      ref="sidebarNavRef"
+      class="sidebar-nav scrollbar-hide"
+      @pointerover="prefetchNavTarget"
+      @focusin="prefetchNavTarget"
+    >
       <p
         v-if="navSearchActive && !hasNavMatches"
         class="px-3 py-6 text-center text-xs text-gray-500 dark:text-dark-400"
@@ -96,19 +101,21 @@
                 </span>
               </button>
               <!-- Children -->
-              <div v-if="!sidebarCollapsed && isGroupExpanded(item)" class="mb-1 ml-4 border-l border-gray-200 pl-2 dark:border-dark-600">
-                <router-link
-                  v-for="child in item.children"
-                  :key="child.path"
-                  :to="child.path"
-                  class="sidebar-link mb-0.5 py-1.5 text-sm"
-                  :class="{ 'sidebar-link-active': route.path === child.path }"
-                  @click="handleMenuItemClick(child.path)"
-                >
-                  <component :is="child.icon" class="h-4 w-4 flex-shrink-0" />
-                  <span>{{ child.label }}</span>
-                </router-link>
-              </div>
+              <Transition name="sidebar-group">
+                <div v-if="!sidebarCollapsed && isGroupExpanded(item)" class="mb-1 ml-4 border-l border-gray-200 pl-2 dark:border-dark-600">
+                  <router-link
+                    v-for="child in item.children"
+                    :key="child.path"
+                    :to="child.path"
+                    class="sidebar-link mb-0.5 py-1.5 text-sm"
+                    :class="{ 'sidebar-link-active': route.path === child.path }"
+                    @click="handleMenuItemClick(child.path)"
+                  >
+                    <component :is="child.icon" class="h-4 w-4 flex-shrink-0" />
+                    <span>{{ child.label }}</span>
+                  </router-link>
+                </div>
+              </Transition>
             </template>
             <!-- Normal item (no children) -->
             <router-link
@@ -236,6 +243,8 @@ import { sanitizeUrl } from '@/utils/url'
 import { FeatureFlags, makeSidebarFlag } from '@/utils/featureFlags'
 import { resolveSiteBillingMode } from '@/utils/siteBillingMode'
 import { useBatchImageAccess } from '@/composables/useBatchImageAccess'
+import { prefetchRouteComponents } from '@/composables/useRoutePrefetch'
+import { applyTheme, themeOriginFromEvent } from '@/utils/themeTransition'
 
 type AdminNavSection = 'overview' | 'users' | 'resources' | 'operations' | 'system'
 
@@ -1016,10 +1025,19 @@ function toggleSidebar() {
   appStore.toggleSidebar()
 }
 
-function toggleTheme() {
+function toggleTheme(event?: MouseEvent) {
   isDark.value = !isDark.value
-  document.documentElement.classList.toggle('dark', isDark.value)
-  localStorage.setItem('theme', isDark.value ? 'dark' : 'light')
+  applyTheme(isDark.value, themeOriginFromEvent(event))
+}
+
+// 悬停/聚焦菜单链接时预加载目标页面代码，点击后无需再等待分包下载与解析
+const prefetchedNavPaths = new Set<string>()
+function prefetchNavTarget(event: Event) {
+  const link = (event.target as Element | null)?.closest?.('a[href]')
+  const path = link?.getAttribute('href')
+  if (!path || !path.startsWith('/') || prefetchedNavPaths.has(path)) return
+  prefetchedNavPaths.add(path)
+  prefetchRouteComponents(router, path)
 }
 
 function closeMobile() {
@@ -1085,6 +1103,15 @@ function handleGroupClick(item: NavItem) {
   }
   groupExpandOverrides.value.set(item.path, true)
 }
+
+// 布局常驻后侧栏不再随页面重建：导航完成后清空菜单搜索与手动展开状态，行为与原先保持一致
+watch(
+  () => route.path,
+  () => {
+    if (navQuery.value) navQuery.value = ''
+    if (groupExpandOverrides.value.size) groupExpandOverrides.value = new Map()
+  }
+)
 
 // Initialize theme
 const savedTheme = localStorage.getItem('theme')
@@ -1267,5 +1294,47 @@ onBeforeUnmount(() => {
   display: block;
   width: 1.25rem;
   height: 1.25rem;
+}
+
+/* 移动端遮罩：与侧栏滑入同步淡入淡出 */
+.fade-enter-active {
+  transition: opacity 0.25s ease-out;
+}
+
+.fade-leave-active {
+  transition: opacity 0.2s ease-in;
+}
+
+.fade-enter-from,
+.fade-leave-to {
+  opacity: 0;
+}
+
+/* 子菜单展开/收起：只动 opacity/transform */
+.sidebar-group-enter-active {
+  transition:
+    opacity 0.18s ease-out,
+    transform 0.18s cubic-bezier(0.2, 0, 0, 1);
+}
+
+.sidebar-group-leave-active {
+  transition:
+    opacity 0.12s ease-in,
+    transform 0.12s ease-in;
+}
+
+.sidebar-group-enter-from,
+.sidebar-group-leave-to {
+  opacity: 0;
+  transform: translateY(-4px);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .fade-enter-active,
+  .fade-leave-active,
+  .sidebar-group-enter-active,
+  .sidebar-group-leave-active {
+    transition: none;
+  }
 }
 </style>

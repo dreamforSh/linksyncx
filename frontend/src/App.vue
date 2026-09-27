@@ -4,6 +4,7 @@ import { computed, onMounted, onBeforeUnmount, watch } from 'vue'
 import Toast from '@/components/common/Toast.vue'
 import NavigationProgress from '@/components/common/NavigationProgress.vue'
 import AdminComplianceDialog from '@/components/admin/AdminComplianceDialog.vue'
+import AppShell from '@/components/layout/AppShell.vue'
 import { resolveRouteDocumentTitle } from '@/router/title'
 import AnnouncementPopup from '@/components/common/AnnouncementPopup.vue'
 import { useAppStore, useAuthStore, useSubscriptionStore, useAnnouncementStore, useAdminComplianceStore, useAdminSettingsStore } from '@/stores'
@@ -163,7 +164,10 @@ onMounted(async () => {
 
 <template>
   <NavigationProgress />
-  <RouterView />
+  <!-- 常驻布局壳：页面内的 <AppLayout> 向它登记，侧边栏/顶栏跨路由保持挂载 -->
+  <AppShell>
+    <RouterView />
+  </AppShell>
   <Toast />
   <AnnouncementPopup />
   <AdminComplianceDialog />

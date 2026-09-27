@@ -5,6 +5,30 @@
 
 import { i18n, getLocale } from '@/i18n'
 
+// Intl 格式化器构造开销较大，表格里每个单元格都新建一次会成为渲染热点；按 locale + 选项缓存复用
+const numberFormatCache = new Map<string, Intl.NumberFormat>()
+const dateTimeFormatCache = new Map<string, Intl.DateTimeFormat>()
+
+function getNumberFormat(locale: string, options: Intl.NumberFormatOptions): Intl.NumberFormat {
+  const key = `${locale}|${JSON.stringify(options)}`
+  let formatter = numberFormatCache.get(key)
+  if (!formatter) {
+    formatter = new Intl.NumberFormat(locale, options)
+    numberFormatCache.set(key, formatter)
+  }
+  return formatter
+}
+
+function getDateTimeFormat(locale: string, options: Intl.DateTimeFormatOptions): Intl.DateTimeFormat {
+  const key = `${locale}|${JSON.stringify(options)}`
+  let formatter = dateTimeFormatCache.get(key)
+  if (!formatter) {
+    formatter = new Intl.DateTimeFormat(locale, options)
+    dateTimeFormatCache.set(key, formatter)
+  }
+  return formatter
+}
+
 /**
  * 格式化相对时间
  * @param date 日期字符串或 Date 对象
@@ -44,7 +68,7 @@ export function formatNumber(num: number | null | undefined): string {
 
   // Use Intl.NumberFormat for compact notation if supported and needed
   // Note: Compact notation in 'zh' uses '万/亿', which is appropriate for Chinese
-  const formatter = new Intl.NumberFormat(locale, {
+  const formatter = getNumberFormat(locale, {
     notation: absNum >= 10000 ? 'compact' : 'standard',
     maximumFractionDigits: 1
   })
@@ -66,7 +90,7 @@ export function formatCurrency(amount: number | null | undefined, currency: stri
   // For very small amounts, show more decimals
   const fractionDigits = amount > 0 && amount < 0.01 ? 6 : 2
 
-  return new Intl.NumberFormat(locale, {
+  return getNumberFormat(locale, {
     style: 'currency',
     currency: currency,
     minimumFractionDigits: fractionDigits,
@@ -118,7 +142,7 @@ export function formatDate(
   if (isNaN(d.getTime())) return ''
 
   const locale = localeOverride ?? getLocale()
-  return new Intl.DateTimeFormat(locale, options).format(d)
+  return getDateTimeFormat(locale, options).format(d)
 }
 
 /**

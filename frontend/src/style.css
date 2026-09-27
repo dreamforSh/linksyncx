@@ -75,7 +75,8 @@
   .btn {
     @apply inline-flex items-center justify-center gap-2;
     @apply rounded-lg border border-transparent px-4 py-2.5 text-sm font-medium;
-    @apply transition-colors duration-150 ease-out;
+    @apply transition-[color,background-color,border-color,box-shadow,transform] duration-150 ease-out;
+    @apply active:scale-[0.97] disabled:active:scale-100 motion-reduce:active:scale-100;
     @apply focus:outline-none focus-visible:ring-2 focus-visible:ring-primary-500/50 focus-visible:ring-offset-2;
     @apply dark:focus-visible:ring-offset-dark-900;
     @apply disabled:cursor-not-allowed disabled:opacity-50;
@@ -219,7 +220,7 @@
     @apply rounded-2xl;
     @apply border border-white/20 dark:border-dark-700/50;
     @apply shadow-glass;
-    @apply transition-all duration-300;
+    @apply transition-[border-color,box-shadow,transform] duration-300;
   }
 
   /* ============ 卡片样式 ============ */
@@ -228,7 +229,7 @@
     @apply rounded-xl;
     @apply border border-gray-200/70 dark:border-dark-700/60;
     @apply shadow-card;
-    @apply transition-all duration-300;
+    @apply transition-[border-color,box-shadow,transform] duration-200 ease-out;
   }
 
   .card-hover {
@@ -381,7 +382,7 @@
     @apply border border-gray-200 dark:border-dark-700;
     @apply shadow-lg;
     @apply py-1;
-    @apply origin-top-right animate-scale-in;
+    @apply origin-top-right;
   }
 
   .dropdown-item {
@@ -437,12 +438,13 @@
     overflow: hidden;
   }
 
+  /* 根节点（遮罩）的时长决定 Vue 何时结束进场，需不短于面板的位移时长 */
   .modal-enter-active {
-    transition: opacity 250ms ease-out;
+    transition: opacity 240ms ease-out;
   }
 
   .modal-leave-active {
-    transition: opacity 200ms ease-in;
+    transition: opacity 150ms ease-in;
   }
 
   .modal-enter-from,
@@ -451,22 +453,26 @@
   }
 
   .modal-enter-active .modal-content {
-    transition: transform 250ms ease-out, opacity 250ms ease-out;
+    transition:
+      transform 240ms cubic-bezier(0.16, 1, 0.3, 1),
+      opacity 200ms ease-out;
   }
 
   .modal-leave-active .modal-content {
-    transition: transform 200ms ease-in, opacity 200ms ease-in;
+    transition:
+      transform 150ms ease-in,
+      opacity 150ms ease-in;
   }
 
   .modal-enter-from .modal-content,
   .modal-leave-to .modal-content {
-    transform: scale(0.95);
+    transform: translateY(8px) scale(0.97);
     opacity: 0;
   }
 
   .modal-enter-to .modal-content,
   .modal-leave-from .modal-content {
-    transform: scale(1);
+    transform: none;
     opacity: 1;
   }
 
@@ -542,13 +548,15 @@
   }
 
   /* ============ 侧边栏 ============ */
+  /* 宽度过渡与 AppShell 内容区的位移动画同步（250ms / 同一缓动，见 layout/appShellContext.ts） */
   .sidebar {
     @apply fixed inset-y-0 left-0 z-40;
     @apply w-64 bg-white dark:bg-dark-900;
     @apply border-r border-gray-200/80 dark:border-dark-800;
     @apply flex flex-col;
-    @apply transition-transform duration-300;
     transition-property: width, transform;
+    transition-duration: 250ms;
+    transition-timing-function: cubic-bezier(0.2, 0, 0, 1);
   }
 
   .sidebar-header {
@@ -602,6 +610,20 @@
   .sidebar-link-active::before {
     content: '';
     @apply absolute bottom-2 left-0 top-2 w-[3px] rounded-r-full bg-primary-600 dark:bg-primary-400;
+    animation: sidebar-indicator-in 220ms cubic-bezier(0.2, 0, 0, 1);
+  }
+
+  @keyframes sidebar-indicator-in {
+    from {
+      opacity: 0;
+      transform: scaleY(0.3);
+    }
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    .sidebar-link-active::before {
+      animation: none;
+    }
   }
 
   .sidebar-section {
@@ -670,7 +692,7 @@
   .tab {
     @apply rounded-lg px-4 py-2 text-sm font-medium;
     @apply text-gray-600 dark:text-dark-400;
-    @apply transition-all duration-200;
+    @apply transition-[color,background-color,box-shadow] duration-200;
     @apply hover:text-gray-900 dark:hover:text-white;
   }
 
@@ -687,7 +709,7 @@
 
   .progress-bar {
     @apply h-full bg-gradient-to-r from-primary-500 to-primary-400;
-    @apply transition-all duration-300;
+    @apply transition-[width] duration-300 ease-out;
   }
 
   /* ============ 开关 ============ */
@@ -874,7 +896,9 @@
 
   /* ============ 图标按钮 / 筛选标签 ============ */
   .icon-btn {
-    @apply inline-flex h-9 w-9 flex-shrink-0 items-center justify-center rounded-lg text-gray-500 transition-colors;
+    @apply inline-flex h-9 w-9 flex-shrink-0 items-center justify-center rounded-lg text-gray-500;
+    @apply transition-[color,background-color,transform] duration-150 ease-out;
+    @apply active:scale-95 disabled:active:scale-100 motion-reduce:active:scale-100;
     @apply hover:bg-gray-100 hover:text-gray-900 dark:text-dark-300 dark:hover:bg-dark-800 dark:hover:text-white;
     @apply focus:outline-none focus-visible:ring-2 focus-visible:ring-primary-500/50;
     @apply disabled:cursor-not-allowed disabled:opacity-50;
@@ -982,4 +1006,19 @@
   .safe-bottom {
     padding-bottom: env(safe-area-inset-bottom);
   }
+}
+
+/* ============ 主题切换 ============ */
+/* 切换期间临时禁用过渡，避免数百个元素同时起颜色过渡（见 utils/themeTransition.ts） */
+.theme-switching *,
+.theme-switching *::before,
+.theme-switching *::after {
+  transition: none !important;
+}
+
+/* View Transitions：关闭默认交叉淡入，改由脚本做圆形扩散 */
+::view-transition-old(root),
+::view-transition-new(root) {
+  animation: none;
+  mix-blend-mode: normal;
 }

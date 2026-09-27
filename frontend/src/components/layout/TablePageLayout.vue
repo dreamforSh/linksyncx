@@ -75,8 +75,9 @@ onUnmounted(() => {
   display: table; /* 使用标准 table 布局以支持 sticky 列 */
 }
 
+/* 表头为 sticky：不用 backdrop-filter，否则滚动时每帧都要重算模糊（DataTable 的表头本身是不透明底色） */
 .table-scroll-container :deep(thead) {
-  @apply bg-gray-50/80 dark:bg-dark-800/80 backdrop-blur-sm;
+  @apply bg-gray-50 dark:bg-dark-800;
 }
 
 .table-scroll-container :deep(tbody) {

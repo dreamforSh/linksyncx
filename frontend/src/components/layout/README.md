@@ -31,6 +31,13 @@ import { AppLayout } from '@/components/layout'
 - Main content area with slot
 - Automatically adjusts margin based on sidebar state
 
+**Persistent shell:** `App.vue` renders a single `AppShell` around `<RouterView>`. A page's
+`<AppLayout>` registers with it and only renders its own content, so the sidebar and header stay
+mounted across route changes (no teardown/rebuild on every navigation). Pages keep wrapping
+themselves in `<AppLayout>` as before; conditional usage such as
+`<component :is="fullscreen ? 'div' : AppLayout">` also works. Without an outer `AppShell`
+(e.g. a component mounted on its own), `AppLayout` falls back to rendering the full layout itself.
+
 ---
 
 ### 2. AppSidebar.vue
