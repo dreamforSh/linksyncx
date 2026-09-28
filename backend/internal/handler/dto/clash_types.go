@@ -15,6 +15,8 @@ type ClashProfileStats struct {
 	Missing   int `json:"missing"`
 	Invalid   int `json:"invalid"`
 	Disabled  int `json:"disabled"`
+	// Hidden nodes are counted here only, not in the states above.
+	Hidden int `json:"hidden"`
 	// Bound counts nodes backing at least one account.
 	Bound int `json:"bound"`
 	// BoundAccounts counts distinct non-shadow accounts using the profile's nodes.
@@ -25,6 +27,9 @@ type ClashProfileStats struct {
 type ClashProfile struct {
 	ID                     int64             `json:"id"`
 	Name                   string            `json:"name"`
+	SourceType             string            `json:"source_type"`
+	SourceName             string            `json:"source_name"`
+	SourceSize             int64             `json:"source_size"`
 	URLMasked              string            `json:"url_masked"`
 	UserAgent              string            `json:"user_agent"`
 	Enabled                bool              `json:"enabled"`
@@ -65,6 +70,9 @@ func ClashProfileFromService(p *service.ClashProfileSummary) *ClashProfile {
 	return &ClashProfile{
 		ID:                     p.ID,
 		Name:                   p.Name,
+		SourceType:             p.SourceType,
+		SourceName:             p.SourceName,
+		SourceSize:             p.SourceSize,
 		URLMasked:              p.URLMasked,
 		UserAgent:              p.UserAgent,
 		Enabled:                p.Enabled,
@@ -84,8 +92,8 @@ func ClashProfileFromService(p *service.ClashProfileSummary) *ClashProfile {
 		NodeCount:              p.NodeCount,
 		Stats: ClashProfileStats{
 			Total: p.Stats.Total, Active: p.Stats.Active, Healthy: p.Stats.Healthy, Unhealthy: p.Stats.Unhealthy,
-			Missing: p.Stats.Missing, Invalid: p.Stats.Invalid, Disabled: p.Stats.Disabled, Bound: p.Stats.Bound,
-			BoundAccounts: p.Stats.BoundAccounts,
+			Missing: p.Stats.Missing, Invalid: p.Stats.Invalid, Disabled: p.Stats.Disabled, Hidden: p.Stats.Hidden,
+			Bound: p.Stats.Bound, BoundAccounts: p.Stats.BoundAccounts,
 		},
 		MeasuredTraffic: ClashProfileTraffic{
 			UploadBytes: p.Traffic.Upload, DownloadBytes: p.Traffic.Download,
@@ -137,6 +145,7 @@ type ClashNode struct {
 	ServerPort          int                 `json:"server_port"`
 	Status              string              `json:"status"`
 	StatusReason        string              `json:"status_reason"`
+	Hidden              bool                `json:"hidden"`
 	MissingSince        *time.Time          `json:"missing_since"`
 	ListenPort          int                 `json:"listen_port"`
 	ProxyID             int64               `json:"proxy_id"`
@@ -216,6 +225,7 @@ func ClashNodeFromService(v *service.ClashNodeView) *ClashNode {
 		ServerPort:          v.ServerPort,
 		Status:              v.Status,
 		StatusReason:        v.StatusReason,
+		Hidden:              v.Hidden,
 		MissingSince:        v.MissingSince,
 		ListenPort:          v.ListenPort,
 		ProxyID:             v.ProxyID,

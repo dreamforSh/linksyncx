@@ -147,6 +147,7 @@ var auditActionOverrides = map[string]string{
 	"DELETE /api/v1/admin/clash/profiles/:id":                 "admin.clash.profile.delete",
 	"POST /api/v1/admin/clash/profiles/preview":               "admin.clash.profile.preview",
 	"POST /api/v1/admin/clash/profiles/:id/refresh":           "admin.clash.profile.refresh",
+	"POST /api/v1/admin/clash/nodes/batch":                    "admin.clash.nodes.batch_update",
 }
 
 // auditBodyOmittedRoutes 请求体几乎整体由凭证构成的路由（如整块粘贴 auth JSON 的导入接口）。

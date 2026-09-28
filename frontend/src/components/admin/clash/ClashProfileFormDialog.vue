@@ -51,7 +51,96 @@
         </div>
       </div>
 
-      <div>
+      <div v-if="!isEdit">
+        <span class="input-label">{{ t('admin.clash.form.source') }}</span>
+        <SegmentedControl
+          v-model="form.sourceType"
+          :options="sourceOptions"
+          :aria-label="t('admin.clash.form.source')"
+          test-id="clash-profile-source"
+          @change="onSourceChange"
+        />
+      </div>
+
+      <div v-if="isFileSource" data-testid="clash-profile-file">
+        <span class="input-label">
+          {{ t('admin.clash.form.file') }}
+          <span v-if="!isEdit" class="text-red-500">*</span>
+        </span>
+        <div
+          class="flex flex-col items-center justify-center gap-2 rounded-xl border-2 border-dashed px-4 py-5 text-center transition-colors"
+          :class="dragActive
+            ? 'border-primary-400 bg-primary-50/60 dark:border-primary-500/60 dark:bg-primary-500/10'
+            : errors.file ? 'border-red-300 dark:border-red-500/50' : 'border-gray-300 dark:border-dark-600'"
+          data-testid="clash-profile-dropzone"
+          @dragenter.prevent="dragActive = true"
+          @dragover.prevent="dragActive = true"
+          @dragleave.prevent="dragActive = false"
+          @drop.prevent="onFileDrop"
+        >
+          <template v-if="file.name">
+            <div class="flex max-w-full items-center gap-2 text-sm text-gray-900 dark:text-white">
+              <Icon name="document" size="md" class="flex-shrink-0 text-primary-500" />
+              <span class="truncate font-medium" :title="file.name" data-testid="clash-profile-file-name">{{ file.name }}</span>
+              <span class="flex-shrink-0 text-xs text-gray-500 dark:text-dark-400">{{ formatBytes(file.size, 1) }}</span>
+            </div>
+            <button type="button" class="btn btn-secondary btn-sm" :disabled="reading" @click="pickFile">
+              {{ t('admin.clash.form.fileReplace') }}
+            </button>
+          </template>
+          <template v-else>
+            <Icon name="upload" size="lg" class="text-gray-400 dark:text-dark-500" />
+            <p class="text-sm text-gray-600 dark:text-gray-300">{{ t('admin.clash.form.fileDrop') }}</p>
+            <button type="button" class="btn btn-secondary btn-sm" :disabled="reading" data-testid="clash-profile-file-pick" @click="pickFile">
+              {{ reading ? t('admin.clash.form.fileReading') : t('admin.clash.form.filePick') }}
+            </button>
+          </template>
+          <input
+            ref="fileInputRef"
+            type="file"
+            class="hidden"
+            accept=".yaml,.yml,.txt,text/yaml,application/yaml,application/x-yaml,text/plain"
+            data-testid="clash-profile-file-input"
+            @change="onFileInput"
+          />
+        </div>
+        <p v-if="errors.file" class="input-error-text" data-testid="clash-profile-file-error">{{ errors.file }}</p>
+        <p v-else-if="isEdit" class="input-hint">
+          {{ t('admin.clash.form.fileKeepHint', { name: profile?.source_name || '-', size: formatBytes(profile?.source_size ?? 0, 1) }) }}
+        </p>
+        <p v-else class="input-hint">{{ t('admin.clash.form.fileHint') }}</p>
+      </div>
+
+      <div v-else-if="isLinksSource" data-testid="clash-profile-links">
+        <label class="input-label" for="clash-profile-links">
+          {{ t('admin.clash.form.links') }}
+          <span v-if="!isEdit" class="text-red-500">*</span>
+        </label>
+        <textarea
+          id="clash-profile-links"
+          ref="linksInputRef"
+          v-model="form.links"
+          rows="4"
+          class="input font-mono text-xs leading-relaxed"
+          :class="errors.links && 'input-error'"
+          autocomplete="off"
+          spellcheck="false"
+          :placeholder="t('admin.clash.form.linksPlaceholder')"
+          data-testid="clash-profile-links-input"
+          @input="onLinksInput"
+        ></textarea>
+        <p v-if="errors.links" class="input-error-text" data-testid="clash-profile-links-error">{{ errors.links }}</p>
+        <template v-else>
+          <p v-if="linksDetected" class="mt-1 text-xs text-emerald-600 dark:text-emerald-400" data-testid="clash-profile-links-detected">
+            {{ t('admin.clash.form.linksDetected') }}
+          </p>
+          <p class="input-hint">
+            {{ isEdit ? t('admin.clash.form.linksKeepHint', { count: profile?.node_count ?? 0 }) : t('admin.clash.form.linksHint') }}
+          </p>
+        </template>
+      </div>
+
+      <div v-else>
         <label class="input-label" for="clash-profile-url">
           {{ t('admin.clash.form.url') }}
           <span v-if="!isEdit" class="text-red-500">*</span>
@@ -66,13 +155,25 @@
           :class="errors.url && 'input-error'"
           :placeholder="isEdit ? profile?.url_masked : 'https://'"
           data-testid="clash-profile-url"
+          @paste="onUrlPaste"
         />
-        <p v-if="errors.url" class="input-error-text">{{ errors.url }}</p>
+        <p v-if="errors.url" class="input-error-text" data-testid="clash-profile-url-error">
+          {{ errors.url }}
+          <button
+            v-if="!isEdit && urlIsNodeLink"
+            type="button"
+            class="ml-1 font-medium underline decoration-dotted underline-offset-2"
+            data-testid="clash-profile-use-links"
+            @click="switchToLinks(form.url)"
+          >
+            {{ t('admin.clash.form.useLinks') }}
+          </button>
+        </p>
         <p v-else-if="isEdit" class="input-hint">{{ t('admin.clash.form.urlKeepHint', { masked: profile?.url_masked || '-' }) }}</p>
         <p v-else class="input-hint">{{ t('admin.clash.form.urlHint') }}</p>
       </div>
 
-      <div class="grid grid-cols-1 gap-4 md:grid-cols-2">
+      <div v-if="!isLocalSource" class="grid grid-cols-1 gap-4 md:grid-cols-2">
         <div>
           <label class="input-label" for="clash-profile-ua">{{ t('admin.clash.form.userAgent') }}</label>
           <input
@@ -147,7 +248,7 @@
         </div>
       </div>
 
-      <div>
+      <div v-if="!isLocalSource">
         <label class="input-label">{{ t('admin.clash.form.fetchProxy') }}</label>
         <Select
           v-model="form.fetchProxyId"
@@ -175,14 +276,12 @@
         <div class="flex flex-wrap items-center justify-between gap-3">
           <div>
             <p class="text-sm font-medium text-gray-900 dark:text-white">{{ t('admin.clash.preview.title') }}</p>
-            <p class="text-xs text-gray-500 dark:text-dark-400">
-              {{ isEdit ? t('admin.clash.preview.editHint') : t('admin.clash.preview.hint') }}
-            </p>
+            <p class="text-xs text-gray-500 dark:text-dark-400">{{ previewHint }}</p>
           </div>
           <button
             type="button"
             class="btn btn-secondary btn-sm"
-            :disabled="previewing || submitting || !form.url.trim()"
+            :disabled="previewing || submitting || reading || !canPreview"
             data-testid="clash-preview-button"
             @click="runPreview"
           >
@@ -304,12 +403,13 @@
 </template>
 
 <script setup lang="ts">
-import { computed, reactive, ref, watch } from 'vue'
+import { computed, nextTick, reactive, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { adminAPI } from '@/api/admin'
 import { useAppStore } from '@/stores/app'
 import BaseDialog from '@/components/common/BaseDialog.vue'
 import Select from '@/components/common/Select.vue'
+import SegmentedControl from '@/components/common/SegmentedControl.vue'
 import Toggle from '@/components/common/Toggle.vue'
 import Icon from '@/components/icons/Icon.vue'
 import ClashRefreshSummary from './ClashRefreshSummary.vue'
@@ -318,11 +418,13 @@ import type {
   ClashPreviewResult,
   ClashProfile,
   ClashProfileInput,
+  ClashProfileSourceType,
   ClashSubscriptionFormat,
   Proxy
 } from '@/types'
+import { CLASH_FILE_MAX_BYTES } from '@/api/admin/clash'
 import { extractApiErrorMessage } from '@/utils/apiError'
-import { clashErrorCode, clashErrorMessage } from '@/utils/clash'
+import { clashErrorCode, clashErrorMessage, isClashNodeLinkText, summarizeClashNodeLinks } from '@/utils/clash'
 import { formatBytes, formatDateOnly } from '@/utils/format'
 
 type IntervalPreset = 0 | 60 | 180 | 360 | 720 | 1440 | 'custom'
@@ -343,7 +445,8 @@ const props = withDefaults(
 
 const emit = defineEmits<{
   (e: 'close'): void
-  (e: 'saved', payload: { profile: ClashProfile; created: boolean }): void
+  /** reparse: a new file was uploaded and only takes effect once the subscription is refreshed. */
+  (e: 'saved', payload: { profile: ClashProfile; created: boolean; reparse?: boolean }): void
 }>()
 
 const { t } = useI18n()
@@ -351,7 +454,10 @@ const appStore = useAppStore()
 
 const form = reactive({
   name: '',
+  sourceType: 'url' as ClashProfileSourceType,
   url: '',
+  /** Pasted node share links, one per line. */
+  links: '',
   userAgent: '',
   enabled: true,
   intervalPreset: DEFAULT_INTERVAL as IntervalPreset,
@@ -362,7 +468,15 @@ const form = reactive({
   fetchProxyId: null as number | null,
   notes: ''
 })
-const errors = reactive({ name: '', url: '', interval: '' })
+const errors = reactive({ name: '', url: '', interval: '', file: '', links: '' })
+const linksInputRef = ref<HTMLTextAreaElement | null>(null)
+/** Node links pasted into the URL box were moved to the links source. */
+const linksDetected = ref(false)
+/** The uploaded configuration, read in the browser and sent as text. */
+const file = reactive({ name: '', size: 0, content: '' })
+const reading = ref(false)
+const dragActive = ref(false)
+const fileInputRef = ref<HTMLInputElement | null>(null)
 const submitting = ref(false)
 const formError = ref('')
 const encryptionKeyMissing = ref(false)
@@ -372,6 +486,31 @@ const previewError = ref('')
 const createdResult = ref<ClashCreateProfileResult | null>(null)
 
 const isEdit = computed(() => props.profile !== null)
+// The source of a saved subscription never changes.
+const sourceType = computed<ClashProfileSourceType>(() => (props.profile ? props.profile.source_type ?? 'url' : form.sourceType))
+const isFileSource = computed(() => sourceType.value === 'file')
+const isLinksSource = computed(() => sourceType.value === 'links')
+/** Uploaded files and pasted links: nothing to fetch, so no User-Agent, schedule or fetch proxy. */
+const isLocalSource = computed(() => sourceType.value !== 'url')
+const urlIsNodeLink = computed(() => isClashNodeLinkText(form.url))
+
+const sourceOptions = computed(() => [
+  { value: 'url' as ClashProfileSourceType, label: t('admin.clash.form.sourceUrl'), icon: 'link' as const },
+  { value: 'file' as ClashProfileSourceType, label: t('admin.clash.form.sourceFile'), icon: 'document' as const },
+  { value: 'links' as ClashProfileSourceType, label: t('admin.clash.form.sourceLinks'), icon: 'server' as const }
+])
+
+const canPreview = computed(() => {
+  if (isFileSource.value) return file.content !== ''
+  if (isLinksSource.value) return form.links.trim() !== ''
+  return form.url.trim() !== ''
+})
+
+const previewHint = computed(() => {
+  if (isFileSource.value) return isEdit.value ? t('admin.clash.preview.editFileHint') : t('admin.clash.preview.fileHint')
+  if (isLinksSource.value) return isEdit.value ? t('admin.clash.preview.editLinksHint') : t('admin.clash.preview.linksHint')
+  return isEdit.value ? t('admin.clash.preview.editHint') : t('admin.clash.preview.hint')
+})
 
 const dialogTitle = computed(() => {
   if (createdResult.value) return t('admin.clash.createResult.title')
@@ -379,8 +518,13 @@ const dialogTitle = computed(() => {
 })
 
 const submitLabel = computed(() => {
-  if (submitting.value) return isEdit.value ? t('common.saving') : t('admin.clash.form.creating')
-  return isEdit.value ? t('common.save') : t('admin.clash.form.submitCreate')
+  if (submitting.value) {
+    if (isEdit.value) return t('common.saving')
+    if (isFileSource.value) return t('admin.clash.form.creatingFile')
+    return isLinksSource.value ? t('admin.clash.form.creatingLinks') : t('admin.clash.form.creating')
+  }
+  if (isEdit.value) return t('common.save')
+  return isLocalSource.value ? t('admin.clash.form.submitCreateFile') : t('admin.clash.form.submitCreate')
 })
 
 const intervalOptions = computed(() => [
@@ -414,7 +558,11 @@ const createdSummaryText = computed(() => {
   if (!result) return ''
   const refresh = result.refresh
   if (!refresh) return t('admin.clash.createResult.notRefreshed')
-  if (refresh.status === 'ok') return t('admin.clash.createResult.refreshOk')
+  if (refresh.status === 'ok') {
+    if (result.profile.source_type === 'file') return t('admin.clash.createResult.fileParsed')
+    if (result.profile.source_type === 'links') return t('admin.clash.createResult.linksParsed')
+    return t('admin.clash.createResult.refreshOk')
+  }
   if (refresh.status === 'skipped') return t('admin.clash.createResult.refreshSkipped')
   return t('admin.clash.createResult.refreshFailed')
 })
@@ -435,7 +583,11 @@ const formatName = (format: ClashSubscriptionFormat) => {
 function resetForm() {
   const profile = props.profile
   form.name = profile?.name ?? ''
+  form.sourceType = profile?.source_type ?? 'url'
   form.url = ''
+  form.links = ''
+  linksDetected.value = false
+  autoName = ''
   form.userAgent = profile?.user_agent ?? ''
   form.enabled = profile?.enabled ?? true
   const interval = profile?.refresh_interval_minutes ?? DEFAULT_INTERVAL
@@ -454,6 +606,13 @@ function resetForm() {
   errors.name = ''
   errors.url = ''
   errors.interval = ''
+  errors.file = ''
+  errors.links = ''
+  file.name = ''
+  file.size = 0
+  file.content = ''
+  reading.value = false
+  dragActive.value = false
   formError.value = ''
   encryptionKeyMissing.value = false
   preview.value = null
@@ -479,11 +638,30 @@ function validate(): boolean {
   errors.name = ''
   errors.url = ''
   errors.interval = ''
+  errors.file = ''
+  errors.links = ''
   const name = form.name.trim()
   if (!name) errors.name = t('admin.clash.form.validation.nameRequired')
+  if (isFileSource.value) {
+    // Editing without a new file keeps the stored one.
+    if (!file.content && !isEdit.value) errors.file = t('admin.clash.form.validation.fileRequired')
+    return !errors.name && !errors.file
+  }
+  if (isLinksSource.value) {
+    // Editing without links keeps the stored ones.
+    const links = form.links.trim()
+    if (!links && !isEdit.value) errors.links = t('admin.clash.form.validation.linksRequired')
+    else if (new Blob([links]).size > CLASH_FILE_MAX_BYTES) {
+      errors.links = t('admin.clash.form.validation.linksTooLarge', { max: formatBytes(CLASH_FILE_MAX_BYTES, 0) })
+    }
+    return !errors.name && !errors.links
+  }
   const url = form.url.trim()
   if (!url && !isEdit.value) errors.url = t('admin.clash.form.validation.urlRequired')
-  else if (url && !isHttpUrl(url)) errors.url = t('admin.clash.form.validation.urlInvalid')
+  else if (url && !isHttpUrl(url)) {
+    if (!isClashNodeLinkText(url)) errors.url = t('admin.clash.form.validation.urlInvalid')
+    else errors.url = isEdit.value ? t('admin.clash.form.validation.urlIsNodeLinkEdit') : t('admin.clash.form.validation.urlIsNodeLink')
+  }
   if (form.intervalPreset === 'custom') {
     const minutes = intervalMinutes()
     if (!Number.isFinite(minutes) || minutes < MIN_INTERVAL || minutes > MAX_INTERVAL) {
@@ -493,7 +671,32 @@ function validate(): boolean {
   return !errors.name && !errors.url && !errors.interval
 }
 
+/** Files and pasted links carry no url, User-Agent, schedule or fetch proxy. */
+function buildLocalPayload(): ClashProfileInput {
+  const payload: ClashProfileInput = {
+    name: form.name.trim(),
+    enabled: form.enabled,
+    include_pattern: form.includePattern.trim(),
+    notes: form.notes.trim()
+  }
+  if (isEdit.value) {
+    payload.exclude_pattern = form.excludePattern.trim()
+  } else {
+    payload.source_type = sourceType.value
+    if (!form.useDefaultExclude) payload.exclude_pattern = form.excludePattern.trim()
+  }
+  const links = form.links.trim()
+  if (isFileSource.value && file.content) {
+    payload.content = file.content
+    payload.source_name = file.name
+  } else if (isLinksSource.value && links) {
+    payload.content = links
+  }
+  return payload
+}
+
 function buildPayload(): ClashProfileInput {
+  if (isLocalSource.value) return buildLocalPayload()
   const payload: ClashProfileInput = {
     name: form.name.trim(),
     enabled: form.enabled,
@@ -523,23 +726,138 @@ function describeError(error: unknown, fallbackKey: string) {
   return clashErrorMessage(error, t) ?? extractApiErrorMessage(error, t(fallbackKey))
 }
 
-async function runPreview() {
-  const url = form.url.trim()
-  if (!url) return
-  if (!isHttpUrl(url)) {
-    errors.url = t('admin.clash.form.validation.urlInvalid')
+function onSourceChange() {
+  errors.url = ''
+  errors.file = ''
+  errors.links = ''
+  linksDetected.value = false
+  preview.value = null
+  previewError.value = ''
+}
+
+// The name picked from the links, replaced as they change until the admin types their own.
+let autoName = ''
+
+function applyLinksName() {
+  if (isEdit.value) return
+  const { count, firstName } = summarizeClashNodeLinks(form.links)
+  if (!firstName) return
+  const name = (count > 1 ? t('admin.clash.form.linksNameMany', { name: firstName, count }) : firstName).slice(0, 100)
+  if (!form.name.trim() || form.name === autoName) {
+    form.name = name
+    autoName = name
+  }
+}
+
+function onLinksInput() {
+  errors.links = ''
+  preview.value = null
+  previewError.value = ''
+  applyLinksName()
+}
+
+/** Moves node share links entered in the URL box to the links source. */
+function switchToLinks(text: string) {
+  const pasted = text.trim()
+  const kept = form.links.trim()
+  form.sourceType = 'links'
+  onSourceChange()
+  form.links = kept ? `${kept}\n${pasted}` : pasted
+  form.url = ''
+  linksDetected.value = true
+  applyLinksName()
+  void nextTick(() => linksInputRef.value?.focus())
+}
+
+function onUrlPaste(event: ClipboardEvent) {
+  if (isEdit.value) return
+  const text = event.clipboardData?.getData('text') ?? ''
+  if (!isClashNodeLinkText(text)) return
+  event.preventDefault()
+  switchToLinks(text)
+}
+
+function pickFile() {
+  fileInputRef.value?.click()
+}
+
+function readFileText(selected: File): Promise<string> {
+  if (typeof selected.text === 'function') return selected.text()
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader()
+    reader.onload = () => resolve(String(reader.result ?? ''))
+    reader.onerror = () => reject(reader.error)
+    reader.readAsText(selected)
+  })
+}
+
+/** Reads a chosen file; a rejected file leaves the previous choice in place. */
+async function loadFile(selected: File) {
+  errors.file = ''
+  if (selected.size > CLASH_FILE_MAX_BYTES) {
+    errors.file = t('admin.clash.form.validation.fileTooLarge', { max: formatBytes(CLASH_FILE_MAX_BYTES, 0) })
     return
+  }
+  reading.value = true
+  try {
+    const content = await readFileText(selected)
+    if (!content.trim()) {
+      errors.file = t('admin.clash.form.validation.fileEmpty')
+      return
+    }
+    file.name = selected.name
+    file.size = selected.size
+    file.content = content
+    preview.value = null
+    previewError.value = ''
+    if (!isEdit.value && !form.name.trim()) form.name = selected.name.replace(/\.(ya?ml|txt)$/i, '').slice(0, 100)
+  } catch {
+    errors.file = t('admin.clash.form.validation.fileUnreadable')
+  } finally {
+    reading.value = false
+  }
+}
+
+async function onFileInput(event: Event) {
+  const input = event.target as HTMLInputElement
+  const selected = input.files?.[0]
+  // Allow picking the same file again after a failed read.
+  input.value = ''
+  if (selected) await loadFile(selected)
+}
+
+async function onFileDrop(event: DragEvent) {
+  dragActive.value = false
+  const dropped = event.dataTransfer?.files?.[0]
+  if (dropped) await loadFile(dropped)
+}
+
+async function runPreview() {
+  let source: Pick<ClashProfileInput, 'source_type' | 'url' | 'content' | 'user_agent' | 'fetch_proxy_id'>
+  if (isFileSource.value) {
+    if (!file.content) return
+    source = { source_type: 'file', content: file.content }
+  } else if (isLinksSource.value) {
+    const links = form.links.trim()
+    if (!links) return
+    source = { source_type: 'links', content: links }
+  } else {
+    const url = form.url.trim()
+    if (!url) return
+    if (!isHttpUrl(url)) {
+      errors.url = t('admin.clash.form.validation.urlInvalid')
+      return
+    }
+    source = { url, user_agent: form.userAgent.trim() || undefined, fetch_proxy_id: form.fetchProxyId ?? undefined }
   }
   previewing.value = true
   previewError.value = ''
   try {
     const excludePattern = isEdit.value || !form.useDefaultExclude ? form.excludePattern.trim() : undefined
     preview.value = await adminAPI.clash.previewProfile({
-      url,
-      user_agent: form.userAgent.trim() || undefined,
+      ...source,
       include_pattern: form.includePattern.trim() || undefined,
-      exclude_pattern: excludePattern,
-      fetch_proxy_id: form.fetchProxyId ?? undefined
+      exclude_pattern: excludePattern
     })
   } catch (error) {
     preview.value = null
@@ -559,7 +877,7 @@ async function handleSubmit() {
     if (props.profile) {
       const updated = await adminAPI.clash.updateProfile(props.profile.id, payload)
       appStore.showSuccess(t('admin.clash.form.updated'))
-      emit('saved', { profile: updated, created: false })
+      emit('saved', { profile: updated, created: false, reparse: payload.content !== undefined })
       emit('close')
     } else {
       const result = await adminAPI.clash.createProfile(payload)

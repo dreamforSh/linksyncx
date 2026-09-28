@@ -939,6 +939,15 @@ export type ClashPlatform = 'openai' | 'anthropic' | 'gemini' | 'grok'
 export type ClashPlatformCheckResult = 'pass' | 'warn' | 'fail' | 'challenge'
 export type ClashRuntimeMode = 'embedded' | 'external' | 'disabled'
 export type ClashExitChangePolicy = 'pause' | 'accept'
+/**
+ * url = 订阅链接；file = 本地上传的配置文件；links = 粘贴的节点分享链接（ss:// vmess:// 等，可以只有一个节点）。
+ * file 与 links 不定时刷新，“刷新”即重新解析已保存的内容。
+ */
+export type ClashProfileSourceType = 'url' | 'file' | 'links'
+/** 节点列表的可见性筛选：默认只列出未隐藏的节点 */
+export type ClashNodeVisibility = 'visible' | 'hidden' | 'all'
+/** 节点批量操作：隐藏会同时禁用节点，取消隐藏只恢复因隐藏而禁用的节点 */
+export type ClashNodeAction = 'enable' | 'disable' | 'hide' | 'unhide'
 
 export interface ClashProfileStats {
   total: number
@@ -948,6 +957,8 @@ export interface ClashProfileStats {
   missing: number
   invalid: number
   disabled: number
+  /** 已隐藏的节点数（不计入 total 及以上各状态）；旧版后端不返回 */
+  hidden?: number
   /** 有账号绑定的节点数 */
   bound: number
   /** 使用该订阅节点的账号数（去重，不含影子账号） */
@@ -965,7 +976,12 @@ export interface ClashProfileTraffic {
 export interface ClashProfile {
   id: number
   name: string
-  /** 订阅链接只以脱敏形式返回 */
+  /** 旧版后端不返回（视为 url） */
+  source_type?: ClashProfileSourceType
+  /** 本地文件订阅上传时的文件名与字节数 */
+  source_name?: string
+  source_size?: number
+  /** 订阅链接只以脱敏形式返回（文件订阅为空） */
   url_masked: string
   user_agent: string
   enabled: boolean
@@ -995,10 +1011,15 @@ export interface ClashProfile {
 /**
  * 新建/编辑订阅的请求体。编辑时所有字段可选：url 留空 = 不修改；fetch_proxy_id=0 = 清除；
  * 新建时不传 exclude_pattern = 使用后端默认的信息节点过滤正则。
+ * 文件订阅：source_type='file' + content（配置文件原文），编辑时不传 content = 保留已上传的文件；
+ * 订阅来源创建后不能更改。
  */
 export interface ClashProfileInput {
   name?: string
+  source_type?: ClashProfileSourceType
   url?: string
+  content?: string
+  source_name?: string
   user_agent?: string
   enabled?: boolean
   refresh_interval_minutes?: number
@@ -1103,6 +1124,8 @@ export interface ClashNode {
   server_port: number
   status: ClashNodeStatus
   status_reason: string
+  /** 已隐藏：不出现在默认列表与账号代理选择器中，并始终保持禁用；旧版后端不返回 */
+  hidden?: boolean
   missing_since: string | null
   listen_port: number
   proxy_id: number
@@ -1141,6 +1164,16 @@ export interface ClashNodeListFilters {
   bound?: boolean
   search?: string
   sort?: ClashNodeSort
+  /** 不传 = visible */
+  visibility?: ClashNodeVisibility
+}
+
+/** 批量操作结果：updated 为实际变更的节点，其余已处于目标状态或不存在 */
+export interface ClashNodeActionResult {
+  action: ClashNodeAction
+  updated: number
+  skipped: number
+  node_ids: number[]
 }
 
 /** 测延迟/探测出口的节点范围：node_ids 或 profile_id */

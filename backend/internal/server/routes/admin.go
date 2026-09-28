@@ -937,6 +937,7 @@ func registerClashRoutes(admin *gin.RouterGroup, h *handler.Handlers) {
 		clash.GET("/nodes/ids", h.Admin.Clash.ListNodeIDs)
 		clash.POST("/nodes/test-latency", h.Admin.Clash.TestNodesLatency)
 		clash.POST("/nodes/probe-exit", h.Admin.Clash.ProbeNodesExit)
+		clash.POST("/nodes/batch", h.Admin.Clash.UpdateNodes)
 		clash.POST("/nodes/:id/enable", h.Admin.Clash.EnableNode)
 		clash.POST("/nodes/:id/disable", h.Admin.Clash.DisableNode)
 		clash.POST("/nodes/:id/accept-exit", h.Admin.Clash.AcceptNodeExit)

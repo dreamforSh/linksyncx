@@ -26,10 +26,13 @@ func NewClashRepository(db *sql.DB) service.ClashRepository {
 	return &clashRepository{db: db}
 }
 
+// clashProfileColumns leaves content_encrypted out on purpose: an uploaded file
+// can be megabytes and is only read when the profile is re-parsed.
 const clashProfileColumns = `id, name, url_encrypted, url_fingerprint, url_masked, user_agent, enabled,
 	refresh_interval_minutes, include_pattern, exclude_pattern, fetch_proxy_id, notes,
 	last_refresh_at, last_refresh_status, last_refresh_error, last_format,
-	upload_bytes, download_bytes, total_bytes, expire_at, node_count, created_at, updated_at`
+	upload_bytes, download_bytes, total_bytes, expire_at, node_count, source_type, source_name, source_size,
+	created_at, updated_at`
 
 type clashRowScanner interface {
 	Scan(dest ...any) error
@@ -45,7 +48,8 @@ func scanClashProfile(row clashRowScanner) (*service.ClashProfile, error) {
 	if err := row.Scan(&p.ID, &p.Name, &p.URLEncrypted, &p.URLFingerprint, &p.URLMasked, &p.UserAgent, &p.Enabled,
 		&p.RefreshIntervalMinutes, &p.IncludePattern, &p.ExcludePattern, &fetchProxyID, &p.Notes,
 		&lastRefreshAt, &p.LastRefreshStatus, &p.LastRefreshError, &p.LastFormat,
-		&p.UploadBytes, &p.DownloadBytes, &p.TotalBytes, &expireAt, &p.NodeCount, &p.CreatedAt, &p.UpdatedAt); err != nil {
+		&p.UploadBytes, &p.DownloadBytes, &p.TotalBytes, &expireAt, &p.NodeCount, &p.SourceType, &p.SourceName, &p.SourceSize,
+		&p.CreatedAt, &p.UpdatedAt); err != nil {
 		return nil, err
 	}
 	if fetchProxyID.Valid {
@@ -66,14 +70,44 @@ func nullTimePtr(v sql.NullTime) *time.Time {
 }
 
 func (r *clashRepository) CreateProfile(ctx context.Context, p *service.ClashProfile) error {
+	sourceType := p.SourceType
+	if sourceType == "" {
+		sourceType = service.ClashProfileSourceURL
+	}
 	return r.db.QueryRowContext(ctx, `
 		INSERT INTO clash_profiles (name, url_encrypted, url_fingerprint, url_masked, user_agent, enabled,
-			refresh_interval_minutes, include_pattern, exclude_pattern, fetch_proxy_id, notes)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+			refresh_interval_minutes, include_pattern, exclude_pattern, fetch_proxy_id, notes,
+			source_type, source_name, source_size, content_encrypted)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)
 		RETURNING id, last_refresh_status, created_at, updated_at`,
 		p.Name, p.URLEncrypted, p.URLFingerprint, p.URLMasked, p.UserAgent, p.Enabled,
 		p.RefreshIntervalMinutes, p.IncludePattern, p.ExcludePattern, p.FetchProxyID, p.Notes,
+		sourceType, p.SourceName, p.SourceSize, p.ContentEncrypted,
 	).Scan(&p.ID, &p.LastRefreshStatus, &p.CreatedAt, &p.UpdatedAt)
+}
+
+func (r *clashRepository) GetProfileContent(ctx context.Context, id int64) (string, error) {
+	var content string
+	err := r.db.QueryRowContext(ctx, `SELECT content_encrypted FROM clash_profiles WHERE id = $1 AND deleted_at IS NULL`, id).Scan(&content)
+	if errors.Is(err, sql.ErrNoRows) {
+		return "", service.ErrClashProfileNotFound
+	}
+	return content, err
+}
+
+func (r *clashRepository) UpdateProfileContent(ctx context.Context, p *service.ClashProfile) error {
+	result, err := r.db.ExecContext(ctx, `
+		UPDATE clash_profiles SET content_encrypted = $2, url_fingerprint = $3, source_name = $4, source_size = $5,
+			updated_at = NOW()
+		WHERE id = $1 AND source_type IN ('file', 'links') AND deleted_at IS NULL`,
+		p.ID, p.ContentEncrypted, p.URLFingerprint, p.SourceName, p.SourceSize)
+	if err != nil {
+		return err
+	}
+	if affected, _ := result.RowsAffected(); affected == 0 {
+		return service.ErrClashProfileNotFound
+	}
+	return nil
 }
 
 func (r *clashRepository) UpdateProfile(ctx context.Context, p *service.ClashProfile) error {
@@ -122,15 +156,16 @@ func (r *clashRepository) ListProfiles(ctx context.Context) ([]service.ClashProf
 func (r *clashRepository) ListProfileStats(ctx context.Context) (map[int64]service.ClashProfileStats, error) {
 	rows, err := r.db.QueryContext(ctx, `
 		SELECT n.profile_id,
-			COUNT(*),
+			COUNT(*) FILTER (WHERE NOT n.hidden),
 			COUNT(*) FILTER (WHERE n.status = 'active'),
 			COUNT(*) FILTER (WHERE n.status = 'active' AND n.health_status = 'healthy'),
-			COUNT(*) FILTER (WHERE n.health_status = 'unhealthy'),
-			COUNT(*) FILTER (WHERE n.status = 'missing'),
-			COUNT(*) FILTER (WHERE n.status = 'invalid'),
-			COUNT(*) FILTER (WHERE n.status = 'disabled'),
+			COUNT(*) FILTER (WHERE NOT n.hidden AND n.health_status = 'unhealthy'),
+			COUNT(*) FILTER (WHERE NOT n.hidden AND n.status = 'missing'),
+			COUNT(*) FILTER (WHERE NOT n.hidden AND n.status = 'invalid'),
+			COUNT(*) FILTER (WHERE NOT n.hidden AND n.status = 'disabled'),
 			COUNT(*) FILTER (WHERE EXISTS (
-				SELECT 1 FROM accounts a WHERE a.proxy_id = n.proxy_id AND a.deleted_at IS NULL))
+				SELECT 1 FROM accounts a WHERE a.proxy_id = n.proxy_id AND a.deleted_at IS NULL)),
+			COUNT(*) FILTER (WHERE n.hidden)
 		FROM clash_nodes n
 		GROUP BY n.profile_id`)
 	if err != nil {
@@ -141,7 +176,7 @@ func (r *clashRepository) ListProfileStats(ctx context.Context) (map[int64]servi
 	for rows.Next() {
 		var id int64
 		var s service.ClashProfileStats
-		if err := rows.Scan(&id, &s.Total, &s.Active, &s.Healthy, &s.Unhealthy, &s.Missing, &s.Invalid, &s.Disabled, &s.Bound); err != nil {
+		if err := rows.Scan(&id, &s.Total, &s.Active, &s.Healthy, &s.Unhealthy, &s.Missing, &s.Invalid, &s.Disabled, &s.Bound, &s.Hidden); err != nil {
 			return nil, err
 		}
 		out[id] = s
@@ -172,7 +207,8 @@ func (r *clashRepository) ListProfileStats(ctx context.Context) (map[int64]servi
 }
 
 func (r *clashRepository) SoftDeleteProfile(ctx context.Context, id int64) error {
-	result, err := r.db.ExecContext(ctx, `UPDATE clash_profiles SET deleted_at = NOW(), updated_at = NOW() WHERE id = $1 AND deleted_at IS NULL`, id)
+	// A deleted subscription is never parsed again, so an uploaded file is dropped with it.
+	result, err := r.db.ExecContext(ctx, `UPDATE clash_profiles SET deleted_at = NOW(), content_encrypted = '', updated_at = NOW() WHERE id = $1 AND deleted_at IS NULL`, id)
 	if err != nil {
 		return err
 	}
@@ -238,7 +274,7 @@ const clashNodeColumns = `n.id, n.profile_id, n.name, n.type, n.server, n.server
 	n.status, n.status_reason, n.missing_since, n.listen_port, n.proxy_id, n.health_status, n.latency_ms,
 	n.consecutive_failures, n.consecutive_successes, n.last_checked_at, n.last_check_error,
 	n.exit_ip, n.exit_country, n.exit_country_code, n.exit_region, n.exit_city, n.exit_status,
-	n.exit_checked_at, n.exit_pending_ip, n.exit_changed_at, n.platform_checks, n.created_at, n.updated_at`
+	n.exit_checked_at, n.exit_pending_ip, n.exit_changed_at, n.platform_checks, n.created_at, n.updated_at, n.hidden`
 
 func scanClashNode(row clashRowScanner, extra ...any) (*service.ClashNode, error) {
 	var (
@@ -255,7 +291,7 @@ func scanClashNode(row clashRowScanner, extra ...any) (*service.ClashNode, error
 		&n.Status, &n.StatusReason, &missingSince, &n.ListenPort, &n.ProxyID, &n.HealthStatus, &latency,
 		&n.ConsecutiveFailures, &n.ConsecutiveSuccesses, &lastCheckedAt, &n.LastCheckError,
 		&n.ExitIP, &n.ExitCountry, &n.ExitCountryCode, &n.ExitRegion, &n.ExitCity, &n.ExitStatus,
-		&exitCheckedAt, &n.ExitPendingIP, &exitChangedAt, &platformRaw, &n.CreatedAt, &n.UpdatedAt}
+		&exitCheckedAt, &n.ExitPendingIP, &exitChangedAt, &platformRaw, &n.CreatedAt, &n.UpdatedAt, &n.Hidden}
 	dest = append(dest, extra...)
 	if err := row.Scan(dest...); err != nil {
 		return nil, err
@@ -387,6 +423,13 @@ func clashNodeWhere(filter service.ClashNodeFilter) (string, []any) {
 	}
 	if filter.LiveOnly {
 		conds = append(conds, "n.status = 'active' AND p.enabled AND p.deleted_at IS NULL")
+	}
+	switch filter.Visibility {
+	case service.ClashNodeVisibilityAll:
+	case service.ClashNodeVisibilityHidden:
+		conds = append(conds, "n.hidden")
+	default:
+		conds = append(conds, "NOT n.hidden")
 	}
 	if search := strings.TrimSpace(filter.Search); search != "" {
 		args = append(args, "%"+escapeLike(search)+"%")
@@ -770,6 +813,70 @@ func (r *clashRepository) SetNodeStatus(ctx context.Context, nodeID int64, statu
 		return service.ErrClashNodeNotFound
 	}
 	return nil
+}
+
+func (r *clashRepository) SetNodesEnabled(ctx context.Context, nodeIDs []int64, enabled bool) ([]int64, error) {
+	if len(nodeIDs) == 0 {
+		return []int64{}, nil
+	}
+	query := `
+		UPDATE clash_nodes SET status = 'disabled', status_reason = $2, updated_at = NOW()
+		WHERE id = ANY($1) AND status = 'active'
+		RETURNING id`
+	args := []any{pq.Array(nodeIDs), service.ClashNodeReasonDisabledByAdmin}
+	if enabled {
+		// Enabling a hidden node also brings it back into view.
+		query = `
+		UPDATE clash_nodes SET status = 'active', status_reason = '', hidden = FALSE, updated_at = NOW()
+		WHERE id = ANY($1) AND status = 'disabled'
+		RETURNING id`
+		args = args[:1]
+	}
+	return r.updateNodeIDs(ctx, query, args...)
+}
+
+func (r *clashRepository) SetNodesHidden(ctx context.Context, nodeIDs []int64, hidden bool) ([]int64, error) {
+	if len(nodeIDs) == 0 {
+		return []int64{}, nil
+	}
+	// Every SET expression sees the row before the update, so the CASEs below
+	// test the old status. Hiding takes live nodes offline; nodes that were
+	// already disabled, missing or invalid keep their status. Unhiding only
+	// revives nodes that hiding disabled.
+	query := `
+		UPDATE clash_nodes SET hidden = TRUE,
+			status = CASE WHEN status = 'active' THEN 'disabled' ELSE status END,
+			status_reason = CASE WHEN status = 'active' THEN $2 ELSE status_reason END,
+			updated_at = NOW()
+		WHERE id = ANY($1) AND NOT hidden
+		RETURNING id`
+	if !hidden {
+		query = `
+		UPDATE clash_nodes SET hidden = FALSE,
+			status = CASE WHEN status = 'disabled' AND status_reason = $2 THEN 'active' ELSE status END,
+			status_reason = CASE WHEN status = 'disabled' AND status_reason = $2 THEN '' ELSE status_reason END,
+			updated_at = NOW()
+		WHERE id = ANY($1) AND hidden
+		RETURNING id`
+	}
+	return r.updateNodeIDs(ctx, query, pq.Array(nodeIDs), service.ClashNodeReasonHiddenByAdmin)
+}
+
+func (r *clashRepository) updateNodeIDs(ctx context.Context, query string, args ...any) ([]int64, error) {
+	rows, err := r.db.QueryContext(ctx, query, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = rows.Close() }()
+	changed := make([]int64, 0)
+	for rows.Next() {
+		var id int64
+		if err := rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		changed = append(changed, id)
+	}
+	return changed, rows.Err()
 }
 
 func (r *clashRepository) MarkProfileNodes(ctx context.Context, profileID int64, status, reason string) error {

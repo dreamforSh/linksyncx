@@ -42,6 +42,30 @@ const (
 	ClashRefreshSkipped = "skipped"
 )
 
+// Clash subscription sources: a subscription URL fetched on a schedule, or
+// local content re-parsed on demand: an uploaded configuration file or pasted
+// node share links (ss://, vmess://, trojan://, ...).
+const (
+	ClashProfileSourceURL   = "url"
+	ClashProfileSourceFile  = "file"
+	ClashProfileSourceLinks = "links"
+)
+
+// Admin-driven node status reasons.
+const (
+	ClashNodeReasonDisabledByAdmin = "disabled by admin"
+	// ClashNodeReasonHiddenByAdmin marks nodes disabled by hiding them; only
+	// those come back online when they are unhidden.
+	ClashNodeReasonHiddenByAdmin = "hidden by admin"
+)
+
+// Node list visibility filters ("" behaves like visible).
+const (
+	ClashNodeVisibilityVisible = "visible"
+	ClashNodeVisibilityHidden  = "hidden"
+	ClashNodeVisibilityAll     = "all"
+)
+
 // ClashPauseReasonPrefix marks temp-unschedulable reasons owned by the Clash
 // pool. Only reasons carrying this prefix are cleared automatically.
 const ClashPauseReasonPrefix = "[clash-exit]"
@@ -96,8 +120,22 @@ type ClashProfile struct {
 	TotalBytes             int64
 	ExpireAt               *time.Time
 	NodeCount              int
-	CreatedAt              time.Time
-	UpdatedAt              time.Time
+	// SourceType is url, file or links. Local sources (file, links) have no
+	// URL: URLFingerprint is a digest of the stored content.
+	SourceType string
+	SourceName string
+	SourceSize int64
+	// ContentEncrypted carries local content (a file or pasted links) on create
+	// only; listings never load it (see ClashRepository.GetProfileContent).
+	ContentEncrypted string
+	CreatedAt        time.Time
+	UpdatedAt        time.Time
+}
+
+// IsLocalSource reports whether the profile keeps its content (an uploaded
+// file or pasted node links) instead of fetching a subscription URL.
+func (p *ClashProfile) IsLocalSource() bool {
+	return p != nil && isLocalClashSource(p.SourceType)
 }
 
 // ClashProfileStats aggregates node states per profile.
@@ -113,6 +151,8 @@ type ClashProfileStats struct {
 	Bound int
 	// BoundAccounts counts distinct non-shadow accounts using the profile's nodes.
 	BoundAccounts int
+	// Hidden counts hidden nodes; every other count leaves them out (except Bound).
+	Hidden int
 }
 
 // ClashPlatformChecks stores AI platform reachability observed through an exit.
@@ -154,6 +194,9 @@ type ClashNode struct {
 	PlatformChecks       ClashPlatformChecks
 	CreatedAt            time.Time
 	UpdatedAt            time.Time
+	// Hidden nodes are left out of the default node list and the account proxy
+	// selector, and always stay disabled until they are unhidden.
+	Hidden bool
 }
 
 // ClashBoundAccount is an account bound to a node's managed proxy.
@@ -193,6 +236,8 @@ func (v *ClashNodeView) unavailableReason() string {
 		return "subscription disabled"
 	case v.Status == ClashNodeStatusMissing:
 		return "node removed from subscription"
+	case v.Status == ClashNodeStatusDisabled && v.Hidden:
+		return "node hidden"
 	case v.Status == ClashNodeStatusDisabled:
 		return "node disabled"
 	case v.Status == ClashNodeStatusInvalid:
@@ -231,6 +276,9 @@ type ClashNodeFilter struct {
 	LiveOnly bool
 	// Sort is one of the ClashNodeSort* orders ("" = profile, then id).
 	Sort string
+	// Visibility is one of the ClashNodeVisibility* filters; "" lists visible
+	// (not hidden) nodes only.
+	Visibility string
 	// TrafficDate is the bucket day for ClashNodeSortTrafficToday.
 	TrafficDate string
 }
@@ -360,6 +408,11 @@ type ClashRepository interface {
 	RecordRefresh(ctx context.Context, profileID int64, record ClashRefreshRecord) error
 	ExistsProfileName(ctx context.Context, name string, excludeID int64) (bool, error)
 	ExistsProfileURL(ctx context.Context, fingerprint string, excludeID int64) (bool, error)
+	// GetProfileContent returns the encrypted file of a file-source profile.
+	GetProfileContent(ctx context.Context, id int64) (string, error)
+	// UpdateProfileContent replaces the file (content, digest, name and size)
+	// of a file-source profile.
+	UpdateProfileContent(ctx context.Context, profile *ClashProfile) error
 
 	ListNodesByProfile(ctx context.Context, profileID int64) ([]ClashNode, error)
 	ListNodeViews(ctx context.Context, filter ClashNodeFilter, params pagination.PaginationParams) ([]ClashNodeView, *pagination.PaginationResult, error)
@@ -372,6 +425,13 @@ type ClashRepository interface {
 	// transaction, allocating listener ports and managed proxies for inserts.
 	ApplyNodeSync(ctx context.Context, profileID int64, plan *ClashNodeSyncPlan, ports ClashPortRange, proxy ClashManagedProxySpecFactory) (*ClashNodeSyncResult, error)
 	SetNodeStatus(ctx context.Context, nodeID int64, status, reason string) error
+	// SetNodesEnabled disables active nodes, or enables disabled ones (which
+	// also unhides them), returning the nodes that changed.
+	SetNodesEnabled(ctx context.Context, nodeIDs []int64, enabled bool) ([]int64, error)
+	// SetNodesHidden hides nodes (active ones become disabled) or unhides them
+	// (nodes disabled by hiding become active again), returning the nodes that
+	// changed.
+	SetNodesHidden(ctx context.Context, nodeIDs []int64, hidden bool) ([]int64, error)
 	MarkProfileNodes(ctx context.Context, profileID int64, status, reason string) error
 	UpdateNodeHealth(ctx context.Context, updates []ClashNodeHealthUpdate) error
 	UpdateNodeExit(ctx context.Context, update ClashNodeExitUpdate) error

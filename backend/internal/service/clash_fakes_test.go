@@ -118,6 +118,9 @@ func (r *fakeClashRepo) CreateProfile(_ context.Context, p *ClashProfile) error 
 	p.LastRefreshStatus = ClashRefreshNever
 	p.CreatedAt, p.UpdatedAt = time.Now(), time.Now()
 	clone := *p
+	if clone.SourceType == "" {
+		clone.SourceType = ClashProfileSourceURL
+	}
 	r.profiles[p.ID] = &clone
 	return nil
 }
@@ -125,11 +128,37 @@ func (r *fakeClashRepo) CreateProfile(_ context.Context, p *ClashProfile) error 
 func (r *fakeClashRepo) UpdateProfile(_ context.Context, p *ClashProfile) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	if _, ok := r.profiles[p.ID]; !ok || r.deleted[p.ID] {
+	stored, ok := r.profiles[p.ID]
+	if !ok || r.deleted[p.ID] {
 		return ErrClashProfileNotFound
 	}
 	clone := *p
+	// Like the SQL update, the source and the stored file never change here.
+	clone.SourceType, clone.SourceName, clone.SourceSize = stored.SourceType, stored.SourceName, stored.SourceSize
+	clone.ContentEncrypted = stored.ContentEncrypted
 	r.profiles[p.ID] = &clone
+	return nil
+}
+
+func (r *fakeClashRepo) GetProfileContent(_ context.Context, id int64) (string, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	p, ok := r.profiles[id]
+	if !ok || r.deleted[id] {
+		return "", ErrClashProfileNotFound
+	}
+	return p.ContentEncrypted, nil
+}
+
+func (r *fakeClashRepo) UpdateProfileContent(_ context.Context, p *ClashProfile) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	stored, ok := r.profiles[p.ID]
+	if !ok || r.deleted[p.ID] || !isLocalClashSource(stored.SourceType) {
+		return ErrClashProfileNotFound
+	}
+	stored.ContentEncrypted, stored.URLFingerprint = p.ContentEncrypted, p.URLFingerprint
+	stored.SourceName, stored.SourceSize = p.SourceName, p.SourceSize
 	return nil
 }
 
@@ -141,6 +170,7 @@ func (r *fakeClashRepo) GetProfile(_ context.Context, id int64) (*ClashProfile, 
 		return nil, ErrClashProfileNotFound
 	}
 	clone := *p
+	clone.ContentEncrypted = "" // not selected by the SQL repository either
 	return &clone, nil
 }
 
@@ -150,7 +180,9 @@ func (r *fakeClashRepo) ListProfiles(_ context.Context) ([]ClashProfile, error) 
 	out := make([]ClashProfile, 0)
 	for id, p := range r.profiles {
 		if !r.deleted[id] {
-			out = append(out, *p)
+			clone := *p
+			clone.ContentEncrypted = ""
+			out = append(out, clone)
 		}
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].ID < out[j].ID })
@@ -163,7 +195,14 @@ func (r *fakeClashRepo) ListProfileStats(_ context.Context) (map[int64]ClashProf
 	out := map[int64]ClashProfileStats{}
 	for _, n := range r.nodes {
 		s := out[n.ProfileID]
-		s.Total++
+		if n.Hidden {
+			s.Hidden++
+		} else {
+			s.Total++
+			if n.Status == ClashNodeStatusDisabled {
+				s.Disabled++
+			}
+		}
 		if n.Status == ClashNodeStatusActive {
 			s.Active++
 		}
@@ -183,10 +222,12 @@ func (r *fakeClashRepo) ListProfileStats(_ context.Context) (map[int64]ClashProf
 func (r *fakeClashRepo) SoftDeleteProfile(_ context.Context, id int64) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	if _, ok := r.profiles[id]; !ok {
+	p, ok := r.profiles[id]
+	if !ok {
 		return ErrClashProfileNotFound
 	}
 	r.deleted[id] = true
+	p.ContentEncrypted = ""
 	return nil
 }
 
@@ -258,6 +299,17 @@ func (r *fakeClashRepo) filteredViewsLocked(filter ClashNodeFilter) []ClashNodeV
 	for _, v := range r.viewsLocked() {
 		if filter.ProfileID != nil && v.ProfileID != *filter.ProfileID {
 			continue
+		}
+		switch filter.Visibility {
+		case ClashNodeVisibilityAll:
+		case ClashNodeVisibilityHidden:
+			if !v.Hidden {
+				continue
+			}
+		default:
+			if v.Hidden {
+				continue
+			}
 		}
 		if filter.Status != "" && v.Status != filter.Status {
 			continue
@@ -464,6 +516,46 @@ func (r *fakeClashRepo) SetNodeStatus(_ context.Context, id int64, status, reaso
 	return nil
 }
 
+func (r *fakeClashRepo) SetNodesEnabled(_ context.Context, ids []int64, enabled bool) ([]int64, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	var changed []int64
+	for _, id := range ids {
+		n, ok := r.nodes[id]
+		switch {
+		case !ok:
+		case enabled && n.Status == ClashNodeStatusDisabled:
+			n.Status, n.StatusReason, n.Hidden = ClashNodeStatusActive, "", false
+			changed = append(changed, id)
+		case !enabled && n.Status == ClashNodeStatusActive:
+			n.Status, n.StatusReason = ClashNodeStatusDisabled, ClashNodeReasonDisabledByAdmin
+			changed = append(changed, id)
+		}
+	}
+	return changed, nil
+}
+
+func (r *fakeClashRepo) SetNodesHidden(_ context.Context, ids []int64, hidden bool) ([]int64, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	var changed []int64
+	for _, id := range ids {
+		n, ok := r.nodes[id]
+		if !ok || n.Hidden == hidden {
+			continue
+		}
+		n.Hidden = hidden
+		switch {
+		case hidden && n.Status == ClashNodeStatusActive:
+			n.Status, n.StatusReason = ClashNodeStatusDisabled, ClashNodeReasonHiddenByAdmin
+		case !hidden && n.Status == ClashNodeStatusDisabled && n.StatusReason == ClashNodeReasonHiddenByAdmin:
+			n.Status, n.StatusReason = ClashNodeStatusActive, ""
+		}
+		changed = append(changed, id)
+	}
+	return changed, nil
+}
+
 func (r *fakeClashRepo) MarkProfileNodes(_ context.Context, profileID int64, status, reason string) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -651,6 +743,8 @@ type fakeClashRuntime struct {
 	// conns is the connection table returned by Connections.
 	conns    []ClashConnection
 	connsErr error
+	// closed records the listeners whose connections were dropped.
+	closed []string
 }
 
 func newFakeClashRuntime() *fakeClashRuntime {
@@ -710,7 +804,10 @@ func (f *fakeClashRuntime) DelayTest(_ context.Context, name, _ string, _ time.D
 	return 42 * time.Millisecond, nil
 }
 
-func (f *fakeClashRuntime) CloseInboundConnections(context.Context, []string) (int, error) {
+func (f *fakeClashRuntime) CloseInboundConnections(_ context.Context, listeners []string) (int, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.closed = append(f.closed, listeners...)
 	return 0, nil
 }
 

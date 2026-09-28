@@ -259,3 +259,120 @@ func TestClashRepositoryTraffic(t *testing.T) {
 	require.NoError(t, integrationDB.QueryRowContext(ctx, `SELECT COUNT(*) FROM clash_node_traffic_daily WHERE node_id = $1`, us.ID).Scan(&left))
 	require.Zero(t, left)
 }
+
+func TestClashRepositoryFileSourceAndHiddenNodes(t *testing.T) {
+	ctx := context.Background()
+	repo := NewClashRepository(integrationDB)
+	suffix := time.Now().Format("150405.000000")
+
+	profile := &service.ClashProfile{
+		Name: "clash-file-" + suffix, SourceType: service.ClashProfileSourceFile, URLFingerprint: "fp-file-" + suffix,
+		UserAgent: "clash.meta", Enabled: true, SourceName: "sub.yaml", SourceSize: 12, ContentEncrypted: "enc:v1",
+	}
+	require.NoError(t, repo.CreateProfile(ctx, profile))
+	t.Cleanup(func() {
+		rows, _ := integrationDB.QueryContext(ctx, `SELECT proxy_id FROM clash_nodes WHERE profile_id = $1`, profile.ID)
+		var proxyIDs []int64
+		for rows != nil && rows.Next() {
+			var id int64
+			_ = rows.Scan(&id)
+			proxyIDs = append(proxyIDs, id)
+		}
+		if rows != nil {
+			_ = rows.Close()
+		}
+		_, _ = integrationDB.ExecContext(ctx, `DELETE FROM clash_nodes WHERE profile_id = $1`, profile.ID)
+		for _, id := range proxyIDs {
+			_, _ = integrationDB.ExecContext(ctx, `DELETE FROM proxies WHERE id = $1`, id)
+		}
+		_, _ = integrationDB.ExecContext(ctx, `DELETE FROM clash_profiles WHERE id = $1`, profile.ID)
+	})
+
+	// The file is stored apart from the listed columns.
+	got, err := repo.GetProfile(ctx, profile.ID)
+	require.NoError(t, err)
+	require.True(t, got.IsLocalSource())
+	require.Equal(t, "sub.yaml", got.SourceName)
+	require.Empty(t, got.ContentEncrypted)
+	content, err := repo.GetProfileContent(ctx, profile.ID)
+	require.NoError(t, err)
+	require.Equal(t, "enc:v1", content)
+	got.ContentEncrypted, got.URLFingerprint, got.SourceName, got.SourceSize = "enc:v2", "fp-file-v2-"+suffix, "v2.yml", 34
+	require.NoError(t, repo.UpdateProfileContent(ctx, got))
+	got.Name = "clash-file-renamed-" + suffix
+	require.NoError(t, repo.UpdateProfile(ctx, got))
+	content, err = repo.GetProfileContent(ctx, profile.ID)
+	require.NoError(t, err)
+	require.Equal(t, "enc:v2", content, "a settings update keeps the file")
+
+	// Pasted node links are stored the same way (migration 250).
+	links := &service.ClashProfile{
+		Name: "clash-links-" + suffix, SourceType: service.ClashProfileSourceLinks, URLFingerprint: "fp-links-" + suffix,
+		UserAgent: "clash.meta", Enabled: true, SourceSize: 10, ContentEncrypted: "enc:ss://a",
+	}
+	require.NoError(t, repo.CreateProfile(ctx, links))
+	t.Cleanup(func() {
+		_, _ = integrationDB.ExecContext(ctx, `DELETE FROM clash_profiles WHERE id = $1`, links.ID)
+	})
+	links.ContentEncrypted, links.URLFingerprint, links.SourceSize = "enc:ss://b", "fp-links-2-"+suffix, 10
+	require.NoError(t, repo.UpdateProfileContent(ctx, links))
+	content, err = repo.GetProfileContent(ctx, links.ID)
+	require.NoError(t, err)
+	require.Equal(t, "enc:ss://b", content)
+
+	cfg := func(name string) map[string]any {
+		return map[string]any{"name": name, "type": "trojan", "server": strings.ToLower(name) + ".example.com", "port": 443, "password": "pw"}
+	}
+	n := 0
+	_, err = repo.ApplyNodeSync(ctx, profile.ID, &service.ClashNodeSyncPlan{Inserts: []service.ClashSyncNewNode{
+		{Name: "F-A", Type: "trojan", Server: "a.example.com", ServerPort: 443, Config: cfg("F-A"), ConfigHash: "f1", Status: service.ClashNodeStatusActive, ProxyName: "Clash·f·A"},
+		{Name: "F-B", Type: "trojan", Server: "b.example.com", ServerPort: 443, Config: cfg("F-B"), ConfigHash: "f2", Status: service.ClashNodeStatusActive, ProxyName: "Clash·f·B"},
+	}}, service.ClashPortRange{Start: 62000, End: 62999}, func() service.ClashManagedProxySpec {
+		n++
+		return service.ClashManagedProxySpec{Host: "127.0.0.1", Username: fmt.Sprintf("f%d", n), Password: "p"}
+	})
+	require.NoError(t, err)
+	nodes, err := repo.ListNodesByProfile(ctx, profile.ID)
+	require.NoError(t, err)
+	a, b := nodes[0], nodes[1]
+
+	changed, err := repo.SetNodesHidden(ctx, []int64{a.ID, -1}, true)
+	require.NoError(t, err)
+	require.Equal(t, []int64{a.ID}, changed)
+	view, err := repo.GetNodeView(ctx, a.ID)
+	require.NoError(t, err)
+	require.True(t, view.Hidden)
+	require.Equal(t, service.ClashNodeStatusDisabled, view.Status)
+	require.Equal(t, service.ClashNodeReasonHiddenByAdmin, view.StatusReason)
+
+	list := func(visibility string) []int64 {
+		views, _, err := repo.ListNodeViews(ctx, service.ClashNodeFilter{ProfileID: &profile.ID, Visibility: visibility}, pagination.PaginationParams{Page: 1, PageSize: 10})
+		require.NoError(t, err)
+		ids := make([]int64, 0, len(views))
+		for _, v := range views {
+			ids = append(ids, v.ID)
+		}
+		return ids
+	}
+	require.Equal(t, []int64{b.ID}, list(service.ClashNodeVisibilityVisible))
+	require.Equal(t, []int64{a.ID}, list(service.ClashNodeVisibilityHidden))
+	require.ElementsMatch(t, []int64{a.ID, b.ID}, list(service.ClashNodeVisibilityAll))
+	stats, err := repo.ListProfileStats(ctx)
+	require.NoError(t, err)
+	require.Equal(t, 1, stats[profile.ID].Hidden)
+	require.Equal(t, 1, stats[profile.ID].Total)
+
+	changed, err = repo.SetNodesEnabled(ctx, []int64{a.ID, b.ID}, false)
+	require.NoError(t, err)
+	require.Equal(t, []int64{b.ID}, changed, "hidden nodes are already offline")
+	changed, err = repo.SetNodesHidden(ctx, []int64{a.ID}, false)
+	require.NoError(t, err)
+	require.Equal(t, []int64{a.ID}, changed)
+	view, err = repo.GetNodeView(ctx, a.ID)
+	require.NoError(t, err)
+	require.False(t, view.Hidden)
+	require.Equal(t, service.ClashNodeStatusActive, view.Status)
+	changed, err = repo.SetNodesEnabled(ctx, []int64{a.ID, b.ID}, true)
+	require.NoError(t, err)
+	require.Equal(t, []int64{b.ID}, changed)
+}

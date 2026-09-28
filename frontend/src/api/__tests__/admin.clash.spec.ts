@@ -14,6 +14,7 @@ vi.mock('@/api/client', () => ({
 import {
   CLASH_EXIT_PROBE_TIMEOUT_MS,
   CLASH_LATENCY_TIMEOUT_MS,
+  CLASH_NODE_ACTION_LIMIT,
   CLASH_NODE_BATCH_LIMIT,
   CLASH_RESYNC_TIMEOUT_MS,
   CLASH_SUBSCRIPTION_TIMEOUT_MS,
@@ -34,6 +35,7 @@ import {
   refreshProfile,
   resyncRuntime,
   testNodesLatency,
+  updateNodes,
   updateProfile,
   updateSettings
 } from '@/api/admin/clash'
@@ -73,9 +75,20 @@ describe('admin Clash API — subscriptions', () => {
     expect(CLASH_SUBSCRIPTION_TIMEOUT_MS).toBe(120_000)
   })
 
-  it('updates a profile with PUT', async () => {
+  it('updates a profile with PUT and the subscription timeout (a new file may be uploaded)', async () => {
     await updateProfile(3, { enabled: false, fetch_proxy_id: 0 })
-    expect(put).toHaveBeenCalledWith('/admin/clash/profiles/3', { enabled: false, fetch_proxy_id: 0 })
+    expect(put).toHaveBeenCalledWith('/admin/clash/profiles/3', { enabled: false, fetch_proxy_id: 0 }, {
+      timeout: CLASH_SUBSCRIPTION_TIMEOUT_MS
+    })
+  })
+
+  it('creates and previews file subscriptions with the file content', async () => {
+    const body = { name: 'F', source_type: 'file' as const, content: 'proxies: []', source_name: 'a.yaml' }
+    await createProfile(body)
+    expect(post).toHaveBeenLastCalledWith('/admin/clash/profiles', body, { timeout: CLASH_SUBSCRIPTION_TIMEOUT_MS })
+    const preview = { source_type: 'file' as const, content: 'proxies: []' }
+    await previewProfile(preview)
+    expect(post).toHaveBeenLastCalledWith('/admin/clash/profiles/preview', preview, { timeout: CLASH_SUBSCRIPTION_TIMEOUT_MS })
   })
 
   it('deletes with and without force', async () => {
@@ -127,6 +140,42 @@ describe('admin Clash API — nodes', () => {
       params: { page: 1, page_size: 20, sort: 'traffic_today' },
       signal: undefined
     })
+  })
+
+  it('sends the visibility filter only when it is not the default', async () => {
+    await listNodes(1, 20, { visibility: 'hidden' })
+    expect(get).toHaveBeenLastCalledWith('/admin/clash/nodes', {
+      params: { page: 1, page_size: 20, visibility: 'hidden' },
+      signal: undefined
+    })
+    await listNodes(1, 20, { visibility: 'visible' })
+    expect(get).toHaveBeenLastCalledWith('/admin/clash/nodes', { params: { page: 1, page_size: 20 }, signal: undefined })
+    await listNodeIds({ visibility: 'all' })
+    expect(get).toHaveBeenLastCalledWith('/admin/clash/nodes/ids', { params: { visibility: 'all' } })
+  })
+
+  it('applies node actions in server-sized chunks and sums the results', async () => {
+    const ids = Array.from({ length: CLASH_NODE_ACTION_LIMIT + 2 }, (_, index) => index + 1)
+    post.mockImplementation(async (_url: string, body: { action: string; node_ids: number[] }) => ({
+      data: { action: body.action, updated: body.node_ids.length - 1, skipped: 1, node_ids: body.node_ids.slice(1) }
+    }))
+
+    const result = await updateNodes('hide', ids)
+
+    expect(post).toHaveBeenCalledTimes(2)
+    expect(post).toHaveBeenNthCalledWith(1, '/admin/clash/nodes/batch', { action: 'hide', node_ids: ids.slice(0, CLASH_NODE_ACTION_LIMIT) })
+    expect(post).toHaveBeenNthCalledWith(2, '/admin/clash/nodes/batch', { action: 'hide', node_ids: ids.slice(CLASH_NODE_ACTION_LIMIT) })
+    expect(result).toEqual({
+      action: 'hide',
+      updated: ids.length - 2,
+      skipped: 2,
+      node_ids: [...ids.slice(1, CLASH_NODE_ACTION_LIMIT), ...ids.slice(CLASH_NODE_ACTION_LIMIT + 1)]
+    })
+    expect(clashAPI.updateNodes).toBe(updateNodes)
+
+    post.mockClear()
+    await expect(updateNodes('unhide', [])).resolves.toEqual({ action: 'unhide', updated: 0, skipped: 0, node_ids: [] })
+    expect(post).not.toHaveBeenCalled()
   })
 
   it('lists the ids of every filtered node for batch tests', async () => {

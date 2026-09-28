@@ -13,6 +13,7 @@ vi.mock('vue-i18n', () => ({
 enableAutoUnmount(afterEach)
 beforeEach(() => {
   vi.clearAllMocks()
+  localStorage.clear()
 })
 
 const manualProxy = (id: number): Proxy => ({
@@ -58,14 +59,21 @@ const list = (exits: ClashExitOption[], overrides: Partial<ClashExitList> = {}):
   ...overrides
 })
 
+// The dropdown is teleported to <body>; render it in place so the wrapper can query it.
+const stubs = { Icon: true, CountryFlag: true, teleport: true }
+
 async function openSelector(props: Record<string, unknown>) {
   const wrapper = mount(ProxySelector, {
     props: { modelValue: null, proxies: [manualProxy(1)], ...props },
-    global: { stubs: { Icon: true, CountryFlag: true } }
+    global: { stubs }
   })
   await wrapper.get('.select-trigger').trigger('click')
   return wrapper
 }
+
+/** Blocked exits are folded into a collapsed section at the bottom. */
+const expandUnavailable = (wrapper: Awaited<ReturnType<typeof openSelector>>) =>
+  wrapper.get('[data-testid="clash-exit-unavailable-toggle"]').trigger('click')
 
 const optionFor = (wrapper: Awaited<ReturnType<typeof openSelector>>, proxyId: number) =>
   wrapper.get(`[data-testid="clash-exit-${proxyId}"]`)
@@ -92,7 +100,8 @@ describe('ProxySelector — Clash exits', () => {
       expect.stringContaining('Airport A'),
       expect.stringContaining('Backup B')
     ])
-    const html = wrapper.html()
+    // The option list only: the subscription filter above it also names the subscriptions.
+    const html = wrapper.get('[role="listbox"]').html()
     expect(html.indexOf('Proxy 1')).toBeLessThan(html.indexOf('HK 01'))
     expect(html.indexOf('HK 02')).toBeLessThan(html.indexOf('Backup B'))
     // Clash exits are never connectivity-tested from the selector.
@@ -107,6 +116,7 @@ describe('ProxySelector — Clash exits', () => {
     const own = exit({ proxy_id: 304, occupants: [{ id: 7, name: 'this-account', platform: 'openai', is_shadow: false }] })
     const free = exit({ proxy_id: 305 })
     const wrapper = await openSelector({ clashExits: list([full, down, unprobed, own, free]), accountId: 7 })
+    await expandUnavailable(wrapper)
 
     expect(optionFor(wrapper, 301).attributes('aria-disabled')).toBe('true')
     expect(optionFor(wrapper, 301).get('[data-testid="clash-exit-occupancy"]').text()).toContain('other-account')
@@ -135,6 +145,7 @@ describe('ProxySelector — Clash exits', () => {
       occupants: [{ id: 98, name: 'someone', platform: 'openai', is_shadow: false }]
     })
     const wrapper = await openSelector({ clashExits: list([both]) })
+    await expandUnavailable(wrapper)
     const option = optionFor(wrapper, 306)
     expect(option.attributes('aria-disabled')).toBe('true')
     expect(option.get('[data-testid="clash-exit-block-reason"]').text()).toBe('admin.clash.reasons.healthFailing')
@@ -240,7 +251,7 @@ describe('ProxySelector — Clash exits', () => {
     const proxies = [1, 2, 3, 4, 5, 6].map(manualProxy)
     const wrapper = mount(ProxySelector, {
       props: { modelValue: null, proxies, clashExits: list([exit({ proxy_id: 381 })]) },
-      global: { stubs: { Icon: true, CountryFlag: true } }
+      global: { stubs }
     })
     await wrapper.get('.select-trigger').trigger('click')
     await wrapper.get('.batch-test-btn').trigger('click')

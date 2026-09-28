@@ -20,6 +20,16 @@
         <div class="flex items-center gap-1.5">
           <h3 class="truncate text-sm font-semibold text-gray-900 dark:text-white" :title="node.name">{{ node.name }}</h3>
           <span :class="CLASH_TYPE_BADGE_CLASS">{{ node.type }}</span>
+          <span
+            v-if="node.hidden"
+            :class="CLASH_HIDDEN_BADGE_CLASS"
+            role="img"
+            :aria-label="t('admin.clash.nodes.hiddenTag')"
+            :title="t('admin.clash.nodes.hiddenHint')"
+            data-testid="clash-node-hidden-badge"
+          >
+            <Icon name="eyeOff" size="xs" />
+          </span>
         </div>
         <p class="mt-0.5 truncate text-xs text-gray-500 dark:text-dark-400" :title="`${node.profile_name} · ${node.server}:${node.server_port}`">
           {{ node.profile_name }}<span v-if="node.listen_port"> · {{ t('admin.clash.nodes.listenPort', { port: node.listen_port }) }}</span>
@@ -163,29 +173,54 @@
           <Icon name="globe" size="sm" />
         </button>
         <button
-          v-if="node.status === 'disabled'"
+          v-if="node.hidden"
           type="button"
           class="row-action px-1.5 hover:!bg-emerald-50 hover:!text-emerald-700 disabled:cursor-not-allowed disabled:opacity-50 dark:hover:!bg-emerald-500/10 dark:hover:!text-emerald-300"
           :disabled="busy"
-          :title="t('admin.clash.actions.enable')"
-          :aria-label="t('admin.clash.actions.enable')"
-          data-testid="clash-node-enable"
-          @click="emit('enable')"
+          :title="t('admin.clash.actions.unhide')"
+          :aria-label="t('admin.clash.actions.unhide')"
+          data-testid="clash-node-unhide"
+          @click="emit('unhide')"
         >
-          <Icon name="checkCircle" size="sm" />
+          <Icon name="eye" size="sm" />
         </button>
-        <button
-          v-else-if="node.status === 'active'"
-          type="button"
-          class="row-action px-1.5 hover:!bg-amber-50 hover:!text-amber-700 disabled:cursor-not-allowed disabled:opacity-50 dark:hover:!bg-amber-500/10 dark:hover:!text-amber-300"
-          :disabled="busy"
-          :title="t('admin.clash.actions.disable')"
-          :aria-label="t('admin.clash.actions.disable')"
-          data-testid="clash-node-disable"
-          @click="emit('disable')"
-        >
-          <Icon name="ban" size="sm" />
-        </button>
+        <template v-else>
+          <button
+            v-if="node.status === 'disabled'"
+            type="button"
+            class="row-action px-1.5 hover:!bg-emerald-50 hover:!text-emerald-700 disabled:cursor-not-allowed disabled:opacity-50 dark:hover:!bg-emerald-500/10 dark:hover:!text-emerald-300"
+            :disabled="busy"
+            :title="t('admin.clash.actions.enable')"
+            :aria-label="t('admin.clash.actions.enable')"
+            data-testid="clash-node-enable"
+            @click="emit('enable')"
+          >
+            <Icon name="checkCircle" size="sm" />
+          </button>
+          <button
+            v-else-if="node.status === 'active'"
+            type="button"
+            class="row-action px-1.5 hover:!bg-amber-50 hover:!text-amber-700 disabled:cursor-not-allowed disabled:opacity-50 dark:hover:!bg-amber-500/10 dark:hover:!text-amber-300"
+            :disabled="busy"
+            :title="t('admin.clash.actions.disable')"
+            :aria-label="t('admin.clash.actions.disable')"
+            data-testid="clash-node-disable"
+            @click="emit('disable')"
+          >
+            <Icon name="ban" size="sm" />
+          </button>
+          <button
+            type="button"
+            class="row-action px-1.5 disabled:cursor-not-allowed disabled:opacity-50"
+            :disabled="busy"
+            :title="t('admin.clash.actions.hide')"
+            :aria-label="t('admin.clash.actions.hide')"
+            data-testid="clash-node-hide"
+            @click="emit('hide')"
+          >
+            <Icon name="eyeOff" size="sm" />
+          </button>
+        </template>
       </div>
     </div>
   </article>
@@ -210,6 +245,7 @@ import { formatDateTime } from '@/utils/format'
 import {
   CLASH_CHECK_PLATFORMS,
   CLASH_PLATFORM_LABELS,
+  CLASH_HIDDEN_BADGE_CLASS,
   CLASH_TYPE_BADGE_CLASS,
   useClashNodeDisplay
 } from './useClashNodeDisplay'
@@ -232,6 +268,8 @@ const emit = defineEmits<{
   (e: 'probe-exit'): void
   (e: 'enable'): void
   (e: 'disable'): void
+  (e: 'hide'): void
+  (e: 'unhide'): void
   (e: 'accept-exit'): void
   (e: 'bindings'): void
 }>()

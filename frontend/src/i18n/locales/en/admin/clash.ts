@@ -22,7 +22,10 @@ export default {
       fullCheck: 'Full check',
       batchTest: 'Batch test',
       stop: 'Stop',
-      unbind: 'Unbind'
+      unbind: 'Unbind',
+      hide: 'Hide',
+      unhide: 'Unhide',
+      reparse: 'Re-parse'
     },
     disabledBanner: {
       title: 'Clash pool is disabled',
@@ -112,7 +115,8 @@ export default {
       loopbackServer: 'Node server is a loopback or link-local address',
       privateServer: 'Node server is a private network address (can be allowed in the config)',
       exitIsServer: 'Exit IP equals this server\'s own IP; no isolation',
-      listenerUnavailable: 'Listener port unavailable: {detail}'
+      listenerUnavailable: 'Listener port unavailable: {detail}',
+      nodeHidden: 'Hidden by an admin'
     },
     profiles: {
       title: 'Subscriptions',
@@ -121,6 +125,11 @@ export default {
       healthyCount: '{count} healthy',
       unhealthyCount: '{count} unhealthy',
       missingCount: '{count} missing',
+      hiddenCount: '{count} hidden',
+      fileSource: 'Local file',
+      fileTitle: 'Uploaded configuration file: {name} ({size}). It is never refreshed automatically; "Re-parse" reads the stored file again with the current rules.',
+      linksSource: 'Node links',
+      linksTitle: 'Imported node share links. Never refreshed automatically; "Re-parse" reads the stored links again with the current rules.',
       boundHint: 'Accounts using this subscription\'s nodes (shadows excluded)',
       boundCount: '{count} account(s)',
       measuredValue: 'Here: {today} today · {total} total',
@@ -187,8 +196,26 @@ export default {
       enabled: 'Enabled',
       enabledHint: 'Disabled subscriptions stop serving and pause bound accounts',
       url: 'Subscription URL',
-      urlHint: 'Clash YAML, Base64 and URI lists are supported. The URL is stored encrypted and only shown masked afterwards.',
+      urlHint: 'Clash YAML, Base64 and URI lists are supported. The URL is stored encrypted and only shown masked afterwards. Share links of single nodes (ss:// and the like) go under "Node links".',
       urlKeepHint: 'Current: {masked}. Leave empty to keep it.',
+      source: 'Source',
+      sourceUrl: 'Subscription URL',
+      sourceFile: 'Local file',
+      sourceLinks: 'Node links',
+      file: 'Configuration file',
+      fileDrop: 'Drop a Clash configuration file here, or',
+      filePick: 'Choose file',
+      fileReplace: 'Choose another',
+      fileReading: 'Reading...',
+      fileHint: 'Clash YAML, Base64 and URI lists are supported (.yaml / .yml / .txt). The file is stored encrypted. Local files are never refreshed automatically; upload the file again to update it.',
+      fileKeepHint: 'Current file: {name} ({size}). Choose no file to keep it; a new file is parsed right after saving.',
+      links: 'Node links',
+      linksPlaceholder: 'One node share link per line, e.g.\nss://…#Hong Kong 01\nvmess://…\ntrojan://…#Japan 02',
+      linksHint: 'Share links of ss, ssr, vmess, vless, trojan, hysteria, hysteria2, tuic, anytls, socks5 and more, one per line (a whole Base64 block works too). Stored encrypted and never refreshed automatically.',
+      linksKeepHint: '{count} node(s) now. Leave empty to keep the stored links; new links replace all of them and are parsed right after saving.',
+      linksDetected: 'Recognized a node share link and switched to "Node links"',
+      linksNameMany: '{name} and others ({count} nodes)',
+      useLinks: 'Use as node links',
       userAgent: 'User-Agent',
       userAgentPlaceholder: 'Empty uses the pool default',
       interval: 'Auto refresh',
@@ -208,19 +235,34 @@ export default {
       notesPlaceholder: 'Optional',
       submitCreate: 'Add and fetch',
       creating: 'Fetching subscription...',
+      submitCreateFile: 'Add and parse',
+      creatingFile: 'Parsing file...',
+      creatingLinks: 'Parsing nodes...',
       updated: 'Subscription saved',
       saveFailed: 'Failed to save the subscription',
       validation: {
         nameRequired: 'Please enter a name',
         urlRequired: 'Please enter the subscription URL',
         urlInvalid: 'The subscription URL must start with http:// or https://',
-        intervalRange: 'The refresh interval must be between {min} and {max} minutes'
+        intervalRange: 'The refresh interval must be between {min} and {max} minutes',
+        fileRequired: 'Please choose a configuration file to upload',
+        fileTooLarge: 'The file must not exceed {max}',
+        fileEmpty: 'The file is empty',
+        fileUnreadable: 'The file could not be read',
+        linksRequired: 'Paste at least one node link',
+        linksTooLarge: 'The links must not exceed {max}',
+        urlIsNodeLink: 'This is a node share link, not a subscription URL',
+        urlIsNodeLinkEdit: 'This is a node share link, not a subscription URL: import it with "Add subscription" > "Node links"'
       }
     },
     preview: {
       title: 'Dry run',
       hint: 'Fetch and parse the subscription with the current settings without saving anything',
       editHint: 'Re-enter the full subscription URL (the stored URL is never sent back)',
+      fileHint: 'Parse the chosen file and preview its nodes without saving anything',
+      editFileHint: 'Choose the file again (the stored file is never sent back)',
+      linksHint: 'Parse the pasted links and preview the nodes without saving anything',
+      editLinksHint: 'Paste the links again (stored links are never sent back)',
       running: 'Parsing...',
       failed: 'Dry run failed',
       format: 'Format',
@@ -243,6 +285,8 @@ export default {
       created: 'Subscription "{name}" added',
       notRefreshed: 'The subscription is disabled, so no nodes were fetched yet.',
       refreshOk: 'The first fetch succeeded; nodes are being loaded into the core.',
+      fileParsed: 'The file was parsed; nodes are being loaded into the core.',
+      linksParsed: 'The links were parsed; nodes are being loaded into the core.',
       refreshSkipped: 'The first fetch triggered the node drop protection.',
       refreshFailed: 'The first fetch failed. The subscription was saved and can be retried later.',
       done: 'Done'
@@ -261,7 +305,11 @@ export default {
         allHealth: 'All health',
         boundAll: 'All',
         boundOnly: 'Bound',
-        unboundOnly: 'Free'
+        unboundOnly: 'Free',
+        visibility: 'Visibility',
+        visibilityVisible: 'Visible nodes',
+        visibilityHidden: 'Hidden nodes',
+        visibilityAll: 'All nodes'
       },
       columns: {
         name: 'Node',
@@ -369,6 +417,8 @@ export default {
       pendingExit: 'New exit {ip} awaiting confirmation',
       exitStale: 'Probe failed; exit info may be outdated',
       shadowTag: 'shadow',
+      hiddenTag: 'Hidden',
+      hiddenHint: 'Hidden: left out of the default node list and the account proxy selector, and kept disabled even when the subscription refreshes',
       empty: 'No matching nodes',
       emptyHint: 'Adjust the filters or refresh a subscription to fetch nodes.',
       loadFailed: 'Failed to load nodes',
@@ -380,6 +430,30 @@ export default {
       enabledToast: 'Node enabled',
       disabledToast: 'Node disabled',
       toggleFailed: 'Failed to update the node',
+      actionDone: {
+        enable: 'Enabled {count} node(s)',
+        disable: 'Disabled {count} node(s)',
+        hide: 'Hid {count} node(s)',
+        unhide: 'Unhid {count} node(s)'
+      },
+      actionSkipped: ', {count} unchanged',
+      actionFailed: 'Node action failed',
+      actionConfirm: {
+        bound: 'These {count} account(s) use these exits and will be paused (bindings stay; rebind them in the account editor):',
+        boundOne: 'These {count} account(s) use this exit and will be paused (bindings stay; rebind them in the account editor):',
+        disable: {
+          title: 'Disable nodes',
+          titleOne: 'Disable node',
+          messageOne: 'Disabling "{name}" drops its connections immediately.',
+          messageMany: 'Disabling the {count} selected nodes drops their connections immediately.'
+        },
+        hide: {
+          title: 'Hide nodes',
+          titleOne: 'Hide node',
+          messageOne: '"{name}" will no longer appear in the node list or the account proxy selector and stays disabled (refreshes do not bring it back). Find it under "Hidden nodes" to unhide it.',
+          messageMany: 'The {count} selected nodes will no longer appear in the node list or the account proxy selector and stay disabled (refreshes do not bring them back). Find them under "Hidden nodes" to unhide them.'
+        }
+      },
       acceptSuccess: 'New exit accepted; bound accounts will resume',
       acceptFailed: 'Failed to accept the exit change',
       disableConfirm: {
@@ -487,7 +561,29 @@ export default {
       exitUnprobedBlocked: 'Exit IP not probed yet, cannot bind',
       platformWarning: 'This platform may be unreachable through this exit',
       selectedLabel: '{node} ({ip})',
-      unlistedProxy: 'Proxy #{id} (not in the list)'
+      unlistedProxy: 'Proxy #{id} (not in the list)',
+      groupCounts: '{usable} usable · {idle} free · {total} total',
+      unavailableSection: 'Unavailable ({count})',
+      unavailableHint: 'Exits that are full, down or not probed yet cannot be picked',
+      filters: {
+        label: 'Filter Clash exits',
+        onlyAvailable: 'Available only',
+        onlyIdle: 'Free only',
+        platformPass: '{platform} check passed',
+        country: 'Country/region',
+        allCountries: 'All countries/regions',
+        profile: 'Subscription',
+        allProfiles: 'All subscriptions',
+        summary: 'Showing {shown} of {total} exits',
+        clear: 'Clear filters',
+        noMatch: 'No exits match the filters'
+      },
+      sort: {
+        label: 'Sort exits',
+        default: 'Default order',
+        latency: 'Lowest latency first',
+        idle: 'Free first'
+      }
     },
     errors: {
       exitOccupied: 'This Clash exit is already used by other accounts and has reached the per-exit limit',
@@ -498,7 +594,7 @@ export default {
       bulkUnsupported: 'Bulk edit cannot set Clash exits: assign them one account at a time in the account editor, or bind accounts from a node on the Clash page',
       managedReadonly: 'This proxy is managed by a Clash subscription. Manage it on the Clash page',
       portReserved: 'This host and port range is reserved for Clash exit listeners and cannot be used by manual proxies',
-      encryptionKeyRequired: 'Saving subscription URLs requires a fixed encryption key: configure TOTP_ENCRYPTION_KEY on the server and restart',
+      encryptionKeyRequired: 'Saving subscription URLs, files or node links requires a fixed encryption key: configure TOTP_ENCRYPTION_KEY on the server and restart',
       profileInUse: 'Accounts still use exits of this subscription',
       profileInUseWithAccounts: 'Accounts still use exits of this subscription: {accounts}',
       profileInvalid: 'Invalid subscription settings: {message}',

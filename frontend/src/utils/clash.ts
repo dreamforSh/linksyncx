@@ -27,6 +27,54 @@ export function stripClashExitPauseReason(reason: string | null | undefined): st
   return (reason as string).trimStart().slice(CLASH_EXIT_PAUSE_PREFIX.length).trim()
 }
 
+/**
+ * Share-link schemes mihomo turns into nodes. http(s) is left out on purpose: in the subscription
+ * form an http(s) line is a subscription URL, not an HTTP proxy node.
+ */
+const CLASH_NODE_LINK_RE = /^(?:ss|ssr|vmess|vless|trojan|hysteria|hysteria2|hy2|tuic|anytls|mierus|socks|socks5|socks5h)(?:\+realm)?:\/\//i
+
+const nonEmptyLines = (text: string | null | undefined) =>
+  (text ?? '').split(/\r?\n/).map((line) => line.trim()).filter(Boolean)
+
+/** True when the text (e.g. pasted into the subscription URL box) starts with a node share link. */
+export function isClashNodeLinkText(text: string | null | undefined): boolean {
+  const first = nonEmptyLines(text)[0]
+  return first !== undefined && CLASH_NODE_LINK_RE.test(first)
+}
+
+function decodeBase64Text(value: string): string {
+  const normalized = value.replace(/-/g, '+').replace(/_/g, '/')
+  const binary = atob(normalized + '='.repeat((4 - (normalized.length % 4)) % 4))
+  return new TextDecoder().decode(Uint8Array.from(binary, (char) => char.charCodeAt(0)))
+}
+
+/** Name carried by a share link: its #fragment, or "ps" of a v2rayN vmess link; '' when it has none. */
+export function clashNodeLinkName(link: string): string {
+  const line = link.trim()
+  if (/^vmess:\/\//i.test(line)) {
+    try {
+      const config = JSON.parse(decodeBase64Text(line.slice('vmess://'.length).split('#')[0])) as { ps?: unknown }
+      if (typeof config.ps === 'string' && config.ps.trim()) return config.ps.trim()
+    } catch {
+      // Not the base64 JSON form: fall back to the fragment.
+    }
+  }
+  const hash = line.indexOf('#')
+  if (hash < 0) return ''
+  const fragment = line.slice(hash + 1)
+  try {
+    return decodeURIComponent(fragment).trim()
+  } catch {
+    return fragment.trim()
+  }
+}
+
+/** How many node share links the text holds and the name of the first one (to prefill a name). */
+export function summarizeClashNodeLinks(text: string | null | undefined): { count: number; firstName: string } {
+  const links = nonEmptyLines(text).filter((line) => CLASH_NODE_LINK_RE.test(line))
+  return { count: links.length, firstName: links.length > 0 ? clashNodeLinkName(links[0]) : '' }
+}
+
 type ReasonMatch = { key: string; params?: Record<string, unknown> }
 
 /**
@@ -46,6 +94,9 @@ function matchClashUnavailableReason(text: string): ReasonMatch | null {
       return { key: 'admin.clash.reasons.nodeDisabled' }
     case 'disabled by admin':
       return { key: 'admin.clash.reasons.disabledByAdmin' }
+    case 'node hidden':
+    case 'hidden by admin':
+      return { key: 'admin.clash.reasons.nodeHidden' }
     case 'health check failing':
       return { key: 'admin.clash.reasons.healthFailing' }
     case 'server is a loopback or link-local address':

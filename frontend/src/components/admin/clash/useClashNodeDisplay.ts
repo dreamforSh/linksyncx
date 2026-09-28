@@ -20,6 +20,11 @@ export const CLASH_TYPE_BADGE_CLASS =
   'inline-flex flex-shrink-0 items-center rounded px-1.5 py-px font-mono text-[10px] font-medium uppercase ' +
   'bg-gray-100 text-gray-600 dark:bg-dark-700 dark:text-dark-300'
 
+/** Marks hidden nodes (listed only by the "hidden" and "all" visibility filters). */
+export const CLASH_HIDDEN_BADGE_CLASS =
+  'inline-flex flex-shrink-0 items-center gap-0.5 rounded px-1.5 py-px text-[10px] font-medium ring-1 ring-inset ' +
+  'bg-slate-100 text-slate-600 ring-slate-400/30 dark:bg-dark-700 dark:text-dark-300 dark:ring-dark-500/40'
+
 const STATUS_PILL_BASE = 'inline-flex items-center gap-1.5 whitespace-nowrap rounded-full px-2 py-0.5 text-xs font-medium ring-1 ring-inset'
 const PLATFORM_BADGE_BASE = 'inline-flex items-center rounded px-1.5 py-px text-[11px] font-medium ring-1 ring-inset'
 

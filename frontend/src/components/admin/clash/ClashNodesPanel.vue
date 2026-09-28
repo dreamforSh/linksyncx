@@ -78,6 +78,15 @@
           @change="applyFilters"
         />
       </div>
+      <div class="w-full sm:w-36">
+        <Select
+          v-model="filters.visibility"
+          :options="visibilityOptions"
+          :aria-label="t('admin.clash.nodes.filters.visibility')"
+          data-testid="clash-nodes-visibility-filter"
+          @change="applyFilters"
+        />
+      </div>
       <div class="w-full sm:w-32">
         <Select
           v-model="filters.health"
@@ -187,6 +196,19 @@
         <Icon name="shield" size="sm" :class="runningKind === 'full' ? 'animate-pulse' : ''" />
         {{ t('admin.clash.actions.fullCheck') }}
       </button>
+      <span class="mx-0.5 hidden h-5 w-px bg-primary-200 dark:bg-primary-500/30 sm:inline-block" aria-hidden="true"></span>
+      <button
+        v-for="item in bulkActionItems"
+        :key="item.action"
+        type="button"
+        class="btn btn-secondary btn-sm"
+        :disabled="nodeActionRunning || batch.running.value"
+        :data-testid="`clash-nodes-bulk-${item.action}`"
+        @click="requestNodeAction(item.action, selectedIds)"
+      >
+        <Icon :name="item.icon" size="sm" />
+        {{ item.label }}
+      </button>
       <button
         type="button"
         class="ml-auto rounded-md px-2 py-1 text-sm font-medium text-primary-800 transition-colors hover:bg-primary-100 dark:text-primary-200 dark:hover:bg-primary-500/20"
@@ -290,6 +312,8 @@
             @probe-exit="probeOne(node)"
             @enable="setNodeEnabled(node, true)"
             @disable="pendingDisable = node"
+            @hide="requestNodeAction('hide', [node.id])"
+            @unhide="requestNodeAction('unhide', [node.id])"
             @accept-exit="pendingAccept = node"
             @bindings="openBindings(node)"
           />
@@ -314,6 +338,15 @@
           <div class="flex items-center gap-1.5">
             <span class="truncate font-medium text-gray-900 dark:text-white" :title="row.name">{{ row.name }}</span>
             <span :class="CLASH_TYPE_BADGE_CLASS">{{ row.type }}</span>
+            <span
+              v-if="row.hidden"
+              :class="CLASH_HIDDEN_BADGE_CLASS"
+              :title="t('admin.clash.nodes.hiddenHint')"
+              data-testid="clash-node-hidden-badge"
+            >
+              <Icon name="eyeOff" size="xs" />
+              {{ t('admin.clash.nodes.hiddenTag') }}
+            </span>
           </div>
           <code
             class="mt-0.5 block truncate font-mono text-xs text-gray-600 dark:text-gray-400"
@@ -465,29 +498,54 @@
             <Icon name="link" size="sm" />
           </button>
           <button
-            v-if="row.status === 'disabled'"
+            v-if="row.hidden"
             type="button"
             class="row-action px-1.5 hover:!bg-emerald-50 hover:!text-emerald-700 disabled:cursor-not-allowed disabled:opacity-50 dark:hover:!bg-emerald-500/10 dark:hover:!text-emerald-300"
-            :disabled="busyIds.has(row.id)"
-            :title="t('admin.clash.actions.enable')"
-            :aria-label="t('admin.clash.actions.enable')"
-            data-testid="clash-node-enable"
-            @click="setNodeEnabled(row, true)"
+            :disabled="busyIds.has(row.id) || nodeActionRunning"
+            :title="t('admin.clash.actions.unhide')"
+            :aria-label="t('admin.clash.actions.unhide')"
+            data-testid="clash-node-unhide"
+            @click="requestNodeAction('unhide', [row.id])"
           >
-            <Icon name="checkCircle" size="sm" />
+            <Icon name="eye" size="sm" />
           </button>
-          <button
-            v-else-if="row.status === 'active'"
-            type="button"
-            class="row-action px-1.5 hover:!bg-amber-50 hover:!text-amber-700 disabled:cursor-not-allowed disabled:opacity-50 dark:hover:!bg-amber-500/10 dark:hover:!text-amber-300"
-            :disabled="busyIds.has(row.id)"
-            :title="t('admin.clash.actions.disable')"
-            :aria-label="t('admin.clash.actions.disable')"
-            data-testid="clash-node-disable"
-            @click="pendingDisable = row"
-          >
-            <Icon name="ban" size="sm" />
-          </button>
+          <template v-else>
+            <button
+              v-if="row.status === 'disabled'"
+              type="button"
+              class="row-action px-1.5 hover:!bg-emerald-50 hover:!text-emerald-700 disabled:cursor-not-allowed disabled:opacity-50 dark:hover:!bg-emerald-500/10 dark:hover:!text-emerald-300"
+              :disabled="busyIds.has(row.id)"
+              :title="t('admin.clash.actions.enable')"
+              :aria-label="t('admin.clash.actions.enable')"
+              data-testid="clash-node-enable"
+              @click="setNodeEnabled(row, true)"
+            >
+              <Icon name="checkCircle" size="sm" />
+            </button>
+            <button
+              v-else-if="row.status === 'active'"
+              type="button"
+              class="row-action px-1.5 hover:!bg-amber-50 hover:!text-amber-700 disabled:cursor-not-allowed disabled:opacity-50 dark:hover:!bg-amber-500/10 dark:hover:!text-amber-300"
+              :disabled="busyIds.has(row.id)"
+              :title="t('admin.clash.actions.disable')"
+              :aria-label="t('admin.clash.actions.disable')"
+              data-testid="clash-node-disable"
+              @click="pendingDisable = row"
+            >
+              <Icon name="ban" size="sm" />
+            </button>
+            <button
+              type="button"
+              class="row-action px-1.5 disabled:cursor-not-allowed disabled:opacity-50"
+              :disabled="busyIds.has(row.id) || nodeActionRunning"
+              :title="t('admin.clash.actions.hide')"
+              :aria-label="t('admin.clash.actions.hide')"
+              data-testid="clash-node-hide"
+              @click="requestNodeAction('hide', [row.id])"
+            >
+              <Icon name="eyeOff" size="sm" />
+            </button>
+          </template>
         </div>
       </template>
 
@@ -523,6 +581,31 @@
         <div class="mt-2 flex flex-wrap gap-1">
           <span
             v-for="account in pendingDisable.accounts"
+            :key="account.id"
+            class="rounded bg-white/70 px-1.5 py-0.5 text-xs font-medium dark:bg-dark-800/60"
+          >{{ account.name }}</span>
+        </div>
+      </div>
+    </ConfirmDialog>
+
+    <ConfirmDialog
+      :show="pendingAction !== null"
+      :title="pendingActionTitle"
+      :message="pendingActionMessage"
+      :confirm-text="pendingAction ? nodeActionLabel(pendingAction.action) : ''"
+      danger
+      @confirm="confirmNodeAction"
+      @cancel="pendingAction = null"
+    >
+      <div
+        v-if="pendingAction && pendingAction.accounts.length > 0"
+        class="rounded-lg border border-amber-200 bg-amber-50 p-3 text-sm text-amber-800 dark:border-amber-500/30 dark:bg-amber-500/10 dark:text-amber-200"
+        data-testid="clash-node-action-bound"
+      >
+        <p>{{ t(pendingAction.ids.length === 1 ? 'admin.clash.nodes.actionConfirm.boundOne' : 'admin.clash.nodes.actionConfirm.bound', { count: pendingAction.accounts.length }) }}</p>
+        <div class="mt-2 flex flex-wrap gap-1">
+          <span
+            v-for="account in pendingAction.accounts"
             :key="account.id"
             class="rounded bg-white/70 px-1.5 py-0.5 text-xs font-medium dark:bg-dark-800/60"
           >{{ account.name }}</span>
@@ -571,13 +654,16 @@ import ClashNodeCard from './ClashNodeCard.vue'
 import ClashNodeBindingsDialog from './ClashNodeBindingsDialog.vue'
 import type { Column } from '@/components/common/types'
 import type {
+  ClashBoundAccount,
   ClashExitProbeResult,
   ClashHealthStatus,
   ClashLatencyResult,
   ClashNode,
+  ClashNodeAction,
   ClashNodeListFilters,
   ClashNodeSort,
   ClashNodeStatus,
+  ClashNodeVisibility,
   ClashProfile
 } from '@/types'
 import { getPersistedPageSize } from '@/composables/usePersistedPageSize'
@@ -596,6 +682,7 @@ import { formatDateTime, formatRelativeTime } from '@/utils/format'
 import {
   CLASH_CHECK_PLATFORMS,
   CLASH_PLATFORM_LABELS,
+  CLASH_HIDDEN_BADGE_CLASS,
   CLASH_TYPE_BADGE_CLASS,
   useClashNodeDisplay
 } from './useClashNodeDisplay'
@@ -641,6 +728,11 @@ const selectedIds = ref<number[]>([])
 const busyIds = ref(new Set<number>())
 const pendingDisable = ref<ClashNode | null>(null)
 const pendingAccept = ref<ClashNode | null>(null)
+/** Hiding and bulk disabling wait for confirmation, listing the accounts that will be paused. */
+const pendingAction = ref<{ action: ClashNodeAction; ids: number[]; name: string; accounts: ClashBoundAccount[] } | null>(null)
+const nodeActionRunning = ref(false)
+/** Nodes seen on any page, so a selection spanning pages can still name its bound accounts. */
+const knownNodes = new Map<number, ClashNode>()
 const bindingNode = ref<ClashNode | null>(null)
 const batchMenuOpen = ref(false)
 const batchMenuRef = ref<HTMLElement | null>(null)
@@ -671,7 +763,8 @@ const filters = reactive({
   status: '' as '' | ClashNodeStatus,
   health: '' as '' | ClashHealthStatus,
   bound: 'all' as BoundFilter,
-  sort: '' as ClashNodeSort
+  sort: '' as ClashNodeSort,
+  visibility: 'visible' as ClashNodeVisibility
 })
 
 const pagination = reactive({
@@ -717,6 +810,12 @@ const healthOptions = computed(() => [
   { value: 'unknown', label: t('admin.clash.health.unknown') }
 ])
 
+const visibilityOptions = computed(() => [
+  { value: 'visible', label: t('admin.clash.nodes.filters.visibilityVisible') },
+  { value: 'hidden', label: t('admin.clash.nodes.filters.visibilityHidden') },
+  { value: 'all', label: t('admin.clash.nodes.filters.visibilityAll') }
+])
+
 const boundOptions = computed(() => [
   { value: 'all' as BoundFilter, label: t('admin.clash.nodes.filters.boundAll') },
   { value: 'bound' as BoundFilter, label: t('admin.clash.nodes.filters.boundOnly') },
@@ -737,6 +836,17 @@ const batchMenuItems = computed(() => [
   { kind: 'full' as ClashBatchKind, label: t('admin.clash.actions.fullCheck'), hint: t('admin.clash.nodes.batch.fullHint') }
 ])
 
+// Hiding only applies to visible nodes and unhiding to hidden ones.
+const bulkActionItems = computed(() => {
+  const items: Array<{ action: ClashNodeAction; icon: 'checkCircle' | 'ban' | 'eyeOff' | 'eye'; label: string }> = [
+    { action: 'enable', icon: 'checkCircle', label: t('admin.clash.actions.enable') },
+    { action: 'disable', icon: 'ban', label: t('admin.clash.actions.disable') }
+  ]
+  if (filters.visibility !== 'hidden') items.push({ action: 'hide', icon: 'eyeOff', label: t('admin.clash.actions.hide') })
+  if (filters.visibility !== 'visible') items.push({ action: 'unhide', icon: 'eye', label: t('admin.clash.actions.unhide') })
+  return items
+})
+
 const selectedSet = computed(() => new Set(selectedIds.value))
 const pageFullySelected = computed(() => nodes.value.length > 0 && nodes.value.every((node) => selectedSet.value.has(node.id)))
 const pagePartiallySelected = computed(() => !pageFullySelected.value && nodes.value.some((node) => selectedSet.value.has(node.id)))
@@ -754,7 +864,8 @@ const buildFilters = (): ClashNodeListFilters => ({
   health: filters.health || undefined,
   bound: filters.bound === 'all' ? undefined : filters.bound === 'bound',
   search: filters.search.trim() || undefined,
-  sort: filters.sort || undefined
+  sort: filters.sort || undefined,
+  visibility: filters.visibility
 })
 
 let abortController: AbortController | null = null
@@ -777,6 +888,7 @@ async function load(options: { silent?: boolean } = {}) {
     })
     if (controller.signal.aborted || abortController !== controller) return
     nodes.value = Array.isArray(response?.items) ? response.items : []
+    for (const node of nodes.value) knownNodes.set(node.id, node)
     pagination.total = response?.total ?? 0
     pagination.pages = response?.pages ?? 0
     loadError.value = ''
@@ -1032,6 +1144,80 @@ async function confirmDisable() {
   const node = pendingDisable.value
   pendingDisable.value = null
   if (node) await setNodeEnabled(node, false)
+}
+
+function nodeActionLabel(action: ClashNodeAction) {
+  return t(`admin.clash.actions.${action}`)
+}
+
+/** Bound accounts that go offline with the nodes (only live nodes still carry traffic). */
+function affectedAccounts(ids: number[]): ClashBoundAccount[] {
+  const accounts = new Map<number, ClashBoundAccount>()
+  for (const id of ids) {
+    const node = knownNodes.get(id)
+    if (node?.status !== 'active') continue
+    for (const account of node.accounts) accounts.set(account.id, account)
+  }
+  return [...accounts.values()]
+}
+
+const pendingActionTitle = computed(() => {
+  const pending = pendingAction.value
+  if (!pending) return ''
+  const base = `admin.clash.nodes.actionConfirm.${pending.action}`
+  return t(pending.ids.length === 1 ? `${base}.titleOne` : `${base}.title`)
+})
+
+const pendingActionMessage = computed(() => {
+  const pending = pendingAction.value
+  if (!pending) return ''
+  const base = `admin.clash.nodes.actionConfirm.${pending.action}`
+  return pending.ids.length === 1 && pending.name
+    ? t(`${base}.messageOne`, { name: pending.name })
+    : t(`${base}.messageMany`, { count: pending.ids.length })
+})
+
+/** Enabling and unhiding run at once; hiding and disabling take nodes offline, so they ask first. */
+function requestNodeAction(action: ClashNodeAction, ids: number[]) {
+  if (ids.length === 0 || nodeActionRunning.value) return
+  if (action === 'enable' || action === 'unhide') {
+    void runNodeAction(action, ids)
+    return
+  }
+  const single = ids.length === 1 ? knownNodes.get(ids[0]) : undefined
+  pendingAction.value = { action, ids: [...ids], name: single?.name ?? '', accounts: affectedAccounts(ids) }
+}
+
+async function confirmNodeAction() {
+  const pending = pendingAction.value
+  pendingAction.value = null
+  if (pending) await runNodeAction(pending.action, pending.ids)
+}
+
+async function runNodeAction(action: ClashNodeAction, ids: number[]) {
+  nodeActionRunning.value = true
+  markBusy(ids, true)
+  try {
+    const result = await adminAPI.clash.updateNodes(action, ids)
+    let message = t(`admin.clash.nodes.actionDone.${action}`, { count: result.updated })
+    if (result.skipped > 0) message += t('admin.clash.nodes.actionSkipped', { count: result.skipped })
+    if (result.updated > 0) appStore.showSuccess(message)
+    else appStore.showInfo(message)
+    const handled = new Set(ids)
+    selectedIds.value = selectedIds.value.filter((id) => !handled.has(id))
+    await load({ silent: true })
+    // Hidden (or revealed) nodes leave the current view; do not strand the user on an empty page.
+    if (nodes.value.length === 0 && pagination.page > 1) {
+      pagination.page = Math.max(1, pagination.pages)
+      await load({ silent: true })
+    }
+    emit('changed')
+  } catch (error) {
+    appStore.showError(describeError(error, 'admin.clash.nodes.actionFailed'))
+  } finally {
+    markBusy(ids, false)
+    nodeActionRunning.value = false
+  }
 }
 
 async function confirmAcceptExit() {

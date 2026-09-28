@@ -21,7 +21,26 @@
             <span class="truncate font-medium text-gray-900 dark:text-white" :title="row.name">{{ row.name }}</span>
             <span v-if="row.last_format" class="format-badge">{{ formatLabel(row.last_format) }}</span>
           </div>
-          <div class="mt-0.5 truncate font-mono text-xs text-gray-500 dark:text-dark-400" :title="row.url_masked">
+          <div
+            v-if="row.source_type === 'file'"
+            class="mt-0.5 flex items-center gap-1 text-xs text-gray-500 dark:text-dark-400"
+            :title="t('admin.clash.profiles.fileTitle', { name: row.source_name || '-', size: formatBytes(row.source_size ?? 0, 1) })"
+            data-testid="clash-profile-file-source"
+          >
+            <Icon name="document" size="xs" class="flex-shrink-0" />
+            <span class="flex-shrink-0">{{ t('admin.clash.profiles.fileSource') }}</span>
+            <span v-if="row.source_name" class="truncate font-mono">· {{ row.source_name }}</span>
+          </div>
+          <div
+            v-else-if="row.source_type === 'links'"
+            class="mt-0.5 flex items-center gap-1 text-xs text-gray-500 dark:text-dark-400"
+            :title="t('admin.clash.profiles.linksTitle')"
+            data-testid="clash-profile-links-source"
+          >
+            <Icon name="server" size="xs" class="flex-shrink-0" />
+            <span>{{ t('admin.clash.profiles.linksSource') }}</span>
+          </div>
+          <div v-else class="mt-0.5 truncate font-mono text-xs text-gray-500 dark:text-dark-400" :title="row.url_masked">
             {{ row.url_masked }}
           </div>
           <div v-if="row.notes" class="mt-0.5 truncate text-xs text-gray-400 dark:text-dark-500" :title="row.notes">
@@ -46,6 +65,14 @@
             </span>
             <span v-if="row.stats.missing > 0" class="text-gray-400 dark:text-dark-500">
               {{ t('admin.clash.profiles.missingCount', { count: row.stats.missing }) }}
+            </span>
+            <span
+              v-if="(row.stats.hidden ?? 0) > 0"
+              class="inline-flex items-center gap-0.5 text-gray-400 dark:text-dark-500"
+              data-testid="clash-profile-hidden"
+            >
+              <Icon name="eyeOff" size="xs" />
+              {{ t('admin.clash.profiles.hiddenCount', { count: row.stats.hidden }) }}
             </span>
           </div>
           <div
@@ -143,8 +170,8 @@
             type="button"
             class="row-action px-1.5 disabled:cursor-not-allowed disabled:opacity-50"
             :disabled="readonly || refreshingIds.has(row.id)"
-            :title="t('admin.clash.actions.refreshNow')"
-            :aria-label="t('admin.clash.actions.refreshNow')"
+            :title="refreshTitle(row)"
+            :aria-label="refreshTitle(row)"
             data-testid="clash-profile-refresh"
             @click="$emit('refresh', row)"
           >
@@ -335,6 +362,12 @@ const refreshDotClass = (status: ClashRefreshStatus) => {
       return 'bg-gray-400'
   }
 }
+
+// Uploaded files and pasted links have nothing to fetch: refreshing re-parses what is stored.
+const refreshTitle = (profile: ClashProfile) =>
+  profile.source_type === 'file' || profile.source_type === 'links'
+    ? t('admin.clash.actions.reparse')
+    : t('admin.clash.actions.refreshNow')
 
 const intervalLabel = (minutes: number) => {
   if (!minutes) return t('admin.clash.interval.manual')

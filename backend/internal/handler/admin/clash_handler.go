@@ -25,8 +25,14 @@ func NewClashHandler(svc *service.ClashService, manager *service.ClashManager, s
 }
 
 type clashProfileRequest struct {
-	Name                   *string `json:"name" binding:"omitempty,max=100"`
+	Name *string `json:"name" binding:"omitempty,max=100"`
+	// SourceType is url (default), file or links; file and links profiles
+	// carry the uploaded file or the pasted share links in Content
+	// (size-checked by the service).
+	SourceType             *string `json:"source_type" binding:"omitempty,oneof=url file links"`
 	URL                    *string `json:"url" binding:"omitempty,max=4096"`
+	Content                *string `json:"content"`
+	SourceName             *string `json:"source_name" binding:"omitempty,max=255"`
 	UserAgent              *string `json:"user_agent" binding:"omitempty,max=200"`
 	Enabled                *bool   `json:"enabled"`
 	RefreshIntervalMinutes *int    `json:"refresh_interval_minutes" binding:"omitempty,min=0,max=10080"`
@@ -40,7 +46,10 @@ type clashProfileRequest struct {
 func (r *clashProfileRequest) toInput() service.ClashProfileInput {
 	in := service.ClashProfileInput{
 		Name:                   r.Name,
+		SourceType:             r.SourceType,
 		URL:                    r.URL,
+		Content:                r.Content,
+		SourceName:             r.SourceName,
 		UserAgent:              r.UserAgent,
 		Enabled:                r.Enabled,
 		RefreshIntervalMinutes: r.RefreshIntervalMinutes,
@@ -61,6 +70,11 @@ func (r *clashProfileRequest) toInput() service.ClashProfileInput {
 type clashNodeSelectionRequest struct {
 	NodeIDs   []int64 `json:"node_ids"`
 	ProfileID *int64  `json:"profile_id"`
+}
+
+type clashNodeActionRequest struct {
+	Action  string  `json:"action" binding:"required,oneof=enable disable hide unhide"`
+	NodeIDs []int64 `json:"node_ids" binding:"required,min=1"`
 }
 
 func parseClashID(c *gin.Context) (int64, bool) {
@@ -184,6 +198,8 @@ func parseClashNodeFilter(c *gin.Context) (service.ClashNodeFilter, bool) {
 		Health: strings.TrimSpace(c.Query("health")),
 		Search: strings.TrimSpace(c.Query("search")),
 		Sort:   service.NormalizeClashNodeSort(strings.TrimSpace(c.Query("sort"))),
+		// visibility=hidden|all; anything else lists visible nodes only.
+		Visibility: strings.TrimSpace(c.Query("visibility")),
 	}
 	if len(filter.Search) > 100 {
 		filter.Search = filter.Search[:100]
@@ -240,6 +256,22 @@ func (h *ClashHandler) ListNodeIDs(c *gin.Context) {
 		return
 	}
 	response.Success(c, gin.H{"ids": ids})
+}
+
+// UpdateNodes POST /admin/clash/nodes/batch — enable, disable, hide or unhide
+// many nodes at once (the panel chunks selections above the service limit).
+func (h *ClashHandler) UpdateNodes(c *gin.Context) {
+	var req clashNodeActionRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		response.BadRequest(c, "Invalid request: "+err.Error())
+		return
+	}
+	result, err := h.svc.UpdateNodes(c.Request.Context(), req.Action, req.NodeIDs)
+	if err != nil {
+		response.ErrorFrom(c, err)
+		return
+	}
+	response.Success(c, result)
 }
 
 // EnableNode POST /admin/clash/nodes/:id/enable

@@ -135,7 +135,15 @@ func BuildClashNodeSyncPlan(existing []ClashNode, parsed []clashsub.Node, opts C
 		nextStatus, nextReason := status, reason
 		switch {
 		case status == ClashNodeStatusInvalid:
-			// Screening failures always win.
+			// Screening failures always win (a hidden node stays hidden, and
+			// invalid keeps it offline just the same).
+		case prev.Hidden:
+			// Hidden nodes stay offline whatever the subscription says, even
+			// when a previously invalid configuration changes.
+			nextStatus, nextReason = ClashNodeStatusDisabled, ClashNodeReasonHiddenByAdmin
+			if prev.Status == ClashNodeStatusDisabled && prev.StatusReason != "" {
+				nextReason = prev.StatusReason
+			}
 		case prev.Status == ClashNodeStatusDisabled:
 			nextStatus, nextReason = ClashNodeStatusDisabled, prev.StatusReason
 		case prev.Status == ClashNodeStatusInvalid && !configChanged:

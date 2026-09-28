@@ -10,6 +10,8 @@ import type {
   ClashExitProbeResult,
   ClashLatencyResult,
   ClashNode,
+  ClashNodeAction,
+  ClashNodeActionResult,
   ClashNodeListFilters,
   ClashNodeSelection,
   ClashPoolSettings,
@@ -31,6 +33,13 @@ export const CLASH_EXIT_PROBE_TIMEOUT_MS = 180_000
 export const CLASH_RESYNC_TIMEOUT_MS = 60_000
 /** The server accepts at most this many node_ids per test/probe request. */
 export const CLASH_NODE_BATCH_LIMIT = 50
+/** The server accepts at most this many node_ids per enable/disable/hide/unhide request. */
+export const CLASH_NODE_ACTION_LIMIT = 500
+/**
+ * Largest configuration file the server can ever accept (the configurable
+ * clash_pool.subscription.max_body_bytes tops out here; the server checks the actual limit).
+ */
+export const CLASH_FILE_MAX_BYTES = 64 * 1024 * 1024
 
 const forceParams = (force?: boolean) => (force ? { force: 'true' } : undefined)
 
@@ -52,9 +61,14 @@ export async function createProfile(input: ClashProfileInput): Promise<ClashCrea
   return data
 }
 
-/** All fields optional: an empty url keeps the stored one, fetch_proxy_id=0 clears it. */
+/**
+ * All fields optional: an empty url keeps the stored one, fetch_proxy_id=0 clears it; for file
+ * subscriptions a new content replaces the stored file (applied on the next refresh).
+ */
 export async function updateProfile(id: number, input: ClashProfileInput): Promise<ClashProfile> {
-  const { data } = await apiClient.put<ClashProfile>(`/admin/clash/profiles/${id}`, input)
+  const { data } = await apiClient.put<ClashProfile>(`/admin/clash/profiles/${id}`, input, {
+    timeout: CLASH_SUBSCRIPTION_TIMEOUT_MS
+  })
   return data
 }
 
@@ -75,9 +89,12 @@ export async function refreshProfile(id: number, options?: { force?: boolean }):
   return data
 }
 
-/** Dry-run fetch + parse without saving anything. */
+/** Dry-run fetch (or parse of an uploaded file) without saving anything. */
 export async function previewProfile(
-  input: Pick<ClashProfileInput, 'url' | 'user_agent' | 'include_pattern' | 'exclude_pattern' | 'fetch_proxy_id'>
+  input: Pick<
+    ClashProfileInput,
+    'source_type' | 'url' | 'content' | 'user_agent' | 'include_pattern' | 'exclude_pattern' | 'fetch_proxy_id'
+  >
 ): Promise<ClashPreviewResult> {
   const { data } = await apiClient.post<ClashPreviewResult>('/admin/clash/profiles/preview', input, {
     timeout: CLASH_SUBSCRIPTION_TIMEOUT_MS
@@ -94,6 +111,7 @@ function nodeFilterParams(filters?: ClashNodeListFilters): Record<string, string
   const search = filters?.search?.trim()
   if (search) params.search = search
   if (filters?.sort) params.sort = filters.sort
+  if (filters?.visibility && filters.visibility !== 'visible') params.visibility = filters.visibility
   return params
 }
 
@@ -130,6 +148,25 @@ export async function enableNode(id: number): Promise<{ enabled: boolean }> {
 export async function disableNode(id: number): Promise<{ enabled: boolean }> {
   const { data } = await apiClient.post<{ enabled: boolean }>(`/admin/clash/nodes/${id}/disable`)
   return data
+}
+
+/**
+ * Enables, disables, hides or unhides nodes. Hiding also takes nodes offline (their connections
+ * drop and bound accounts get paused); unhiding brings back only the nodes hiding disabled, and
+ * enabling a hidden node unhides it. Selections above the server limit go in sequential chunks.
+ */
+export async function updateNodes(action: ClashNodeAction, nodeIds: number[]): Promise<ClashNodeActionResult> {
+  const total: ClashNodeActionResult = { action, updated: 0, skipped: 0, node_ids: [] }
+  for (let start = 0; start < nodeIds.length; start += CLASH_NODE_ACTION_LIMIT) {
+    const { data } = await apiClient.post<ClashNodeActionResult>('/admin/clash/nodes/batch', {
+      action,
+      node_ids: nodeIds.slice(start, start + CLASH_NODE_ACTION_LIMIT)
+    })
+    total.updated += data?.updated ?? 0
+    total.skipped += data?.skipped ?? 0
+    if (Array.isArray(data?.node_ids)) total.node_ids.push(...data.node_ids)
+  }
+  return total
 }
 
 /** Confirms an in-place egress IP change; bound accounts stay paused until then. */
@@ -215,6 +252,7 @@ export const clashAPI = {
   listNodeIds,
   enableNode,
   disableNode,
+  updateNodes,
   acceptNodeExit,
   testNodesLatency,
   probeNodesExit,

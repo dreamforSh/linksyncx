@@ -525,7 +525,9 @@ func (s *ClashService) ListExits(ctx context.Context) (*ClashExitList, error) {
 	}
 	for i := range views {
 		view := &views[i]
-		if view.ProfileDeleted && len(view.Accounts) == 0 {
+		// Deleted subscriptions and hidden nodes stay listed only while an
+		// account is still bound to them, so that binding keeps resolving.
+		if (view.ProfileDeleted || view.Hidden) && len(view.Accounts) == 0 {
 			continue
 		}
 		key := view.ExitKey()

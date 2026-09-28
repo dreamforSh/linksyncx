@@ -4,6 +4,7 @@ import { fileURLToPath } from 'node:url'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { enableAutoUnmount, flushPromises, mount } from '@vue/test-utils'
 import ClashView from '../ClashView.vue'
+import Select from '@/components/common/Select.vue'
 import type { ClashNode, ClashProfile, ClashRuntimeStatus } from '@/types'
 
 const api = vi.hoisted(() => ({
@@ -23,6 +24,7 @@ const api = vi.hoisted(() => ({
   probeNodesExit: vi.fn(),
   enableNode: vi.fn(),
   disableNode: vi.fn(),
+  updateNodes: vi.fn(),
   acceptNodeExit: vi.fn(),
   updateSettings: vi.fn(),
   getAllProxies: vi.fn()
@@ -481,6 +483,266 @@ describe('ClashView', () => {
     await flushPromises()
     expect(wrapper.get('[data-testid="clash-bindings-blocked"]').text()).toContain('admin.clash.nodes.bindings.unavailable')
     expect(wrapper.get('[data-testid="clash-bindings-submit"]').attributes('disabled')).toBeDefined()
+  })
+
+  it('hides a node after confirming, naming the accounts that will be paused', async () => {
+    api.updateNodes.mockResolvedValue({ action: 'hide', updated: 1, skipped: 0, node_ids: [11] })
+    const wrapper = await mountView()
+    api.listNodes.mockClear()
+
+    await wrapper.findAll('[data-testid="clash-node-hide"]')[0].trigger('click')
+    expect(api.updateNodes).not.toHaveBeenCalled()
+    const confirm = dialog(wrapper, 'admin.clash.nodes.actionConfirm.hide.titleOne')
+    expect(confirm.text()).toContain('admin.clash.nodes.actionConfirm.hide.messageOne {"name":"HK 01"}')
+    const bound = wrapper.get('[data-testid="clash-node-action-bound"]').text()
+    expect(bound).toContain('admin.clash.nodes.actionConfirm.boundOne {"count":1}')
+    expect(bound).toContain('claude-main')
+
+    await clickDialogButton(wrapper, 'admin.clash.nodes.actionConfirm.hide.titleOne', 'admin.clash.actions.hide')
+    await flushPromises()
+    expect(api.updateNodes).toHaveBeenCalledWith('hide', [11])
+    expect(toast.showSuccess).toHaveBeenCalledWith('admin.clash.nodes.actionDone.hide {"count":1}')
+    expect(api.listNodes).toHaveBeenCalled()
+  })
+
+  it('applies bulk actions to the selection and offers unhide in the hidden view', async () => {
+    api.updateNodes
+      .mockResolvedValueOnce({ action: 'disable', updated: 1, skipped: 1, node_ids: [11] })
+      .mockResolvedValueOnce({ action: 'unhide', updated: 1, skipped: 0, node_ids: [21] })
+    const wrapper = await mountView()
+
+    const selects = wrapper.get('[data-testid="clash-nodes-panel"]').findAll('[data-testid="clash-node-select"]')
+    await selects[0].setValue(true)
+    await selects[2].setValue(true)
+    const bar = wrapper.get('[data-testid="clash-nodes-bulk-bar"]')
+    expect(bar.find('[data-testid="clash-nodes-bulk-hide"]').exists()).toBe(true)
+    expect(bar.find('[data-testid="clash-nodes-bulk-unhide"]').exists()).toBe(false)
+
+    await bar.get('[data-testid="clash-nodes-bulk-disable"]').trigger('click')
+    expect(dialog(wrapper, 'admin.clash.nodes.actionConfirm.disable.title').text())
+      .toContain('admin.clash.nodes.actionConfirm.disable.messageMany {"count":2}')
+    await clickDialogButton(wrapper, 'admin.clash.nodes.actionConfirm.disable.title', 'admin.clash.actions.disable')
+    await flushPromises()
+    expect(api.updateNodes).toHaveBeenLastCalledWith('disable', [11, 13])
+    expect(toast.showSuccess).toHaveBeenLastCalledWith(
+      'admin.clash.nodes.actionDone.disable {"count":1}admin.clash.nodes.actionSkipped {"count":1}'
+    )
+    expect(wrapper.find('[data-testid="clash-nodes-bulk-bar"]').exists()).toBe(false)
+
+    // The hidden view lists hidden nodes with an unhide action instead of hide.
+    const hiddenNode = node({ id: 21, name: 'US 09', status: 'disabled', status_reason: 'hidden by admin', hidden: true, available: false })
+    api.listNodes.mockResolvedValue({ items: [hiddenNode], total: 1, page: 1, page_size: 20, pages: 1 })
+    const visibility = wrapper.findAllComponents(Select)
+      .find((item) => item.attributes('data-testid') === 'clash-nodes-visibility-filter')
+    if (!visibility) throw new Error('visibility filter not found')
+    visibility.vm.$emit('update:modelValue', 'hidden')
+    visibility.vm.$emit('change', 'hidden', null)
+    await flushPromises()
+    expect(api.listNodes).toHaveBeenLastCalledWith(1, expect.any(Number), expect.objectContaining({ visibility: 'hidden' }), expect.anything())
+    const card = wrapper.get('[data-testid="clash-node-card"]')
+    expect(card.find('[data-testid="clash-node-hidden-badge"]').exists()).toBe(true)
+    expect(card.text()).toContain('admin.clash.reasons.nodeHidden')
+    expect(card.find('[data-testid="clash-node-hide"]').exists()).toBe(false)
+    expect(card.find('[data-testid="clash-node-enable"]').exists()).toBe(false)
+
+    await card.get('[data-testid="clash-node-select"]').setValue(true)
+    expect(wrapper.find('[data-testid="clash-nodes-bulk-hide"]').exists()).toBe(false)
+    await card.get('[data-testid="clash-node-unhide"]').trigger('click')
+    await flushPromises()
+    expect(api.updateNodes).toHaveBeenLastCalledWith('unhide', [21])
+    expect(toast.showSuccess).toHaveBeenLastCalledWith('admin.clash.nodes.actionDone.unhide {"count":1}')
+  })
+
+  it('shows local-file subscriptions and their hidden node count', async () => {
+    api.listProfiles.mockResolvedValue([profile({
+      source_type: 'file',
+      source_name: 'airport.yaml',
+      source_size: 2048,
+      url_masked: '',
+      refresh_interval_minutes: 0,
+      stats: { total: 3, active: 2, healthy: 2, unhealthy: 0, missing: 0, invalid: 0, disabled: 1, hidden: 4, bound: 1, bound_accounts: 1 }
+    })])
+    const wrapper = await mountView()
+
+    const table = wrapper.get('[data-testid="clash-profile-table"]')
+    expect(table.get('[data-testid="clash-profile-file-source"]').text()).toContain('airport.yaml')
+    expect(table.get('[data-testid="clash-profile-hidden"]').text()).toContain('admin.clash.profiles.hiddenCount {"count":4}')
+    expect(table.get('[data-testid="clash-profile-refresh"]').attributes('title')).toBe('admin.clash.actions.reparse')
+  })
+
+  it('uploads a local Clash file as a new subscription', async () => {
+    const content = 'proxies:\n  - {name: HK, type: ss, server: hk.example, port: 1, cipher: aes-128-gcm, password: p}\n'
+    api.previewProfile.mockResolvedValue({ format: 'clash_yaml', node_count: 1, usable: 1, nodes: [], skipped: [] })
+    api.createProfile.mockResolvedValue({
+      profile: profile({ id: 2, name: 'airport', source_type: 'file', source_name: 'airport.yaml' }),
+      refresh: { profile_id: 2, status: 'ok', parsed: 1, filtered: 0, private: 0, inserted: 1, updated: 0, missing: 0 }
+    })
+    const wrapper = await mountView()
+
+    await wrapper.get('[data-testid="clash-add-profile"]').trigger('click')
+    await flushPromises()
+    await wrapper.get('[data-testid="clash-profile-source-file"]').trigger('click')
+    expect(wrapper.find('[data-testid="clash-profile-url"]').exists()).toBe(false)
+    expect(wrapper.find('#clash-profile-ua').exists()).toBe(false)
+
+    // Submitting without a file is rejected locally.
+    await wrapper.get('#clash-profile-form').trigger('submit')
+    expect(wrapper.get('[data-testid="clash-profile-file-error"]').text()).toBe('admin.clash.form.validation.fileRequired')
+    expect(api.createProfile).not.toHaveBeenCalled()
+
+    const input = wrapper.get('[data-testid="clash-profile-file-input"]')
+    const upload = new File([content], 'airport.yaml', { type: 'text/yaml' })
+    Object.defineProperty(input.element, 'files', { value: [upload], configurable: true })
+    await input.trigger('change')
+    await vi.waitFor(() => expect(wrapper.find('[data-testid="clash-profile-file-name"]').exists()).toBe(true))
+    expect(wrapper.get('[data-testid="clash-profile-file-name"]').text()).toBe('airport.yaml')
+    expect((wrapper.get('#clash-profile-name').element as HTMLInputElement).value).toBe('airport')
+
+    await wrapper.get('[data-testid="clash-preview-button"]').trigger('click')
+    await flushPromises()
+    expect(api.previewProfile).toHaveBeenCalledWith({
+      source_type: 'file',
+      content,
+      include_pattern: undefined,
+      exclude_pattern: undefined
+    })
+
+    await wrapper.get('#clash-profile-form').trigger('submit')
+    await flushPromises()
+    expect(api.createProfile).toHaveBeenCalledWith({
+      name: 'airport',
+      enabled: true,
+      include_pattern: '',
+      notes: '',
+      source_type: 'file',
+      content,
+      source_name: 'airport.yaml'
+    })
+    expect(wrapper.get('[data-testid="clash-create-result"]').text()).toContain('admin.clash.createResult.fileParsed')
+  })
+
+  it('turns a node link pasted into the subscription URL box into a links subscription', async () => {
+    const ssLink =
+      'ss://YWVzLTEyOC1nY206dGVzdC1wYXNzd29yZA@us.example.com:13277?plugin=obfs-local%3Bobfs%3Dhttp%3Bobfs-host%3Dcdn.example.com' +
+      '#%F0%9F%87%BA%F0%9F%87%B8%20%E7%BE%8E%E5%9B%BD-%E6%B4%9B%E6%9D%89%E7%9F%B6%2004'
+    api.previewProfile.mockResolvedValue({ format: 'uri_list', node_count: 1, usable: 1, nodes: [], skipped: [] })
+    api.createProfile.mockResolvedValue({
+      profile: profile({ id: 3, name: '🇺🇸 美国-洛杉矶 04', source_type: 'links', url_masked: '' }),
+      refresh: { profile_id: 3, status: 'ok', parsed: 1, filtered: 0, private: 0, inserted: 1, updated: 0, missing: 0 }
+    })
+    const wrapper = await mountView()
+
+    await wrapper.get('[data-testid="clash-add-profile"]').trigger('click')
+    await flushPromises()
+    await wrapper.get('[data-testid="clash-profile-url"]').trigger('paste', {
+      clipboardData: { getData: () => `${ssLink}\n` }
+    })
+    await flushPromises()
+    expect(wrapper.find('[data-testid="clash-profile-url"]').exists()).toBe(false)
+    const links = wrapper.get('[data-testid="clash-profile-links-input"]')
+    expect((links.element as HTMLTextAreaElement).value).toBe(ssLink)
+    expect(wrapper.find('[data-testid="clash-profile-links-detected"]').exists()).toBe(true)
+    expect((wrapper.get('#clash-profile-name').element as HTMLInputElement).value).toBe('🇺🇸 美国-洛杉矶 04')
+    // No User-Agent, schedule or fetch proxy for pasted links.
+    expect(wrapper.find('#clash-profile-ua').exists()).toBe(false)
+
+    await wrapper.get('[data-testid="clash-preview-button"]').trigger('click')
+    await flushPromises()
+    expect(api.previewProfile).toHaveBeenCalledWith({
+      source_type: 'links',
+      content: ssLink,
+      include_pattern: undefined,
+      exclude_pattern: undefined
+    })
+
+    await wrapper.get('#clash-profile-form').trigger('submit')
+    await flushPromises()
+    expect(api.createProfile).toHaveBeenCalledWith({
+      name: '🇺🇸 美国-洛杉矶 04',
+      enabled: true,
+      include_pattern: '',
+      notes: '',
+      source_type: 'links',
+      content: ssLink
+    })
+    expect(wrapper.get('[data-testid="clash-create-result"]').text()).toContain('admin.clash.createResult.linksParsed')
+  })
+
+  it('offers the links source when a node link is typed as a subscription URL', async () => {
+    const wrapper = await mountView()
+    await wrapper.get('[data-testid="clash-add-profile"]').trigger('click')
+    await flushPromises()
+
+    await wrapper.get('#clash-profile-name').setValue('manual')
+    await wrapper.get('[data-testid="clash-profile-url"]').setValue('trojan://pw@jp.example.com:443#JP%2001')
+    await wrapper.get('#clash-profile-form').trigger('submit')
+    expect(wrapper.get('[data-testid="clash-profile-url-error"]').text()).toContain('admin.clash.form.validation.urlIsNodeLink')
+    expect(api.createProfile).not.toHaveBeenCalled()
+
+    await wrapper.get('[data-testid="clash-profile-use-links"]').trigger('click')
+    expect((wrapper.get('[data-testid="clash-profile-links-input"]').element as HTMLTextAreaElement).value)
+      .toBe('trojan://pw@jp.example.com:443#JP%2001')
+    // A name the admin typed is kept.
+    expect((wrapper.get('#clash-profile-name').element as HTMLInputElement).value).toBe('manual')
+
+    // Clearing the links asks for at least one.
+    await wrapper.get('[data-testid="clash-profile-links-input"]').setValue('  ')
+    await wrapper.get('#clash-profile-form').trigger('submit')
+    expect(wrapper.get('[data-testid="clash-profile-links-error"]').text()).toBe('admin.clash.form.validation.linksRequired')
+  })
+
+  it('replaces the links of a links subscription and re-parses it', async () => {
+    const linksProfile = profile({ source_type: 'links', url_masked: '', refresh_interval_minutes: 0, node_count: 2 })
+    api.listProfiles.mockResolvedValue([linksProfile])
+    api.updateProfile.mockResolvedValue(linksProfile)
+    api.refreshProfile.mockResolvedValue({ profile_id: 1, status: 'ok', parsed: 1, filtered: 0, private: 0, inserted: 0, updated: 1, missing: 1 })
+    const wrapper = await mountView()
+    expect(wrapper.get('[data-testid="clash-profile-links-source"]').text()).toContain('admin.clash.profiles.linksSource')
+
+    await wrapper.get('[data-testid="clash-profile-edit"]').trigger('click')
+    await flushPromises()
+    expect(wrapper.find('[data-testid="clash-profile-source-links"]').exists()).toBe(false)
+    expect(wrapper.get('[data-testid="clash-profile-links"]').text()).toContain('admin.clash.form.linksKeepHint {"count":2}')
+
+    // Saving other fields keeps the stored links.
+    await wrapper.get('#clash-profile-form').trigger('submit')
+    await flushPromises()
+    expect(api.updateProfile.mock.calls[0][1]).not.toHaveProperty('content')
+    expect(api.refreshProfile).not.toHaveBeenCalled()
+
+    await wrapper.get('[data-testid="clash-profile-edit"]').trigger('click')
+    await flushPromises()
+    await wrapper.get('[data-testid="clash-profile-links-input"]').setValue('  vless://id@sg.example.com:443#SG  ')
+    await wrapper.get('#clash-profile-form').trigger('submit')
+    await flushPromises()
+    expect(api.updateProfile).toHaveBeenLastCalledWith(1, expect.objectContaining({ content: 'vless://id@sg.example.com:443#SG' }))
+    expect(api.updateProfile.mock.calls[1][1]).not.toHaveProperty('source_type')
+    expect(api.refreshProfile).toHaveBeenCalledWith(1, { force: false })
+  })
+
+  it('re-parses a file subscription right after a new file is uploaded', async () => {
+    const fileProfile = profile({ source_type: 'file', source_name: 'old.yaml', source_size: 10, url_masked: '', refresh_interval_minutes: 0 })
+    api.listProfiles.mockResolvedValue([fileProfile])
+    api.updateProfile.mockResolvedValue({ ...fileProfile, source_name: 'new.yaml' })
+    api.refreshProfile.mockResolvedValue({ profile_id: 1, status: 'ok', parsed: 2, filtered: 0, private: 0, inserted: 1, updated: 1, missing: 0 })
+    const wrapper = await mountView()
+
+    await wrapper.get('[data-testid="clash-profile-edit"]').trigger('click')
+    await flushPromises()
+    expect(wrapper.find('[data-testid="clash-profile-source-url"]').exists()).toBe(false)
+    expect(wrapper.get('[data-testid="clash-profile-file"]').text()).toContain('admin.clash.form.fileKeepHint')
+
+    const input = wrapper.get('[data-testid="clash-profile-file-input"]')
+    Object.defineProperty(input.element, 'files', { value: [new File(['proxies: []'], 'new.yaml')], configurable: true })
+    await input.trigger('change')
+    await vi.waitFor(() => expect(wrapper.find('[data-testid="clash-profile-file-name"]').exists()).toBe(true))
+
+    await wrapper.get('#clash-profile-form').trigger('submit')
+    await flushPromises()
+    expect(api.updateProfile).toHaveBeenCalledWith(1, expect.objectContaining({ content: 'proxies: []', source_name: 'new.yaml' }))
+    expect(api.updateProfile.mock.calls[0][1]).not.toHaveProperty('url')
+    expect(api.updateProfile.mock.calls[0][1]).not.toHaveProperty('refresh_interval_minutes')
+    expect(api.refreshProfile).toHaveBeenCalledWith(1, { force: false })
   })
 
   it('shows friendly errors for Clash API failures', async () => {

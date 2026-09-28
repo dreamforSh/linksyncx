@@ -22,7 +22,10 @@ export default {
       fullCheck: '完整检测',
       batchTest: '批量测试',
       stop: '停止',
-      unbind: '解绑'
+      unbind: '解绑',
+      hide: '隐藏',
+      unhide: '取消隐藏',
+      reparse: '重新解析'
     },
     disabledBanner: {
       title: 'Clash 代理池未启用',
@@ -112,7 +115,8 @@ export default {
       loopbackServer: '节点地址为本机或链路本地地址',
       privateServer: '节点地址为内网地址（可在配置中放行）',
       exitIsServer: '出口 IP 与本服务器出口相同，无法隔离',
-      listenerUnavailable: '监听端口不可用：{detail}'
+      listenerUnavailable: '监听端口不可用：{detail}',
+      nodeHidden: '管理员已隐藏'
     },
     profiles: {
       title: '订阅',
@@ -121,6 +125,11 @@ export default {
       healthyCount: '{count} 健康',
       unhealthyCount: '{count} 异常',
       missingCount: '{count} 失效',
+      hiddenCount: '{count} 已隐藏',
+      fileSource: '本地文件',
+      fileTitle: '本地上传的配置文件：{name}（{size}）。不会自动刷新，“重新解析”按当前规则重新读取该文件。',
+      linksSource: '节点链接',
+      linksTitle: '粘贴导入的节点分享链接。不会自动刷新，“重新解析”按当前规则重新读取已保存的链接。',
       boundHint: '使用该订阅节点的账号数（不含影子账号）',
       boundCount: '{count} 个账号',
       measuredValue: '本地 今日 {today} · 累计 {total}',
@@ -187,8 +196,26 @@ export default {
       enabled: '启用订阅',
       enabledHint: '停用后节点停止服务，绑定账号会被暂停',
       url: '订阅链接',
-      urlHint: '支持 Clash YAML、Base64 与 URI 列表格式；链接加密保存，之后只显示脱敏形式。',
+      urlHint: '支持 Clash YAML、Base64 与 URI 列表格式；链接加密保存，之后只显示脱敏形式。单个节点的分享链接（ss:// 等）请使用「节点链接」。',
       urlKeepHint: '当前：{masked}。留空表示不修改。',
+      source: '订阅来源',
+      sourceUrl: '订阅链接',
+      sourceFile: '本地文件',
+      sourceLinks: '节点链接',
+      file: '配置文件',
+      fileDrop: '将 Clash 配置文件拖到这里，或',
+      filePick: '选择文件',
+      fileReplace: '重新选择',
+      fileReading: '读取中...',
+      fileHint: '支持 Clash YAML、Base64 与 URI 列表格式（.yaml / .yml / .txt）；文件内容加密保存。本地文件不会自动刷新，需要更新时重新上传即可。',
+      fileKeepHint: '当前文件：{name}（{size}）。不选择文件表示保留当前文件；上传新文件后会立即重新解析。',
+      links: '节点链接',
+      linksPlaceholder: '每行一个节点分享链接，例如：\nss://…#香港 01\nvmess://…\ntrojan://…#日本 02',
+      linksHint: '支持 ss、ssr、vmess、vless、trojan、hysteria、hysteria2、tuic、anytls、socks5 等分享链接，每行一个（也可以粘贴 Base64 编码的整段内容）；内容加密保存，不会自动刷新。',
+      linksKeepHint: '当前共 {count} 个节点。留空表示保留现有链接；填写后会替换全部链接，保存后立即重新解析。',
+      linksDetected: '已识别为节点分享链接，已切换到「节点链接」',
+      linksNameMany: '{name} 等 {count} 个节点',
+      useLinks: '改用节点链接',
       userAgent: 'User-Agent',
       userAgentPlaceholder: '留空使用池设置中的默认值',
       interval: '自动刷新',
@@ -208,19 +235,34 @@ export default {
       notesPlaceholder: '可选',
       submitCreate: '添加并拉取',
       creating: '正在拉取订阅...',
+      submitCreateFile: '添加并解析',
+      creatingFile: '正在解析文件...',
+      creatingLinks: '正在解析节点...',
       updated: '订阅已保存',
       saveFailed: '保存订阅失败',
       validation: {
         nameRequired: '请输入订阅名称',
         urlRequired: '请输入订阅链接',
         urlInvalid: '请输入以 http:// 或 https:// 开头的订阅链接',
-        intervalRange: '自动刷新间隔需在 {min} 到 {max} 分钟之间'
+        intervalRange: '自动刷新间隔需在 {min} 到 {max} 分钟之间',
+        fileRequired: '请选择要上传的配置文件',
+        fileTooLarge: '文件不能超过 {max}',
+        fileEmpty: '文件内容为空',
+        fileUnreadable: '无法读取该文件',
+        linksRequired: '请粘贴至少一个节点链接',
+        linksTooLarge: '内容不能超过 {max}',
+        urlIsNodeLink: '这是节点分享链接，不是订阅链接',
+        urlIsNodeLinkEdit: '这是节点分享链接，不是订阅链接：请在「添加订阅」中选择「节点链接」导入'
       }
     },
     preview: {
       title: '试解析',
       hint: '按当前配置拉取并解析订阅，不会保存任何内容',
       editHint: '需要重新输入完整的订阅链接（已保存的链接不会回显）',
+      fileHint: '解析所选文件并预览节点，不会保存任何内容',
+      editFileHint: '需要重新选择文件（已保存的文件不会回显）',
+      linksHint: '解析粘贴的节点链接并预览，不会保存任何内容',
+      editLinksHint: '需要重新粘贴节点链接（已保存的链接不会回显）',
       running: '解析中...',
       failed: '试解析失败',
       format: '格式',
@@ -243,6 +285,8 @@ export default {
       created: '订阅「{name}」已添加',
       notRefreshed: '订阅未启用，暂未拉取节点。',
       refreshOk: '已完成首次拉取，节点正在接入内核。',
+      fileParsed: '文件已解析，节点正在接入内核。',
+      linksParsed: '节点链接已解析，节点正在接入内核。',
       refreshSkipped: '首次拉取触发了节点数骤降保护。',
       refreshFailed: '首次拉取失败，订阅已保存，可稍后重试。',
       done: '完成'
@@ -261,7 +305,11 @@ export default {
         allHealth: '全部健康',
         boundAll: '全部',
         boundOnly: '已绑定',
-        unboundOnly: '空闲'
+        unboundOnly: '空闲',
+        visibility: '可见性',
+        visibilityVisible: '未隐藏节点',
+        visibilityHidden: '已隐藏节点',
+        visibilityAll: '全部节点'
       },
       columns: {
         name: '节点',
@@ -369,6 +417,8 @@ export default {
       pendingExit: '新出口 {ip} 待确认',
       exitStale: '探测失败，出口信息可能已过期',
       shadowTag: '影子',
+      hiddenTag: '已隐藏',
+      hiddenHint: '已隐藏：不出现在默认节点列表和账号的代理选择器中，并保持禁用，订阅刷新也不会恢复',
       empty: '没有匹配的节点',
       emptyHint: '调整筛选条件，或刷新订阅以拉取节点。',
       loadFailed: '加载节点失败',
@@ -380,6 +430,30 @@ export default {
       enabledToast: '节点已启用',
       disabledToast: '节点已禁用',
       toggleFailed: '更新节点状态失败',
+      actionDone: {
+        enable: '已启用 {count} 个节点',
+        disable: '已禁用 {count} 个节点',
+        hide: '已隐藏 {count} 个节点',
+        unhide: '已取消隐藏 {count} 个节点'
+      },
+      actionSkipped: '，{count} 个无需变更',
+      actionFailed: '节点操作失败',
+      actionConfirm: {
+        bound: '以下 {count} 个账号正在使用这些出口，操作后会被暂停调度（绑定保留，可在账号编辑中改绑其他出口）：',
+        boundOne: '以下 {count} 个账号正在使用该出口，操作后会被暂停调度（绑定保留，可在账号编辑中改绑其他出口）：',
+        disable: {
+          title: '批量禁用节点',
+          titleOne: '禁用节点',
+          messageOne: '禁用「{name}」会立即断开经由它的连接。',
+          messageMany: '禁用所选的 {count} 个节点会立即断开经由它们的连接。'
+        },
+        hide: {
+          title: '批量隐藏节点',
+          titleOne: '隐藏节点',
+          messageOne: '隐藏后「{name}」不再出现在节点列表和账号的代理选择器中，并保持禁用（订阅刷新也不会恢复）。可在「已隐藏节点」中找回并取消隐藏。',
+          messageMany: '隐藏后所选的 {count} 个节点不再出现在节点列表和账号的代理选择器中，并保持禁用（订阅刷新也不会恢复）。可在「已隐藏节点」中找回并取消隐藏。'
+        }
+      },
       acceptSuccess: '已确认新出口，绑定账号将恢复调度',
       acceptFailed: '确认出口变更失败',
       disableConfirm: {
@@ -487,7 +561,29 @@ export default {
       exitUnprobedBlocked: '出口 IP 未探测，暂不可绑定',
       platformWarning: '该平台在此出口可能不可用',
       selectedLabel: '{node}（{ip}）',
-      unlistedProxy: '代理 #{id}（不在可选列表中）'
+      unlistedProxy: '代理 #{id}（不在可选列表中）',
+      groupCounts: '可用 {usable} · 空闲 {idle} · 共 {total}',
+      unavailableSection: '不可用（{count}）',
+      unavailableHint: '已占满、不可用或未探测出口 IP 的出口，不能选择',
+      filters: {
+        label: '筛选 Clash 出口',
+        onlyAvailable: '仅可用',
+        onlyIdle: '仅空闲',
+        platformPass: '{platform} 检测通过',
+        country: '国家/地区',
+        allCountries: '全部国家/地区',
+        profile: '订阅',
+        allProfiles: '全部订阅',
+        summary: '显示 {shown} / {total} 个出口',
+        clear: '清除筛选',
+        noMatch: '没有符合筛选条件的出口'
+      },
+      sort: {
+        label: '出口排序',
+        default: '默认排序',
+        latency: '延迟最低优先',
+        idle: '空闲优先'
+      }
     },
     errors: {
       exitOccupied: '该 Clash 出口已被其他账号占用，达到单出口账号上限',
@@ -498,7 +594,7 @@ export default {
       bulkUnsupported: '批量编辑不能设置 Clash 出口：请在账号编辑中逐个指定，或在 Clash 订阅页的节点上绑定账号',
       managedReadonly: '该代理由 Clash 订阅托管，请在 Clash 订阅页管理',
       portReserved: '该地址与端口段保留给 Clash 出口监听，手动代理不能使用',
-      encryptionKeyRequired: '保存订阅链接需要固定的加密密钥：请在服务端配置 TOTP_ENCRYPTION_KEY 并重启后重试',
+      encryptionKeyRequired: '保存订阅链接、配置文件或节点链接需要固定的加密密钥：请在服务端配置 TOTP_ENCRYPTION_KEY 并重启后重试',
       profileInUse: '仍有账号在使用该订阅的出口',
       profileInUseWithAccounts: '仍有账号在使用该订阅的出口：{accounts}',
       profileInvalid: '订阅配置无效：{message}',

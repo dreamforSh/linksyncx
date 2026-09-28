@@ -539,7 +539,9 @@ func (m *ClashManager) refreshDueProfiles(ctx context.Context) {
 	}
 	now := time.Now()
 	for _, profile := range profiles {
-		if !profile.Enabled || profile.RefreshIntervalMinutes <= 0 {
+		// Uploaded files and pasted links have nothing to fetch; they are
+		// re-parsed on demand.
+		if !profile.Enabled || profile.RefreshIntervalMinutes <= 0 || profile.IsLocalSource() {
 			continue
 		}
 		if profile.LastRefreshAt != nil && now.Sub(*profile.LastRefreshAt) < time.Duration(profile.RefreshIntervalMinutes)*time.Minute {

@@ -121,10 +121,17 @@ func (s *ClashService) structuralChange(ctx context.Context) {
 }
 
 // ClashProfileInput creates or updates a subscription. Nil pointers keep the
-// current value on update; an empty URL keeps the stored one.
+// current value on update; an empty URL (or file content) keeps the stored one.
 type ClashProfileInput struct {
-	Name                   *string
-	URL                    *string
+	Name *string
+	// SourceType picks url (default), file or links on create; it cannot
+	// change later.
+	SourceType *string
+	URL        *string
+	// Content is an uploaded Clash configuration file or pasted node share
+	// links (local sources only); SourceName is the original file name.
+	Content                *string
+	SourceName             *string
 	UserAgent              *string
 	Enabled                *bool
 	RefreshIntervalMinutes *int
@@ -219,7 +226,7 @@ func (s *ClashService) GetProfile(ctx context.Context, id int64) (*ClashProfileS
 func (s *ClashService) requireEncryption() error {
 	if s.encryptor == nil || s.cfg == nil || !s.cfg.Totp.EncryptionKeyConfigured {
 		return infraerrors.BadRequest(ClashErrCodeEncryptionRequired,
-			"a fixed encryption key (TOTP_ENCRYPTION_KEY) is required to store subscription URLs")
+			"a fixed encryption key (TOTP_ENCRYPTION_KEY) is required to store subscription URLs, files and node links")
 	}
 	return nil
 }
@@ -274,13 +281,26 @@ func (s *ClashService) CreateProfile(ctx context.Context, in ClashProfileInput) 
 	if err := s.requireEncryption(); err != nil {
 		return nil, nil, err
 	}
+	sourceType, err := normalizeClashSourceType(derefString(in.SourceType))
+	if err != nil {
+		return nil, nil, err
+	}
 	rawURL := strings.TrimSpace(derefString(in.URL))
-	if rawURL == "" {
+	content := derefString(in.Content)
+	if isLocalClashSource(sourceType) {
+		if rawURL != "" {
+			return nil, nil, infraerrors.BadRequest(ClashErrCodeProfileInvalid, "only url subscriptions take a url")
+		}
+		if strings.TrimSpace(content) == "" {
+			return nil, nil, infraerrors.BadRequest(ClashErrCodeProfileInvalid, "content is required")
+		}
+	} else if rawURL == "" {
 		return nil, nil, infraerrors.BadRequest(ClashErrCodeProfileInvalid, "url is required")
 	}
 	settings := s.poolSettings(ctx)
 	profile := &ClashProfile{
 		Name:                   derefString(in.Name),
+		SourceType:             sourceType,
 		UserAgent:              derefString(in.UserAgent),
 		Enabled:                true,
 		RefreshIntervalMinutes: 360,
@@ -301,10 +321,20 @@ func (s *ClashService) CreateProfile(ctx context.Context, in ClashProfileInput) 
 	if in.ExcludePattern != nil {
 		profile.ExcludePattern = strings.TrimSpace(*in.ExcludePattern)
 	}
+	if profile.IsLocalSource() {
+		// Nothing to fetch: no schedule, no fetch proxy.
+		profile.RefreshIntervalMinutes = 0
+		profile.FetchProxyID = nil
+	}
 	if err := s.validateProfile(ctx, profile, rawURL); err != nil {
 		return nil, nil, err
 	}
-	if err := s.setProfileURL(ctx, profile, rawURL); err != nil {
+	if profile.IsLocalSource() {
+		err = s.setProfileContent(ctx, profile, content, derefString(in.SourceName))
+	} else {
+		err = s.setProfileURL(ctx, profile, rawURL)
+	}
+	if err != nil {
 		return nil, nil, err
 	}
 	if err := s.repo.CreateProfile(ctx, profile); err != nil {
@@ -373,15 +403,49 @@ func (s *ClashService) UpdateProfile(ctx context.Context, id int64, in ClashProf
 	if profile.UserAgent == "" {
 		profile.UserAgent = s.poolSettings(ctx).DefaultUserAgent
 	}
+	if in.SourceType != nil {
+		requested, err := normalizeClashSourceType(*in.SourceType)
+		if err != nil {
+			return nil, err
+		}
+		// Rows from before local sources existed have no source type: url.
+		if stored, _ := normalizeClashSourceType(profile.SourceType); requested != stored {
+			return nil, infraerrors.BadRequest(ClashErrCodeProfileInvalid, "the source of a subscription cannot change; create a new one instead")
+		}
+	}
 	rawURL := strings.TrimSpace(derefString(in.URL))
+	content := derefString(in.Content)
+	if profile.IsLocalSource() {
+		if rawURL != "" {
+			return nil, infraerrors.BadRequest(ClashErrCodeProfileInvalid, "only url subscriptions take a url; upload a file or paste links instead")
+		}
+		profile.RefreshIntervalMinutes = 0
+		profile.FetchProxyID = nil
+	} else if content != "" {
+		return nil, infraerrors.BadRequest(ClashErrCodeProfileInvalid, "only file and links subscriptions take content")
+	}
 	if err := s.validateProfile(ctx, profile, rawURL); err != nil {
 		return nil, err
 	}
-	if rawURL != "" {
+	replaceContent := profile.IsLocalSource() && content != ""
+	if rawURL != "" || replaceContent {
 		if err := s.requireEncryption(); err != nil {
 			return nil, err
 		}
+	}
+	if rawURL != "" {
 		if err := s.setProfileURL(ctx, profile, rawURL); err != nil {
+			return nil, err
+		}
+	}
+	if replaceContent {
+		if err := s.setProfileContent(ctx, profile, content, derefString(in.SourceName)); err != nil {
+			return nil, err
+		}
+		// Stored before the other fields so the content and its digest always
+		// change together. It takes effect on the next refresh (the panel
+		// refreshes right after saving).
+		if err := s.repo.UpdateProfileContent(ctx, profile); err != nil {
 			return nil, err
 		}
 	}
@@ -478,13 +542,18 @@ func (s *ClashService) fetchAndParse(ctx context.Context, rawURL, userAgent stri
 	return parsed, fetched.UserInfo, nil
 }
 
-// PreviewProfile fetches and parses a subscription without saving it.
+// PreviewProfile fetches (or, for local content, just parses) a subscription
+// without saving it.
 func (s *ClashService) PreviewProfile(ctx context.Context, in ClashProfileInput) (*ClashPreviewResult, error) {
 	if err := s.requireEnabled(); err != nil {
 		return nil, err
 	}
+	sourceType, err := normalizeClashSourceType(derefString(in.SourceType))
+	if err != nil {
+		return nil, err
+	}
 	rawURL := strings.TrimSpace(derefString(in.URL))
-	if rawURL == "" {
+	if sourceType == ClashProfileSourceURL && rawURL == "" {
 		return nil, infraerrors.BadRequest(ClashErrCodeProfileInvalid, "url is required")
 	}
 	include, err := compileClashPattern("include_pattern", derefString(in.IncludePattern))
@@ -499,13 +568,23 @@ func (s *ClashService) PreviewProfile(ctx context.Context, in ClashProfileInput)
 	if err != nil {
 		return nil, err
 	}
-	userAgent := strings.TrimSpace(derefString(in.UserAgent))
-	if userAgent == "" {
-		userAgent = s.poolSettings(ctx).DefaultUserAgent
-	}
-	parsed, info, err := s.fetchAndParse(ctx, rawURL, userAgent, in.FetchProxyID)
-	if err != nil {
-		return nil, infraerrors.BadRequest(ClashErrCodeFetchFailed, err.Error())
+	var (
+		parsed *clashsub.Result
+		info   *ClashUserInfo
+	)
+	if isLocalClashSource(sourceType) {
+		if parsed, err = s.parseClashContent(sourceType, localClashContent(sourceType, derefString(in.Content))); err != nil {
+			return nil, err
+		}
+	} else {
+		userAgent := strings.TrimSpace(derefString(in.UserAgent))
+		if userAgent == "" {
+			userAgent = s.poolSettings(ctx).DefaultUserAgent
+		}
+		parsed, info, err = s.fetchAndParse(ctx, rawURL, userAgent, in.FetchProxyID)
+		if err != nil {
+			return nil, infraerrors.BadRequest(ClashErrCodeFetchFailed, err.Error())
+		}
 	}
 	result := &ClashPreviewResult{Format: string(parsed.Format), NodeCount: len(parsed.Nodes), UserInfo: info}
 	for _, node := range parsed.Nodes {
@@ -563,10 +642,6 @@ func (s *ClashService) RefreshProfile(ctx context.Context, id int64, force bool)
 		return result, nil
 	}
 
-	rawURL, err := s.encryptor.Decrypt(profile.URLEncrypted)
-	if err != nil {
-		return fail(ClashRefreshError, errors.New("stored subscription URL cannot be decrypted; re-enter the URL (encryption key changed?)"))
-	}
 	include, err := compileClashPattern("include_pattern", profile.IncludePattern)
 	if err != nil {
 		return fail(ClashRefreshError, err)
@@ -575,10 +650,23 @@ func (s *ClashService) RefreshProfile(ctx context.Context, id int64, force bool)
 	if err != nil {
 		return fail(ClashRefreshError, err)
 	}
-	parsed, info, err := s.fetchAndParse(ctx, rawURL, profile.UserAgent, profile.FetchProxyID)
-	record.UserInfo = info
-	if err != nil {
-		return fail(ClashRefreshError, err)
+	var parsed *clashsub.Result
+	if profile.IsLocalSource() {
+		// Local content is re-parsed as stored; it reports no traffic quota.
+		if parsed, err = s.loadProfileContent(ctx, profile); err != nil {
+			return fail(ClashRefreshError, err)
+		}
+	} else {
+		rawURL, err := s.encryptor.Decrypt(profile.URLEncrypted)
+		if err != nil {
+			return fail(ClashRefreshError, errors.New("stored subscription URL cannot be decrypted; re-enter the URL (encryption key changed?)"))
+		}
+		var info *ClashUserInfo
+		parsed, info, err = s.fetchAndParse(ctx, rawURL, profile.UserAgent, profile.FetchProxyID)
+		record.UserInfo = info
+		if err != nil {
+			return fail(ClashRefreshError, err)
+		}
 	}
 	result.Format, record.Format = string(parsed.Format), string(parsed.Format)
 	result.Skipped = limitSkipped(parsed.Skipped)
@@ -655,38 +743,106 @@ func (s *ClashService) ListNodeIDs(ctx context.Context, filter ClashNodeFilter) 
 
 func (s *ClashService) prepareNodeFilter(filter ClashNodeFilter) ClashNodeFilter {
 	filter.Sort = NormalizeClashNodeSort(filter.Sort)
+	switch filter.Visibility {
+	case ClashNodeVisibilityHidden, ClashNodeVisibilityAll:
+	default:
+		filter.Visibility = ClashNodeVisibilityVisible
+	}
 	if filter.Sort == ClashNodeSortTrafficToday {
 		filter.TrafficDate = clashTrafficDate(time.Now())
 	}
 	return filter
 }
 
-// SetNodeEnabled toggles an admin disable. Disabling immediately drops the
-// node's established connections; bound accounts are paused on reconcile.
+// SetNodeEnabled toggles an admin disable on one node (see UpdateNodes).
 func (s *ClashService) SetNodeEnabled(ctx context.Context, nodeID int64, enabled bool) error {
-	view, err := s.repo.GetNodeView(ctx, nodeID)
-	if err != nil {
+	if _, err := s.repo.GetNodeView(ctx, nodeID); err != nil {
 		return err
 	}
-	switch {
-	case enabled && view.Status == ClashNodeStatusDisabled:
-		if err := s.repo.SetNodeStatus(ctx, nodeID, ClashNodeStatusActive, ""); err != nil {
-			return err
+	action := ClashNodeActionDisable
+	if enabled {
+		action = ClashNodeActionEnable
+	}
+	_, err := s.UpdateNodes(ctx, action, []int64{nodeID})
+	return err
+}
+
+// Clash node admin actions (UpdateNodes).
+const (
+	ClashNodeActionEnable  = "enable"
+	ClashNodeActionDisable = "disable"
+	ClashNodeActionHide    = "hide"
+	ClashNodeActionUnhide  = "unhide"
+)
+
+// clashNodeActionLimit bounds one batch request; the panel sends larger
+// selections in chunks.
+const clashNodeActionLimit = 500
+
+// ClashNodeActionResult reports a node action: Updated nodes changed, the rest
+// of the request was already in the requested state (or does not exist).
+type ClashNodeActionResult struct {
+	Action  string  `json:"action"`
+	Updated int     `json:"updated"`
+	Skipped int     `json:"skipped"`
+	NodeIDs []int64 `json:"node_ids"`
+}
+
+// UpdateNodes applies an admin action to many nodes with one status update,
+// one core resync, one connection drop and one pause reconcile. Disable only
+// touches active nodes; enable brings disabled (and hidden) nodes back; hide
+// takes nodes out of view and offline; unhide revives the nodes that hiding
+// disabled. Accounts bound to a node that goes offline are paused.
+func (s *ClashService) UpdateNodes(ctx context.Context, action string, nodeIDs []int64) (*ClashNodeActionResult, error) {
+	ids := make([]int64, 0, len(nodeIDs))
+	seen := make(map[int64]struct{}, len(nodeIDs))
+	for _, id := range nodeIDs {
+		if _, dup := seen[id]; id <= 0 || dup {
+			continue
 		}
-	case !enabled && view.Status != ClashNodeStatusDisabled:
-		if err := s.repo.SetNodeStatus(ctx, nodeID, ClashNodeStatusDisabled, "disabled by admin"); err != nil {
-			return err
-		}
+		seen[id] = struct{}{}
+		ids = append(ids, id)
+	}
+	if len(ids) == 0 {
+		return nil, infraerrors.BadRequest("CLASH_NODE_SELECTION_EMPTY", "no node selected")
+	}
+	if len(ids) > clashNodeActionLimit {
+		return nil, infraerrors.BadRequest("CLASH_TOO_MANY_NODES", fmt.Sprintf("at most %d nodes per request", clashNodeActionLimit))
+	}
+	var (
+		changed []int64
+		err     error
+	)
+	switch action {
+	case ClashNodeActionEnable:
+		changed, err = s.repo.SetNodesEnabled(ctx, ids, true)
+	case ClashNodeActionDisable:
+		changed, err = s.repo.SetNodesEnabled(ctx, ids, false)
+	case ClashNodeActionHide:
+		changed, err = s.repo.SetNodesHidden(ctx, ids, true)
+	case ClashNodeActionUnhide:
+		changed, err = s.repo.SetNodesHidden(ctx, ids, false)
 	default:
-		return nil
+		return nil, infraerrors.BadRequest("CLASH_NODE_ACTION_INVALID", "action must be enable, disable, hide or unhide")
+	}
+	if err != nil {
+		return nil, err
+	}
+	result := &ClashNodeActionResult{Action: action, Updated: len(changed), Skipped: len(ids) - len(changed), NodeIDs: changed}
+	if len(changed) == 0 {
+		return result, nil
 	}
 	s.structuralChange(ctx)
-	if !enabled && s.runtime != nil {
-		if _, err := s.runtime.CloseInboundConnections(ctx, []string{ClashListenerName(nodeID)}); err != nil {
-			s.log().Warn("close clash node connections failed", zap.Int64("node_id", nodeID), zap.Error(err))
+	if (action == ClashNodeActionDisable || action == ClashNodeActionHide) && s.runtime != nil {
+		listeners := make([]string, 0, len(changed))
+		for _, id := range changed {
+			listeners = append(listeners, ClashListenerName(id))
+		}
+		if _, err := s.runtime.CloseInboundConnections(ctx, listeners); err != nil {
+			s.log().Warn("close clash node connections failed", zap.Int("nodes", len(changed)), zap.Error(err))
 		}
 	}
-	return s.ReconcilePauses(ctx)
+	return result, s.ReconcilePauses(ctx)
 }
 
 // AcceptNodeExit confirms an in-place egress change.

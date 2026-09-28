@@ -4,6 +4,7 @@ import zh from '@/i18n/locales/zh'
 import {
   clashCheckPlatformFor,
   clashErrorMessage,
+  clashNodeLinkName,
   clashTrafficToday,
   clashTrafficTotal,
   clashTrafficTrend,
@@ -16,8 +17,10 @@ import {
   formatTrafficRate,
   isBlockingPlatformCheck,
   isClashExitPauseReason,
+  isClashNodeLinkText,
   localizeClashUnavailableReason,
-  stripClashExitPauseReason
+  stripClashExitPauseReason,
+  summarizeClashNodeLinks
 } from '../clash'
 import type { ClashExitList, ClashNodeTraffic } from '@/types'
 
@@ -99,7 +102,9 @@ describe('clash pause reasons', () => {
       ['node removed from subscription', 'admin.clash.reasons.nodeMissing'],
       ['node disabled', 'admin.clash.reasons.nodeDisabled'],
       ['health check failing', 'admin.clash.reasons.healthFailing'],
+      ['node hidden', 'admin.clash.reasons.nodeHidden'],
       // Node status_reason vocabulary shown in the nodes table.
+      ['hidden by admin', 'admin.clash.reasons.nodeHidden'],
       ['removed from subscription', 'admin.clash.reasons.nodeMissing'],
       ['disabled by admin', 'admin.clash.reasons.disabledByAdmin'],
       ['server is a loopback or link-local address', 'admin.clash.reasons.loopbackServer'],
@@ -227,5 +232,40 @@ describe('estimateCodexImportCount', () => {
     ['{\n "a": 1\n}\n{\n "b": 2\n}', 2]
   ])('%j -> %i', (content, expected) => {
     expect(estimateCodexImportCount(content)).toBe(expected)
+  })
+})
+
+describe('node share links', () => {
+  // Made-up credentials in the SIP002 form providers hand out (base64url userinfo, obfs plugin).
+  const ssLink =
+    'ss://YWVzLTEyOC1nY206dGVzdC1wYXNzd29yZA@us.example.com:13277?plugin=obfs-local%3Bobfs%3Dhttp%3Bobfs-host%3Dcdn.example.com' +
+    '#%F0%9F%87%BA%F0%9F%87%B8%20%E7%BE%8E%E5%9B%BD-%E6%B4%9B%E6%9D%89%E7%9F%B6%2004'
+  const vmessLink = 'vmess://' + btoa(JSON.stringify({ v: '2', ps: 'JP 01', add: 'jp.example.com', port: '443', id: 'x' }))
+
+  it('recognizes share links but not subscription URLs', () => {
+    expect(isClashNodeLinkText(ssLink)).toBe(true)
+    expect(isClashNodeLinkText(`\n  ${vmessLink}\n`)).toBe(true)
+    expect(isClashNodeLinkText('hy2://pw@a.example.com:443#A')).toBe(true)
+    expect(isClashNodeLinkText('hysteria2+realm://pw@a.example.com:443')).toBe(true)
+    expect(isClashNodeLinkText('SOCKS5://u:p@a.example.com:1080')).toBe(true)
+    expect(isClashNodeLinkText('https://sub.example.com/api?token=x')).toBe(false)
+    expect(isClashNodeLinkText('http://1.2.3.4:8080')).toBe(false)
+    expect(isClashNodeLinkText('ss:/broken')).toBe(false)
+    expect(isClashNodeLinkText('')).toBe(false)
+    expect(isClashNodeLinkText(null)).toBe(false)
+  })
+
+  it('reads the node name from the fragment or the vmess JSON', () => {
+    expect(clashNodeLinkName(ssLink)).toBe('🇺🇸 美国-洛杉矶 04')
+    expect(clashNodeLinkName(vmessLink)).toBe('JP 01')
+    expect(clashNodeLinkName('trojan://pw@a.example.com:443#%E6%97%A5%E6%9C%AC%2001')).toBe('日本 01')
+    expect(clashNodeLinkName('trojan://pw@a.example.com:443#100%')).toBe('100%')
+    expect(clashNodeLinkName('vmess://not-base64#Fallback')).toBe('Fallback')
+    expect(clashNodeLinkName('trojan://pw@a.example.com:443')).toBe('')
+  })
+
+  it('counts the links of pasted text and names the first one', () => {
+    expect(summarizeClashNodeLinks(`${ssLink}\r\n\r\n${vmessLink}\nnot a link`)).toEqual({ count: 2, firstName: '🇺🇸 美国-洛杉矶 04' })
+    expect(summarizeClashNodeLinks('proxies: []')).toEqual({ count: 0, firstName: '' })
   })
 })

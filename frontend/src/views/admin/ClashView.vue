@@ -366,7 +366,12 @@ function closeForm() {
   editingProfile.value = null
 }
 
-function handleSaved() {
+function handleSaved(payload?: { profile: ClashProfile; created: boolean; reparse?: boolean }) {
+  // A replaced file only takes effect once parsed; enabled subscriptions are re-parsed right away.
+  if (payload?.reparse && payload.profile.enabled) {
+    void refreshProfile(payload.profile, false)
+    return
+  }
   void loadProfiles()
   void nodesPanelRef.value?.reload()
 }
