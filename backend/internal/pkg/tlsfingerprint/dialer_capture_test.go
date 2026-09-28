@@ -8,6 +8,7 @@ import (
 	"io"
 	"net/http"
 	"os"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -137,7 +138,7 @@ func TestDialerAgainstCaptureServer(t *testing.T) {
 			}
 			effectiveKeyShare := tc.profile.KeyShareGroups
 			if len(effectiveKeyShare) == 0 {
-				effectiveKeyShare = []uint16{29} // X25519
+				effectiveKeyShare = []uint16{0x11ec, 0x001d} // X25519MLKEM768, X25519
 			}
 			effectivePSKModes := tc.profile.PSKModes
 			if len(effectivePSKModes) == 0 {
@@ -161,7 +162,7 @@ func TestDialerAgainstCaptureServer(t *testing.T) {
 			}
 
 			// 校验扩展顺序；如果 Profile 显式配置了 Extensions 就使用配置值，
-			// 否则使用默认顺序（Node.js 24.x）。
+			// 否则使用默认顺序（Claude Code 2.1.280 / Bun）。
 			expectedExtOrder := uint16sToInts(defaultExtensionOrder)
 			if len(tc.profile.Extensions) > 0 {
 				expectedExtOrder = uint16sToInts(tc.profile.Extensions)
@@ -358,8 +359,13 @@ func TestBuildClientHelloSpecNewFields(t *testing.T) {
 				t.Errorf("default versions: got %v, want 2 entries", e.Versions)
 			}
 		case *utls.KeyShareExtension:
-			if len(e.KeyShares) != 1 {
-				t.Errorf("default key shares: got %d, want 1", len(e.KeyShares))
+			// Claude Code 2.1.280 (Bun) sends a post-quantum X25519MLKEM768 share and an X25519 share.
+			groups := make([]utls.CurveID, len(e.KeyShares))
+			for i, share := range e.KeyShares {
+				groups[i] = share.Group
+			}
+			if want := []utls.CurveID{utls.X25519MLKEM768, utls.X25519}; !slices.Equal(groups, want) {
+				t.Errorf("default key shares: got %v, want %v", groups, want)
 			}
 		}
 	}
