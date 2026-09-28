@@ -113,6 +113,14 @@ func (s *GatewayService) ForwardCountTokens(ctx context.Context, c *gin.Context,
 		}
 	}
 
+	// 客户端上下文清洗（dateline 归一化 + userEmail 脱敏）：与 Forward 同一 helper。
+	// count_tokens 的 messages 同样带会话上下文块，不清洗就会把终端用户 email 发往上游。
+	if next, ok := s.sanitizeClientContextIfEnabled(ctx, account, body); ok {
+		if err := replaceBody(next); err != nil {
+			return err
+		}
+	}
+
 	// Antigravity 账户不支持 count_tokens，返回 404 让客户端 fallback 到本地估算。
 	// 返回 nil 避免 handler 层记录为错误，也不设置 ops 上游错误上下文。
 	if account.Platform == PlatformAntigravity {

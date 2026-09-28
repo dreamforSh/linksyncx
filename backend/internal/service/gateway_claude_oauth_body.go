@@ -278,6 +278,27 @@ func normalizeClaudeOAuthRequestBody(body []byte, modelID string, opts claudeOAu
 		}
 	}
 
+	// output_format（已废弃）→ output_config.format：真实客户端 SDK 在本地做此
+	// 迁移（2.1.283 二进制实证 Ai()：output_format 为真值才迁移，与 output_config.format
+	// 同时存在时客户端直接报错），上游永远不会从真实客户端收到顶层 output_format。
+	// 对象值迁移（两者都存在时保留 output_config.format）；null 等价于未设置，直接
+	// 删除；其它非法值原样透传，交由上游报错。
+	if raw := gjson.GetBytes(out, "output_format"); raw.Exists() {
+		migrate := raw.IsObject()
+		if migrate && !gjson.GetBytes(out, "output_config.format").Exists() {
+			if next, ok := setJSONRawBytes(out, "output_config.format", []byte(raw.Raw)); ok {
+				out = next
+				modified = true
+			}
+		}
+		if migrate || raw.Type == gjson.Null {
+			if next, ok := deleteJSONPathBytes(out, "output_format"); ok {
+				out = next
+				modified = true
+			}
+		}
+	}
+
 	// context_management：thinking.type 为 enabled/adaptive 时，真实 CLI 会自动
 	// 附带 {"edits":[{"type":"clear_thinking_20251015","keep":"all"}]}。
 	// 客户端显式传了就透传；否则按 CLI 行为补齐。
@@ -1254,6 +1275,53 @@ func (s *GatewayService) normalizeClientDatelineIfEnabled(ctx context.Context, a
 		return nil, false
 	}
 	return next, true
+}
+
+// sanitizeUserEmailForOAuth 脱敏请求体中的 "# userEmail" 上下文段（范围与约束见
+// anthropicfp.SanitizeUserEmail）：relay 场景下终端用户的 email 与上游账号身份不一致
+// （可观测差异 + 隐私泄漏）。账号记录了 email 时替换为账号 email，否则整段删除。
+// 与 dateline 归一化共用 enable_client_dateline_normalization 开关，返回约定同
+// normalizeClientDatelineIfEnabled。
+func (s *GatewayService) sanitizeUserEmailForOAuth(ctx context.Context, account *Account, body []byte) ([]byte, bool) {
+	if !s.shouldNormalizeClientDateline(ctx, account) {
+		return nil, false
+	}
+	next, changed := anthropicfp.SanitizeUserEmail(body, claudeOAuthAccountEmail(account))
+	if !changed {
+		return nil, false
+	}
+	return next, true
+}
+
+// claudeOAuthAccountEmail 返回 Anthropic OAuth/SetupToken 账号记录的 email，读取顺序与
+// 后台账号列表的展示一致：OAuth 授权流程写入的 extra.email_address → CRS 同步写入的
+// extra.email → credentials.email。
+func claudeOAuthAccountEmail(account *Account) string {
+	if account == nil {
+		return ""
+	}
+	if email := firstStringValue(account.Extra, "email_address", "email"); email != "" {
+		return email
+	}
+	return strings.TrimSpace(account.GetCredential("email"))
+}
+
+// sanitizeClientContextIfEnabled 是 enable_client_dateline_normalization 开关下的客户端
+// 上下文清洗：dateline 归一化 + userEmail 脱敏，仅对 Anthropic OAuth/SetupToken 账号
+// 生效。Forward 与 ForwardCountTokens 共用，两个出口发往上游的上下文块保持一致。
+// 只有请求体确实改变时才返回 (next, true)。
+func (s *GatewayService) sanitizeClientContextIfEnabled(ctx context.Context, account *Account, body []byte) ([]byte, bool) {
+	out, changed := body, false
+	if next, ok := s.normalizeClientDatelineIfEnabled(ctx, account, out); ok {
+		out, changed = next, true
+	}
+	if next, ok := s.sanitizeUserEmailForOAuth(ctx, account, out); ok {
+		out, changed = next, true
+	}
+	if !changed {
+		return nil, false
+	}
+	return out, true
 }
 
 func (s *GatewayService) claudeOAuthSystemPromptInjectionSettings(ctx context.Context) (bool, string, string) {

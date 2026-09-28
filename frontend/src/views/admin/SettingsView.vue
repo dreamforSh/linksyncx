@@ -5715,7 +5715,7 @@
                 <Toggle v-model="form.rewrite_message_cache_control" />
               </div>
 
-              <!-- 客户端 dateline 归一化（仅 Anthropic OAuth/SetupToken） -->
+              <!-- 客户端上下文清洗：dateline 归一化 + userEmail 脱敏（仅 Anthropic OAuth/SetupToken） -->
               <div class="flex items-center justify-between">
                 <div>
                   <label

@@ -477,6 +477,17 @@ func mergeAnthropicBeta(required []string, incoming string) string {
 	return strings.Join(out, ",")
 }
 
+// bodyHasStructuredOutputFormat 检测结构化输出请求：output_config.format 为对象，或
+// 废弃的顶层 output_format 为对象（normalizeClaudeOAuthRequestBody 会把后者迁移为
+// 前者）。与真实客户端一致，null 等非对象值不算（sideQuery 以 Boolean(output_format) 判定）。
+func bodyHasStructuredOutputFormat(body []byte) bool {
+	if len(body) == 0 {
+		return false
+	}
+	return gjson.GetBytes(body, "output_config.format").IsObject() ||
+		gjson.GetBytes(body, "output_format").IsObject()
+}
+
 func mergeAnthropicBetaDropping(required []string, incoming string, drop map[string]struct{}) string {
 	merged := mergeAnthropicBeta(required, incoming)
 	if merged == "" || len(drop) == 0 {
@@ -530,11 +541,18 @@ func (s *GatewayService) computeFinalAnthropicBeta(
 	if tokenType == "oauth" {
 		if mimicClaudeCode {
 			// mimic 路径跳过白名单透传，incomingBeta 始终为空；按真实 CLI 2.1.280
-			// 的 beta 选择规则按请求计算（haiku 的 claude-code 挪到末尾、thinking 才带
-			// redact-thinking 等），固定列表已无法通过上游的来源判定。
+			// 的 beta 选择规则按请求计算（haiku 的 claude-code 挪到末尾、thinking
+			// 才带 interleaved/effort 等），固定列表已无法通过上游的来源判定。
 			thinkingType := gjson.GetBytes(body, "thinking.type").String()
 			thinkingEnabled := thinkingType == "enabled" || thinkingType == "adaptive"
-			return mergeAnthropicBetaDropping(claude.ClaudeCodeMimicryBetas(modelID, thinkingEnabled), "", effectiveDropSet), true
+			betas := claude.ClaudeCodeMimicryBetas(modelID, thinkingEnabled)
+			// 结构化输出：2.1.283 的 sideQuery 在请求带 output_format 时把
+			// structured-outputs push 到 beta 列表末尾（SDK messages.parse() 同样追加在
+			// 末尾，Px() 只做映射不排序）；普通对话不携带。
+			if bodyHasStructuredOutputFormat(body) {
+				betas = append(betas, claude.BetaStructuredOutputs)
+			}
+			return mergeAnthropicBetaDropping(betas, "", effectiveDropSet), true
 		}
 		// 真 Claude Code 客户端透传路径
 		return stripBetaTokensWithSet(s.getBetaHeader(modelID, clientBeta), effectiveDropSet), true

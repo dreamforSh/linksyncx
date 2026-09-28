@@ -88,7 +88,8 @@ export default {
     health: {
       healthy: 'Healthy',
       unhealthy: 'Unhealthy',
-      unknown: 'Unchecked'
+      unknown: 'Unchecked',
+      failed: 'Failing'
     },
     nodeStatus: {
       active: 'Active',
@@ -416,6 +417,7 @@ export default {
       exitUnprobed: 'Not probed',
       pendingExit: 'New exit {ip} awaiting confirmation',
       exitStale: 'Probe failed; exit info may be outdated',
+      exitFailed: 'Probe failed',
       shadowTag: 'shadow',
       hiddenTag: 'Hidden',
       hiddenHint: 'Hidden: left out of the default node list and the account proxy selector, and kept disabled even when the subscription refreshes',
@@ -424,9 +426,11 @@ export default {
       loadFailed: 'Failed to load nodes',
       latencyDone: 'Latency test finished: {success} succeeded, {failed} failed',
       latencyFailed: 'Latency test failed',
+      latencyFailedDetail: 'Latency test failed: {error}',
       probeDone: 'Exit probe finished: {success} succeeded, {failed} failed',
       probeChanged: 'Exit probe finished: {success} succeeded, {failed} failed; {changed} node(s) changed their exit IP and await confirmation',
       probeFailed: 'Exit probe failed',
+      probeFailedDetail: 'Exit probe failed: {error}',
       enabledToast: 'Node enabled',
       disabledToast: 'Node disabled',
       toggleFailed: 'Failed to update the node',

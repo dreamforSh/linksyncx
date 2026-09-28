@@ -154,6 +154,74 @@ func newTestGatewayServiceForBeta(injectBetaForAPIKey bool) *GatewayService {
 	return &GatewayService{cfg: cfg}
 }
 
+func TestComputeFinalAnthropicBeta_OAuthMimic_StructuredOutputsConditional(t *testing.T) {
+	s := newTestGatewayServiceForBeta(false)
+	const schemaFormat = `{"type":"json_schema","schema":{"type":"object"}}`
+
+	// 普通对话，以及值为 null 的结构化输出字段：不携带（真实客户端按 Boolean(output_format) 判定）
+	for _, body := range []string{
+		`{"messages":[]}`,
+		`{"messages":[],"output_format":null}`,
+		`{"messages":[],"output_config":{"effort":"high","format":null}}`,
+	} {
+		final, ok := s.computeFinalAnthropicBeta("oauth", true, "claude-sonnet-4-6", http.Header{}, []byte(body), nil)
+		require.True(t, ok)
+		require.False(t, anthropicBetaTokensContains(final, claude.BetaStructuredOutputs),
+			"body %s 不得携带 structured-outputs beta", body)
+	}
+
+	// output_config.format 或废弃的顶层 output_format 为对象：追加在伪装列表末尾
+	// （2.1.283 sideQuery 的 push 与 SDK parse() 都追加在末尾），其余 beta 顺序不变；
+	// haiku 形态同样追加在末尾的 claude-code 之后。
+	for _, model := range []string{"claude-sonnet-4-6", "claude-haiku-4-5"} {
+		base := mergeAnthropicBetaDropping(claude.ClaudeCodeMimicryBetas(model, false), "", nil)
+		for _, body := range []string{
+			`{"messages":[],"output_config":{"format":` + schemaFormat + `}}`,
+			`{"messages":[],"output_format":` + schemaFormat + `}`,
+		} {
+			final, ok := s.computeFinalAnthropicBeta("oauth", true, model, http.Header{}, []byte(body), nil)
+			require.True(t, ok)
+			require.Equal(t, base+","+claude.BetaStructuredOutputs, final, "model=%s body=%s", model, body)
+		}
+	}
+}
+
+// output_format（已废弃）→ output_config.format，对齐 SDK Ai()：对象值迁移，并存时保留
+// output_config.format，null 直接删除，其它非法值原样透传交由上游报错。
+func TestNormalizeClaudeOAuthRequestBody_MigratesDeprecatedOutputFormat(t *testing.T) {
+	const format = `{"type":"json_schema","schema":{"type":"object"}}`
+	const clientFormat = `{"type":"json_schema","schema":{"type":"string"}}`
+	cases := []struct {
+		name, in         string
+		wantOutputFormat string // 空串表示 output_format 应被移除
+		wantOutputConfig string // 空串表示不应存在 output_config
+	}{
+		{name: "migrate", in: `{"output_format":` + format + `}`, wantOutputConfig: `{"format":` + format + `}`},
+		// 与 JS 的 {...output_config, format} 一致：format 追加在已有字段之后。
+		{name: "merge into existing output_config", in: `{"output_config":{"effort":"high"},"output_format":` + format + `}`, wantOutputConfig: `{"effort":"high","format":` + format + `}`},
+		{name: "both present keeps output_config.format", in: `{"output_config":{"format":` + clientFormat + `},"output_format":` + format + `}`, wantOutputConfig: `{"format":` + clientFormat + `}`},
+		{name: "null is dropped", in: `{"output_format":null}`},
+		{name: "invalid value passes through", in: `{"output_format":"json"}`, wantOutputFormat: `"json"`},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			in := `{"model":"claude-sonnet-4-6","messages":[],` + strings.TrimPrefix(tc.in, "{")
+			out, _ := normalizeClaudeOAuthRequestBody([]byte(in), "claude-sonnet-4-6", claudeOAuthNormalizeOptions{})
+
+			if tc.wantOutputFormat == "" {
+				require.False(t, gjson.GetBytes(out, "output_format").Exists(), "output_format 应被移除: %s", out)
+			} else {
+				require.Equal(t, tc.wantOutputFormat, gjson.GetBytes(out, "output_format").Raw)
+			}
+			if tc.wantOutputConfig == "" {
+				require.False(t, gjson.GetBytes(out, "output_config").Exists(), "不应生成 output_config: %s", out)
+			} else {
+				require.Equal(t, tc.wantOutputConfig, gjson.GetBytes(out, "output_config").Raw)
+			}
+		})
+	}
+}
+
 func TestComputeFinalAnthropicBeta_OAuthMimic_NonHaiku_IncludesContextManagement(t *testing.T) {
 	s := newTestGatewayServiceForBeta(false)
 	final, ok := s.computeFinalAnthropicBeta("oauth", true, "claude-sonnet-4-6", http.Header{}, []byte(`{}`), nil)

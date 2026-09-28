@@ -374,7 +374,10 @@
           <span class="flex flex-wrap items-center gap-x-1.5 text-xs" :title="healthTitle(row)" data-testid="clash-node-health">
             <span class="h-2 w-2 flex-shrink-0 rounded-full" :class="healthDotClass(row)" aria-hidden="true"></span>
             <span :class="healthTextClass(row)">{{ healthLabel(row) }}</span>
-            <span v-if="row.health_status === 'unhealthy' && row.consecutive_failures > 0" class="text-red-600 dark:text-red-400">
+            <span
+              v-if="row.consecutive_failures > 0"
+              :class="row.health_status === 'unhealthy' ? 'text-red-600 dark:text-red-400' : 'text-amber-600 dark:text-amber-400'"
+            >
               · {{ t('admin.clash.nodes.consecutiveFailures', { count: row.consecutive_failures }) }}
             </span>
             <span v-else-if="row.last_checked_at" class="text-gray-400 dark:text-dark-500">
@@ -392,6 +395,13 @@
             :class="row.status === 'invalid' ? 'text-red-600 dark:text-red-400' : 'text-gray-500 dark:text-dark-400'"
             :title="row.status_reason"
           >{{ localizeClashUnavailableReason(row.status_reason, t) }}</span>
+          <span
+            v-if="checkError(row)"
+            class="line-clamp-2 break-words text-xs"
+            :class="row.health_status === 'unhealthy' ? 'text-red-600 dark:text-red-400' : 'text-amber-700 dark:text-amber-300'"
+            :title="checkError(row)"
+            data-testid="clash-node-check-error"
+          >{{ checkError(row) }}</span>
         </div>
       </template>
 
@@ -401,6 +411,12 @@
             <CountryFlag :code="row.exit_country_code" :label="row.exit_country" />
             <span class="font-mono text-xs text-gray-900 dark:text-gray-100">{{ row.exit_ip }}</span>
           </div>
+          <div
+            v-else-if="exitFailed(row)"
+            class="text-xs text-amber-600 dark:text-amber-400"
+            :title="t('admin.clash.nodes.checkedAt', { time: formatDateTime(row.exit_checked_at) })"
+            data-testid="clash-node-exit-failed"
+          >{{ t('admin.clash.nodes.exitFailed') }}</div>
           <div v-else class="text-xs italic text-gray-400 dark:text-dark-500">{{ t('admin.clash.nodes.exitUnprobed') }}</div>
           <div v-if="exitLocation(row)" class="mt-0.5 truncate text-xs text-gray-500 dark:text-dark-400">{{ exitLocation(row) }}</div>
           <div
@@ -714,6 +730,8 @@ const {
   healthDotClass,
   healthTextClass,
   healthTitle,
+  checkError,
+  exitFailed,
   exitLocation,
   platformBadgeClass,
   platformTitle,
@@ -1092,8 +1110,11 @@ async function testOne(node: ClashNode) {
     applyLatencyResults(results)
     const success = results.filter((result) => result.success).length
     const failed = results.length - success
+    // One node: say why it failed instead of only counting.
+    const reason = results.length === 1 && !results[0].success ? results[0].error?.trim() : ''
     const message = t('admin.clash.nodes.latencyDone', { success, failed })
-    if (failed === 0) appStore.showSuccess(message)
+    if (reason) appStore.showError(t('admin.clash.nodes.latencyFailedDetail', { error: reason }))
+    else if (failed === 0) appStore.showSuccess(message)
     else appStore.showWarning(message)
     await load({ silent: true })
     emit('changed')
@@ -1113,7 +1134,9 @@ async function probeOne(node: ClashNode) {
     const success = results.filter((result) => result.success).length
     const failed = results.length - success
     const changed = results.filter((result) => result.exit_status === 'changed').length
-    if (changed > 0) appStore.showWarning(t('admin.clash.nodes.probeChanged', { success, failed, changed }))
+    const reason = results.length === 1 && !results[0].success ? results[0].error?.trim() : ''
+    if (reason) appStore.showError(t('admin.clash.nodes.probeFailedDetail', { error: reason }))
+    else if (changed > 0) appStore.showWarning(t('admin.clash.nodes.probeChanged', { success, failed, changed }))
     else if (failed > 0) appStore.showWarning(t('admin.clash.nodes.probeDone', { success, failed }))
     else appStore.showSuccess(t('admin.clash.nodes.probeDone', { success, failed }))
     await load({ silent: true })

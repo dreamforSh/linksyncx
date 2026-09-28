@@ -703,11 +703,14 @@ const (
 	// SettingKeyEnableAnthropicCacheTTL1hInjection 是否对 Anthropic OAuth/SetupToken 请求体注入 1h cache_control ttl（默认 false）
 	SettingKeyEnableAnthropicCacheTTL1hInjection = "enable_anthropic_cache_ttl_1h_injection"
 	// SettingKeyEnableClientDatelineNormalization 是否对 Anthropic OAuth/SetupToken 账号
-	// 的 /v1/messages 请求体做客户端 dateline 归一化（默认 true）。
-	// 归一化把 system prompt / <system-reminder> 块中 "Today's date is …" 语句里的
-	// 非 ASCII 撇号与 "/" 日期分隔符还原为 ASCII 撇号 + "-" 分隔符，抹除某些客户端
-	// 在检测到非官方 base URL 时注入的 3 bit 隐写指纹。仅适用于 Anthropic OAuth/SetupToken
-	// 账号；API Key 账号不受影响。
+	// 的 /v1/messages 与 count_tokens 请求体做客户端上下文清洗（默认 true）。清洗范围：
+	//  1. dateline 归一化：把 system prompt / <system-reminder> 块中 "Today's date is …"
+	//     语句里的非 ASCII 撇号与 "/" 日期分隔符还原为 ASCII 撇号 + "-" 分隔符，
+	//     抹除某些客户端在检测到非官方 base URL 时注入的 3 bit 隐写指纹；
+	//  2. userEmail 脱敏：<system-reminder> 块内的 "# userEmail" 上下文段改写为上游账号
+	//     email（账号未记录 email 时整段删除），relay 场景下终端用户 email 与上游账号
+	//     身份不一致。
+	// 仅适用于 Anthropic OAuth/SetupToken 账号；API Key 账号不受影响。
 	SettingKeyEnableClientDatelineNormalization = "enable_client_dateline_normalization"
 	// SettingKeyRewriteMessageCacheControl 是否改写 messages[*].content[*].cache_control（默认 false）
 	SettingKeyRewriteMessageCacheControl = "rewrite_message_cache_control"

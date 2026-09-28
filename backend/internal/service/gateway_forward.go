@@ -279,11 +279,14 @@ func (s *GatewayService) Forward(ctx context.Context, c *gin.Context, account *A
 		}
 	}
 
-	// 客户端 dateline 归一化：仅对 Anthropic OAuth/SetupToken 账号生效。
-	// 抹除 "Today's date is …" 语句里可能被注入的隐写指纹（4 种撇号 × 2 种日期
-	// 分隔符），还原为 ASCII 撇号 + "-" 分隔符。运行在 mimicry 分支之外，
-	// 保证真实 Claude Code 客户端注入的指纹同样被清洗。
-	if next, ok := s.normalizeClientDatelineIfEnabled(ctx, account, body); ok {
+	// 客户端上下文清洗：仅对 Anthropic OAuth/SetupToken 账号生效。
+	//   - dateline 归一化：抹除 "Today's date is …" 语句里可能被注入的隐写指纹
+	//     （4 种撇号 × 2 种日期分隔符），还原为 ASCII 撇号 + "-" 分隔符；
+	//   - userEmail 脱敏：relay 场景下终端用户 email 与上游 OAuth 账号身份不一致
+	//     （可观测差异 + 隐私泄漏），替换为账号 email 或整段删除。
+	// 运行在 mimicry 分支之外，保证真实 Claude Code 客户端同样被清洗；
+	// ForwardCountTokens 走同一个 helper。
+	if next, ok := s.sanitizeClientContextIfEnabled(ctx, account, body); ok {
 		if err := replaceBody(next); err != nil {
 			return nil, err
 		}

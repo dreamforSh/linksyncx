@@ -32,6 +32,13 @@ const (
 	BetaPromptCachingEvict         = "prompt-caching-evict-2026-05-12"
 	BetaThinkingBindingControls    = "thinking-binding-controls-2026-08-01"
 
+	// structured-outputs：条件携带，禁止加入任何默认/伪装固定列表。2.1.283 二进制实证：
+	//   - sideQuery 仅在请求带 output_format（发出时为 output_config.format）时把它
+	//     push 到 beta 列表末尾；SDK messages.parse() 同样追加在末尾；
+	//   - 主循环选择表里它受 GrowthBook 开关 tengu_tool_pear 控制，与请求体无关，
+	//     默认关闭，普通对话流量不携带。
+	BetaStructuredOutputs = "structured-outputs-2025-12-15"
+
 	// SDK surfaceCapabilities.sdkBetas 能力位（2.1.280 第一方抓包实证：每次
 	// /v1/messages?beta=true 均携带，经 mf()→surfaceCapabilities.sdkBetas() 注入）。
 	BetaAdvancedToolUse              = "advanced-tool-use-2025-11-20"

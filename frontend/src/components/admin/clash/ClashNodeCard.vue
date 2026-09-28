@@ -47,6 +47,13 @@
       :class="node.status === 'invalid' ? 'text-red-600 dark:text-red-400' : 'text-gray-500 dark:text-dark-400'"
       :title="node.status_reason"
     >{{ localizeClashUnavailableReason(node.status_reason, t) }}</p>
+    <p
+      v-else-if="checkError(node)"
+      class="mx-4 mt-2 line-clamp-2 break-words text-xs"
+      :class="node.health_status === 'unhealthy' ? 'text-red-600 dark:text-red-400' : 'text-amber-700 dark:text-amber-300'"
+      :title="checkError(node)"
+      data-testid="clash-node-check-error"
+    >{{ checkError(node) }}</p>
 
     <div class="mx-4 mt-3 grid grid-cols-3 divide-x divide-gray-200 rounded-lg bg-gray-50 py-2 text-center dark:divide-dark-700 dark:bg-dark-800/70">
       <div class="min-w-0 px-1.5" :title="healthTitle(node)" data-testid="clash-node-health">
@@ -96,6 +103,12 @@
         <span class="font-mono text-gray-900 dark:text-gray-100">{{ node.exit_ip }}</span>
         <span v-if="exitLocation(node)" class="truncate text-gray-500 dark:text-dark-400" :title="exitLocation(node)">{{ exitLocation(node) }}</span>
       </div>
+      <div
+        v-else-if="exitFailed(node)"
+        class="text-amber-600 dark:text-amber-400"
+        :title="t('admin.clash.nodes.checkedAt', { time: formatDateTime(node.exit_checked_at) })"
+        data-testid="clash-node-exit-failed"
+      >{{ t('admin.clash.nodes.exitFailed') }}</div>
       <div v-else class="italic text-gray-400 dark:text-dark-500">{{ t('admin.clash.nodes.exitUnprobed') }}</div>
       <div
         v-if="node.exit_status === 'changed'"
@@ -283,6 +296,8 @@ const {
   healthDotClass,
   healthTextClass,
   healthTitle,
+  checkError,
+  exitFailed,
   exitLocation,
   platformBadgeClass,
   platformTitle,

@@ -745,6 +745,65 @@ describe('ClashView', () => {
     expect(api.refreshProfile).toHaveBeenCalledWith(1, { force: false })
   })
 
+  it('shows failing checks as failures instead of never tested', async () => {
+    const failing = node({
+      id: 21,
+      name: 'US 04',
+      type: 'ss',
+      health_status: 'unknown',
+      latency_ms: null,
+      consecutive_failures: 2,
+      last_checked_at: '2026-09-28T00:00:00Z',
+      last_check_error: 'dial tcp: lookup us04.example.com: no such host',
+      exit_ip: '',
+      exit_country: '',
+      exit_country_code: '',
+      exit_status: 'unknown',
+      exit_checked_at: '2026-09-28T00:01:00Z',
+      platform_checks: { checked_at: null, results: {} }
+    })
+    const unchecked = node({
+      id: 22,
+      name: 'US 05',
+      health_status: 'unknown',
+      latency_ms: null,
+      exit_ip: '',
+      exit_status: 'unknown',
+      platform_checks: { checked_at: null, results: {} }
+    })
+    api.listNodes.mockResolvedValue({ items: [failing, unchecked], total: 2, page: 1, page_size: 20, pages: 1 })
+    const wrapper = await mountView()
+
+    const [failingCard, uncheckedCard] = wrapper.findAll('[data-testid="clash-node-card"]')
+    expect(failingCard.get('[data-testid="clash-node-health"]').text()).toContain('admin.clash.health.failed')
+    expect(failingCard.get('[data-testid="clash-node-check-error"]').text()).toBe('dial tcp: lookup us04.example.com: no such host')
+    expect(failingCard.get('[data-testid="clash-node-exit-failed"]').text()).toBe('admin.clash.nodes.exitFailed')
+    expect(uncheckedCard.get('[data-testid="clash-node-health"]').text()).toContain('admin.clash.health.unknown')
+    expect(uncheckedCard.find('[data-testid="clash-node-check-error"]').exists()).toBe(false)
+    expect(uncheckedCard.get('[data-testid="clash-node-exit"]').text()).toContain('admin.clash.nodes.exitUnprobed')
+
+    await wrapper.get('[data-testid="clash-nodes-view-table"]').trigger('click')
+    const row = wrapper.get('[data-testid="clash-nodes-panel"] tbody tr')
+    expect(row.get('[data-testid="clash-node-health"]').text()).toContain('admin.clash.nodes.consecutiveFailures {"count":2}')
+    expect(row.get('[data-testid="clash-node-check-error"]').text()).toBe('dial tcp: lookup us04.example.com: no such host')
+    expect(row.get('[data-testid="clash-node-exit-failed"]').text()).toBe('admin.clash.nodes.exitFailed')
+  })
+
+  it('names the reason when testing a single node fails', async () => {
+    api.testNodesLatency.mockResolvedValue([{ node_id: 11, success: false, error: 'dial tcp 1.2.3.4:443: i/o timeout', health_status: 'unknown' }])
+    api.probeNodesExit.mockResolvedValue([{ node_id: 11, success: false, error: 'socks connect: general SOCKS server failure', exit_status: 'unknown' }])
+    const wrapper = await mountView()
+    const card = wrapper.findAll('[data-testid="clash-node-card"]')[0]
+
+    await card.get('[data-testid="clash-node-latency"]').trigger('click')
+    await flushPromises()
+    expect(toast.showError).toHaveBeenCalledWith('admin.clash.nodes.latencyFailedDetail {"error":"dial tcp 1.2.3.4:443: i/o timeout"}')
+
+    await card.get('[data-testid="clash-node-probe"]').trigger('click')
+    await flushPromises()
+    expect(toast.showError).toHaveBeenLastCalledWith('admin.clash.nodes.probeFailedDetail {"error":"socks connect: general SOCKS server failure"}')
+  })
+
   it('shows friendly errors for Clash API failures', async () => {
     api.resyncRuntime.mockRejectedValue({ status: 503, reason: 'CLASH_RUNTIME_UNAVAILABLE', message: 'core down' })
     const wrapper = await mountView()

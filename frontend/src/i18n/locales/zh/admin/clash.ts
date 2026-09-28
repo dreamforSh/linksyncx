@@ -88,7 +88,8 @@ export default {
     health: {
       healthy: '健康',
       unhealthy: '异常',
-      unknown: '未检测'
+      unknown: '未检测',
+      failed: '检测失败'
     },
     nodeStatus: {
       active: '正常',
@@ -416,6 +417,7 @@ export default {
       exitUnprobed: '未探测',
       pendingExit: '新出口 {ip} 待确认',
       exitStale: '探测失败，出口信息可能已过期',
+      exitFailed: '探测失败',
       shadowTag: '影子',
       hiddenTag: '已隐藏',
       hiddenHint: '已隐藏：不出现在默认节点列表和账号的代理选择器中，并保持禁用，订阅刷新也不会恢复',
@@ -424,9 +426,11 @@ export default {
       loadFailed: '加载节点失败',
       latencyDone: '延迟测试完成：成功 {success}，失败 {failed}',
       latencyFailed: '延迟测试失败',
+      latencyFailedDetail: '延迟测试失败：{error}',
       probeDone: '出口探测完成：成功 {success}，失败 {failed}',
       probeChanged: '出口探测完成：成功 {success}，失败 {failed}；{changed} 个节点出口 IP 发生变化，待确认',
       probeFailed: '出口探测失败',
+      probeFailedDetail: '出口探测失败：{error}',
       enabledToast: '节点已启用',
       disabledToast: '节点已禁用',
       toggleFailed: '更新节点状态失败',

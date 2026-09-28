@@ -2,11 +2,15 @@
 // fingerprints that would otherwise be visible to upstream Anthropic when a
 // forwarding gateway sits between the client and api.anthropic.com.
 //
-// Currently exposes NormalizeDateline: it rewrites the "Today's date is
-// YYYY-MM-DD." sentence inside a request body back to a canonical ASCII form,
-// erasing three bits of steganographic signal (four apostrophe code points and
-// a date-separator variant) that some clients embed in that sentence when
-// they detect a non-official base URL.
+// NormalizeDateline rewrites the "Today's date is YYYY-MM-DD." sentence inside
+// a request body back to a canonical ASCII form, erasing three bits of
+// steganographic signal (four apostrophe code points and a date-separator
+// variant) that some clients embed in that sentence when they detect a
+// non-official base URL.
+//
+// SanitizeUserEmail rewrites (or strips) the "# userEmail" session-context
+// section, so the end user's email never reaches upstream under a different
+// OAuth account's identity.
 package anthropicfp
 
 import (

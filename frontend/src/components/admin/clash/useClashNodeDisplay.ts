@@ -78,15 +78,24 @@ export function useClashNodeDisplay() {
     }
   }
 
+  /**
+   * Checked but never passed: health stays "unknown" until the failure threshold is reached, so
+   * without this a node that cannot connect would look as if it had never been tested.
+   */
+  const healthFailed = (node: ClashNode) =>
+    node.health_status === 'unknown' && !!node.last_checked_at && (node.consecutive_failures > 0 || !!node.last_check_error)
+
   const healthLabel = (node: ClashNode) => {
     if (node.health_status === 'healthy') {
       return typeof node.latency_ms === 'number' ? `${node.latency_ms} ms` : t('admin.clash.health.healthy')
     }
-    return node.health_status === 'unhealthy' ? t('admin.clash.health.unhealthy') : t('admin.clash.health.unknown')
+    if (node.health_status === 'unhealthy') return t('admin.clash.health.unhealthy')
+    return healthFailed(node) ? t('admin.clash.health.failed') : t('admin.clash.health.unknown')
   }
 
   const healthDotClass = (node: ClashNode) => {
     if (node.health_status === 'unhealthy') return 'bg-red-500'
+    if (healthFailed(node)) return 'bg-amber-500'
     if (node.health_status !== 'healthy') return 'bg-gray-400'
     const latency = node.latency_ms ?? 0
     if (latency >= 1000) return 'bg-red-500'
@@ -96,6 +105,7 @@ export function useClashNodeDisplay() {
 
   const healthTextClass = (node: ClashNode) => {
     if (node.health_status === 'unhealthy') return 'font-medium text-red-600 dark:text-red-400'
+    if (healthFailed(node)) return 'font-medium text-amber-600 dark:text-amber-400'
     if (node.health_status === 'healthy') return 'font-medium tabular-nums text-gray-800 dark:text-gray-100'
     return 'text-gray-500 dark:text-dark-400'
   }
@@ -106,6 +116,13 @@ export function useClashNodeDisplay() {
     if (node.last_check_error) parts.push(node.last_check_error)
     return parts.join('\n') || undefined
   }
+
+  /** Error of the latest failed latency check, shown inline while a live node keeps failing. */
+  const checkError = (node: ClashNode) =>
+    node.status === 'active' && (node.consecutive_failures > 0 || healthFailed(node)) ? node.last_check_error.trim() : ''
+
+  /** Probed without ever getting an exit IP: a failed probe leaves the exit status "unknown". */
+  const exitFailed = (node: ClashNode) => !node.exit_ip && !!node.exit_checked_at
 
   const exitLocation = (node: ClashNode) =>
     [node.exit_country, node.exit_region, node.exit_city]
@@ -158,6 +175,8 @@ export function useClashNodeDisplay() {
     healthDotClass,
     healthTextClass,
     healthTitle,
+    checkError,
+    exitFailed,
     exitLocation,
     platformBadgeClass,
     platformResultLabel,
