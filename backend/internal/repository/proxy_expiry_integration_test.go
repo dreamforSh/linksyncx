@@ -61,6 +61,23 @@ func (s *ProxyExpirySuite) TestLegacyDirectFallbackModeIsRejectedByDatabase() {
 	s.Require().Error(s.repo.Create(s.ctx, p), "fallback_mode=direct must be rejected by proxies_fallback_mode_check")
 }
 
+// CRS 同步等内部路径创建 / 更新代理时不填回退策略：必须按默认值 none 写入，不能撞上 CHECK 约束。
+func (s *ProxyExpirySuite) TestUnspecifiedFallbackModeIsStoredAsNone() {
+	p := &service.Proxy{Name: "p-crs", Protocol: "http", Host: "127.0.0.1", Port: 8080, Status: service.StatusActive}
+	s.Require().NoError(s.repo.Create(s.ctx, p))
+	s.Require().Equal(service.FallbackModeNone, p.FallbackMode)
+	got, err := s.repo.GetByID(s.ctx, p.ID)
+	s.Require().NoError(err)
+	s.Require().Equal(service.FallbackModeNone, got.FallbackMode)
+
+	got.FallbackMode = ""
+	got.Name = "p-crs-renamed"
+	s.Require().NoError(s.repo.Update(s.ctx, got))
+	reloaded, err := s.repo.GetByID(s.ctx, p.ID)
+	s.Require().NoError(err)
+	s.Require().Equal(service.FallbackModeNone, reloaded.FallbackMode)
+}
+
 func (s *ProxyExpirySuite) TestSweep_EnqueuesChangedAccountIDsWithoutFullRebuild() {
 	past := time.Now().Add(-time.Hour)
 	future := time.Now().Add(24 * time.Hour)

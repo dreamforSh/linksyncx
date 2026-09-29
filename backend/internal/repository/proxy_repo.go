@@ -33,6 +33,16 @@ func newProxyRepositoryWithSQL(client *dbent.Client, sqlq sqlExecutor) *proxyRep
 	return &proxyRepository{client: client, sql: sqlq}
 }
 
+// storedProxyFallbackMode 把未指定的过期回退策略（空串）按列默认值写成 none：ent 显式写入
+// 列值时不会套用数据库默认值，而 proxies_fallback_mode_check（迁移 251）只允许 none / proxy。
+// CRS 同步等内部路径创建代理时不填该字段，必须在这里兜底；非法取值原样写入，交给 CHECK 约束拒绝。
+func storedProxyFallbackMode(mode string) string {
+	if mode == "" {
+		return service.FallbackModeNone
+	}
+	return mode
+}
+
 func (r *proxyRepository) Create(ctx context.Context, proxyIn *service.Proxy) error {
 	builder := r.client.Proxy.Create().
 		SetName(proxyIn.Name).
@@ -40,7 +50,7 @@ func (r *proxyRepository) Create(ctx context.Context, proxyIn *service.Proxy) er
 		SetHost(proxyIn.Host).
 		SetPort(proxyIn.Port).
 		SetStatus(proxyIn.Status).
-		SetFallbackMode(proxyIn.FallbackMode).
+		SetFallbackMode(storedProxyFallbackMode(proxyIn.FallbackMode)).
 		SetExpiryWarnDays(proxyIn.ExpiryWarnDays)
 	if proxyIn.Source != "" {
 		builder.SetSource(proxyIn.Source)
@@ -157,7 +167,7 @@ func updateProxyAndInvalidateProbeSnapshots(ctx context.Context, client *dbent.C
 		SetHost(proxyIn.Host).
 		SetPort(proxyIn.Port).
 		SetStatus(proxyIn.Status).
-		SetFallbackMode(proxyIn.FallbackMode).
+		SetFallbackMode(storedProxyFallbackMode(proxyIn.FallbackMode)).
 		SetExpiryWarnDays(proxyIn.ExpiryWarnDays)
 	if proxyIn.Username != "" {
 		builder.SetUsername(proxyIn.Username)
