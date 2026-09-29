@@ -644,6 +644,8 @@ func applyProxyEntityToService(dst *service.Proxy, src *dbent.Proxy) {
 	dst.CreatedAt = src.CreatedAt
 	dst.UpdatedAt = src.UpdatedAt
 	dst.Source = src.Source
+	// 未指定的回退策略由 storedProxyFallbackMode 补成 none，回写实际存储值。
+	dst.FallbackMode = src.FallbackMode
 }
 
 // ListAllForFallback 返回所有代理（含过期/非活跃），供改投逻辑使用。
