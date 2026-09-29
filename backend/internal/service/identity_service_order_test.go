@@ -15,15 +15,17 @@ type identityCacheStub struct {
 func (s *identityCacheStub) GetFingerprint(_ context.Context, _ int64) (*Fingerprint, error) {
 	return nil, nil
 }
-func (s *identityCacheStub) SetFingerprint(_ context.Context, _ int64, _ *Fingerprint) error {
-	return nil
+func (s *identityCacheStub) SetFingerprint(_ context.Context, _ int64, fp *Fingerprint) (*Fingerprint, error) {
+	return fp, nil
 }
-func (s *identityCacheStub) GetMaskedSessionID(_ context.Context, _ int64) (string, error) {
+func (s *identityCacheStub) CreateFingerprint(_ context.Context, _ int64, fp *Fingerprint) (*Fingerprint, error) {
+	return fp, nil
+}
+func (s *identityCacheStub) GetOrCreateMaskedSessionID(_ context.Context, _ int64, candidate string) (string, error) {
+	if s.maskedSessionID == "" {
+		s.maskedSessionID = candidate
+	}
 	return s.maskedSessionID, nil
-}
-func (s *identityCacheStub) SetMaskedSessionID(_ context.Context, _ int64, sessionID string) error {
-	s.maskedSessionID = sessionID
-	return nil
 }
 
 func TestIdentityService_RewriteUserID_PreservesTopLevelFieldOrder(t *testing.T) {

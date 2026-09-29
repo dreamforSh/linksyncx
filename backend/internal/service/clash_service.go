@@ -258,12 +258,8 @@ func (s *ClashService) validateProfile(ctx context.Context, p *ClashProfile, raw
 		}
 	}
 	if p.FetchProxyID != nil {
-		proxy, err := s.proxyRepo.GetByID(ctx, *p.FetchProxyID)
-		if err != nil {
-			return infraerrors.BadRequest(ClashErrCodeProfileInvalid, "fetch proxy not found")
-		}
-		if proxy.IsClashManaged() {
-			return infraerrors.BadRequest(ClashErrCodeProfileInvalid, "fetch proxy must be a manual proxy")
+		if _, err := s.subscriptionFetchProxy(ctx, *p.FetchProxyID); err != nil {
+			return err
 		}
 	}
 	if exists, err := s.repo.ExistsProfileName(ctx, p.Name, p.ID); err != nil {
@@ -522,12 +518,26 @@ func (s *ClashService) maxNodesPerProfile() int {
 	return s.cfg.ClashPool.Subscription.MaxNodesPerProfile
 }
 
+func (s *ClashService) subscriptionFetchProxy(ctx context.Context, id int64) (*Proxy, error) {
+	if s.proxyRepo == nil {
+		return nil, fmt.Errorf("fetch proxy %d storage is unavailable", id)
+	}
+	proxy, err := s.proxyRepo.GetByID(ctx, id)
+	if err != nil || proxy == nil {
+		return nil, infraerrors.BadRequest(ClashErrCodeProfileInvalid, "fetch proxy not found")
+	}
+	if proxy.IsClashManaged() {
+		return nil, infraerrors.BadRequest(ClashErrCodeProfileInvalid, "fetch proxy must be a manual proxy")
+	}
+	return proxy, nil
+}
+
 func (s *ClashService) fetchAndParse(ctx context.Context, rawURL, userAgent string, fetchProxyID *int64) (*clashsub.Result, *ClashUserInfo, error) {
 	var via *Proxy
 	if fetchProxyID != nil {
-		proxy, err := s.proxyRepo.GetByID(ctx, *fetchProxyID)
+		proxy, err := s.subscriptionFetchProxy(ctx, *fetchProxyID)
 		if err != nil {
-			return nil, nil, fmt.Errorf("fetch proxy %d: %w", *fetchProxyID, err)
+			return nil, nil, err
 		}
 		via = proxy
 	}

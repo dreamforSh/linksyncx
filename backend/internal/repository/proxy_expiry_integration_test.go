@@ -73,6 +73,7 @@ func (s *ProxyExpirySuite) TestUnspecifiedFallbackModeIsStoredAsNone() {
 	got.FallbackMode = ""
 	got.Name = "p-crs-renamed"
 	s.Require().NoError(s.repo.Update(s.ctx, got))
+	s.Require().Equal(service.FallbackModeNone, got.FallbackMode)
 	reloaded, err := s.repo.GetByID(s.ctx, p.ID)
 	s.Require().NoError(err)
 	s.Require().Equal(service.FallbackModeNone, reloaded.FallbackMode)

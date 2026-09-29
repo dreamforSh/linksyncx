@@ -604,16 +604,15 @@ sudo systemctl status redis
 
 ## TLS Fingerprint Configuration
 
-Sub2API supports TLS fingerprint simulation to make requests appear as if they come from the official Claude CLI (Node.js client).
+Sub2API supports configurable TLS ClientHello profiles. The built-in default targets Claude Code 2.1.280 / Bun; a profile alone does not reproduce an entire client.
 
 > **💡 Tip:** Visit **[tls.sub2api.org](https://tls.sub2api.org/)** to get TLS fingerprint information for different devices and browsers.
 
 ### Default Behavior
 
-- Built-in `claude_cli_v2` profile simulates Node.js 20.x + OpenSSL 3.x
-- JA3 Hash: `1a28e69016765d92e3b381168d68922c`
-- JA4: `t13d5911h1_a33745022dd6_1f22a2ca17c4`
-- Profile selection: `accountID % profileCount`
+- Empty fields independently inherit the built-in defaults, including `key_share_groups: [4588, 29]` (X25519MLKEM768, X25519).
+- Custom `curves` must include every effective key-share group. For a Node profile with no group `4588`, explicitly set `key_share_groups: [29]`; inconsistent profiles are rejected before connecting.
+- Accounts can select a stored profile, use random selection, or inherit the built-in default.
 
 ### Configuration
 
@@ -631,13 +630,15 @@ gateway:
         name: "Profile 2"
         cipher_suites: [4866, 4867, 4865, 49199, 49195, 49200, 49196]
         curves: [29, 23, 24]
-        point_formats: 0
+        key_share_groups: [29]
+        point_formats: [0]
 
       # Another custom profile
       profile_3:
         name: "Profile 3"
         cipher_suites: [4865, 4866, 4867, 49199, 49200]
         curves: [29, 23, 24, 25]
+        key_share_groups: [29]
 ```
 
 ### Profile Fields
@@ -646,7 +647,8 @@ gateway:
 |-------|------|-------------|
 | `name` | string | Display name (required) |
 | `cipher_suites` | []uint16 | Cipher suites in decimal. Empty = default |
-| `curves` | []uint16 | Elliptic curves in decimal. Empty = default |
+| `curves` | []uint16 | Supported groups in decimal. Empty = default |
+| `key_share_groups` | []uint16 | Groups sent in Key Share. Empty = default; every group must also occur in `curves` |
 | `point_formats` | []uint8 | EC point formats. Empty = default |
 
 ### Common Values Reference

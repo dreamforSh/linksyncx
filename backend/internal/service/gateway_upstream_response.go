@@ -527,18 +527,11 @@ func (s *GatewayService) handleErrorResponse(ctx context.Context, resp *http.Res
 	return nil, fmt.Errorf("upstream error: %d message=%s", resp.StatusCode, upstreamMsg)
 }
 
-func (s *GatewayService) handleRetryExhaustedSideEffects(ctx context.Context, resp *http.Response, account *Account) {
-	body, _ := s.readUpstreamErrorBody(resp)
-	statusCode := resp.StatusCode
-
-	// OAuth/Setup Token 账号的 403：标记账号异常
-	if account.IsOAuth() && statusCode == 403 {
-		s.rateLimitService.HandleUpstreamError(ctx, account, statusCode, resp.Header, body)
-		logger.LegacyPrintf("service.gateway", "Account %d: marked as error after %d retries for status %d", account.ID, maxRetryAttempts, statusCode)
-	} else {
-		// API Key 未配置错误码：不标记账号状态
-		logger.LegacyPrintf("service.gateway", "Account %d: upstream error %d after %d retries (not marking account)", account.ID, statusCode, maxRetryAttempts)
-	}
+// handleRetryExhaustedSideEffects 记录同账号重试耗尽。只有 API Key 账号会进入重试
+// （OAuth/Setup Token 账号不做同账号重试，见 shouldRetryUpstreamError），
+// 未配置的错误码不标记账号状态。
+func (s *GatewayService) handleRetryExhaustedSideEffects(_ context.Context, resp *http.Response, account *Account) {
+	logger.LegacyPrintf("service.gateway", "Account %d: upstream error %d after %d retries (not marking account)", account.ID, resp.StatusCode, maxRetryAttempts)
 }
 
 func (s *GatewayService) handleFailoverSideEffects(ctx context.Context, resp *http.Response, account *Account, requestedModel ...string) {
@@ -550,9 +543,8 @@ func (s *GatewayService) handleFailoverSideEffects(ctx context.Context, resp *ht
 	s.rateLimitService.HandleUpstreamError(ctx, account, resp.StatusCode, resp.Header, body)
 }
 
-// handleRetryExhaustedError 处理重试耗尽后的错误
-// OAuth 403：标记账号异常
-// API Key 未配置错误码：仅返回错误，不标记账号
+// handleRetryExhaustedError 处理重试耗尽后的错误（只有 API Key 账号会进入重试）：
+// 未配置错误码仅返回错误，不标记账号
 func (s *GatewayService) handleRetryExhaustedError(ctx context.Context, resp *http.Response, c *gin.Context, account *Account) (*ForwardResult, error) {
 	MarkResponseCommitted(c)
 	// Capture upstream error body before side-effects consume the stream.
