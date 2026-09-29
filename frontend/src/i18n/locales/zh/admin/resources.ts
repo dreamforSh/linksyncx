@@ -239,7 +239,6 @@ export default {
       fallbackMode: '到期回退',
       fallbackNone: '不回退',
       fallbackProxy: '指定备用代理',
-      fallbackDirect: '回退直连',
       backupProxy: '备用代理',
     },
 

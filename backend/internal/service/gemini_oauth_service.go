@@ -113,12 +113,10 @@ func (s *GeminiOAuthService) GenerateAuthURL(ctx context.Context, proxyID *int64
 		return nil, fmt.Errorf("failed to generate session ID: %w", err)
 	}
 
-	var proxyURL string
-	if proxyID != nil {
-		proxy, err := s.proxyRepo.GetByID(ctx, *proxyID)
-		if err == nil && proxy != nil {
-			proxyURL = proxy.URL()
-		}
+	// fail-closed：选了代理但解析失败时报错，绝不直连。
+	proxyURL, err := resolveProxyURLByID(ctx, s.proxyRepo, proxyID)
+	if err != nil {
+		return nil, err
 	}
 
 	// OAuth client selection:
@@ -409,10 +407,10 @@ func (s *GeminiOAuthService) RefreshAccountGoogleOneTier(
 		return "", nil, nil, fmt.Errorf("missing access_token")
 	}
 
-	// 获取 proxy URL
-	var proxyURL string
-	if account.ProxyID != nil && account.Proxy != nil {
-		proxyURL = account.Proxy.URL()
+	// 获取 proxy URL（fail-closed：分配了代理但不可用时拒绝直连，避免出口 IP 泄漏）
+	proxyURL, proxyErr := account.ProxyURLForOutbound()
+	if proxyErr != nil {
+		return "", nil, nil, proxyErr
 	}
 
 	// 调用 Drive API
@@ -456,14 +454,17 @@ func (s *GeminiOAuthService) ExchangeCode(ctx context.Context, input *GeminiExch
 		return nil, fmt.Errorf("invalid state")
 	}
 
+	// fail-closed：选了代理但解析失败时报错，绝不直连。
 	proxyURL := session.ProxyURL
 	if input.ProxyID != nil {
-		proxy, err := s.proxyRepo.GetByID(ctx, *input.ProxyID)
-		if err == nil && proxy != nil {
-			proxyURL = proxy.URL()
+		resolved, err := resolveProxyURLByID(ctx, s.proxyRepo, input.ProxyID)
+		if err != nil {
+			return nil, err
 		}
+		proxyURL = resolved
 	}
-	logger.LegacyPrintf("service.gemini_oauth", "[GeminiOAuth] ProxyURL: %s", proxyURL)
+	// 只记录是否走代理：代理 URL 可能内含账号密码，不能进日志。
+	logger.LegacyPrintf("service.gemini_oauth", "[GeminiOAuth] Using proxy: %t", proxyURL != "")
 
 	redirectURI := session.RedirectURI
 
@@ -746,12 +747,10 @@ func (s *GeminiOAuthService) RefreshAccountToken(ctx context.Context, account *A
 		oauthType = "code_assist"
 	}
 
-	var proxyURL string
-	if account.ProxyID != nil {
-		proxy, err := s.proxyRepo.GetByID(ctx, *account.ProxyID)
-		if err == nil && proxy != nil {
-			proxyURL = proxy.URL()
-		}
+	// fail-closed：账号分配了代理但解析失败时报错，绝不直连刷新 token。
+	proxyURL, err := accountProxyURLWithRepo(ctx, s.proxyRepo, account)
+	if err != nil {
+		return nil, err
 	}
 
 	tokenInfo, err := s.RefreshToken(ctx, oauthType, refreshToken, proxyURL)

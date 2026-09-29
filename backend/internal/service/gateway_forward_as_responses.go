@@ -130,10 +130,14 @@ func (s *GatewayService) ForwardAsResponses(
 		return nil, fmt.Errorf("get access token: %w", err)
 	}
 
-	// 9. Get proxy URL
-	proxyURL := ""
-	if account.ProxyID != nil && account.Proxy != nil {
-		proxyURL = account.Proxy.URL()
+	// 9. Get proxy URL (fail-closed：分配了代理但不可用时拒绝直连，按传输层故障 failover)
+	resolvedProxyURL, proxyErr := account.ProxyURLForOutbound()
+	if proxyErr != nil {
+		return nil, s.handleUpstreamTransportError(ctx, c, account, proxyErr, OpsUpstreamErrorEvent{})
+	}
+	proxyURL := resolvedProxyURL
+	if account.IsCustomBaseURLEnabled() && account.GetCustomBaseURL() != "" {
+		proxyURL = "" // relay 通过 &proxy= 携带代理
 	}
 
 	// 10. Build upstream request

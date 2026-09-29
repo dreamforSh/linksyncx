@@ -18,6 +18,9 @@ import (
 	"github.com/Wei-Shaw/sub2api/internal/util/httputil"
 )
 
+// errInvalidProxyFallbackMode 拒绝 none / proxy 以外的过期回退策略（含已移除的 "direct"）。
+var errInvalidProxyFallbackMode = infraerrors.BadRequest("PROXY_FALLBACK_MODE_INVALID", "fallback_mode must be none or proxy")
+
 // Proxy management implementations
 func (s *adminServiceImpl) ListProxies(ctx context.Context, page, pageSize int, protocol, status, search, source string, sortBy, sortOrder string) ([]Proxy, int64, error) {
 	params := pagination.PaginationParams{Page: page, PageSize: pageSize, SortBy: sortBy, SortOrder: sortOrder}
@@ -67,6 +70,9 @@ func (s *adminServiceImpl) CreateProxy(ctx context.Context, input *CreateProxyIn
 	mode := input.FallbackMode
 	if mode == "" {
 		mode = FallbackModeNone
+	}
+	if !IsValidProxyFallbackMode(mode) {
+		return nil, errInvalidProxyFallbackMode
 	}
 	// 校验：mode=proxy 必须有 backup
 	if mode == FallbackModeProxy && input.BackupProxyID == nil {
@@ -124,9 +130,15 @@ func (s *adminServiceImpl) UpdateProxy(ctx context.Context, id int64, input *Upd
 	if input.FallbackMode != "" {
 		mode = input.FallbackMode
 	}
+	if mode == "" {
+		mode = FallbackModeNone
+	}
 	backupID := proxy.BackupProxyID
 	if input.BackupProxyID != nil || input.ClearBackupID {
 		backupID = input.BackupProxyID
+	}
+	if !IsValidProxyFallbackMode(mode) {
+		return nil, errInvalidProxyFallbackMode
 	}
 	if mode == FallbackModeProxy && backupID == nil {
 		return nil, infraerrors.BadRequest("PROXY_BACKUP_REQUIRED", "backup proxy required when fallback_mode=proxy")

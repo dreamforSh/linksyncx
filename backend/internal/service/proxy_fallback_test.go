@@ -29,13 +29,16 @@ func TestResolveFallbackTarget(t *testing.T) {
 		require.False(t, change)
 		require.Nil(t, target)
 	})
-	t.Run("direct -> nil target, change", func(t *testing.T) {
-		a := mkProxy(1, FallbackModeDirect, nil, di(-1), now)
-		by := map[int64]Proxy{1: a}
-		target, change := ResolveProxyFallbackTarget(a, by, now)
-		require.True(t, change)
-		require.Nil(t, target)
-	})
+	// "direct"（过期改投直连）已移除：遗留或未知取值一律按 none 处理，账号保持绑定原代理（fail-closed）。
+	for _, legacy := range []string{"direct", "Direct", "bogus", ""} {
+		t.Run("legacy "+legacy+" keeps original", func(t *testing.T) {
+			a := mkProxy(1, legacy, nil, di(-1), now)
+			by := map[int64]Proxy{1: a}
+			target, change := ResolveProxyFallbackTarget(a, by, now)
+			require.False(t, change, "an expired proxy must never move its accounts to a direct connection")
+			require.Nil(t, target)
+		})
+	}
 	t.Run("proxy -> healthy backup", func(t *testing.T) {
 		b := mkProxy(2, FallbackModeNone, nil, di(30), now)
 		a := mkProxy(1, FallbackModeProxy, i64(2), di(-1), now)
@@ -62,19 +65,42 @@ func TestResolveFallbackTarget(t *testing.T) {
 		require.False(t, change)
 		require.Nil(t, target)
 	})
-	t.Run("chain tail direct fallback", func(t *testing.T) {
-		b := mkProxy(2, FallbackModeDirect, nil, di(-1), now)
+	t.Run("chain ending on a legacy direct node keeps original", func(t *testing.T) {
+		b := mkProxy(2, "direct", nil, di(-1), now)
 		a := mkProxy(1, FallbackModeProxy, i64(2), di(-1), now)
 		by := map[int64]Proxy{1: a, 2: b}
 		target, change := ResolveProxyFallbackTarget(a, by, now)
-		require.True(t, change)
+		require.False(t, change, "a chain may only end on a healthy proxy, never on a direct connection")
 		require.Nil(t, target)
 	})
 }
 
+// 不变量：只要决定改投（change=true），目标一定是某个具体代理，绝不是直连（nil）。
+func TestResolveFallbackNeverTargetsDirect(t *testing.T) {
+	now := time.Now()
+	modes := []string{FallbackModeNone, FallbackModeProxy, "direct", "bogus"}
+	for _, startMode := range modes {
+		for _, backupMode := range modes {
+			for _, backupExpired := range []bool{false, true} {
+				expiry := di(30)
+				if backupExpired {
+					expiry = di(-1)
+				}
+				start := mkProxy(1, startMode, i64(2), di(-1), now)
+				backup := mkProxy(2, backupMode, i64(3), expiry, now)
+				tail := mkProxy(3, FallbackModeNone, nil, di(-1), now)
+				target, change := ResolveProxyFallbackTarget(start, map[int64]Proxy{1: start, 2: backup, 3: tail}, now)
+				if change {
+					require.NotNil(t, target, "start=%s backup=%s expired=%v", startMode, backupMode, backupExpired)
+				}
+			}
+		}
+	}
+}
+
 func TestResolveFallbackSkipsInactiveBackup(t *testing.T) {
 	now := time.Now()
-	for _, mode := range []string{FallbackModeNone, FallbackModeProxy, FallbackModeDirect} {
+	for _, mode := range []string{FallbackModeNone, FallbackModeProxy, "direct"} {
 		t.Run(mode, func(t *testing.T) {
 			source := mkProxy(1, FallbackModeProxy, i64(2), di(-1), now)
 			disabled := mkProxy(2, mode, i64(3), di(30), now)
@@ -82,14 +108,11 @@ func TestResolveFallbackSkipsInactiveBackup(t *testing.T) {
 			healthy := mkProxy(3, FallbackModeNone, nil, di(30), now)
 			target, change := ResolveProxyFallbackTarget(source, map[int64]Proxy{1: source, 2: disabled, 3: healthy}, now)
 			switch mode {
-			case FallbackModeNone:
-				require.False(t, change)
-				require.Nil(t, target)
 			case FallbackModeProxy:
 				require.True(t, change)
 				require.Equal(t, i64(3), target)
-			case FallbackModeDirect:
-				require.True(t, change)
+			default: // none and the removed legacy "direct" both stop the chain
+				require.False(t, change)
 				require.Nil(t, target)
 			}
 		})

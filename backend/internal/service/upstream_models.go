@@ -544,7 +544,11 @@ func (s *AccountTestService) fetchModelsDevRegistry(ctx context.Context, account
 		return nil, err
 	}
 	req.Header.Set("Accept", "application/json")
-	resp, err := s.doUpstreamModelsRequest(req, upstreamModelsProxyURL(account), account)
+	proxyURL, err := upstreamModelsProxyURL(account)
+	if err != nil {
+		return nil, err
+	}
+	resp, err := s.doUpstreamModelsRequest(req, proxyURL, account)
 	if err != nil {
 		return nil, err
 	}
@@ -746,7 +750,10 @@ func (s *AccountTestService) fetchUpstreamModelList(ctx context.Context, account
 		return nil, nil, err
 	}
 
-	proxyURL := upstreamModelsProxyURL(account)
+	proxyURL, err := upstreamModelsProxyURL(account)
+	if err != nil {
+		return nil, nil, err
+	}
 	resp, err := s.doUpstreamModelsRequest(req, proxyURL, account)
 	if err != nil {
 		return nil, nil, newUpstreamModelSyncUpstreamError("Failed to request upstream model list", err)
@@ -1166,7 +1173,11 @@ func (s *AccountTestService) fetchAntigravityOAuthUpstreamModels(ctx context.Con
 		return nil, newUpstreamModelSyncConfigError("No Antigravity access token is available", nil)
 	}
 
-	client, err := antigravity.NewClient(upstreamModelsProxyURL(account))
+	proxyURL, err := upstreamModelsProxyURL(account)
+	if err != nil {
+		return nil, err
+	}
+	client, err := antigravity.NewClient(proxyURL)
 	if err != nil {
 		return nil, newUpstreamModelSyncConfigError("Failed to configure Antigravity client", err)
 	}
@@ -1197,11 +1208,12 @@ func (s *AccountTestService) doUpstreamModelsRequest(req *http.Request, proxyURL
 	return s.httpUpstream.DoWithTLS(req, proxyURL, account.ID, account.Concurrency, s.tlsFPProfileService.ResolveTLSProfile(account))
 }
 
-func upstreamModelsProxyURL(account *Account) string {
-	if account != nil && account.ProxyID != nil && account.Proxy != nil {
-		return account.Proxy.URL()
+// upstreamModelsProxyURL fail-closed：分配了代理但不可用时返回错误，绝不回退直连。
+func upstreamModelsProxyURL(account *Account) (string, error) {
+	if account == nil {
+		return "", nil
 	}
-	return ""
+	return account.ProxyURLForOutbound()
 }
 
 func buildV1ModelsURL(base string) string {

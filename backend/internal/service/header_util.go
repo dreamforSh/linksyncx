@@ -6,7 +6,8 @@ import (
 )
 
 // headerWireCasing 定义每个白名单 header 在真实 Claude CLI 抓包中的准确大小写。
-// Accept-Encoding keeps canonical casing so net/http recognizes explicit compression negotiation.
+// Accept-Encoding keeps canonical casing so net/http recognizes explicit compression negotiation;
+// its Bun default value is written in the Bun tail block by httpwire.
 // Go 的 HTTP server 解析请求时会将所有 header key 转为 Canonical 形式（如 x-app → X-App），
 // 此 map 用于在转发时恢复到真实的 wire format。
 //
@@ -46,8 +47,8 @@ var headerWireCasing = map[string]string{
 
 // headerWireOrder 定义真实 Claude CLI 发送 header 的顺序（本机 claude.exe
 // 2.1.280 抓包：Bun fetch 的用户头按头名字节序升序，随后 Connection/Host/
-// Accept-Encoding/Content-Length 固定尾序；后两者由 Go transport 自管，不列出）。
-// 用于 debug log 按此顺序输出，便于与抓包结果直接对比。
+// Accept-Encoding/Content-Length 固定尾序）。线上顺序由传输层 httpwire 按同一
+// 规则写出（TLS 指纹链路），这里只用于 debug log 按此顺序输出，便于与抓包对比。
 var headerWireOrder = []string{
 	"Accept",
 	"Authorization",

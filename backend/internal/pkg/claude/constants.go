@@ -186,14 +186,32 @@ func ClaudeCodeMimicryBetas(modelID string, thinkingEnabled bool) []string {
 // SDK 版本与 CLI 版本绑定发布，更新 CLICurrentVersion 时必须成对更新。
 const SDKTSVersion = "0.112.1"
 
-// SDKTSRuntimeVersion 是真实客户端上报的运行时版本。npm 安装形态为 Node v26.x；
-// Bun 原生二进制上报 Bun 的 node-compat 版本（如 v22.x）。默认画像取 npm 形态。
+// SDKTSRuntimeVersion 是真实客户端上报的 X-Stainless-Runtime-Version。
+// SDK 的运行时探测 oa() 只区分 deno/edge/node，无 bun 分支：Bun 提供
+// globalThis.process（[object process]）→ 判定为 "node"，版本取 process.version。
+// 本机 Bun 1.4.3 打包的 claude.exe 2.1.283 的 process.version = v26.3.0
+// （二进制内唯一出现的 v2x.y.z，出现 6 次），故 X-Stainless-Runtime: node +
+// v26.3.0 与 Bun TLS/线级指纹是自洽的一对，不是 npm/Bun 画像混用。
 const SDKTSRuntimeVersion = "v26.3.0"
 
-// OAuthHelperUserAgent 是真实 CLI 控制面（token 交换/刷新等）的 UA
-// （2.1.280 二进制实证：裸 fetch + sdk-ts UA，带 anthropic-beta: oauth-2025-04-20，
-// 无 x-stainless-*、无显式 Accept）。
+// OAuthHelperUserAgent 是真实 CLI **token 刷新**路径的 UA（2.1.283 二进制实证：
+// userOAuthProvider 用裸 fetch，headers 仅 {Content-Type, anthropic-beta:
+// oauth-2025-04-20, User-Agent}，无 x-stainless-*、无显式 Accept）。
+// 授权码交换是另一条路径（见 OAuthLoginUserAgent）。
 const OAuthHelperUserAgent = "anthropic-sdk-typescript/" + SDKTSVersion + " userOAuthProvider"
+
+// OAuthLoginAxiosVersion / OAuthLoginUserAgent 对应真实 CLI **登录授权码交换**路径
+// （2.1.283 二进制实证：sNr 用 axios `mt.post(TOKEN_URL, body, {headers:{Content-Type}})`，
+// axios 1.9.0 的 Node http 适配器自动补 `User-Agent: axios/1.9.0`、
+// `Accept: application/json, text/plain, */*`、`Accept-Encoding: gzip, compress, deflate, br`；
+// **不带 anthropic-beta**——与刷新 helper 的形态不同，不能混用）。
+const (
+	OAuthLoginAxiosVersion = "1.9.0"
+	OAuthLoginUserAgent    = "axios/" + OAuthLoginAxiosVersion
+	// OAuthLoginAccept / OAuthLoginAcceptEncoding 是 axios Node 适配器的默认值。
+	OAuthLoginAccept         = "application/json, text/plain, */*"
+	OAuthLoginAcceptEncoding = "gzip, compress, deflate, br"
+)
 
 // DefaultHeaders 是 Claude Code 客户端默认请求头。
 // 每次调用现构造：User-Agent 走 DefaultUserAgent()（运行期可变版本号），

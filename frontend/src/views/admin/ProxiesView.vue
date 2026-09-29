@@ -539,7 +539,6 @@
           <Select v-model="createForm.fallback_mode" :options="[
             { label: t('admin.proxies.fallbackNone'), value: 'none' },
             { label: t('admin.proxies.fallbackProxy'), value: 'proxy' },
-            { label: t('admin.proxies.fallbackDirect'), value: 'direct' },
           ]" />
         </div>
         <div v-if="createForm.fallback_mode === 'proxy'">
@@ -772,7 +771,6 @@
           <Select v-model="editForm.fallback_mode" :options="[
             { label: t('admin.proxies.fallbackNone'), value: 'none' },
             { label: t('admin.proxies.fallbackProxy'), value: 'proxy' },
-            { label: t('admin.proxies.fallbackDirect'), value: 'direct' },
           ]" />
         </div>
         <div v-if="editForm.fallback_mode === 'proxy'">
@@ -987,7 +985,7 @@ import { ref, reactive, computed, onMounted, onUnmounted } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useAppStore } from '@/stores/app'
 import { adminAPI } from '@/api/admin'
-import type { Proxy, ProxyAccountSummary, ProxyProtocol, ProxyQualityCheckResult, ProxySourceFilter } from '@/types'
+import type { Proxy, ProxyAccountSummary, ProxyFallbackMode, ProxyProtocol, ProxyQualityCheckResult, ProxySourceFilter } from '@/types'
 import type { Column } from '@/components/common/types'
 import AppLayout from '@/components/layout/AppLayout.vue'
 import TablePageLayout from '@/components/layout/TablePageLayout.vue'
@@ -1166,7 +1164,7 @@ const createForm = reactive({
   username: '',
   password: '',
   expires_at: '' as string,
-  fallback_mode: 'none' as 'none' | 'proxy' | 'direct',
+  fallback_mode: 'none' as ProxyFallbackMode,
   backup_proxy_id: null as number | null,
   expiry_warn_days: 7 as number,
 })
@@ -1180,7 +1178,7 @@ const editForm = reactive({
   password: '',
   status: 'active' as 'active' | 'inactive' | 'expired',
   expires_at: '' as string,
-  fallback_mode: 'none' as 'none' | 'proxy' | 'direct',
+  fallback_mode: 'none' as ProxyFallbackMode,
   backup_proxy_id: null as number | null,
   expiry_warn_days: 7 as number,
 })

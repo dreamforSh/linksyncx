@@ -176,7 +176,11 @@ func getVertexServiceAccountAccessToken(ctx context.Context, cache GeminiTokenCa
 		}
 	}
 
-	accessToken, ttl, err := exchangeVertexServiceAccountToken(ctx, key, vertexServiceAccountProxyURL(account))
+	proxyURL, err := vertexServiceAccountProxyURL(account)
+	if err != nil {
+		return "", err
+	}
+	accessToken, ttl, err := exchangeVertexServiceAccountToken(ctx, key, proxyURL)
 	if err != nil {
 		return "", err
 	}
@@ -186,11 +190,12 @@ func getVertexServiceAccountAccessToken(ctx context.Context, cache GeminiTokenCa
 	return accessToken, nil
 }
 
-func vertexServiceAccountProxyURL(account *Account) string {
-	if account == nil || account.ProxyID == nil || account.Proxy == nil {
-		return ""
+// vertexServiceAccountProxyURL fail-closed：分配了代理但不可用时返回错误，绝不回退直连。
+func vertexServiceAccountProxyURL(account *Account) (string, error) {
+	if account == nil {
+		return "", nil
 	}
-	return account.Proxy.URL()
+	return account.ProxyURLForOutbound()
 }
 
 func newVertexServiceAccountHTTPClient(proxyURL string) (*http.Client, error) {

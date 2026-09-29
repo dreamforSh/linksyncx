@@ -96,17 +96,23 @@ func TestHTTPUpstreamDoWithTLSPlainHTTPUsesConfiguredSOCKSProxy(t *testing.T) {
 	require.Equal(t, int64(1), upstreamCalls.Load())
 }
 
-func TestTLSFingerprintHTTPSProxyFallsBackWithoutBypassingProxy(t *testing.T) {
-	proxyURL, err := url.Parse("https://user:pass@proxy.example:8443")
-	require.NoError(t, err)
-	transport, err := buildUpstreamTransportWithTLSFingerprint(poolSettings{}, proxyURL, &tlsfingerprint.Profile{Name: "test"})
-	require.NoError(t, err)
-	require.NotNil(t, transport.Proxy)
-	require.Nil(t, transport.DialTLSContext)
-	req := &http.Request{URL: &url.URL{Scheme: "https", Host: "upstream.example"}}
-	resolved, err := transport.Proxy(req)
-	require.NoError(t, err)
-	require.Equal(t, "https://user:pass@proxy.example:8443", resolved.String())
+// 所有代理类型都由指纹 dialer 自建隧道：Transport.Proxy 一旦设置，net/http 会对
+// https 目标自己做 CONNECT + 标准库 TLS，绕开 uTLS 指纹与 httpwire 头序。
+func TestTLSFingerprintTransportTunnelsEveryProxyScheme(t *testing.T) {
+	for _, raw := range []string{"", "http://proxy.example:8080", "https://user:pass@proxy.example:8443", "socks5h://proxy.example:1080"} {
+		var proxyURL *url.URL
+		if raw != "" {
+			var err error
+			proxyURL, err = url.Parse(raw)
+			require.NoError(t, err)
+		}
+		transport, err := buildUpstreamTransportWithTLSFingerprint(poolSettings{}, proxyURL, &tlsfingerprint.Profile{Name: "test"}, tlsfingerprint.DialOptions{})
+		require.NoError(t, err, raw)
+		require.Nil(t, transport.Proxy, raw)
+		require.NotNil(t, transport.DialTLSContext, raw)
+		require.NotNil(t, transport.DialContext, "plain http must use the same tunnel: %s", raw)
+		require.True(t, transport.DisableCompression, "Accept-Encoding is written by httpwire, not net/http")
+	}
 }
 
 func startTestSOCKS5Proxy(t *testing.T) (string, *atomic.Int64) {

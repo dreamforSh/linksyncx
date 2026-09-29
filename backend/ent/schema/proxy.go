@@ -57,7 +57,7 @@ func (Proxy) Fields() []ent.Field {
 			Comment("Proxy expiration time (NULL means never expires)."),
 		field.String("fallback_mode").
 			MaxLen(20).Default("none").
-			Comment("Fallback target on expiry: none | proxy | direct."),
+			Comment("Fallback target on expiry: none | proxy (expired proxies never fall back to a direct connection)."),
 		field.Int64("backup_proxy_id").
 			Optional().Nillable().
 			Comment("Backup proxy id when fallback_mode=proxy (self-reference)."),

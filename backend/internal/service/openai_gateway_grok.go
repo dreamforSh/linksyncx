@@ -102,9 +102,9 @@ func (s *OpenAIGatewayService) forwardGrokResponses(
 	upstreamCtx, releaseUpstreamCtx := detachUpstreamContext(ctx)
 	defer releaseUpstreamCtx()
 
-	proxyURL := ""
-	if account.ProxyID != nil && account.Proxy != nil {
-		proxyURL = account.Proxy.URL()
+	proxyURL, proxyErr := account.ProxyURLForOutbound()
+	if proxyErr != nil {
+		return nil, proxyErr
 	}
 
 	upstreamStart := time.Now()
@@ -1401,9 +1401,9 @@ func (s *OpenAIGatewayService) describeGrokComposerImage(
 		return "", OpenAIUsage{}, fmt.Errorf("build grok composer image bridge request: %w", err)
 	}
 
-	proxyURL := ""
-	if account.ProxyID != nil && account.Proxy != nil {
-		proxyURL = account.Proxy.URL()
+	proxyURL, proxyErr := account.ProxyURLForOutbound()
+	if proxyErr != nil {
+		return "", OpenAIUsage{}, proxyErr
 	}
 
 	resp, err := s.doOpenAIUpstream(upstreamReq, proxyURL, account)

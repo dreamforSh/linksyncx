@@ -91,15 +91,25 @@ func TestVertexServiceAccountProxyURL(t *testing.T) {
 	account := &Account{
 		ProxyID: &proxyID,
 		Proxy: &Proxy{
+			ID:       proxyID,
 			Protocol: "http",
 			Host:     "proxy.example.com",
 			Port:     8080,
 		},
 	}
 
-	require.Equal(t, "http://proxy.example.com:8080", vertexServiceAccountProxyURL(account))
-	require.Empty(t, vertexServiceAccountProxyURL(&Account{Proxy: account.Proxy}))
-	require.Empty(t, vertexServiceAccountProxyURL(&Account{ProxyID: &proxyID}))
+	url, err := vertexServiceAccountProxyURL(account)
+	require.NoError(t, err)
+	require.Equal(t, "http://proxy.example.com:8080", url)
+
+	// 未分配代理 → 空 URL、无错误（直连是预期）
+	url, err = vertexServiceAccountProxyURL(&Account{})
+	require.NoError(t, err)
+	require.Empty(t, url)
+
+	// 分配了代理但 Proxy 关系缺失 → fail-closed，返回错误而非空 URL（避免直连泄漏）
+	_, err = vertexServiceAccountProxyURL(&Account{ProxyID: &proxyID})
+	require.ErrorIs(t, err, ErrAccountProxyUnavailable)
 }
 
 func TestVertexServiceAccountHTTPClientRecordsDependency(t *testing.T) {

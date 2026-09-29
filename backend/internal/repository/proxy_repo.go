@@ -765,7 +765,9 @@ func (r *proxyRepository) sweepOneExpiredProxyOnExec(ctx context.Context, exec s
 	if changed == 0 {
 		return nil, nil
 	}
-	if !change {
+	// 过期回退只会改投到备用代理，绝不把账号改投为直连（proxy_id=NULL 会泄漏出口 IP）：
+	// 没有可用备用代理时账号保持绑定已过期的代理（fail-closed），只失效其探测快照。
+	if !change || target == nil {
 		accountIDs, err := invalidateProxyProbeSnapshots(ctx, exec, proxyID)
 		if err != nil {
 			return nil, err
@@ -775,32 +777,18 @@ func (r *proxyRepository) sweepOneExpiredProxyOnExec(ctx context.Context, exec s
 		}
 		return nil, nil
 	}
-	var rows *sql.Rows
 	// Match the current proxy even after an earlier fallback. Keep the first
 	// origin so manual revert still restores the originally assigned proxy.
-	if target == nil {
-		rows, err = exec.QueryContext(ctx, `
-			UPDATE accounts SET proxy_id=NULL, proxy_fallback_origin_id=COALESCE(proxy_fallback_origin_id,$1),
-				extra=CASE
-					WHEN type='apikey' AND extra ? 'upstream_billing_probe'
-					THEN extra - 'upstream_billing_probe'
-					ELSE extra
-				END,
-				updated_at=NOW()
-			WHERE proxy_id=$1 AND deleted_at IS NULL
-			RETURNING id`, proxyID)
-	} else {
-		rows, err = exec.QueryContext(ctx, `
-			UPDATE accounts SET proxy_id=$2, proxy_fallback_origin_id=COALESCE(proxy_fallback_origin_id,$1),
-				extra=CASE
-					WHEN type='apikey' AND extra ? 'upstream_billing_probe'
-					THEN extra - 'upstream_billing_probe'
-					ELSE extra
-				END,
-				updated_at=NOW()
-			WHERE proxy_id=$1 AND deleted_at IS NULL
-			RETURNING id`, proxyID, *target)
-	}
+	rows, err := exec.QueryContext(ctx, `
+		UPDATE accounts SET proxy_id=$2, proxy_fallback_origin_id=COALESCE(proxy_fallback_origin_id,$1),
+			extra=CASE
+				WHEN type='apikey' AND extra ? 'upstream_billing_probe'
+				THEN extra - 'upstream_billing_probe'
+				ELSE extra
+			END,
+			updated_at=NOW()
+		WHERE proxy_id=$1 AND deleted_at IS NULL
+		RETURNING id`, proxyID, *target)
 	if err != nil {
 		return nil, err
 	}

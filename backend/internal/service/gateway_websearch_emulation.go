@@ -185,7 +185,10 @@ func (s *GatewayService) handleWebSearchEmulation(
 }
 
 func doWebSearch(ctx context.Context, account *Account, query string) (*websearch.SearchResponse, string, error) {
-	proxyURL := resolveAccountProxyURL(account)
+	proxyURL, err := resolveAccountProxyURL(account)
+	if err != nil {
+		return nil, "", fmt.Errorf("web search emulation: %w", err)
+	}
 	mgr := getWebSearchManager()
 	if mgr == nil {
 		return nil, "", fmt.Errorf("web search emulation: manager not initialized")
@@ -200,11 +203,10 @@ func doWebSearch(ctx context.Context, account *Account, query string) (*websearc
 	return resp, providerName, nil
 }
 
-func resolveAccountProxyURL(account *Account) string {
-	if account.ProxyID != nil && account.Proxy != nil {
-		return account.Proxy.URL()
-	}
-	return ""
+// resolveAccountProxyURL 返回账号出站代理 URL，fail-closed：分配了代理但不可用时返回错误，
+// 调用方绝不能回退直连（避免出口 IP 泄漏）。委托给 Account.ProxyURLForOutbound。
+func resolveAccountProxyURL(account *Account) (string, error) {
+	return account.ProxyURLForOutbound()
 }
 
 // --- SSE streaming response ---

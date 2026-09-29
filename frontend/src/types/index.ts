@@ -847,6 +847,8 @@ export type AccountPlatform = 'anthropic' | 'openai' | 'gemini' | 'antigravity' 
 export type AccountType = 'oauth' | 'setup-token' | 'apikey' | 'upstream' | 'bedrock' | 'service_account'
 export type OAuthAddMethod = 'oauth' | 'setup-token'
 export type ProxyProtocol = 'http' | 'https' | 'socks5' | 'socks5h'
+/** 代理到期回退：none = 保持绑定原代理（请求失败而非直连）；proxy = 改投备用代理。不存在改投直连。 */
+export type ProxyFallbackMode = 'none' | 'proxy'
 /** manual = 管理员手动维护；clash = Clash 订阅节点物化的托管代理（只读） */
 export type ProxySource = 'manual' | 'clash'
 /** GET /admin/proxies 的 source 过滤，不传时后端默认 manual */
@@ -884,7 +886,7 @@ export interface Proxy {
   quality_summary?: string
   quality_checked?: number
   expires_at: string | null
-  fallback_mode: 'none' | 'proxy' | 'direct'
+  fallback_mode: ProxyFallbackMode
   backup_proxy_id?: number | null
   expiry_warn_days: number
   created_at: string
@@ -1932,7 +1934,7 @@ export interface CreateProxyRequest {
   username?: string | null
   password?: string | null
   expires_at?: number | null   // unix 秒；null/0 = 永不过期
-  fallback_mode?: 'none' | 'proxy' | 'direct'
+  fallback_mode?: ProxyFallbackMode
   backup_proxy_id?: number | null
   expiry_warn_days?: number
 }
@@ -1946,7 +1948,7 @@ export interface UpdateProxyRequest {
   password?: string | null
   status?: 'active' | 'inactive'
   expires_at?: number | null   // unix 秒；null/0 = 永不过期
-  fallback_mode?: 'none' | 'proxy' | 'direct'
+  fallback_mode?: ProxyFallbackMode
   backup_proxy_id?: number | null
   expiry_warn_days?: number
 }

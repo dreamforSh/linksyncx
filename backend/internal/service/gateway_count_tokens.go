@@ -174,12 +174,17 @@ func (s *GatewayService) ForwardCountTokens(ctx context.Context, c *gin.Context,
 	// 先记录首发 wire body；如果后面进入 400 retry，retry 会基于未签名的逻辑 body 重新构建。
 	acceptedWireBody := wireBody
 
-	// 获取代理URL（自定义 base URL 模式下，proxy 通过 buildCustomRelayURL 作为查询参数传递）
-	proxyURL := ""
-	if account.ProxyID != nil && account.Proxy != nil {
-		if !account.IsCustomBaseURLEnabled() || account.GetCustomBaseURL() == "" {
-			proxyURL = account.Proxy.URL()
-		}
+	// 解析出站代理（fail-closed）：分配了代理但不可用时拒绝直连，避免出口 IP 泄漏。
+	resolvedProxyURL, proxyErr := account.ProxyURLForOutbound()
+	if proxyErr != nil {
+		setOpsUpstreamError(c, 0, sanitizeUpstreamErrorMessage(proxyErr.Error()), "")
+		s.countTokensError(c, http.StatusBadGateway, "upstream_error", "Request failed")
+		return proxyErr
+	}
+	// 自定义 base URL relay 模式：代理已校验可用，由 buildCustomRelayURL 作为 &proxy= 携带。
+	proxyURL := resolvedProxyURL
+	if account.IsCustomBaseURLEnabled() && account.GetCustomBaseURL() != "" {
+		proxyURL = ""
 	}
 
 	// 发送请求
@@ -302,9 +307,11 @@ func (s *GatewayService) forwardCountTokensAnthropicAPIKeyPassthrough(ctx contex
 		return err
 	}
 
-	proxyURL := ""
-	if account.ProxyID != nil && account.Proxy != nil {
-		proxyURL = account.Proxy.URL()
+	proxyURL, proxyErr := account.ProxyURLForOutbound()
+	if proxyErr != nil {
+		setOpsUpstreamError(c, 0, sanitizeUpstreamErrorMessage(proxyErr.Error()), "")
+		s.countTokensError(c, http.StatusBadGateway, "upstream_error", "Request failed")
+		return proxyErr
 	}
 
 	resp, err := s.httpUpstream.DoWithTLS(upstreamReq, proxyURL, account.ID, account.Concurrency, s.tlsFPProfileService.ResolveTLSProfile(account))

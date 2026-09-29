@@ -116,10 +116,10 @@ func (s *AntigravityGatewayService) ForwardGemini(ctx context.Context, c *gin.Co
 		return nil, err
 	}
 
-	// 代理 URL
-	proxyURL := ""
-	if account.ProxyID != nil && account.Proxy != nil {
-		proxyURL = account.Proxy.URL()
+	// 代理 URL（fail-closed：分配了代理但不可用时拒绝直连，避免出口 IP 泄漏）
+	proxyURL, proxyErr := account.ProxyURLForOutbound()
+	if proxyErr != nil {
+		return nil, proxyErr
 	}
 
 	// Antigravity 上游要求必须包含身份提示词，注入到请求中

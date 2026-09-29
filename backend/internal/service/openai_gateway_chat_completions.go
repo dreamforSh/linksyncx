@@ -392,10 +392,10 @@ func (s *OpenAIGatewayService) forwardAsChatCompletions(
 		upstreamReq.Header.Set("session_id", generateSessionUUID(sessionKey))
 	}
 
-	// 7. Send request
-	proxyURL := ""
-	if account.ProxyID != nil && account.Proxy != nil {
-		proxyURL = account.Proxy.URL()
+	// 7. Send request（fail-closed：分配了代理但不可用时拒绝直连）
+	proxyURL, proxyErr := account.ProxyURLForOutbound()
+	if proxyErr != nil {
+		return nil, proxyErr
 	}
 	resp, err := s.doOpenAIUpstream(upstreamReq, proxyURL, account)
 	if err != nil {

@@ -207,12 +207,19 @@ func (h *OpenAIOAuthHandler) RefreshToken(c *gin.Context) {
 		return
 	}
 
+	// fail-closed：选了代理但解析失败时报错，绝不直连（与 GrokOAuthHandler.RefreshToken 一致）。
 	var proxyURL string
 	if req.ProxyID != nil {
 		proxy, err := h.adminService.GetProxy(c.Request.Context(), *req.ProxyID)
-		if err == nil && proxy != nil {
-			proxyURL = proxy.URL()
+		if err != nil {
+			response.ErrorFrom(c, err)
+			return
 		}
+		if proxy == nil {
+			response.BadRequest(c, "OPENAI_OAUTH_PROXY_NOT_FOUND: proxy not found")
+			return
+		}
+		proxyURL = proxy.URL()
 	}
 
 	// 未指定 client_id 时，根据请求路径平台自动设置默认值，避免 repository 层盲猜
@@ -397,9 +404,11 @@ func (h *OpenAIOAuthHandler) CreateAccountFromCodexPAT(c *gin.Context) {
 			response.ErrorFrom(c, err)
 			return
 		}
-		if proxy != nil {
-			proxyURL = proxy.URL()
+		if proxy == nil {
+			response.BadRequest(c, "OPENAI_OAUTH_PROXY_NOT_FOUND: proxy not found")
+			return
 		}
+		proxyURL = proxy.URL()
 	}
 
 	tokenInfo, err := h.openaiOAuthService.ValidateCodexPersonalAccessToken(c.Request.Context(), req.AccessToken, proxyURL)

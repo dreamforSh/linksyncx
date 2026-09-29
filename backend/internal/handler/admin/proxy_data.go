@@ -159,9 +159,14 @@ func (h *ProxyHandler) ImportData(c *gin.Context) {
 					t := time.Unix(*item.ExpiresAt, 0).UTC()
 					existingExpiresAt = &t
 				}
-				existingFallbackMode := item.FallbackMode
-				if existingFallbackMode == "" {
-					existingFallbackMode = service.FallbackModeNone
+				existingFallbackMode, fallbackWarning := normalizeImportedProxyFallbackMode(item.FallbackMode)
+				if fallbackWarning != "" {
+					result.Errors = append(result.Errors, DataImportError{
+						Kind:     "proxy",
+						Name:     item.Name,
+						ProxyKey: key,
+						Message:  fallbackWarning,
+					})
 				}
 				var existingBackupProxyID *int64
 				if item.BackupProxyName != "" {
@@ -206,7 +211,15 @@ func (h *ProxyHandler) ImportData(c *gin.Context) {
 		}
 
 		// 解析 backup_proxy_name → backup_proxy_id
-		fallbackMode := item.FallbackMode
+		fallbackMode, fallbackWarning := normalizeImportedProxyFallbackMode(item.FallbackMode)
+		if fallbackWarning != "" {
+			result.Errors = append(result.Errors, DataImportError{
+				Kind:     "proxy",
+				Name:     item.Name,
+				ProxyKey: key,
+				Message:  fallbackWarning,
+			})
+		}
 		var backupProxyID *int64
 		if item.BackupProxyName != "" {
 			if bid, ok := proxyNameToID[item.BackupProxyName]; ok {

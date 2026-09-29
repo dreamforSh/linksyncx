@@ -95,13 +95,10 @@ func (s *OAuthService) generateAuthURLWithScope(ctx context.Context, scope strin
 		return nil, fmt.Errorf("failed to generate session ID: %w", err)
 	}
 
-	// Get proxy URL if specified
-	var proxyURL string
-	if proxyID != nil {
-		proxy, err := s.proxyRepo.GetByID(ctx, *proxyID)
-		if err == nil && proxy != nil {
-			proxyURL = proxy.URL()
-		}
+	// Get proxy URL if specified（fail-closed：选了代理但解析失败时报错，绝不直连）
+	proxyURL, err := resolveProxyURLByID(ctx, s.proxyRepo, proxyID)
+	if err != nil {
+		return nil, err
 	}
 
 	// Store session
@@ -151,13 +148,14 @@ func (s *OAuthService) ExchangeCode(ctx context.Context, input *ExchangeCodeInpu
 		return nil, fmt.Errorf("session not found or expired")
 	}
 
-	// Get proxy URL
+	// Get proxy URL（fail-closed：选了代理但解析失败时报错，绝不直连）
 	proxyURL := session.ProxyURL
 	if input.ProxyID != nil {
-		proxy, err := s.proxyRepo.GetByID(ctx, *input.ProxyID)
-		if err == nil && proxy != nil {
-			proxyURL = proxy.URL()
+		resolved, err := resolveProxyURLByID(ctx, s.proxyRepo, input.ProxyID)
+		if err != nil {
+			return nil, err
 		}
+		proxyURL = resolved
 	}
 
 	// Determine if this is a setup token (scope is inference only)
@@ -184,13 +182,10 @@ type CookieAuthInput struct {
 
 // CookieAuth performs OAuth using sessionKey (cookie-based auto-auth)
 func (s *OAuthService) CookieAuth(ctx context.Context, input *CookieAuthInput) (*TokenInfo, error) {
-	// Get proxy URL if specified
-	var proxyURL string
-	if input.ProxyID != nil {
-		proxy, err := s.proxyRepo.GetByID(ctx, *input.ProxyID)
-		if err == nil && proxy != nil {
-			proxyURL = proxy.URL()
-		}
+	// Get proxy URL if specified（fail-closed：选了代理但解析失败时报错，绝不直连）
+	proxyURL, err := resolveProxyURLByID(ctx, s.proxyRepo, input.ProxyID)
+	if err != nil {
+		return nil, err
 	}
 
 	// Determine scope and if this is a setup token
@@ -309,12 +304,10 @@ func (s *OAuthService) RefreshAccountToken(ctx context.Context, account *Account
 		return nil, fmt.Errorf("no refresh token available")
 	}
 
-	var proxyURL string
-	if account.ProxyID != nil {
-		proxy, err := s.proxyRepo.GetByID(ctx, *account.ProxyID)
-		if err == nil && proxy != nil {
-			proxyURL = proxy.URL()
-		}
+	// fail-closed：账号分配了代理但解析失败时报错，绝不直连刷新 token。
+	proxyURL, err := accountProxyURLWithRepo(ctx, s.proxyRepo, account)
+	if err != nil {
+		return nil, err
 	}
 
 	return s.RefreshToken(ctx, refreshToken, proxyURL)

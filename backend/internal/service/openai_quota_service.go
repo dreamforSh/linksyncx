@@ -501,12 +501,17 @@ func (s *OpenAIQuotaService) prepareUpstreamCall(ctx context.Context, accountID 
 	// the Account by hand).
 	if account.ProxyID != nil {
 		switch {
-		case account.Proxy != nil:
+		case account.Proxy != nil && account.Proxy.ID == *account.ProxyID:
 			proxyURL = account.Proxy.URL()
 		case s.proxyRepo != nil:
 			if proxy, perr := s.proxyRepo.GetByID(ctx, *account.ProxyID); perr == nil && proxy != nil {
 				proxyURL = proxy.URL()
 			}
+		}
+		// fail-closed：分配了代理但解析不出可用 URL 时返回错误，绝不回退直连（避免出口 IP 泄漏）。
+		if proxyURL == "" {
+			err = ErrAccountProxyUnavailable
+			return
 		}
 	}
 

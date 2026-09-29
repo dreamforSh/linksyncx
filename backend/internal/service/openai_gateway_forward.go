@@ -1057,10 +1057,13 @@ func (s *OpenAIGatewayService) Forward(ctx context.Context, c *gin.Context, acco
 			return nil, err
 		}
 
-		// Get proxy URL
-		proxyURL := ""
-		if account.ProxyID != nil && account.Proxy != nil {
-			proxyURL = account.Proxy.URL()
+		// Get proxy URL（fail-closed：分配了代理但不可用时拒绝直连）
+		proxyURL, proxyErr := account.ProxyURLForOutbound()
+		if proxyErr != nil {
+			if headerGuard != nil {
+				headerGuard.close()
+			}
+			return nil, proxyErr
 		}
 
 		// Send request

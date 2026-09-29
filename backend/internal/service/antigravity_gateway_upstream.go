@@ -72,10 +72,10 @@ func (s *AntigravityGatewayService) ForwardUpstream(ctx context.Context, c *gin.
 		req.Header.Set("anthropic-beta", v)
 	}
 
-	// 代理 URL
-	proxyURL := ""
-	if account.ProxyID != nil && account.Proxy != nil {
-		proxyURL = account.Proxy.URL()
+	// 代理 URL（fail-closed：分配了代理但不可用时拒绝直连，避免出口 IP 泄漏）
+	proxyURL, proxyErr := account.ProxyURLForOutbound()
+	if proxyErr != nil {
+		return nil, proxyErr
 	}
 
 	// 发送请求

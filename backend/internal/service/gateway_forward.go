@@ -349,12 +349,17 @@ func (s *GatewayService) Forward(ctx context.Context, c *gin.Context, account *A
 		return nil, err
 	}
 
-	// 获取代理URL（自定义 base URL 模式下，proxy 通过 buildCustomRelayURL 作为查询参数传递）
-	proxyURL := ""
-	if account.ProxyID != nil && account.Proxy != nil {
-		if !account.IsCustomBaseURLEnabled() || account.GetCustomBaseURL() == "" {
-			proxyURL = account.Proxy.URL()
-		}
+	// 解析出站代理（fail-closed）：账号分配了代理但当前不可用时，绝不回退直连
+	// （会泄漏真实出口 IP）——按传输层故障处理，触发 failover 切换到其它账号。
+	resolvedProxyURL, proxyErr := account.ProxyURLForOutbound()
+	if proxyErr != nil {
+		return nil, s.handleUpstreamTransportError(ctx, c, account, proxyErr, OpsUpstreamErrorEvent{})
+	}
+	// 自定义 base URL relay 模式：代理已在上面校验可用，此处由 buildCustomRelayURL 作为
+	// &proxy= 查询参数交给 relay 携带，传输层本身不设置代理。
+	proxyURL := resolvedProxyURL
+	if account.IsCustomBaseURLEnabled() && account.GetCustomBaseURL() != "" {
+		proxyURL = ""
 	}
 
 	// 解析 TLS 指纹 profile（同一请求生命周期内不变，避免重试循环中重复解析）

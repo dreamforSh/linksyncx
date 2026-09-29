@@ -8,7 +8,7 @@ import (
 )
 
 func (s *ProxyExpirySuite) TestRevertClearsBillingProbe() {
-	original := s.mkProxy("original", service.FallbackModeDirect, nil, nil)
+	original := s.mkProxy("original", service.FallbackModeNone, nil, nil)
 	backup := s.mkProxy("backup", service.FallbackModeNone, nil, nil)
 	account := s.mkAccountWithProxy(backup)
 	_, err := s.tx.ExecContext(s.ctx, `UPDATE accounts SET type='apikey',proxy_fallback_origin_id=$1,extra='{"upstream_billing_probe_enabled":true,"upstream_billing_probe":{"status":"ok","data":{"balance":123}},"keep_me":true}'::jsonb WHERE id=$2`, original, account)
@@ -30,7 +30,8 @@ func (s *ProxyExpirySuite) TestRevertProbeInvalidationScope() {
 		same, direct, clear bool
 	}{
 		{"changed API key", "apikey", false, false, true},
-		{"direct API key", "apikey", false, true, true},
+		// Legacy data: accounts the removed direct fallback left without a proxy can still be reverted.
+		{"legacy direct API key", "apikey", false, true, true},
 		{"same proxy", "apikey", true, false, false},
 		{"oauth metadata", "oauth", false, false, false},
 	} {

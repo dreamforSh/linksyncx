@@ -1,19 +1,14 @@
 // Package tlsfingerprint provides TLS fingerprint simulation for HTTP clients.
-// It uses the utls library to create TLS connections that mimic Node.js/Claude Code clients.
+// It uses the utls library to create TLS connections that mimic Claude Code
+// (Bun fetch) clients, directly or through http/https/socks5 proxies.
 package tlsfingerprint
 
 import (
-	"bufio"
 	"context"
-	"encoding/base64"
-	"fmt"
-	"log/slog"
 	"net"
-	"net/http"
 	"net/url"
 
 	utls "github.com/refraction-networking/utls"
-	"golang.org/x/net/proxy"
 )
 
 // Profile contains TLS fingerprint configuration.
@@ -33,9 +28,10 @@ type Profile struct {
 }
 
 // Dialer creates TLS connections with custom fingerprints.
+// It is a direct-connection ProxyDialer with default timeouts.
 type Dialer struct {
-	profile    *Profile
-	baseDialer func(ctx context.Context, network, addr string) (net.Conn, error)
+	profile *Profile
+	dialer  *ProxyDialer
 }
 
 // HTTPProxyDialer creates TLS connections through HTTP/HTTPS proxies with custom fingerprints.
@@ -43,6 +39,8 @@ type Dialer struct {
 type HTTPProxyDialer struct {
 	profile  *Profile
 	proxyURL *url.URL
+	dialer   *ProxyDialer
+	err      error
 }
 
 // SOCKS5ProxyDialer creates TLS connections through SOCKS5 proxies with custom fingerprints.
@@ -50,6 +48,8 @@ type HTTPProxyDialer struct {
 type SOCKS5ProxyDialer struct {
 	profile  *Profile
 	proxyURL *url.URL
+	dialer   *ProxyDialer
+	err      error
 }
 
 // Default TLS fingerprint values captured from real Claude Code 2.1.280 (Bun/1.4.3)
@@ -122,193 +122,51 @@ var (
 
 // NewDialer creates a new TLS fingerprint dialer.
 // baseDialer is used for TCP connection establishment (supports proxy scenarios).
-// If baseDialer is nil, direct TCP dial is used.
+// If baseDialer is nil, direct TCP dial with the default dial timeout is used.
+// The TLS handshake is bounded by the default handshake timeout.
 func NewDialer(profile *Profile, baseDialer func(ctx context.Context, network, addr string) (net.Conn, error)) *Dialer {
-	if baseDialer == nil {
-		baseDialer = (&net.Dialer{}).DialContext
-	}
-	return &Dialer{profile: profile, baseDialer: baseDialer}
+	// 直连不会返回错误（错误只来自代理配置）。
+	dialer, _ := newProxyDialer(profile, nil, DialOptions{}, baseDialer)
+	return &Dialer{profile: profile, dialer: dialer}
 }
 
 // NewHTTPProxyDialer creates a new TLS fingerprint dialer that works through HTTP/HTTPS proxies.
-// It establishes a CONNECT tunnel before performing TLS handshake with custom fingerprint.
+// It establishes a CONNECT tunnel (after a TLS handshake with https proxies) before
+// performing the TLS handshake with custom fingerprint.
 func NewHTTPProxyDialer(profile *Profile, proxyURL *url.URL) *HTTPProxyDialer {
-	return &HTTPProxyDialer{profile: profile, proxyURL: proxyURL}
+	dialer, err := newProxyDialer(profile, proxyURL, DialOptions{}, nil)
+	return &HTTPProxyDialer{profile: profile, proxyURL: proxyURL, dialer: dialer, err: err}
 }
 
 // NewSOCKS5ProxyDialer creates a new TLS fingerprint dialer that works through SOCKS5 proxies.
 // It establishes a SOCKS5 tunnel before performing TLS handshake with custom fingerprint.
 func NewSOCKS5ProxyDialer(profile *Profile, proxyURL *url.URL) *SOCKS5ProxyDialer {
-	return &SOCKS5ProxyDialer{profile: profile, proxyURL: proxyURL}
+	dialer, err := newProxyDialer(profile, proxyURL, DialOptions{}, nil)
+	return &SOCKS5ProxyDialer{profile: profile, proxyURL: proxyURL, dialer: dialer, err: err}
 }
 
 // DialTLSContext establishes a TLS connection through SOCKS5 proxy with the configured fingerprint.
 // Flow: SOCKS5 CONNECT to target -> TLS handshake with utls on the tunnel
 func (d *SOCKS5ProxyDialer) DialTLSContext(ctx context.Context, network, addr string) (net.Conn, error) {
-	slog.Debug("tls_fingerprint_socks5_connecting", "proxy", d.proxyURL.Host, "target", addr)
-
-	// Step 1: Create SOCKS5 dialer
-	var auth *proxy.Auth
-	if d.proxyURL.User != nil {
-		username := d.proxyURL.User.Username()
-		password, _ := d.proxyURL.User.Password()
-		auth = &proxy.Auth{
-			User:     username,
-			Password: password,
-		}
+	if d.err != nil {
+		return nil, d.err
 	}
-
-	// Determine proxy address
-	proxyAddr := d.proxyURL.Host
-	if d.proxyURL.Port() == "" {
-		proxyAddr = net.JoinHostPort(d.proxyURL.Hostname(), "1080") // Default SOCKS5 port
-	}
-
-	socksDialer, err := proxy.SOCKS5("tcp", proxyAddr, auth, proxy.Direct)
-	if err != nil {
-		slog.Debug("tls_fingerprint_socks5_dialer_failed", "error", err)
-		return nil, fmt.Errorf("create SOCKS5 dialer: %w", err)
-	}
-
-	// Step 2: Establish SOCKS5 tunnel to target
-	slog.Debug("tls_fingerprint_socks5_establishing_tunnel", "target", addr)
-	conn, err := socksDialer.Dial("tcp", addr)
-	if err != nil {
-		slog.Debug("tls_fingerprint_socks5_connect_failed", "error", err)
-		return nil, fmt.Errorf("SOCKS5 connect: %w", err)
-	}
-	slog.Debug("tls_fingerprint_socks5_tunnel_established")
-
-	// Step 3: Perform TLS handshake on the tunnel with utls fingerprint
-	return performTLSHandshake(ctx, conn, d.profile, addr)
+	return d.dialer.DialTLSContext(ctx, network, addr)
 }
 
 // DialTLSContext establishes a TLS connection through HTTP proxy with the configured fingerprint.
-// Flow: TCP connect to proxy -> CONNECT tunnel -> TLS handshake with utls
+// Flow: TCP connect to proxy -> (TLS with https proxy) -> CONNECT tunnel -> TLS handshake with utls
 func (d *HTTPProxyDialer) DialTLSContext(ctx context.Context, network, addr string) (net.Conn, error) {
-	slog.Debug("tls_fingerprint_http_proxy_connecting", "proxy", d.proxyURL.Host, "target", addr)
-
-	// Step 1: TCP connect to proxy server
-	var proxyAddr string
-	if d.proxyURL.Port() != "" {
-		proxyAddr = d.proxyURL.Host
-	} else {
-		// Default ports
-		if d.proxyURL.Scheme == "https" {
-			proxyAddr = net.JoinHostPort(d.proxyURL.Hostname(), "443")
-		} else {
-			proxyAddr = net.JoinHostPort(d.proxyURL.Hostname(), "80")
-		}
+	if d.err != nil {
+		return nil, d.err
 	}
-
-	dialer := &net.Dialer{}
-	conn, err := dialer.DialContext(ctx, "tcp", proxyAddr)
-	if err != nil {
-		slog.Debug("tls_fingerprint_http_proxy_connect_failed", "error", err)
-		return nil, fmt.Errorf("connect to proxy: %w", err)
-	}
-	slog.Debug("tls_fingerprint_http_proxy_connected", "proxy_addr", proxyAddr)
-
-	// Step 2: Send CONNECT request to establish tunnel
-	req := &http.Request{
-		Method: "CONNECT",
-		URL:    &url.URL{Opaque: addr},
-		Host:   addr,
-		Header: make(http.Header),
-	}
-
-	// Add proxy authentication if present
-	if d.proxyURL.User != nil {
-		username := d.proxyURL.User.Username()
-		password, _ := d.proxyURL.User.Password()
-		auth := base64.StdEncoding.EncodeToString([]byte(username + ":" + password))
-		req.Header.Set("Proxy-Authorization", "Basic "+auth)
-	}
-
-	slog.Debug("tls_fingerprint_http_proxy_sending_connect", "target", addr)
-	if err := req.Write(conn); err != nil {
-		_ = conn.Close()
-		slog.Debug("tls_fingerprint_http_proxy_write_failed", "error", err)
-		return nil, fmt.Errorf("write CONNECT request: %w", err)
-	}
-
-	// Step 3: Read CONNECT response
-	br := bufio.NewReader(conn)
-	resp, err := http.ReadResponse(br, req)
-	if err != nil {
-		_ = conn.Close()
-		slog.Debug("tls_fingerprint_http_proxy_read_response_failed", "error", err)
-		return nil, fmt.Errorf("read CONNECT response: %w", err)
-	}
-	// CONNECT response has no body; do not defer resp.Body.Close() as it wraps the
-	// same conn that will be used for the TLS handshake.
-
-	if resp.StatusCode != http.StatusOK {
-		_ = conn.Close()
-		slog.Debug("tls_fingerprint_http_proxy_connect_failed_status", "status_code", resp.StatusCode, "status", resp.Status)
-		return nil, fmt.Errorf("proxy CONNECT failed: %s", resp.Status)
-	}
-	slog.Debug("tls_fingerprint_http_proxy_tunnel_established")
-
-	// Step 4: Perform TLS handshake on the tunnel with utls fingerprint
-	return performTLSHandshake(ctx, conn, d.profile, addr)
+	return d.dialer.DialTLSContext(ctx, network, addr)
 }
 
 // DialTLSContext establishes a TLS connection with the configured fingerprint.
 // This method is designed to be used as http.Transport.DialTLSContext.
 func (d *Dialer) DialTLSContext(ctx context.Context, network, addr string) (net.Conn, error) {
-	// Establish TCP connection using base dialer (supports proxy)
-	slog.Debug("tls_fingerprint_dialing_tcp", "addr", addr)
-	conn, err := d.baseDialer(ctx, network, addr)
-	if err != nil {
-		slog.Debug("tls_fingerprint_tcp_dial_failed", "error", err)
-		return nil, err
-	}
-	slog.Debug("tls_fingerprint_tcp_connected", "addr", addr)
-
-	// Perform TLS handshake with utls fingerprint
-	return performTLSHandshake(ctx, conn, d.profile, addr)
-}
-
-// tlsSessionCache 复用 TLS 会话票据（真实 Node/Bun 客户端会复用；
-// 每次连接都完整握手是弱信号）。
-var tlsSessionCache = utls.NewLRUClientSessionCache(128)
-
-// performTLSHandshake performs the uTLS handshake on an established connection.
-// It builds a ClientHello spec from the profile, applies it, and completes the handshake.
-// On failure, conn is closed and an error is returned.
-func performTLSHandshake(ctx context.Context, conn net.Conn, profile *Profile, addr string) (net.Conn, error) {
-	host, _, err := net.SplitHostPort(addr)
-	if err != nil {
-		host = addr
-	}
-
-	spec := buildClientHelloSpecFromProfile(profile)
-	tlsConn := utls.UClient(conn, &utls.Config{
-		ServerName:                         host,
-		ClientSessionCache:                 tlsSessionCache,
-		OmitEmptyPsk:                       true, // 未命中复用时 hello 与首次抓包逐字节一致
-		PreferSkipResumptionOnNilExtension: true, // 2.1.280 hello 没有 PSK 扩展，避免 utls panic
-	}, utls.HelloCustom)
-
-	if err := tlsConn.ApplyPreset(spec); err != nil {
-		_ = conn.Close()
-		return nil, fmt.Errorf("apply TLS preset: %w", err)
-	}
-
-	if err := tlsConn.HandshakeContext(ctx); err != nil {
-		_ = conn.Close()
-		return nil, fmt.Errorf("TLS handshake failed: %w", err)
-	}
-
-	state := tlsConn.ConnectionState()
-	slog.Debug("tls_fingerprint_handshake_success",
-		"host", host,
-		"version", state.Version,
-		"cipher_suite", state.CipherSuite,
-		"alpn", state.NegotiatedProtocol)
-
-	return tlsConn, nil
+	return d.dialer.DialTLSContext(ctx, network, addr)
 }
 
 // toUTLSCurves converts uint16 slice to utls.CurveID slice.

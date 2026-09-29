@@ -52,29 +52,21 @@ func (s *ProxyExpirySuite) accountProxyID(id int64) *int64 {
 	return pid
 }
 
-func (s *ProxyExpirySuite) TestSweep_DirectMode() {
+// 过期改投直连（fallback_mode=direct）已移除：数据库 CHECK 约束（迁移 251）拒绝写入该取值，
+// 过期扫描也就不可能再把账号的 proxy_id 置空。
+func (s *ProxyExpirySuite) TestLegacyDirectFallbackModeIsRejectedByDatabase() {
 	past := time.Now().Add(-time.Hour)
-	pid := s.mkProxy("p-direct", service.FallbackModeDirect, &past, nil)
-	aid := s.mkAccountWithProxy(pid)
-
-	changed, err := s.repo.SweepExpiredProxies(s.ctx, time.Now())
-	s.Require().NoError(err)
-	s.Require().GreaterOrEqual(changed, int64(1))
-
-	got, _ := s.repo.GetByID(s.ctx, pid)
-	s.Require().Equal(service.StatusExpired, got.Status)
-	s.Require().Nil(s.accountProxyID(aid))
-	var origin *int64
-	err = scanSingleRow(s.ctx, s.tx, `SELECT proxy_fallback_origin_id FROM accounts WHERE id=$1`, []any{aid}, &origin)
-	s.Require().NoError(err)
-	s.Require().NotNil(origin)
-	s.Require().Equal(pid, *origin)
+	p := &service.Proxy{Name: "p-direct", Protocol: "http", Host: "127.0.0.1", Port: 8080,
+		Status: service.StatusActive, FallbackMode: "direct", ExpiryWarnDays: 7, ExpiresAt: &past}
+	s.Require().Error(s.repo.Create(s.ctx, p), "fallback_mode=direct must be rejected by proxies_fallback_mode_check")
 }
 
 func (s *ProxyExpirySuite) TestSweep_EnqueuesChangedAccountIDsWithoutFullRebuild() {
 	past := time.Now().Add(-time.Hour)
-	firstProxyID := s.mkProxy("p-bulk-first", service.FallbackModeDirect, &past, nil)
-	secondProxyID := s.mkProxy("p-bulk-second", service.FallbackModeDirect, &past, nil)
+	future := time.Now().Add(24 * time.Hour)
+	backupProxyID := s.mkProxy("p-bulk-backup", service.FallbackModeNone, &future, nil)
+	firstProxyID := s.mkProxy("p-bulk-first", service.FallbackModeProxy, &past, &backupProxyID)
+	secondProxyID := s.mkProxy("p-bulk-second", service.FallbackModeProxy, &past, &backupProxyID)
 	firstAccountID := s.mkAccountWithProxy(firstProxyID)
 	secondAccountID := s.mkAccountWithProxy(secondProxyID)
 

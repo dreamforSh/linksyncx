@@ -48,7 +48,7 @@ type DataProxy struct {
 	Password        string `json:"password,omitempty"`
 	Status          string `json:"status"`
 	ExpiresAt       *int64 `json:"expires_at,omitempty"`        // unix 秒，与 DataAccount.ExpiresAt 风格一致
-	FallbackMode    string `json:"fallback_mode,omitempty"`     // none/direct/proxy
+	FallbackMode    string `json:"fallback_mode,omitempty"`     // none/proxy（旧版导出的 direct 导入时降级为 none）
 	BackupProxyName string `json:"backup_proxy_name,omitempty"` // 备用代理 name（跨实例按 name 反查）
 	ExpiryWarnDays  int    `json:"expiry_warn_days,omitempty"`
 }
@@ -322,9 +322,14 @@ func (h *AccountHandler) importData(ctx context.Context, req DataImportRequest) 
 						t := time.Unix(*item.ExpiresAt, 0).UTC()
 						existingExpiresAt = &t
 					}
-					existingFallbackMode := item.FallbackMode
-					if existingFallbackMode == "" {
-						existingFallbackMode = service.FallbackModeNone
+					existingFallbackMode, fallbackWarning := normalizeImportedProxyFallbackMode(item.FallbackMode)
+					if fallbackWarning != "" {
+						result.Errors = append(result.Errors, DataImportError{
+							Kind:     "proxy",
+							Name:     item.Name,
+							ProxyKey: key,
+							Message:  fallbackWarning,
+						})
 					}
 					var existingBackupProxyID *int64
 					if item.BackupProxyName != "" {
@@ -360,7 +365,15 @@ func (h *AccountHandler) importData(ctx context.Context, req DataImportRequest) 
 		}
 
 		// 解析 backup_proxy_name → backup_proxy_id
-		fallbackMode := item.FallbackMode
+		fallbackMode, fallbackWarning := normalizeImportedProxyFallbackMode(item.FallbackMode)
+		if fallbackWarning != "" {
+			result.Errors = append(result.Errors, DataImportError{
+				Kind:     "proxy",
+				Name:     item.Name,
+				ProxyKey: key,
+				Message:  fallbackWarning,
+			})
+		}
 		var backupProxyID *int64
 		if item.BackupProxyName != "" {
 			if bid, ok := proxyNameToID[item.BackupProxyName]; ok {
@@ -824,6 +837,21 @@ func normalizeProxyStatus(status string) string {
 		return "inactive"
 	default:
 		return normalized
+	}
+}
+
+// normalizeImportedProxyFallbackMode 规范化导入数据里的 fallback_mode：空值视为 none；
+// 旧版本导出的 "direct"（过期改投直连，已移除——代理过期不得让账号转直连）及其它未知取值
+// 一律降级为 none，并返回需要写进导入结果的提示（无降级时为空串）。
+func normalizeImportedProxyFallbackMode(mode string) (string, string) {
+	trimmed := strings.TrimSpace(mode)
+	switch trimmed {
+	case "", service.FallbackModeNone:
+		return service.FallbackModeNone, ""
+	case service.FallbackModeProxy:
+		return service.FallbackModeProxy, ""
+	default:
+		return service.FallbackModeNone, fmt.Sprintf("fallback_mode %q is not supported (expired proxies never fall back to a direct connection), downgraded to none", trimmed)
 	}
 }
 

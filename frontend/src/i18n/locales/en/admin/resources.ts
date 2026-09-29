@@ -241,7 +241,6 @@ export default {
       fallbackMode: 'Expiry fallback',
       fallbackNone: 'No fallback',
       fallbackProxy: 'Backup proxy',
-      fallbackDirect: 'Direct connection',
       backupProxy: 'Backup proxy',
     },
 

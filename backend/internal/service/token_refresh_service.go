@@ -1456,11 +1456,14 @@ func (s *TokenRefreshService) ensureOpenAIPrivacy(ctx context.Context, account *
 		return
 	}
 
-	var proxyURL string
-	if account.ProxyID != nil && s.proxyRepo != nil {
-		if p, err := s.proxyRepo.GetByID(ctx, *account.ProxyID); err == nil && p != nil {
-			proxyURL = p.URL()
-		}
+	// fail-closed：账号分配了代理但解析失败时跳过（下轮刷新重试），绝不直连泄漏出口 IP。
+	proxyURL, proxyErr := accountProxyURLWithRepo(ctx, s.proxyRepo, account)
+	if proxyErr != nil {
+		slog.Warn("token_refresh.openai_privacy_skipped_proxy_unavailable",
+			"account_id", account.ID,
+			"error", proxyErr,
+		)
+		return
 	}
 
 	mode := disableOpenAITraining(ctx, s.privacyClientFactory, token, proxyURL)
@@ -1501,11 +1504,14 @@ func (s *TokenRefreshService) ensureAntigravityPrivacy(ctx context.Context, acco
 
 	projectID, _ := account.Credentials["project_id"].(string)
 
-	var proxyURL string
-	if account.ProxyID != nil && s.proxyRepo != nil {
-		if p, err := s.proxyRepo.GetByID(ctx, *account.ProxyID); err == nil && p != nil {
-			proxyURL = p.URL()
-		}
+	// fail-closed：账号分配了代理但解析失败时跳过（下轮刷新重试），绝不直连泄漏出口 IP。
+	proxyURL, proxyErr := accountProxyURLWithRepo(ctx, s.proxyRepo, account)
+	if proxyErr != nil {
+		slog.Warn("token_refresh.antigravity_privacy_skipped_proxy_unavailable",
+			"account_id", account.ID,
+			"error", proxyErr,
+		)
+		return
 	}
 
 	mode := setAntigravityPrivacy(ctx, token, projectID, proxyURL)

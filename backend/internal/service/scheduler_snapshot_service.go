@@ -286,7 +286,12 @@ func (s *SchedulerSnapshotService) GetAccount(ctx context.Context, accountID int
 		if err != nil {
 			logger.LegacyPrintf("service.scheduler_snapshot", "[Scheduler] account cache read failed: id=%d err=%v", accountID, err)
 		} else if account != nil {
-			return account, nil
+			// 陈旧缓存兜底：账号分配了代理，但缓存条目缺 Proxy 关系（旧版本序列化前无该字段）时
+			// 回源 DB 补全，避免下游 ProxyURLForOutbound fail-closed 误报（GetByID 会 eager-load Proxy）。
+			if account.ProxyID == nil || account.Proxy != nil {
+				return account, nil
+			}
+			logger.LegacyPrintf("service.scheduler_snapshot", "[Scheduler] cached account %d has proxy_id but no proxy relation; refreshing from DB to avoid direct-connection leak", accountID)
 		}
 	}
 

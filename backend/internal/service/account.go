@@ -2456,6 +2456,36 @@ func (a *Account) GetTLSFingerprintProfileID() int64 {
 	return 0
 }
 
+// ErrAccountProxyUnavailable 表示账号分配了代理，但运行时无法解析出可用的代理 URL
+// （关系未加载 / 与 ProxyID 错配 / 代理被删 / clash 节点缺失）。出站调用方遇到它必须
+// fail-closed（报错或 failover），**绝不能回退直连**——否则会泄漏网关真实出口 IP。
+var ErrAccountProxyUnavailable = errors.New("assigned proxy is currently unavailable; refusing to connect directly")
+
+// ProxyURLForOutbound 返回账号所有上游流量（数据面转发、测试、探测、配额、计费、OAuth）
+// 应使用的代理 URL，语义为 fail-closed：
+//
+//   - 未分配代理（ProxyID == nil）→ ("", nil)：直连是预期行为。
+//   - 分配了代理但关系缺失 / 与 ProxyID 错配 / URL 为空 → ("", ErrAccountProxyUnavailable)：
+//     调用方必须据此拒绝直连（数据面走 failover，其余路径上抛错误）。
+//   - 正常 → (proxy.URL(), nil)。
+//
+// 传输层只把"非空且不可解析"的代理判为错误、把空串当直连，无法区分"未分配"与"分配了但丢失"，
+// 因此账号级的判定必须在这里完成。clash 出口是 socks5://127.0.0.1:<port> 的 Proxy 行，核心/节点
+// 不健康时连接会被拒绝（REJECT 占位监听 / connection-refused），只要真的使用该 URL 即天然 fail-closed。
+func (a *Account) ProxyURLForOutbound() (string, error) {
+	if a == nil || a.ProxyID == nil {
+		return "", nil
+	}
+	if a.Proxy == nil || a.Proxy.ID != *a.ProxyID {
+		return "", ErrAccountProxyUnavailable
+	}
+	proxyURL := a.Proxy.URL()
+	if proxyURL == "" {
+		return "", ErrAccountProxyUnavailable
+	}
+	return proxyURL, nil
+}
+
 // GetUserMsgQueueMode 获取用户消息队列模式
 // "serialize" = 串行队列, "throttle" = 软性限速, "" = 未设置（使用全局配置）
 func (a *Account) GetUserMsgQueueMode() string {

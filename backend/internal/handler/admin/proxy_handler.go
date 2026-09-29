@@ -34,7 +34,7 @@ type CreateProxyRequest struct {
 	Username       string `json:"username"`
 	Password       string `json:"password"`
 	ExpiresAt      *int64 `json:"expires_at"`
-	FallbackMode   string `json:"fallback_mode" binding:"omitempty,oneof=none proxy direct"`
+	FallbackMode   string `json:"fallback_mode" binding:"omitempty,oneof=none proxy"`
 	BackupProxyID  *int64 `json:"backup_proxy_id"`
 	ExpiryWarnDays int    `json:"expiry_warn_days" binding:"omitempty,min=0"`
 }
@@ -49,7 +49,7 @@ type UpdateProxyRequest struct {
 	Password       *string                `json:"password"`
 	Status         string                 `json:"status" binding:"omitempty,oneof=active inactive"`
 	ExpiresAt      dto.NullableInt64Field `json:"expires_at"`
-	FallbackMode   string                 `json:"fallback_mode" binding:"omitempty,oneof=none proxy direct"`
+	FallbackMode   string                 `json:"fallback_mode" binding:"omitempty,oneof=none proxy"`
 	BackupProxyID  dto.NullableInt64Field `json:"backup_proxy_id"`
 	ExpiryWarnDays *int                   `json:"expiry_warn_days" binding:"omitempty,min=0"`
 }

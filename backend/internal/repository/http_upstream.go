@@ -7,6 +7,7 @@ import (
 	"compress/gzip"
 	"context"
 	"crypto/tls"
+	"crypto/x509"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -27,6 +28,7 @@ import (
 	"golang.org/x/net/http2"
 
 	"github.com/Wei-Shaw/sub2api/internal/config"
+	"github.com/Wei-Shaw/sub2api/internal/pkg/httpwire"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/proxyurl"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/proxyutil"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/servertiming"
@@ -167,6 +169,8 @@ type httpUpstreamService struct {
 	clients map[string]*upstreamClientEntry // 客户端缓存池，key 由隔离策略决定
 	// OpenAI 走 HTTP/HTTPS 代理时的 H2->H1 回退状态（key=标准化 proxyKey）
 	openAIHTTP2Fallbacks sync.Map
+	// tlsRootCAs 仅供测试注入自签根证书；生产为 nil（系统根证书）
+	tlsRootCAs *x509.CertPool
 }
 
 // NewHTTPUpstream 创建通用 HTTP 上游服务
@@ -610,7 +614,7 @@ func (s *httpUpstreamService) getClientEntryWithTLS(proxyURL string, accountID i
 
 	// 创建带 TLS 指纹的 Transport
 	slog.Debug("tls_fingerprint_creating_new_client", "account_id", accountID, "cache_key", cacheKey, "proxy", proxyKey)
-	transport, err := buildUpstreamTransportWithTLSFingerprint(settings, parsedProxy, profile)
+	transport, err := buildUpstreamTransportWithTLSFingerprint(settings, parsedProxy, profile, s.tlsDialOptions())
 	if err != nil {
 		s.mu.Unlock()
 		return nil, fmt.Errorf("build TLS fingerprint transport: %w", err)
@@ -1425,66 +1429,46 @@ func enableHTTP2KeepAlive(transport *http.Transport, protocolMode string) (*http
 	return h2, nil
 }
 
-// buildUpstreamTransportWithTLSFingerprint 构建带 TLS 指纹伪装的 Transport
-// 使用 utls 库模拟 Claude CLI 的 TLS 指纹
+// buildUpstreamTransportWithTLSFingerprint 构建带 TLS 指纹伪装的 Transport，
+// 在传输层完整复刻真实 Claude Code（Bun fetch）的出站形态：
 //
-// 参数:
-//   - settings: 连接池配置
-//   - proxyURL: 代理 URL（nil 表示直连）
-//   - profile: TLS 指纹配置
+//   - 连接：tlsfingerprint.ProxyDialer 直连或经 http / https / socks5 代理隧道建连，
+//     再以 profile 完成 uTLS 握手；建连、代理协商、TLS 握手各有独立超时（net/http
+//     不对自定义 DialTLSContext 施加 TLSHandshakeTimeout）。明文 http 目标（如重定向）
+//     走同一隧道，绝不绕过代理直连。
+//   - 线级头序：httpwire 把 net/http 写出的请求头块重排为 Bun fetch 形态（调用方头
+//     按字节序，随后 Connection / Host / Accept-Encoding / Content-Length 固定尾序）。
+//   - 连接池、keep-alive、MaxConnsPerHost 排队、空闲回收与复用失败重试仍由
+//     http.Transport 按 poolSettings 管理；Bun 只讲 HTTP/1.1。
 //
-// 返回:
-//   - *http.Transport: 配置好的 Transport 实例
-//   - error: 配置错误
-//
-// 代理类型处理:
-//   - nil/空: 直连，使用 TLSFingerprintDialer
-//   - http/https: HTTP 代理，使用 HTTPProxyDialer（CONNECT 隧道 + utls 握手）
-//   - socks5: SOCKS5 代理，使用 SOCKS5ProxyDialer（SOCKS5 隧道 + utls 握手）
-func buildUpstreamTransportWithTLSFingerprint(settings poolSettings, proxyURL *url.URL, profile *tlsfingerprint.Profile) (*http.Transport, error) {
-	transport := &http.Transport{
+// Accept-Encoding：关闭 net/http 自动追加的 "gzip"，调用方未设置时由 httpwire 补
+// Bun 默认值 "gzip, deflate, br, zstd"；响应统一在 decompressResponseBody 解压。
+func buildUpstreamTransportWithTLSFingerprint(settings poolSettings, proxyURL *url.URL, profile *tlsfingerprint.Profile, dialOpts tlsfingerprint.DialOptions) (*http.Transport, error) {
+	dialer, err := tlsfingerprint.NewProxyDialer(profile, proxyURL, dialOpts)
+	if err != nil {
+		return nil, err
+	}
+	return &http.Transport{
+		DialContext:           httpwire.WrapDialer(dialer.DialContext),
+		DialTLSContext:        httpwire.WrapDialer(dialer.DialTLSContext),
+		DisableCompression:    true,
 		MaxIdleConns:          settings.maxIdleConns,
 		MaxIdleConnsPerHost:   settings.maxIdleConnsPerHost,
 		MaxConnsPerHost:       settings.maxConnsPerHost,
 		IdleConnTimeout:       settings.idleConnTimeout,
 		ResponseHeaderTimeout: settings.responseHeaderTimeout,
-		// 禁用默认的 TLS，我们使用自定义的 DialTLSContext
-		ForceAttemptHTTP2: false,
-	}
+		ForceAttemptHTTP2:     false,
+	}, nil
+}
 
-	// 根据代理类型选择合适的 TLS 指纹 Dialer
-	if proxyURL == nil {
-		// 直连：使用 TLSFingerprintDialer
-		slog.Debug("tls_fingerprint_transport_direct")
-		dialer := tlsfingerprint.NewDialer(profile, nil)
-		transport.DialTLSContext = dialer.DialTLSContext
-	} else {
-		scheme := strings.ToLower(proxyURL.Scheme)
-		switch scheme {
-		case "socks5", "socks5h":
-			// SOCKS5 代理：使用 SOCKS5ProxyDialer
-			slog.Debug("tls_fingerprint_transport_socks5", "proxy", proxyURL.Host)
-			socks5Dialer := tlsfingerprint.NewSOCKS5ProxyDialer(profile, proxyURL)
-			transport.DialTLSContext = socks5Dialer.DialTLSContext
-		case "https":
-			// The fingerprint dialer emits a plaintext CONNECT preface and cannot
-			// establish TLS to an HTTPS proxy. Keep proxy routing via net/http.
-			return buildUpstreamTransport(settings, proxyURL, upstreamProtocolModeDefault)
-		case "http":
-			// HTTP/HTTPS 代理：使用 HTTPProxyDialer（CONNECT 隧道）
-			slog.Debug("tls_fingerprint_transport_http_connect", "proxy", proxyURL.Host)
-			httpDialer := tlsfingerprint.NewHTTPProxyDialer(profile, proxyURL)
-			transport.DialTLSContext = httpDialer.DialTLSContext
-		default:
-			// 未知代理类型，回退到普通代理配置（无 TLS 指纹）
-			slog.Debug("tls_fingerprint_transport_unknown_scheme_fallback", "scheme", scheme)
-			if err := proxyutil.ConfigureTransportProxy(transport, proxyURL); err != nil {
-				return nil, err
-			}
-		}
+// tlsDialOptions 返回指纹拨号的分阶段超时，与普通 Transport 的建连/握手超时一致。
+func (s *httpUpstreamService) tlsDialOptions() tlsfingerprint.DialOptions {
+	return tlsfingerprint.DialOptions{
+		DialTimeout:      defaultUpstreamDialTimeout,
+		HandshakeTimeout: defaultUpstreamTLSHandshakeTimeout,
+		KeepAlive:        defaultUpstreamDialKeepAlive,
+		RootCAs:          s.tlsRootCAs,
 	}
-
-	return transport, nil
 }
 
 // trackedBody 带跟踪功能的响应体包装器

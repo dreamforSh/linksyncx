@@ -16,11 +16,7 @@ func (s *ProxyExpirySuite) TestSweep_SkipsChangedSnapshot() {
 			past := now.Add(-time.Hour)
 			future := now.Add(24 * time.Hour)
 			backup := s.mkProxy("snapshot-backup", service.FallbackModeNone, &future, nil)
-			source := s.mkProxy("snapshot-source", service.FallbackModeDirect, &past, nil)
-			if edit == "change backup" {
-				_, err := s.tx.ExecContext(s.ctx, `UPDATE proxies SET fallback_mode='proxy', backup_proxy_id=$1 WHERE id=$2`, backup, source)
-				s.Require().NoError(err)
-			}
+			source := s.mkProxy("snapshot-source", service.FallbackModeProxy, &past, &backup)
 			account := s.mkAccountWithProxy(source)
 			snapshot, err := s.repo.GetByID(s.ctx, source)
 			s.Require().NoError(err)
@@ -65,14 +61,16 @@ func (s *ProxyExpirySuite) TestSweep_SkipsChangedSnapshot() {
 func (s *ProxyExpirySuite) TestSweep_ChangedModeIsUsedOnNextScan() {
 	now := time.Now()
 	past := now.Add(-time.Hour)
-	source := s.mkProxy("mode-source", service.FallbackModeDirect, &past, nil)
+	future := now.Add(24 * time.Hour)
+	backup := s.mkProxy("mode-backup", service.FallbackModeNone, &future, nil)
+	source := s.mkProxy("mode-source", service.FallbackModeProxy, &past, &backup)
 	account := s.mkAccountWithProxy(source)
 	snapshot, err := s.repo.GetByID(s.ctx, source)
 	s.Require().NoError(err)
 	updated := *snapshot
 	updated.FallbackMode = service.FallbackModeNone
 	s.Require().NoError(s.repo.Update(s.ctx, &updated))
-	changed, err := s.repo.sweepOneExpiredProxy(s.ctx, *snapshot, now, nil, true)
+	changed, err := s.repo.sweepOneExpiredProxy(s.ctx, *snapshot, now, &backup, true)
 	s.Require().NoError(err)
 	s.Empty(changed)
 	_, err = s.repo.SweepExpiredProxies(s.ctx, now)

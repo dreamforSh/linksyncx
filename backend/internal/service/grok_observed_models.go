@@ -106,11 +106,10 @@ func (s *GrokQuotaService) syncGrokObservedModels(ctx context.Context, account *
 	}
 	account.ApplyHeaderOverrides(req.Header)
 
-	proxyURL := ""
-	if s.proxyRepo != nil && account.ProxyID != nil {
-		if p, err := s.proxyRepo.GetByID(ctx, *account.ProxyID); err == nil && p != nil {
-			proxyURL = p.URL()
-		}
+	// fail-closed：账号分配了代理但解析失败时报错，绝不直连同步模型列表。
+	proxyURL, err := accountProxyURLWithRepo(ctx, s.proxyRepo, account)
+	if err != nil {
+		return err
 	}
 	if s.httpUpstream == nil {
 		return nil

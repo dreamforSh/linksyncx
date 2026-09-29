@@ -207,15 +207,21 @@ func (f *AntigravityQuotaFetcher) buildUsageInfo(modelsResp *antigravity.FetchAv
 }
 
 // GetProxyURL 获取账户的代理 URL
-func (f *AntigravityQuotaFetcher) GetProxyURL(ctx context.Context, account *Account) string {
-	if account.ProxyID == nil || f.proxyRepo == nil {
-		return ""
+// GetProxyURL fail-closed：账号分配了代理但既没预加载、也无法从 proxyRepo 补齐时
+// 返回错误，绝不回退直连（避免出口 IP 泄漏）。
+func (f *AntigravityQuotaFetcher) GetProxyURL(ctx context.Context, account *Account) (string, error) {
+	if account.ProxyID == nil {
+		return "", nil
 	}
-	proxy, err := f.proxyRepo.GetByID(ctx, *account.ProxyID)
-	if err != nil || proxy == nil {
-		return ""
+	if account.Proxy != nil && account.Proxy.ID == *account.ProxyID {
+		return account.Proxy.URL(), nil
 	}
-	return proxy.URL()
+	if f.proxyRepo != nil {
+		if proxy, err := f.proxyRepo.GetByID(ctx, *account.ProxyID); err == nil && proxy != nil {
+			return proxy.URL(), nil
+		}
+	}
+	return "", ErrAccountProxyUnavailable
 }
 
 // classifyForbiddenType 根据 403 响应体判断禁止类型

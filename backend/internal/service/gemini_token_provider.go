@@ -116,11 +116,12 @@ func (p *GeminiTokenProvider) GetAccessToken(ctx context.Context, account *Accou
 			return accessToken, nil
 		}
 
-		var proxyURL string
-		if account.ProxyID != nil && p.geminiOAuthService.proxyRepo != nil {
-			if proxy, err := p.geminiOAuthService.proxyRepo.GetByID(ctx, *account.ProxyID); err == nil && proxy != nil {
-				proxyURL = proxy.URL()
-			}
+		// fail-closed：账号分配了代理但解析失败时跳过 project_id 探测（回退 AI Studio 模式），
+		// 绝不直连探测泄漏出口 IP。
+		proxyURL, proxyErr := accountProxyURLWithRepo(ctx, p.geminiOAuthService.proxyRepo, account)
+		if proxyErr != nil {
+			log.Printf("[GeminiTokenProvider] Skip project_id auto-detect: %v, fallback to AI Studio API mode", proxyErr)
+			return accessToken, nil
 		}
 
 		detected, tierID, err := p.geminiOAuthService.fetchProjectID(ctx, accessToken, proxyURL)

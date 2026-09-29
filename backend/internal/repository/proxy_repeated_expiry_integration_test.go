@@ -10,20 +10,20 @@ import (
 )
 
 func (s *ProxyExpirySuite) TestSweep_RepeatedExpiryPreservesOriginalProxy() {
-	for _, direct := range []bool{false, true} {
-		s.Run(map[bool]string{false: "next backup", true: "direct"}[direct], func() {
+	for _, hasNextBackup := range []bool{true, false} {
+		s.Run(map[bool]string{true: "next backup", false: "no further backup"}[hasNextBackup], func() {
 			now := time.Now()
 			past := now.Add(-time.Hour)
 			soon := now.Add(time.Hour)
 			later := now.Add(48 * time.Hour)
 			originalID := s.mkProxy("repeated-original", service.FallbackModeProxy, &past, nil)
-			middleID := s.mkProxy("repeated-middle", service.FallbackModeDirect, &soon, nil)
+			middleID := s.mkProxy("repeated-middle", service.FallbackModeNone, &soon, nil)
 			lastID := s.mkProxy("repeated-last", service.FallbackModeNone, &later, nil)
 			// Populate directed foreign keys directly so this regression does not depend
 			// on the separate ORM backup-edge fix.
 			_, err := s.tx.ExecContext(s.ctx, `UPDATE proxies SET backup_proxy_id=$1 WHERE id=$2`, middleID, originalID)
 			s.Require().NoError(err)
-			if !direct {
+			if hasNextBackup {
 				_, err = s.tx.ExecContext(s.ctx, `UPDATE proxies SET fallback_mode='proxy',backup_proxy_id=$1 WHERE id=$2`, lastID, middleID)
 				s.Require().NoError(err)
 			}
@@ -35,11 +35,14 @@ func (s *ProxyExpirySuite) TestSweep_RepeatedExpiryPreservesOriginalProxy() {
 
 			changed, err = s.repo.SweepExpiredProxies(s.ctx, now.Add(2*time.Hour))
 			s.Require().NoError(err)
-			s.Require().EqualValues(1, changed, "accounts already in fallback must still be rerouted")
-			if direct {
-				s.Require().Nil(s.accountProxyID(accountID))
-			} else {
+			if hasNextBackup {
+				s.Require().EqualValues(1, changed, "accounts already in fallback must still be rerouted")
 				s.Require().Equal(&lastID, s.accountProxyID(accountID))
+			} else {
+				// Without a usable backup the account stays bound to the expired proxy
+				// (fail-closed); expiry never moves it to a direct connection.
+				s.Require().Zero(changed)
+				s.Require().Equal(&middleID, s.accountProxyID(accountID))
 			}
 			var origin *int64
 			err = scanSingleRow(s.ctx, s.tx, `SELECT proxy_fallback_origin_id FROM accounts WHERE id=$1`, []any{accountID}, &origin)

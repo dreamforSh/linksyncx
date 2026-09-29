@@ -39,7 +39,7 @@ type Proxy struct {
 	Status string `json:"status,omitempty"`
 	// Proxy expiration time (NULL means never expires).
 	ExpiresAt *time.Time `json:"expires_at,omitempty"`
-	// Fallback target on expiry: none | proxy | direct.
+	// Fallback target on expiry: none | proxy (expired proxies never fall back to a direct connection).
 	FallbackMode string `json:"fallback_mode,omitempty"`
 	// Backup proxy id when fallback_mode=proxy (self-reference).
 	BackupProxyID *int64 `json:"backup_proxy_id,omitempty"`

@@ -492,14 +492,27 @@ func TestSweepExpiredProxyFallbackRerouteDeletesProbeSnapshot(t *testing.T) {
 	proxyRepo := newProxyRepositoryWithSQL(tx.Client(), tx)
 	accountRepo := newAccountRepositoryWithSQL(tx.Client(), tx, nil)
 	past := time.Now().Add(-time.Hour)
+	future := time.Now().Add(24 * time.Hour)
+	backup := &service.Proxy{
+		Name:           "healthy-probe-backup",
+		Protocol:       "http",
+		Host:           "127.0.0.1",
+		Port:           8081,
+		Status:         service.StatusActive,
+		ExpiresAt:      &future,
+		FallbackMode:   service.FallbackModeNone,
+		ExpiryWarnDays: 7,
+	}
+	require.NoError(t, proxyRepo.Create(ctx, backup))
 	proxy := &service.Proxy{
-		Name:           "expired-probe-proxy-direct",
+		Name:           "expired-probe-proxy-rerouted",
 		Protocol:       "http",
 		Host:           "127.0.0.1",
 		Port:           8080,
 		Status:         service.StatusActive,
 		ExpiresAt:      &past,
-		FallbackMode:   service.FallbackModeDirect,
+		FallbackMode:   service.FallbackModeProxy,
+		BackupProxyID:  &backup.ID,
 		ExpiryWarnDays: 7,
 	}
 	require.NoError(t, proxyRepo.Create(ctx, proxy))
@@ -521,7 +534,7 @@ func TestSweepExpiredProxyFallbackRerouteDeletesProbeSnapshot(t *testing.T) {
 
 	got, err := accountRepo.GetByID(ctx, account.ID)
 	require.NoError(t, err)
-	require.Nil(t, got.ProxyID)
+	require.Equal(t, &backup.ID, got.ProxyID, "expiry reroutes onto the backup proxy, never to a direct connection")
 	require.NotContains(t, got.Extra, service.UpstreamBillingProbeExtraKey)
 	require.Equal(t, []int64{account.ID}, latestBulkAccountOutboxPayload(t, ctx, tx))
 }

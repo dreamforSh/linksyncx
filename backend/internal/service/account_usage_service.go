@@ -937,9 +937,9 @@ func (s *AccountUsageService) probeOpenAICodexSnapshot(ctx context.Context, acco
 	enforceCodexIdentityHeadersWithUA(req.Header, account.GetOpenAIUserAgent())
 	setOpenAIChatGPTAccountHeaders(req.Header, account)
 
-	proxyURL := ""
-	if account.ProxyID != nil && account.Proxy != nil {
-		proxyURL = account.Proxy.URL()
+	proxyURL, proxyErr := account.ProxyURLForOutbound()
+	if proxyErr != nil {
+		return nil, proxyErr
 	}
 	client, err := httppool.GetClient(httppool.Options{
 		ProxyURL:              proxyURL,
@@ -1121,7 +1121,10 @@ func (s *AccountUsageService) getAntigravityUsage(ctx context.Context, account *
 		fetchCtx, fetchCancel := context.WithTimeout(context.Background(), 30*time.Second)
 		defer fetchCancel()
 
-		proxyURL := s.antigravityQuotaFetcher.GetProxyURL(fetchCtx, account)
+		proxyURL, proxyErr := s.antigravityQuotaFetcher.GetProxyURL(fetchCtx, account)
+		if proxyErr != nil {
+			return nil, proxyErr
+		}
 		fetchResult, err := s.antigravityQuotaFetcher.FetchQuota(fetchCtx, account, proxyURL)
 		if err != nil {
 			degraded := buildAntigravityDegradedUsage(err)
@@ -1621,15 +1624,20 @@ func (s *AccountUsageService) fetchOAuthUsageRaw(ctx context.Context, account *A
 		return nil, fmt.Errorf("no access token available")
 	}
 
-	return s.usageFetcher.FetchUsageWithOptions(ctx, s.claudeFetchOptions(ctx, account, accessToken))
+	opts, err := s.claudeFetchOptions(ctx, account, accessToken)
+	if err != nil {
+		return nil, err
+	}
+	return s.usageFetcher.FetchUsageWithOptions(ctx, opts)
 }
 
 // claudeFetchOptions 构建调用 Claude OAuth 账号侧接口的公共选项：代理、TLS 指纹与缓存的
 // Fingerprint（包含 User-Agent 等信息），用量、profile 与重置领取共用。
-func (s *AccountUsageService) claudeFetchOptions(ctx context.Context, account *Account, accessToken string) *ClaudeUsageFetchOptions {
-	var proxyURL string
-	if account.ProxyID != nil && account.Proxy != nil {
-		proxyURL = account.Proxy.URL()
+// fail-closed：账号分配了代理但不可用时返回错误，绝不回退直连（避免出口 IP 泄漏）。
+func (s *AccountUsageService) claudeFetchOptions(ctx context.Context, account *Account, accessToken string) (*ClaudeUsageFetchOptions, error) {
+	proxyURL, err := account.ProxyURLForOutbound()
+	if err != nil {
+		return nil, err
 	}
 
 	opts := &ClaudeUsageFetchOptions{
@@ -1644,7 +1652,7 @@ func (s *AccountUsageService) claudeFetchOptions(ctx context.Context, account *A
 			opts.Fingerprint = fp
 		}
 	}
-	return opts
+	return opts, nil
 }
 
 // parseTime 尝试多种格式解析时间

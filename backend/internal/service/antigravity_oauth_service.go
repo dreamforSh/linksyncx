@@ -46,12 +46,10 @@ func (s *AntigravityOAuthService) GenerateAuthURL(ctx context.Context, proxyID *
 		return nil, fmt.Errorf("生成 session_id 失败: %w", err)
 	}
 
-	var proxyURL string
-	if proxyID != nil {
-		proxy, err := s.proxyRepo.GetByID(ctx, *proxyID)
-		if err == nil && proxy != nil {
-			proxyURL = proxy.URL()
-		}
+	// fail-closed：选了代理但解析失败时报错，绝不直连。
+	proxyURL, err := resolveProxyURLByID(ctx, s.proxyRepo, proxyID)
+	if err != nil {
+		return nil, err
 	}
 
 	session := &antigravity.OAuthSession{
@@ -105,13 +103,14 @@ func (s *AntigravityOAuthService) ExchangeCode(ctx context.Context, input *Antig
 		return nil, fmt.Errorf("state 无效")
 	}
 
-	// 确定代理 URL
+	// 确定代理 URL（fail-closed：选了代理但解析失败时报错，绝不直连）
 	proxyURL := session.ProxyURL
 	if input.ProxyID != nil {
-		proxy, err := s.proxyRepo.GetByID(ctx, *input.ProxyID)
-		if err == nil && proxy != nil {
-			proxyURL = proxy.URL()
+		resolved, err := resolveProxyURLByID(ctx, s.proxyRepo, input.ProxyID)
+		if err != nil {
+			return nil, err
 		}
+		proxyURL = resolved
 	}
 
 	client, err := antigravity.NewClient(proxyURL)
@@ -213,12 +212,10 @@ func (s *AntigravityOAuthService) RefreshToken(ctx context.Context, refreshToken
 
 // ValidateRefreshToken 用 refresh token 验证并获取完整的 token 信息（含 email 和 project_id）
 func (s *AntigravityOAuthService) ValidateRefreshToken(ctx context.Context, refreshToken string, proxyID *int64) (*AntigravityTokenInfo, error) {
-	var proxyURL string
-	if proxyID != nil {
-		proxy, err := s.proxyRepo.GetByID(ctx, *proxyID)
-		if err == nil && proxy != nil {
-			proxyURL = proxy.URL()
-		}
+	// fail-closed：选了代理但解析失败时报错，绝不直连。
+	proxyURL, err := resolveProxyURLByID(ctx, s.proxyRepo, proxyID)
+	if err != nil {
+		return nil, err
 	}
 
 	// 刷新 token
@@ -285,12 +282,10 @@ func (s *AntigravityOAuthService) RefreshAccountToken(ctx context.Context, accou
 		return nil, fmt.Errorf("无可用的 refresh_token")
 	}
 
-	var proxyURL string
-	if account.ProxyID != nil {
-		proxy, err := s.proxyRepo.GetByID(ctx, *account.ProxyID)
-		if err == nil && proxy != nil {
-			proxyURL = proxy.URL()
-		}
+	// fail-closed：账号分配了代理但解析失败时报错，绝不直连刷新 token。
+	proxyURL, err := accountProxyURLWithRepo(ctx, s.proxyRepo, account)
+	if err != nil {
+		return nil, err
 	}
 
 	tokenInfo, err := s.RefreshToken(ctx, refreshToken, proxyURL)
@@ -441,12 +436,10 @@ func resolveDefaultTierID(loadRaw map[string]any) string {
 
 // FillProjectID 仅获取 project_id，不刷新 OAuth token
 func (s *AntigravityOAuthService) FillProjectID(ctx context.Context, account *Account, accessToken string) (string, error) {
-	var proxyURL string
-	if account.ProxyID != nil {
-		proxy, err := s.proxyRepo.GetByID(ctx, *account.ProxyID)
-		if err == nil && proxy != nil {
-			proxyURL = proxy.URL()
-		}
+	// fail-closed：账号分配了代理但解析失败时报错，绝不直连。
+	proxyURL, err := accountProxyURLWithRepo(ctx, s.proxyRepo, account)
+	if err != nil {
+		return "", err
 	}
 	result, err := s.loadProjectIDWithRetry(ctx, accessToken, proxyURL, 3)
 	if result != nil {
