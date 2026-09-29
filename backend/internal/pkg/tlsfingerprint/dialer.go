@@ -12,7 +12,7 @@ import (
 )
 
 // Profile contains TLS fingerprint configuration.
-// All slice fields use built-in defaults when empty.
+// Empty slice fields independently inherit built-in defaults.
 type Profile struct {
 	Name                string // Profile name for identification
 	CipherSuites        []uint16
@@ -22,7 +22,7 @@ type Profile struct {
 	SignatureAlgorithms []uint16 // Empty uses defaultSignatureAlgorithms
 	ALPNProtocols       []string // Empty uses ["http/1.1"]
 	SupportedVersions   []uint16 // Empty uses [TLS1.3, TLS1.2]
-	KeyShareGroups      []uint16 // Empty uses [X25519]
+	KeyShareGroups      []uint16 // Empty uses [X25519MLKEM768, X25519]
 	PSKModes            []uint16 // Empty uses [psk_dhe_ke]
 	Extensions          []uint16 // Extension type IDs in order; empty uses default Claude Code 2.1.280 (Bun) order
 }

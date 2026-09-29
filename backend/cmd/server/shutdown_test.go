@@ -62,7 +62,10 @@ func TestCRSShutdownWaitsForActiveStream(t *testing.T) {
 	server := startDrainTestServer(t, func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/event-stream")
 		_, _ = io.WriteString(w, "data: first\n\n")
-		w.(http.Flusher).Flush()
+		if err := http.NewResponseController(w).Flush(); err != nil {
+			t.Errorf("flush stream: %v", err)
+			return
+		}
 		close(started)
 		<-release
 		_, _ = io.WriteString(w, "data: done\n\n")
@@ -95,7 +98,10 @@ func TestCRSShutdownCancelsStreamBeforeWaitingForSettlement(t *testing.T) {
 	server := startDrainTestServer(t, func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/event-stream")
 		_, _ = io.WriteString(w, "data: first\n\n")
-		w.(http.Flusher).Flush()
+		if err := http.NewResponseController(w).Flush(); err != nil {
+			t.Errorf("flush stream: %v", err)
+			return
+		}
 		<-r.Context().Done()
 		close(cancelled)
 		<-settle
@@ -123,7 +129,10 @@ func TestCRSShutdownBoundsStuckStreamWithoutPermittingDependencyCleanup(t *testi
 	release := make(chan struct{})
 	server := startDrainTestServer(t, func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
-		w.(http.Flusher).Flush()
+		if err := http.NewResponseController(w).Flush(); err != nil {
+			t.Errorf("flush stream: %v", err)
+			return
+		}
 		<-release // Model an upstream stream detached from the request context.
 	})
 	t.Cleanup(func() { close(release) })
@@ -141,7 +150,7 @@ func TestCRSShutdownTracksHijackedHandlerThroughSettlement(t *testing.T) {
 	hijacked, cancelled, release := make(chan struct{}), make(chan struct{}), make(chan struct{})
 	finishSettlement := sync.OnceFunc(func() { close(release) })
 	server := startDrainTestServer(t, func(w http.ResponseWriter, r *http.Request) {
-		conn, rw, err := w.(http.Hijacker).Hijack()
+		conn, rw, err := http.NewResponseController(w).Hijack()
 		if err != nil {
 			return
 		}
@@ -176,7 +185,9 @@ func TestCRSShutdownRejectsNewRequests(t *testing.T) {
 		t.Fatal("new request reached handler during drain")
 	})}
 	installHTTPDrain(server)
-	server.Handler.(*httpDrain).beginDrain()
+	drain, ok := server.Handler.(*httpDrain)
+	require.True(t, ok)
+	drain.beginDrain()
 	recorder := httptest.NewRecorder()
 	server.Handler.ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, "/", nil))
 	require.Equal(t, http.StatusServiceUnavailable, recorder.Code)
