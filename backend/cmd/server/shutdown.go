@@ -63,10 +63,11 @@ func installHTTPDrain(server *http.Server) {
 		}
 		d.mu.Lock()
 		closeConn := false
-		if state == http.StateHijacked {
+		switch state {
+		case http.StateHijacked:
 			d.hijacked[conn] = struct{}{}
 			closeConn = d.stopping
-		} else if state == http.StateClosed {
+		case http.StateClosed:
 			delete(d.hijacked, conn)
 		}
 		d.mu.Unlock()

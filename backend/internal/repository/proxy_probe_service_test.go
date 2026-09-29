@@ -84,13 +84,19 @@ func (s *ProxyProbeServiceSuite) setupHTTPSProxyServer(handler http.HandlerFunc)
 			w.WriteHeader(http.StatusBadGateway)
 			return
 		}
-		defer upstream.Close()
-		conn, rw, err := w.(http.Hijacker).Hijack()
+		defer func() { _ = upstream.Close() }()
+		hijacker, ok := w.(http.Hijacker)
+		if !ok {
+			t.Error("CONNECT proxy requires HTTP hijacking")
+			w.WriteHeader(http.StatusInternalServerError)
+			return
+		}
+		conn, rw, err := hijacker.Hijack()
 		if err != nil {
 			t.Errorf("hijack CONNECT: %v", err)
 			return
 		}
-		defer conn.Close()
+		defer func() { _ = conn.Close() }()
 		connects.Add(1)
 		_, _ = rw.WriteString("HTTP/1.1 200 Connection Established\r\n\r\n")
 		_ = rw.Flush()

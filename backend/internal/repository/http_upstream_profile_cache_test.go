@@ -10,7 +10,8 @@ import (
 )
 
 func TestCRSTLSProfileChangesReplaceCachedTransport(t *testing.T) {
-	upstream := NewHTTPUpstream(nil).(*httpUpstreamService)
+	upstream, ok := NewHTTPUpstream(nil).(*httpUpstreamService)
+	require.True(t, ok)
 	first := &tlsfingerprint.Profile{Curves: []uint16{29}, KeyShareGroups: []uint16{29}}
 	a, err := upstream.getClientEntryWithTLS("", 1, 1, first, service.HTTPUpstreamProfileDefault, false, false)
 	require.NoError(t, err)
@@ -28,7 +29,8 @@ func TestCRSTLSProfileChangesReplaceCachedTransport(t *testing.T) {
 
 func TestCRSTLSTransportIsolatesAccountsEvenInProxyPoolMode(t *testing.T) {
 	cfg := &config.Config{Gateway: config.GatewayConfig{ConnectionPoolIsolation: config.ConnectionPoolIsolationProxy}}
-	upstream := NewHTTPUpstream(cfg).(*httpUpstreamService)
+	upstream, ok := NewHTTPUpstream(cfg).(*httpUpstreamService)
+	require.True(t, ok)
 	a, err := upstream.getClientEntryWithTLS("", 1, 1, nil, service.HTTPUpstreamProfileDefault, false, false)
 	require.NoError(t, err)
 	b, err := upstream.getClientEntryWithTLS("", 2, 1, nil, service.HTTPUpstreamProfileDefault, false, false)

@@ -71,7 +71,7 @@ func TestCRSShutdownWaitsForActiveStream(t *testing.T) {
 	t.Cleanup(releaseStream)
 	resp, err := http.Get(server.URL)
 	require.NoError(t, err)
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	waitForDrainSignal(t, started)
 	done := drainAsync(server.Config, time.Second, time.Second)
 	select {
@@ -104,7 +104,7 @@ func TestCRSShutdownCancelsStreamBeforeWaitingForSettlement(t *testing.T) {
 	t.Cleanup(finishSettlement)
 	resp, err := http.Get(server.URL)
 	require.NoError(t, err)
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	done := drainAsync(server.Config, 20*time.Millisecond, time.Second)
 	waitForDrainSignal(t, cancelled)
 	select {
@@ -129,7 +129,7 @@ func TestCRSShutdownBoundsStuckStreamWithoutPermittingDependencyCleanup(t *testi
 	t.Cleanup(func() { close(release) })
 	resp, err := http.Get(server.URL)
 	require.NoError(t, err)
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	started := time.Now()
 	drained, err := drainHTTPServer(server.Config, 20*time.Millisecond, 20*time.Millisecond)
 	require.False(t, drained, "active handlers must keep database/cache cleanup disabled")
@@ -145,7 +145,7 @@ func TestCRSShutdownTracksHijackedHandlerThroughSettlement(t *testing.T) {
 		if err != nil {
 			return
 		}
-		defer conn.Close()
+		defer func() { _ = conn.Close() }()
 		_, _ = rw.WriteString("HTTP/1.1 200 OK\r\nContent-Length: 0\r\n\r\n")
 		_ = rw.Flush()
 		close(hijacked)
@@ -156,7 +156,7 @@ func TestCRSShutdownTracksHijackedHandlerThroughSettlement(t *testing.T) {
 	t.Cleanup(finishSettlement)
 	resp, err := http.Get(server.URL)
 	require.NoError(t, err)
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	waitForDrainSignal(t, hijacked)
 	done := drainAsync(server.Config, 20*time.Millisecond, time.Second)
 	waitForDrainSignal(t, cancelled)
