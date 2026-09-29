@@ -156,11 +156,16 @@ func (s *ClaudeQuotaService) accessToken(ctx context.Context, account *Account) 
 }
 
 func (s *ClaudeQuotaService) fetchOptions(ctx context.Context, account *Account) (*ClaudeUsageFetchOptions, error) {
+	opts, err := s.usage.claudeFetchOptions(ctx, account, "")
+	if err != nil {
+		return nil, err
+	}
 	token, err := s.accessToken(ctx, account)
 	if err != nil {
 		return nil, err
 	}
-	return s.usage.claudeFetchOptions(ctx, account, token)
+	opts.AccessToken = token
+	return opts, nil
 }
 
 // fetchResetStatus 读一次带重置状态的用量：触顶时用 at_wall 模式（两种重置都会下发），

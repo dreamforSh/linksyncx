@@ -87,7 +87,7 @@ func TestSyncBillingHeaderVersion_RecomputesSuffixAndIsIdempotent(t *testing.T) 
 	require.JSONEq(t, gjson.GetBytes(body, "messages").Raw, gjson.GetBytes(result, "messages").Raw)
 }
 
-func TestBuildOAuthRequest_BillingMatchesWireUserAgent(t *testing.T) {
+func TestBuildOAuthRequest_BillingPolicy(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	for _, endpoint := range []string{"messages", "count_tokens"} {
 		for _, tc := range []struct {
@@ -145,6 +145,8 @@ func TestBuildOAuthRequest_BillingMatchesWireUserAgent(t *testing.T) {
 				if endpoint == "count_tokens" {
 					// 真实 CLI 2.1.280 的 count_tokens 不带 system/billing 块
 					require.False(t, gjson.GetBytes(wireBody, "system").Exists())
+				} else if !tc.mimic {
+					require.Equal(t, billing, gjson.GetBytes(wireBody, "system.0.text").String())
 				} else {
 					require.Contains(t, gjson.GetBytes(wireBody, "system.0.text").String(),
 						"cc_version="+version+"."+computeClaudeCodeFingerprint(wireBody, version)+";")

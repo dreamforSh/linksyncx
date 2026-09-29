@@ -10,7 +10,6 @@ import (
 	"strings"
 
 	"github.com/Wei-Shaw/sub2api/internal/pkg/claude"
-	"github.com/Wei-Shaw/sub2api/internal/pkg/logger"
 	"github.com/Wei-Shaw/sub2api/internal/util/urlvalidator"
 	"github.com/google/uuid"
 	"github.com/tidwall/gjson"
@@ -59,12 +58,13 @@ func (s *GatewayService) buildUpstreamRequest(ctx context.Context, c *gin.Contex
 	if s.settingService != nil {
 		enableFP, enableMPT, _ = s.settingService.GetGatewayForwardingSettings(ctx)
 	}
-	if account.IsOAuth() && s.identityService != nil {
+	// Native pass-through does not consume a cached identity. Avoid introducing
+	// an identity-store dependency when both identity transformations are off.
+	if account.IsOAuth() && s.identityService != nil && (enableFP || !enableMPT || mimicClaudeCode) {
 		// 1. 获取或创建指纹（包含随机生成的ClientID）
 		fp, err := s.identityService.GetOrCreateFingerprint(ctx, account.ID, clientHeaders)
 		if err != nil {
-			logger.LegacyPrintf("service.gateway", "Warning: failed to get fingerprint for account %d: %v", account.ID, err)
-			// 失败时降级为透传原始headers
+			return nil, nil, fmt.Errorf("account identity unavailable: %w", err)
 		} else {
 			if enableFP {
 				fingerprint = fp
@@ -76,7 +76,11 @@ func (s *GatewayService) buildUpstreamRequest(ctx context.Context, c *gin.Contex
 			if !enableMPT {
 				accountUUID := account.GetExtraString("account_uuid")
 				if accountUUID != "" && fp.ClientID != "" {
-					if newBody, err := s.identityService.RewriteUserIDWithMasking(ctx, body, account, accountUUID, fp.ClientID, fp.UserAgent); err == nil && len(newBody) > 0 {
+					newBody, err := s.identityService.RewriteUserIDWithMasking(ctx, body, account, accountUUID, fp.ClientID, fp.UserAgent)
+					if err != nil {
+						return nil, nil, err
+					}
+					if len(newBody) > 0 {
 						body = newBody
 					}
 				}
@@ -90,21 +94,19 @@ func (s *GatewayService) buildUpstreamRequest(ctx context.Context, c *gin.Contex
 	mimicUserAgent := claude.DefaultUserAgent()
 
 	// Mimicry may override the cached User-Agent later, even without a fingerprint.
-	if billingUA := effectiveBillingUserAgent(mimicUserAgent, tokenType, mimicClaudeCode, fingerprint); billingUA != "" {
+	if billingUA := effectiveBillingUserAgent(mimicUserAgent, tokenType, mimicClaudeCode, fingerprint); mimicClaudeCode && billingUA != "" {
 		body = syncBillingHeaderVersion(body, billingUA)
 	}
 
-	// === 计算最终 anthropic-beta header（先于 body sanitize 与 CCH 签名）===
+	// === 计算最终 anthropic-beta header（先于 body sanitize）===
 	//
 	// 顺序约束：
 	//   1) 算 finalBeta（纯函数，不依赖 req.Header；mimicry 路径会忽略客户端 beta，
 	//      与原“OAuth + mimicClaudeCode 跳过白名单透传”行为对齐）
 	//   2) 按 finalBeta 做能力维度 body sanitize（如 context-management beta 缺失 →
 	//      strip body.context_management，与 Bedrock 路径对称）
-	//   3) CCH 签名（必须使用 strip 后的 body，否则 hash 与最终 body 不一致 →
-	//      被 Anthropic 判 third-party）
-	//   4) NewRequest（body 至此最终敲定）
-	//   5) 透传白名单 / fingerprint / mimic header / 写入 finalBeta
+	//   3) NewRequest（body 至此最终敲定；不生成或验证 CCH 签名）
+	//   4) 透传白名单 / fingerprint / mimic header / 写入 finalBeta
 	policyFilterSet := s.getBetaPolicyFilterSet(ctx, c, account, modelID)
 	effectiveDropSet := mergeDropSets(policyFilterSet)
 	finalBetaHeader, finalBetaShouldSet := s.computeFinalAnthropicBeta(
@@ -511,9 +513,8 @@ func mergeAnthropicBetaDropping(required []string, incoming string, drop map[str
 //
 // 设计动机：将原本在 buildUpstreamRequest 内联在一起、依赖 req.Header 的
 // anthropic-beta 计算逻辑抽成纯函数。这样调用方可以在 NewRequest 之前
-// 就提前拿到最终 beta header，进而能按它对 body 做能力维度 sanitize 后再做
-// CCH 签名——一举修复了以下之前由顺序依赖导致的能力维度 sanitize
-// 无法部署的问题（签名与最终 body 不一致可以被判 third-party）。
+// 就提前拿到最终 beta header，进而能按它对 body 做能力维度 sanitize。
+// 本服务不生成或验证 CCH 签名；原生 billing attribution 按不透明文本保留。
 //
 // 返回 (value, shouldSet)：
 //   - shouldSet=false 意为“不主动设置 anthropic-beta header”，与原代码“

@@ -26,20 +26,25 @@ func (s *stubIdentityCache) GetFingerprint(_ context.Context, _ int64) (*Fingerp
 	return &clone, nil
 }
 
-func (s *stubIdentityCache) SetFingerprint(_ context.Context, _ int64, fp *Fingerprint) error {
+func (s *stubIdentityCache) SetFingerprint(_ context.Context, _ int64, fp *Fingerprint) (*Fingerprint, error) {
 	s.setCalls++
 	clone := *fp
 	s.lastSet = &clone
 	s.fingerprint = &clone
-	return nil
+	return &clone, nil
 }
 
-func (s *stubIdentityCache) GetMaskedSessionID(_ context.Context, _ int64) (string, error) {
-	return "", nil
+func (s *stubIdentityCache) CreateFingerprint(ctx context.Context, id int64, fp *Fingerprint) (*Fingerprint, error) {
+	if s.fingerprint == nil {
+		if _, err := s.SetFingerprint(ctx, id, fp); err != nil {
+			return nil, err
+		}
+	}
+	return s.GetFingerprint(ctx, id)
 }
 
-func (s *stubIdentityCache) SetMaskedSessionID(_ context.Context, _ int64, _ string) error {
-	return nil
+func (s *stubIdentityCache) GetOrCreateMaskedSessionID(_ context.Context, _ int64, candidate string) (string, error) {
+	return candidate, nil
 }
 
 func headersWithUA(ua string) http.Header {

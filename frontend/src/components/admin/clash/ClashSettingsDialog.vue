@@ -140,6 +140,7 @@ const sections: Array<{ key: SectionKey; fields: FieldDef[] }> = [
   {
     key: 'health',
     fields: [
+      { key: 'automatic_probes_enabled', type: 'toggle', wide: true },
       { key: 'health_test_url', type: 'text', wide: true },
       { key: 'health_timeout_ms', type: 'number', min: 1000, max: 30000 },
       { key: 'pause_ttl_minutes', type: 'number', min: 15, max: 240 },
@@ -219,7 +220,8 @@ async function load() {
   loading.value = true
   loadError.value = ''
   try {
-    form.value = { ...(await adminAPI.clash.getSettings()) }
+    const settings = await adminAPI.clash.getSettings()
+    form.value = { ...settings, automatic_probes_enabled: settings.automatic_probes_enabled ?? true }
   } catch (error) {
     loadError.value = clashErrorMessage(error, t) ?? extractApiErrorMessage(error, t('admin.clash.settings.loadFailed'))
   } finally {

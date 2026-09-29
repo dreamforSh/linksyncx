@@ -689,10 +689,9 @@ const (
 	SettingKeyEnableFingerprintUnification = "enable_fingerprint_unification"
 	// SettingKeyEnableMetadataPassthrough 是否透传客户端原始 metadata.user_id（默认 false）
 	SettingKeyEnableMetadataPassthrough = "enable_metadata_passthrough"
-	// SettingKeyEnableCCHSigning 已废弃（no-op）：2.1.280 实证 cch 为字面量占位符
-	// `cch=00000`（真实 CLI 硬编码、无签名计算），网关在 billing 块中固定注入该
-	// 占位符（见 buildBillingAttributionText），无需开关。保留该 key 仅为向后兼容，
-	// 开关不再产生任何效果。
+	// SettingKeyEnableCCHSigning is retained as a no-op for configuration compatibility.
+	// Native billing attribution is opaque and preserved. The legacy non-native
+	// template uses an unverified placeholder; this switch does not sign requests.
 	SettingKeyEnableCCHSigning = "enable_cch_signing"
 	// SettingKeyEnableClaudeOAuthSystemPromptInjection 是否对 Claude OAuth mimic 路径注入 Claude Code system blocks（默认 true）
 	SettingKeyEnableClaudeOAuthSystemPromptInjection = "enable_claude_oauth_system_prompt_injection"

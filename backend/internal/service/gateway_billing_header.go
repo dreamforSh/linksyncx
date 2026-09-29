@@ -52,11 +52,7 @@ func syncBillingHeaderVersion(body []byte, userAgent string) []byte {
 			fingerprintedReplacement := replacement + "." + computeClaudeCodeFingerprint(body, version)
 			newText := ccVersionWithFingerprintInBillingRe.ReplaceAllString(text.String(), fingerprintedReplacement)
 			newText = ccVersionInBillingRe.ReplaceAllString(newText, replacement)
-			// 2.1.280 实证：cch 是第一方请求恒带的字面量占位符（无签名）；
-			// 客户端指向 localhost/3P 时会省略，发往第一方前补回；已有值原样保留。
-			if !strings.Contains(newText, "cch=") {
-				newText = ensureBillingCCHStubText(newText)
-			}
+
 			if newText != text.String() {
 				if updated, err := sjson.SetBytes(body, fmt.Sprintf("system.%d.text", idx), newText); err == nil {
 					body = updated
@@ -68,19 +64,4 @@ func syncBillingHeaderVersion(body []byte, userAgent string) []byte {
 	})
 
 	return body
-}
-
-// ensureBillingCCHStubText 为 billing attribution 文本补齐 " cch=00000;" 占位符，
-// 插在 cc_entrypoint 子句之后。
-func ensureBillingCCHStubText(text string) string {
-	i := strings.Index(text, "cc_entrypoint=")
-	if i < 0 {
-		return text
-	}
-	j := strings.IndexByte(text[i:], ';')
-	if j < 0 {
-		return text
-	}
-	at := i + j + 1
-	return text[:at] + " cch=00000;" + text[at:]
 }

@@ -491,6 +491,10 @@ export default {
           label: 'When the exit IP changes',
           hint: 'What happens when a node keeps its address but egresses from a new IP'
         },
+        automatic_probes_enabled: {
+          label: 'Automatic probes',
+          hint: 'When off, background latency, exit IP and related platform checks pause. Manual checks remain available. Subscription refreshes are configured separately.'
+        },
         health_test_url: {
           label: 'Health check URL',
           hint: 'Requested through each node to measure latency'

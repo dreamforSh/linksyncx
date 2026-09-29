@@ -18,6 +18,7 @@ import (
 	"github.com/Wei-Shaw/sub2api/internal/pkg/claude"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/geminicli"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/openai_compat"
+	"github.com/Wei-Shaw/sub2api/internal/pkg/proxyurl"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/xai"
 )
 
@@ -1243,6 +1244,9 @@ func (a *Account) GetPoolModeRetryStatusCodes() []int {
 // IsPoolModeRetryableStatus 在账号上下文中判断给定状态码是否应触发同账号重试。
 // 若账号未配置 pool_mode_retry_status_codes，则回退到默认列表。
 func (a *Account) IsPoolModeRetryableStatus(statusCode int) bool {
+	if isTerminalClaudeAuthorizationError(a, statusCode) {
+		return false
+	}
 	codes := a.GetPoolModeRetryStatusCodes()
 	if codes == nil {
 		return isPoolModeRetryableStatus(statusCode)
@@ -2480,7 +2484,7 @@ func (a *Account) ProxyURLForOutbound() (string, error) {
 		return "", ErrAccountProxyUnavailable
 	}
 	proxyURL := a.Proxy.URL()
-	if proxyURL == "" {
+	if _, _, err := proxyurl.Parse(proxyURL); err != nil {
 		return "", ErrAccountProxyUnavailable
 	}
 	return proxyURL, nil

@@ -10,27 +10,27 @@ wire:
 
 build:
 	@echo "构建后端（不嵌入前端）..."
-	@go build -ldflags="$(LDFLAGS)" -o bin/server ./cmd/server
+	@python3 ./scripts/crs_go.py build -ldflags="$(LDFLAGS)" -o bin/server ./cmd/server
 	@echo "构建完成: bin/server"
 
 build-embed:
 	@echo "构建后端（嵌入前端）..."
-	@go build -tags embed -ldflags="$(LDFLAGS)" -o bin/server ./cmd/server
+	@python3 ./scripts/crs_go.py build -tags embed -ldflags="$(LDFLAGS)" -o bin/server ./cmd/server
 	@echo "构建完成: bin/server (with embedded frontend)"
 
 test-unit:
-	@go test -tags unit ./... -count=1
+	@python3 ./scripts/crs_go.py test -tags unit ./... -count=1
 
 test-integration:
-	@go test -tags integration ./... -count=1 -race -parallel=8
+	@python3 ./scripts/crs_go.py test -tags integration ./... -count=1 -race -parallel=8
 
 test-e2e:
 	@echo "运行 E2E 测试（需要本地服务器运行）..."
-	@go test -tags e2e ./internal/integration/... -count=1 -v
+	@python3 ./scripts/crs_go.py test -tags e2e ./internal/integration/... -count=1 -v
 
 test-cover-integration:
 	@echo "运行集成测试并生成覆盖率报告..."
-	@go test -tags=integration -cover -coverprofile=coverage.out -count=1 -race -parallel=8 ./...
+	@python3 ./scripts/crs_go.py test -tags=integration -cover -coverprofile=coverage.out -count=1 -race -parallel=8 ./...
 	@go tool cover -func=coverage.out | tail -1
 	@go tool cover -html=coverage.out -o coverage.html
 	@echo "覆盖率报告已生成: coverage.html"

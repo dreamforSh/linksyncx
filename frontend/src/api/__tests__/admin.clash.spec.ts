@@ -40,6 +40,7 @@ import {
   updateSettings
 } from '@/api/admin/clash'
 import { adminAPI, clashAPI } from '@/api/admin'
+import { makeClashPoolSettings } from '@/__tests__/fixtures/clash'
 
 beforeEach(() => {
   for (const fn of [get, post, put, del]) {
@@ -252,7 +253,7 @@ describe('admin Clash API — exits, runtime and settings', () => {
   it('reads and writes pool settings', async () => {
     await getSettings()
     expect(get).toHaveBeenLastCalledWith('/admin/clash/settings')
-    const settings = { max_accounts_per_exit: 2 } as never
+    const settings = makeClashPoolSettings({ max_accounts_per_exit: 2, automatic_probes_enabled: false })
     await updateSettings(settings)
     expect(put).toHaveBeenCalledWith('/admin/clash/settings', settings)
   })

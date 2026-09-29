@@ -520,16 +520,21 @@ func (s *GatewayService) buildCountTokensRequest(ctx context.Context, c *gin.Con
 		ctEnableFP, ctEnableMPT, _ = s.settingService.GetGatewayForwardingSettings(ctx)
 	}
 	var ctFingerprint *Fingerprint
-	if account.IsOAuth() && s.identityService != nil {
+	if account.IsOAuth() && s.identityService != nil && (ctEnableFP || !ctEnableMPT || mimicClaudeCode) {
 		fp, err := s.identityService.GetOrCreateFingerprint(ctx, account.ID, clientHeaders)
-		if err == nil {
-			ctFingerprint = fp
-			if !ctEnableMPT {
-				accountUUID := account.GetExtraString("account_uuid")
-				if accountUUID != "" && fp.ClientID != "" {
-					if newBody, err := s.identityService.RewriteUserIDWithMasking(ctx, body, account, accountUUID, fp.ClientID, fp.UserAgent); err == nil && len(newBody) > 0 {
-						body = newBody
-					}
+		if err != nil {
+			return nil, nil, fmt.Errorf("account identity unavailable: %w", err)
+		}
+		ctFingerprint = fp
+		if !ctEnableMPT {
+			accountUUID := account.GetExtraString("account_uuid")
+			if accountUUID != "" && fp.ClientID != "" {
+				newBody, err := s.identityService.RewriteUserIDWithMasking(ctx, body, account, accountUUID, fp.ClientID, fp.UserAgent)
+				if err != nil {
+					return nil, nil, err
+				}
+				if len(newBody) > 0 {
+					body = newBody
 				}
 			}
 		}
@@ -543,11 +548,11 @@ func (s *GatewayService) buildCountTokensRequest(ctx context.Context, c *gin.Con
 	// 一致性铁律：同一次请求内只取一次 mimic UA，billing cc_version 与出站
 	// User-Agent 头共用这一个字符串（同 buildUpstreamRequest）。
 	ctMimicUserAgent := claude.DefaultUserAgent()
-	if billingUA := effectiveBillingUserAgent(ctMimicUserAgent, tokenType, mimicClaudeCode, billingFingerprint); billingUA != "" {
+	if billingUA := effectiveBillingUserAgent(ctMimicUserAgent, tokenType, mimicClaudeCode, billingFingerprint); mimicClaudeCode && billingUA != "" {
 		body = syncBillingHeaderVersion(body, billingUA)
 	}
 
-	// === 计算最终 anthropic-beta header（先于 body sanitize 与 CCH 签名）===
+	// === 计算最终 anthropic-beta header（先于 body sanitize）===
 	// 顺序约束同 buildUpstreamRequest。
 	ctEffectiveDropSet := mergeDropSets(s.getBetaPolicyFilterSet(ctx, c, account, modelID))
 	finalBetaHeader, finalBetaShouldSet := s.computeFinalCountTokensAnthropicBeta(

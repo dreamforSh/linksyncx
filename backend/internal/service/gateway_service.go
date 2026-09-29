@@ -450,6 +450,8 @@ var allowedHeaders = map[string]bool{
 	"content-type":                              true,
 	"accept-encoding":                           true,
 	"x-claude-code-session-id":                  true,
+	"x-claude-code-prompt-id":                   true,
+	"x-claude-code-request-class":               true,
 	"x-client-request-id":                       true,
 }
 
@@ -1251,6 +1253,9 @@ func (s *GatewayService) hashContent(content string) string {
 
 // GetAccessToken 获取账号凭证
 func (s *GatewayService) GetAccessToken(ctx context.Context, account *Account) (string, string, error) {
+	if _, err := accountProxyURL(account); err != nil {
+		return "", "", err
+	}
 	switch account.Type {
 	case AccountTypeOAuth, AccountTypeSetupToken:
 		// Both oauth and setup-token use OAuth token flow

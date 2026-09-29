@@ -25,9 +25,11 @@ type ClashPoolSettings struct {
 	// MaxAccountsPerExit caps accounts sharing one egress IP (1 = exclusive).
 	MaxAccountsPerExit int `json:"max_accounts_per_exit"`
 	// AllowUnprobedExitBinding allows binding nodes whose egress IP is unknown.
-	AllowUnprobedExitBinding bool   `json:"allow_unprobed_exit_binding"`
-	HealthTestURL            string `json:"health_test_url"`
-	HealthTimeoutMs          int    `json:"health_timeout_ms"`
+	AllowUnprobedExitBinding bool `json:"allow_unprobed_exit_binding"`
+	// AutomaticProbesEnabled gates background latency, egress and platform probes.
+	AutomaticProbesEnabled bool   `json:"automatic_probes_enabled"`
+	HealthTestURL          string `json:"health_test_url"`
+	HealthTimeoutMs        int    `json:"health_timeout_ms"`
 	// BoundCheckIntervalSeconds applies to nodes backing at least one account.
 	BoundCheckIntervalSeconds   int `json:"bound_check_interval_seconds"`
 	UnboundCheckIntervalSeconds int `json:"unbound_check_interval_seconds"`
@@ -52,6 +54,7 @@ type ClashPoolSettings struct {
 func defaultClashPoolSettings() *ClashPoolSettings {
 	return &ClashPoolSettings{
 		MaxAccountsPerExit:          1,
+		AutomaticProbesEnabled:      true,
 		HealthTestURL:               "https://www.gstatic.com/generate_204",
 		HealthTimeoutMs:             5000,
 		BoundCheckIntervalSeconds:   60,
@@ -83,7 +86,15 @@ func (s *SettingService) GetClashPoolSettings(ctx context.Context) (*ClashPoolSe
 		return nil, fmt.Errorf("get clash pool settings: %w", err)
 	}
 	if strings.TrimSpace(raw) == "" {
+		defaults.AutomaticProbesEnabled = false
 		return defaults, nil
+	}
+	var stored map[string]json.RawMessage
+	if err := json.Unmarshal([]byte(raw), &stored); err != nil {
+		return nil, fmt.Errorf("parse clash pool settings: %w", err)
+	}
+	if stored == nil || string(stored["automatic_probes_enabled"]) == "null" {
+		return nil, fmt.Errorf("parse clash pool settings: automatic probe setting must not be null")
 	}
 	settings := *defaults
 	if err := json.Unmarshal([]byte(raw), &settings); err != nil {
@@ -91,6 +102,7 @@ func (s *SettingService) GetClashPoolSettings(ctx context.Context) (*ClashPoolSe
 	}
 	if err := validateClashPoolSettings(&settings); err != nil {
 		// A stored value that no longer validates must not stall the pool.
+		defaults.AutomaticProbesEnabled = false
 		return defaults, nil
 	}
 	return &settings, nil

@@ -40,9 +40,11 @@ var headerWireCasing = map[string]string{
 	// （2.1.81 旧抓包为小写，以新抓包为准），故不在表中，按 Canonical 直写。
 
 	// Claude Code 2.1.87+ 新增 header
-	"x-claude-code-session-id": "X-Claude-Code-Session-Id",
-	"x-client-request-id":      "x-client-request-id",
-	"content-length":           "content-length",
+	"x-claude-code-session-id":    "X-Claude-Code-Session-Id",
+	"x-claude-code-prompt-id":     "x-claude-code-prompt-id",
+	"x-claude-code-request-class": "x-claude-code-request-class",
+	"x-client-request-id":         "x-client-request-id",
+	"content-length":              "content-length",
 }
 
 // headerWireOrder 定义真实 Claude CLI 发送 header 的顺序（本机 claude.exe

@@ -34,9 +34,9 @@ const (
 )
 
 func (s *GatewayService) shouldRetryUpstreamError(account *Account, statusCode int) bool {
-	// OAuth/Setup Token 账号：仅 403 重试
-	if account.IsOAuth() {
-		return statusCode == 403
+	// Authentication and permission errors are terminal for this account.
+	if isTerminalClaudeAuthorizationError(account, statusCode) || account.IsOAuth() {
+		return false
 	}
 
 	// API Key 账号：未配置的错误码重试
@@ -241,7 +241,10 @@ func (s *GatewayService) Forward(ctx context.Context, c *gin.Context, account *A
 		normalizeOpts := claudeOAuthNormalizeOptions{}
 		if s.identityService != nil && c != nil {
 			fp, err := s.identityService.GetOrCreateFingerprint(ctx, account.ID, c.Request.Header)
-			if err == nil && fp != nil {
+			if err != nil {
+				return nil, fmt.Errorf("account identity unavailable: %w", err)
+			}
+			if fp != nil {
 				// metadata 透传开启时跳过 metadata 注入
 				_, mimicMPT, _ := s.settingService.GetGatewayForwardingSettings(ctx)
 				if !mimicMPT {
@@ -366,8 +369,8 @@ func (s *GatewayService) Forward(ctx context.Context, c *gin.Context, account *A
 	tlsProfile := s.tlsFPProfileService.ResolveTLSProfile(account)
 
 	// 调试日志：记录即将转发的账号信息
-	logger.LegacyPrintf("service.gateway", "[Forward] Using account: ID=%d Name=%s Platform=%s Type=%s TLSFingerprint=%v Proxy=%s",
-		account.ID, account.Name, account.Platform, account.Type, tlsProfile, proxyURL)
+	logger.LegacyPrintf("service.gateway", "[Forward] Using account: ID=%d Name=%s Platform=%s Type=%s TLSFingerprint=%v ProxyID=%v",
+		account.ID, account.Name, account.Platform, account.Type, tlsProfile, account.ProxyID)
 	// Pre-filter: strip empty text blocks (including nested in tool_result) to prevent upstream 400.
 	if err := replaceBody(StripEmptyTextBlocks(body)); err != nil {
 		return nil, err

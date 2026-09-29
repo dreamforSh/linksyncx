@@ -6,6 +6,7 @@ import { enableAutoUnmount, flushPromises, mount } from '@vue/test-utils'
 import ClashView from '../ClashView.vue'
 import Select from '@/components/common/Select.vue'
 import type { ClashNode, ClashProfile, ClashRuntimeStatus } from '@/types'
+import { makeClashPoolSettings } from '@/__tests__/fixtures/clash'
 
 const api = vi.hoisted(() => ({
   getRuntime: vi.fn(),
@@ -172,7 +173,7 @@ beforeEach(() => {
   localStorage.clear()
   api.getRuntime.mockResolvedValue(runtime())
   api.listProfiles.mockResolvedValue([profile()])
-  api.getSettings.mockResolvedValue({ max_accounts_per_exit: 1 })
+  api.getSettings.mockResolvedValue(makeClashPoolSettings())
   const nodes = makeNodes()
   api.listNodes.mockResolvedValue({ items: nodes, total: nodes.length, page: 1, page_size: 20, pages: 1 })
   api.listExits.mockResolvedValue({ max_accounts_per_exit: 1, allow_unprobed_exit_binding: false, exits: [] })
@@ -329,7 +330,8 @@ describe('ClashView', () => {
     expect(api.acceptNodeExit).toHaveBeenCalledWith(12)
   })
 
-  it('runs latency tests and exit probes for the selected nodes', async () => {
+  it.each([true, false])('runs manual latency and exit probes with automatic probes set to %s', async (enabled) => {
+    api.getSettings.mockResolvedValue(makeClashPoolSettings({ automatic_probes_enabled: enabled }))
     api.testNodesLatency.mockResolvedValue([
       { node_id: 11, success: true, latency_ms: 30, health_status: 'healthy' },
       { node_id: 12, success: false, error: 'timeout', health_status: 'unhealthy' }

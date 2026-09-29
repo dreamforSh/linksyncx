@@ -1,0 +1,11 @@
+{
+  "module": "github.com/metacubex/mihomo",
+  "version": "v1.19.31",
+  "original_sha256": "5ed821bf17536b7a012506baa1fe00550451c81b7f36e291799234ccdd7940df",
+  "replacement_sha256": "927399b3b3ed0940c9572995e14ab60a9a2635c241b57df797666c5088eee634",
+  "patch_sha256": "8b4dde3ba0a6cdf9119213269e070e8c98f4fca2968f980e186b014d6eba745a",
+  "source": "https://github.com/MetaCubeX/mihomo/blob/v1.19.31/log/log.go",
+  "license": "GPL-3.0",
+  "reason": "Atomic access to log level avoids hot-reload SetLevel racing background proxy log output.",
+  "replacement_file": "log.go.txt"
+}

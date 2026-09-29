@@ -901,18 +901,14 @@ func (s *SettingService) getGatewayForwardingSettingsCached(ctx context.Context)
 		})
 		if err != nil {
 			slog.Warn("failed to get gateway forwarding settings", "error", err)
+			// A failed read must not enable request rewriting. Cache the conservative
+			// fallback only for the short error TTL, then retry the repository.
 			gatewayForwardingCache.Store(&cachedGatewayForwardingSettings{
-				openAITTFTMode:                   OpenAITTFTModeSemantic,
-				fingerprintUnification:           true,
-				metadataPassthrough:              false,
-				cchSigning:                       false,
-				claudeOAuthSystemPromptInjection: true,
-				anthropicCacheTTL1hInjection:     false,
-				rewriteMessageCacheControl:       s.defaultRewriteMessageCacheControl(),
-				clientDatelineNormalization:      true,
-				expiresAt:                        time.Now().Add(gatewayForwardingErrorTTL).UnixNano(),
+				openAITTFTMode:      OpenAITTFTModeSemantic,
+				metadataPassthrough: true,
+				expiresAt:           time.Now().Add(gatewayForwardingErrorTTL).UnixNano(),
 			})
-			return gatewayForwardingSettingsResult{openAITTFTMode: OpenAITTFTModeSemantic, fp: true, claudeOAuthSystemPromptInjection: true, rewriteMessageCacheControl: s.defaultRewriteMessageCacheControl(), clientDatelineNormalization: true}, nil
+			return gatewayForwardingSettingsResult{openAITTFTMode: OpenAITTFTModeSemantic, mp: true}, nil
 		}
 		ttftMode := normalizeOpenAITTFTMode(values[SettingKeyOpenAITTFTMode])
 		fp := true
@@ -965,7 +961,7 @@ func (s *SettingService) getGatewayForwardingSettingsCached(ctx context.Context)
 	if r, ok := val.(gatewayForwardingSettingsResult); ok {
 		return r
 	}
-	return gatewayForwardingSettingsResult{fp: true, claudeOAuthSystemPromptInjection: true, clientDatelineNormalization: true}
+	return gatewayForwardingSettingsResult{openAITTFTMode: OpenAITTFTModeSemantic, mp: true}
 }
 
 // GetOpenAITTFTMode 返回 Responses first_token_ms 的统计口径。

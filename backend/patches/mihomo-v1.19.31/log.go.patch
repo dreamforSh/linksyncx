@@ -1,0 +1,38 @@
+--- a/log/log.go
++++ b/log/log.go
+@@ -3,6 +3,7 @@
+ import (
+ 	"fmt"
+ 	"os"
++	"sync/atomic"
+ 
+ 	"github.com/metacubex/mihomo/common/observable"
+ 
+@@ -12,7 +13,7 @@
+ var (
+ 	logCh  = make(chan Event)
+ 	source = observable.NewObservable[Event](logCh)
+-	level  = INFO
++	level  int32 = int32(INFO)
+ )
+ 
+ func init() {
+@@ -72,15 +73,15 @@
+ }
+ 
+ func Level() LogLevel {
+-	return level
++	return LogLevel(atomic.LoadInt32(&level))
+ }
+ 
+ func SetLevel(newLevel LogLevel) {
+-	level = newLevel
++	atomic.StoreInt32(&level, int32(newLevel))
+ }
+ 
+ func print(data Event) {
+-	if data.LogLevel < level {
++	if data.LogLevel < Level() {
+ 		return
+ 	}
+ 
