@@ -64,7 +64,7 @@ var probeURLs = []struct {
 	parser string
 }{
 	{"http://ip-api.com/json/?lang=zh-CN", "ip-api"},
-	{"http://api64.ipify.org?format=json", "ipify"},
+	{"https://api64.ipify.org?format=json", "ipify"},
 }
 
 type configuredProbeTarget struct {

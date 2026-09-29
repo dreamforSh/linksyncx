@@ -34,9 +34,10 @@ const (
 )
 
 func (s *GatewayService) shouldRetryUpstreamError(account *Account, statusCode int) bool {
-	// OAuth/Setup Token 账号：仅 403 重试
+	// OAuth/Setup Token 账号：不做同账号重试。403 是账号级的权限/封禁信号，用同一个 token
+	// 立刻再发几次结果不会变，只是多打上游风控；直接走 failover，账号标记见 handleFailoverSideEffects。
 	if account.IsOAuth() {
-		return statusCode == 403
+		return false
 	}
 
 	// API Key 账号：未配置的错误码重试
@@ -366,8 +367,13 @@ func (s *GatewayService) Forward(ctx context.Context, c *gin.Context, account *A
 	tlsProfile := s.tlsFPProfileService.ResolveTLSProfile(account)
 
 	// 调试日志：记录即将转发的账号信息
-	logger.LegacyPrintf("service.gateway", "[Forward] Using account: ID=%d Name=%s Platform=%s Type=%s TLSFingerprint=%v Proxy=%s",
-		account.ID, account.Name, account.Platform, account.Type, tlsProfile, proxyURL)
+	// 只记代理 ID，不记代理 URL（URL 里带代理账号密码）。
+	var logProxyID int64
+	if account.ProxyID != nil {
+		logProxyID = *account.ProxyID
+	}
+	logger.LegacyPrintf("service.gateway", "[Forward] Using account: ID=%d Name=%s Platform=%s Type=%s TLSFingerprint=%v ProxyID=%d",
+		account.ID, account.Name, account.Platform, account.Type, tlsProfile, logProxyID)
 	// Pre-filter: strip empty text blocks (including nested in tool_result) to prevent upstream 400.
 	if err := replaceBody(StripEmptyTextBlocks(body)); err != nil {
 		return nil, err

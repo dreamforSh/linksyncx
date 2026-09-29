@@ -10,6 +10,7 @@ import (
 	"net"
 	"net/http"
 	"net/url"
+	"regexp"
 	"strings"
 	"time"
 
@@ -183,6 +184,8 @@ func fetchClashSubscription(ctx context.Context, policy clashFetchPolicy, rawURL
 
 // redactClashURLError strips the subscription URL (which carries the access
 // token) from transport errors before they are stored or logged.
+var clashErrorURLPattern = regexp.MustCompile(`https?://[^\s"'<>]+`)
+
 func redactClashURLError(err error, target *url.URL) string {
 	message := err.Error()
 	var urlErr *url.Error
@@ -192,7 +195,9 @@ func redactClashURLError(err error, target *url.URL) string {
 	if target != nil {
 		message = strings.ReplaceAll(message, target.String(), maskClashURL(target.String()))
 	}
-	return message
+	// Redirect and nested parser errors may contain a different URL from the
+	// original target, including credentials in its path or query string.
+	return clashErrorURLPattern.ReplaceAllStringFunc(message, maskClashURL)
 }
 
 // maskClashURL keeps scheme and host and hides path, query and credentials.

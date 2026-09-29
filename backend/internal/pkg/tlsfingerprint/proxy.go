@@ -117,6 +117,9 @@ func (d *ProxyDialer) DialContext(ctx context.Context, network, addr string) (ne
 
 // DialTLSContext 经同一路由建立到 addr 的连接，并以 Profile 指纹完成 TLS 握手。
 func (d *ProxyDialer) DialTLSContext(ctx context.Context, network, addr string) (net.Conn, error) {
+	if err := ValidateProfile(d.profile); err != nil {
+		return nil, err
+	}
 	conn, err := d.dialTunnel(ctx, network, addr)
 	if err != nil {
 		return nil, err

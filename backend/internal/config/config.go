@@ -1492,7 +1492,7 @@ type TLSFingerprintConfig struct {
 }
 
 // TLSProfileConfig 单个TLS指纹模板的配置
-// 所有列表字段为空时使用内置默认值（Claude CLI 2.x / Node.js 20.x）
+// 每个空列表字段独立继承内置默认值（Claude Code 2.1.280 / Bun）
 // 建议通过 TLS 指纹采集工具 (tests/tls-fingerprint-web) 获取完整配置
 type TLSProfileConfig struct {
 	// Name: 模板显示名称
@@ -1516,7 +1516,7 @@ type TLSProfileConfig struct {
 	// PSKModes: PSK密钥交换模式（如 [1] 即 psk_dhe_ke）
 	PSKModes []uint16 `mapstructure:"psk_modes"`
 	// Extensions: TLS扩展类型ID列表，按发送顺序排列
-	// 空则使用内置默认顺序 [0,11,10,35,16,22,23,13,43,45,51]
+	// 空则使用内置默认顺序
 	// GREASE值(如0x0a0a)会自动插入GREASE扩展
 	Extensions []uint16 `mapstructure:"extensions"`
 }

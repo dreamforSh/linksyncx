@@ -43,10 +43,10 @@ type ClashSyncStats struct {
 const clashDropProtectionMinNodes = 3
 
 // BuildClashNodeSyncPlan matches freshly parsed nodes against stored ones.
-// Matching prefers an identical configuration, then the same name, then the
-// same (type, server, port); unmatched stored nodes become missing. Matched
-// nodes keep their listener port and managed proxy, so account bindings
-// survive renames and credential rotations.
+// Global matching prefers an identical configuration and name, then configuration,
+// then name, then an unambiguous (type, server, port). Unmatched stored nodes become
+// missing. Matched nodes keep their listener port and managed proxy, so account
+// bindings survive renames and credential rotations.
 func BuildClashNodeSyncPlan(existing []ClashNode, parsed []clashsub.Node, opts ClashSyncOptions) (*ClashNodeSyncPlan, *ClashSyncStats, error) {
 	stats := &ClashSyncStats{Parsed: len(parsed)}
 	candidates := make([]clashsub.Node, 0, len(parsed))
@@ -79,11 +79,13 @@ func BuildClashNodeSyncPlan(existing []ClashNode, parsed []clashsub.Node, opts C
 		}
 	}
 
+	byHashName := make(map[string][]int, len(existing))
 	byHash := make(map[string][]int, len(existing))
 	byName := make(map[string][]int, len(existing))
 	byEndpoint := make(map[string][]int, len(existing))
 	for i := range existing {
 		node := &existing[i]
+		byHashName[node.ConfigHash+"\x00"+node.Name] = append(byHashName[node.ConfigHash+"\x00"+node.Name], i)
 		byHash[node.ConfigHash] = append(byHash[node.ConfigHash], i)
 		byName[node.Name] = append(byName[node.Name], i)
 		byEndpoint[clashEndpointKey(node.Type, node.Server, node.ServerPort)] = append(byEndpoint[clashEndpointKey(node.Type, node.Server, node.ServerPort)], i)
@@ -98,24 +100,58 @@ func BuildClashNodeSyncPlan(existing []ClashNode, parsed []clashsub.Node, opts C
 		}
 		return 0, false
 	}
+	hashes := make([]string, len(candidates))
+	for i, node := range candidates {
+		hashes[i] = clashsub.ConfigHash(node.Config)
+	}
+	assignments := make(map[int]int, len(candidates))
+	matchRound := func(index map[string][]int, key func(int) string) {
+		for i := range candidates {
+			if _, found := assignments[i]; found {
+				continue
+			}
+			if idx, found := take(index[key(i)]); found {
+				assignments[i] = idx
+			}
+		}
+	}
+	// Reserve every stronger match before a new entry can reuse an old identity.
+	matchRound(byHashName, func(i int) string { return hashes[i] + "\x00" + candidates[i].Name })
+	matchRound(byHash, func(i int) string { return hashes[i] })
+	matchRound(byName, func(i int) string { return candidates[i].Name })
+	remaining := make(map[string][]int)
+	for i, node := range candidates {
+		if _, found := assignments[i]; !found {
+			key := clashEndpointKey(node.Type, node.Server, node.Port)
+			remaining[key] = append(remaining[key], i)
+		}
+	}
+	for key, incoming := range remaining {
+		if len(incoming) != 1 {
+			continue
+		}
+		available := make([]int, 0, len(byEndpoint[key]))
+		for _, idx := range byEndpoint[key] {
+			if !matched[idx] {
+				available = append(available, idx)
+			}
+		}
+		if len(available) == 1 {
+			idx := available[0]
+			assignments[incoming[0]], matched[idx] = idx, true
+		}
+	}
 
 	plan := &ClashNodeSyncPlan{}
-	for _, node := range candidates {
-		hash := clashsub.ConfigHash(node.Config)
+	for i, node := range candidates {
+		hash := hashes[i]
 		status, reason := clashNodeScreen(node, opts.AllowPrivateNodes)
 		if status == ClashNodeStatusInvalid {
 			stats.Private++
 		}
 		proxyName := clashManagedProxyName(opts.ProfileName, node.Name)
 
-		idx, found := take(byHash[hash])
-		configChanged := false
-		if !found {
-			if idx, found = take(byName[node.Name]); !found {
-				idx, found = take(byEndpoint[clashEndpointKey(node.Type, node.Server, node.Port)])
-			}
-			configChanged = found
-		}
+		idx, found := assignments[i]
 		if !found {
 			plan.Inserts = append(plan.Inserts, ClashSyncNewNode{
 				Name:         node.Name,
@@ -132,6 +168,7 @@ func BuildClashNodeSyncPlan(existing []ClashNode, parsed []clashsub.Node, opts C
 		}
 
 		prev := &existing[idx]
+		configChanged := prev.ConfigHash != hash
 		nextStatus, nextReason := status, reason
 		switch {
 		case status == ClashNodeStatusInvalid:
@@ -223,4 +260,6 @@ func compileClashPattern(field, pattern string) (*regexp.Regexp, error) {
 
 // DefaultClashExcludePattern filters informational pseudo-nodes that panels
 // insert to show remaining traffic, expiry or their website.
-const DefaultClashExcludePattern = `(?i)(剩余|到期|过期|流量|官网|套餐|重置|expire|traffic|website|remaining)`
+const DefaultClashExcludePattern = `(?i)(剩余|到期|过期|流量|官网|重置|` +
+	`\b(expire[sd]?|expiry|expiration|traffic|website|remaining)\b|` +
+	`^[\s\p{P}\p{S}\p{M}\p{Z}]*(当前|我的)?套餐(信息|详情|名称|有效期)?[\s\p{P}\p{Z}]*([:：=]|$))`

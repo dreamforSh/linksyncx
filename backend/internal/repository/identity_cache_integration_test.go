@@ -25,13 +25,15 @@ func (s *IdentityCacheSuite) SetupTest() {
 }
 
 func (s *IdentityCacheSuite) TestGetFingerprint_Missing() {
-	_, err := s.cache.GetFingerprint(s.ctx, 1)
-	require.True(s.T(), errors.Is(err, redis.Nil), "expected redis.Nil for missing fingerprint")
+	fp, err := s.cache.GetFingerprint(s.ctx, 1)
+	require.NoError(s.T(), err)
+	require.Nil(s.T(), fp)
 }
 
 func (s *IdentityCacheSuite) TestSetAndGetFingerprint() {
 	fp := &service.Fingerprint{ClientID: "c1", UserAgent: "ua"}
-	require.NoError(s.T(), s.cache.SetFingerprint(s.ctx, 1, fp), "SetFingerprint")
+	_, setErr := s.cache.SetFingerprint(s.ctx, 1, fp)
+	require.NoError(s.T(), setErr, "SetFingerprint")
 	gotFP, err := s.cache.GetFingerprint(s.ctx, 1)
 	require.NoError(s.T(), err, "GetFingerprint")
 	require.Equal(s.T(), "c1", gotFP.ClientID)
@@ -40,7 +42,8 @@ func (s *IdentityCacheSuite) TestSetAndGetFingerprint() {
 
 func (s *IdentityCacheSuite) TestFingerprint_TTL() {
 	fp := &service.Fingerprint{ClientID: "c1", UserAgent: "ua"}
-	require.NoError(s.T(), s.cache.SetFingerprint(s.ctx, 2, fp))
+	_, setErr := s.cache.SetFingerprint(s.ctx, 2, fp)
+	require.NoError(s.T(), setErr)
 
 	fpKey := fmt.Sprintf("%s%d", fingerprintKeyPrefix, 2)
 	ttl, err := s.rdb.TTL(s.ctx, fpKey).Result()
@@ -58,8 +61,8 @@ func (s *IdentityCacheSuite) TestGetFingerprint_JSONCorruption() {
 }
 
 func (s *IdentityCacheSuite) TestSetFingerprint_Nil() {
-	err := s.cache.SetFingerprint(s.ctx, 100, nil)
-	require.NoError(s.T(), err, "SetFingerprint(nil) should succeed")
+	_, err := s.cache.SetFingerprint(s.ctx, 100, nil)
+	require.Error(s.T(), err, "nil is not an account identity")
 }
 
 func TestIdentityCacheSuite(t *testing.T) {

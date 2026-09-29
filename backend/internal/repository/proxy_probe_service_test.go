@@ -2,12 +2,23 @@ package repository
 
 import (
 	"context"
+	"crypto/ecdsa"
+	"crypto/elliptic"
+	"crypto/rand"
+	"crypto/tls"
+	"crypto/x509"
 	"io"
+	"math/big"
+	"net"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"strings"
+	"sync/atomic"
 	"testing"
+	"time"
 
+	"github.com/Wei-Shaw/sub2api/internal/pkg/httpclient"
 	"github.com/stretchr/testify/require"
 	"github.com/stretchr/testify/suite"
 )
@@ -35,6 +46,79 @@ func (s *ProxyProbeServiceSuite) TearDownTest() {
 
 func (s *ProxyProbeServiceSuite) setupProxyServer(handler http.HandlerFunc) {
 	s.proxySrv = newLocalTestServer(s.T(), handler)
+}
+
+// The fake proxy only tunnels the built-in ipify target to a loopback TLS server.
+// Trust its test certificate without disabling certificate or hostname checks.
+func (s *ProxyProbeServiceSuite) setupHTTPSProxyServer(handler http.HandlerFunc) *atomic.Int64 {
+	t := s.T()
+	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	require.NoError(t, err)
+	cert := &x509.Certificate{
+		SerialNumber: big.NewInt(1), DNSNames: []string{"api64.ipify.org"},
+		NotBefore: time.Now().Add(-time.Hour), NotAfter: time.Now().Add(time.Hour),
+		KeyUsage:    x509.KeyUsageDigitalSignature | x509.KeyUsageCertSign,
+		ExtKeyUsage: []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
+		IsCA:        true, BasicConstraintsValid: true,
+	}
+	der, err := x509.CreateCertificate(rand.Reader, cert, cert, &key.PublicKey, key)
+	require.NoError(t, err)
+	target := httptest.NewUnstartedServer(handler)
+	target.TLS = &tls.Config{Certificates: []tls.Certificate{{Certificate: [][]byte{der}, PrivateKey: key}}}
+	target.StartTLS()
+	t.Cleanup(target.Close)
+	connects := &atomic.Int64{}
+	s.setupProxyServer(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodConnect {
+			handler(w, r)
+			return
+		}
+		if r.Host != "api64.ipify.org:443" {
+			t.Errorf("unexpected CONNECT target: %s", r.Host)
+			w.WriteHeader(http.StatusBadGateway)
+			return
+		}
+		upstream, err := net.DialTimeout("tcp", target.Listener.Addr().String(), time.Second)
+		if err != nil {
+			t.Errorf("dial local TLS target: %v", err)
+			w.WriteHeader(http.StatusBadGateway)
+			return
+		}
+		defer func() { _ = upstream.Close() }()
+		hijacker, ok := w.(http.Hijacker)
+		if !ok {
+			t.Error("CONNECT proxy requires HTTP hijacking")
+			w.WriteHeader(http.StatusInternalServerError)
+			return
+		}
+		conn, rw, err := hijacker.Hijack()
+		if err != nil {
+			t.Errorf("hijack CONNECT: %v", err)
+			return
+		}
+		defer func() { _ = conn.Close() }()
+		connects.Add(1)
+		_, _ = rw.WriteString("HTTP/1.1 200 Connection Established\r\n\r\n")
+		_ = rw.Flush()
+		go func() { _, _ = io.Copy(upstream, rw); _ = upstream.Close() }()
+		_, _ = io.Copy(conn, upstream)
+	})
+	client, err := httpclient.GetClient(httpclient.Options{
+		ProxyURL: s.proxySrv.URL, Timeout: defaultProxyProbeTimeout, AllowPrivateHosts: true,
+	})
+	require.NoError(t, err)
+	proxyURL, err := url.Parse(s.proxySrv.URL)
+	require.NoError(t, err)
+	baseTransport, ok := target.Client().Transport.(*http.Transport)
+	require.True(t, ok)
+	transport := baseTransport.Clone()
+	transport.Proxy = http.ProxyURL(proxyURL)
+	transport.DisableKeepAlives = true
+	require.False(t, transport.TLSClientConfig.InsecureSkipVerify)
+	previous := client.Transport
+	client.Transport = transport
+	t.Cleanup(func() { client.Transport = previous; transport.CloseIdleConnections() })
+	return connects
 }
 
 func (s *ProxyProbeServiceSuite) TestProbeProxy_InvalidProxyURL() {
@@ -72,14 +156,14 @@ func (s *ProxyProbeServiceSuite) TestProbeProxy_Success_IPAPI() {
 }
 
 func (s *ProxyProbeServiceSuite) TestProbeProxy_Success_IPifyFallback() {
-	s.setupProxyServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	connects := s.setupHTTPSProxyServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		// ip-api 失败
-		if strings.Contains(r.RequestURI, "ip-api.com") {
+		if r.Host == "ip-api.com" {
 			w.WriteHeader(http.StatusServiceUnavailable)
 			return
 		}
 		// ipify 成功
-		if strings.Contains(r.RequestURI, "api64.ipify.org") {
+		if r.Host == "api64.ipify.org" && r.TLS != nil && r.URL.RawQuery == "format=json" {
 			w.Header().Set("Content-Type", "application/json")
 			_, _ = io.WriteString(w, `{"ip": "5.6.7.8"}`)
 			return
@@ -91,6 +175,8 @@ func (s *ProxyProbeServiceSuite) TestProbeProxy_Success_IPifyFallback() {
 	require.NoError(s.T(), err, "ProbeProxy should fallback to ipify")
 	require.GreaterOrEqual(s.T(), latencyMs, int64(0), "unexpected latency")
 	require.Equal(s.T(), "5.6.7.8", info.IP)
+	require.EqualValues(s.T(), 1, connects.Load(), "HTTPS fallback must use CONNECT")
+	require.Empty(s.T(), info.CountryCode, "ipify does not provide geographic data")
 }
 
 func (s *ProxyProbeServiceSuite) TestProbeProxy_AllFailed() {
@@ -104,14 +190,14 @@ func (s *ProxyProbeServiceSuite) TestProbeProxy_AllFailed() {
 }
 
 func (s *ProxyProbeServiceSuite) TestProbeProxy_InvalidJSON() {
-	s.setupProxyServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if strings.Contains(r.RequestURI, "ip-api.com") {
+	connects := s.setupHTTPSProxyServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Host == "ip-api.com" {
 			w.Header().Set("Content-Type", "application/json")
 			_, _ = io.WriteString(w, "not-json")
 			return
 		}
 		// ipify 也返回无效响应
-		if strings.Contains(r.RequestURI, "api64.ipify.org") {
+		if r.Host == "api64.ipify.org" && r.TLS != nil {
 			w.Header().Set("Content-Type", "application/json")
 			_, _ = io.WriteString(w, "not-json")
 			return
@@ -122,6 +208,8 @@ func (s *ProxyProbeServiceSuite) TestProbeProxy_InvalidJSON() {
 	_, _, err := s.prober.ProbeProxy(s.ctx, s.proxySrv.URL)
 	require.Error(s.T(), err)
 	require.ErrorContains(s.T(), err, "all probe URLs failed")
+	require.ErrorContains(s.T(), err, "failed to parse ipify response")
+	require.EqualValues(s.T(), 1, connects.Load())
 }
 
 func (s *ProxyProbeServiceSuite) TestProbeProxy_ProxyServerClosed() {
