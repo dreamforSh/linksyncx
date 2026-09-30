@@ -22,6 +22,8 @@ func TestCRSTLSRejectsKeyShareOutsideSupportedGroupsBeforeDial(t *testing.T) {
 	require.Zero(t, calls)
 	require.NoError(t, ValidateProfile(&Profile{Curves: []uint16{29}, KeyShareGroups: []uint16{29}}))
 	require.NoError(t, ValidateProfile(nil))
+	require.NoError(t, ValidateProfile(&Profile{}))
+	require.ErrorContains(t, ValidateProfile(&Profile{Curves: []uint16{29}, KeyShareGroups: []uint16{29, 23}}), "key share 23")
 	for _, raw := range []string{"http://proxy.invalid:8080", "https://proxy.invalid:443", "socks5h://proxy.invalid:1080"} {
 		t.Run(raw, func(t *testing.T) {
 			proxyURL, err := url.Parse(raw)

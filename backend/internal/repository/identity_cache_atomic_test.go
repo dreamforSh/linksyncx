@@ -173,3 +173,42 @@ func TestCRSMaskedSessionConcurrentCreationAndRenewal(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, "new-window", next)
 }
+
+// A corrupt record observed at the atomic write boundary must survive unchanged.
+func TestIdentityAtomicWritesPreserveCorruptRecords(t *testing.T) {
+	server := miniredis.RunT(t)
+	client := redis.NewClient(&redis.Options{Addr: server.Addr()})
+	t.Cleanup(func() { _ = client.Close() })
+	cache := NewIdentityCache(client)
+	for _, payload := range []string{"invalid-json", "null", "{}", `{"ClientID":""}`, `{"ClientID":42}`, `{"ClientID":false}`} {
+		t.Run(payload, func(t *testing.T) {
+			for _, write := range []func(context.Context, int64, *service.Fingerprint) (*service.Fingerprint, error){cache.CreateFingerprint, cache.SetFingerprint} {
+				require.NoError(t, server.Set(fingerprintKey(7), payload))
+				stored, err := write(t.Context(), 7, &service.Fingerprint{ClientID: "candidate"})
+				require.Error(t, err)
+				require.Nil(t, stored)
+				current, err := server.Get(fingerprintKey(7))
+				require.NoError(t, err)
+				require.Equal(t, payload, current)
+			}
+		})
+	}
+}
+
+func TestIdentityRefreshKeepsSameIdentityAndRenewsTTL(t *testing.T) {
+	server := miniredis.RunT(t)
+	client := redis.NewClient(&redis.Options{Addr: server.Addr()})
+	t.Cleanup(func() { _ = client.Close() })
+	cache := NewIdentityCache(client)
+	_, err := cache.CreateFingerprint(t.Context(), 8, &service.Fingerprint{ClientID: "c8", UserAgent: "ua-old", UpdatedAt: 1})
+	require.NoError(t, err)
+	server.FastForward(fingerprintTTL / 2)
+	refreshed, err := cache.SetFingerprint(t.Context(), 8, &service.Fingerprint{ClientID: "c8", UserAgent: "ua-new", UpdatedAt: 2})
+	require.NoError(t, err)
+	require.Equal(t, "ua-new", refreshed.UserAgent)
+	require.EqualValues(t, 2, refreshed.UpdatedAt)
+	require.Equal(t, fingerprintTTL, server.TTL(fingerprintKey(8)))
+	stored, err := cache.GetFingerprint(t.Context(), 8)
+	require.NoError(t, err)
+	require.Equal(t, "ua-new", stored.UserAgent)
+}

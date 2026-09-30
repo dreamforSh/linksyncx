@@ -61,8 +61,8 @@ func decodeFingerprint(val string) (*service.Fingerprint, error) {
 var refreshFingerprintScript = redis.NewScript(`
 local current = redis.call('GET', KEYS[1])
 if current then
-    local identity = cjson.decode(current)
-    if type(identity) ~= 'table' or not identity.ClientID then
+    local ok, identity = pcall(cjson.decode, current)
+    if not ok or type(identity) ~= 'table' or type(identity.ClientID) ~= 'string' or identity.ClientID == '' then
         return redis.error_reply('invalid stored account identity')
     end
     if identity.ClientID ~= ARGV[2] then return current end
@@ -86,6 +86,15 @@ func (c *identityCache) SetFingerprint(ctx context.Context, accountID int64, fp 
 	return decodeFingerprint(stored)
 }
 
+// Creation and winner selection share one Redis operation. Existing malformed
+// records are returned for decoding and never silently replaced with a new identity.
+var createFingerprintScript = redis.NewScript(`
+local current = redis.call('GET', KEYS[1])
+if current then return current end
+redis.call('SET', KEYS[1], ARGV[1], 'PX', ARGV[2])
+return ARGV[1]
+`)
+
 func (c *identityCache) CreateFingerprint(ctx context.Context, accountID int64, fp *service.Fingerprint) (*service.Fingerprint, error) {
 	if fp == nil || fp.ClientID == "" {
 		return nil, fmt.Errorf("account identity requires a client ID")
@@ -94,17 +103,11 @@ func (c *identityCache) CreateFingerprint(ctx context.Context, accountID int64, 
 	if err != nil {
 		return nil, err
 	}
-	if err := c.rdb.SetNX(ctx, fingerprintKey(accountID), val, fingerprintTTL).Err(); err != nil {
-		return nil, err
-	}
-	winner, err := c.GetFingerprint(ctx, accountID)
+	stored, err := createFingerprintScript.Run(ctx, c.rdb, []string{fingerprintKey(accountID)}, val, fingerprintTTL.Milliseconds()).Text()
 	if err != nil {
 		return nil, err
 	}
-	if winner == nil {
-		return nil, fmt.Errorf("account identity disappeared during creation")
-	}
-	return winner, nil
+	return decodeFingerprint(stored)
 }
 
 var maskedSessionScript = redis.NewScript(`
