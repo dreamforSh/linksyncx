@@ -5,6 +5,7 @@ package service
 import (
 	"context"
 	"errors"
+	"strconv"
 	"testing"
 	"time"
 
@@ -67,7 +68,6 @@ func TestUpdateServicePerformUpdateNoUpdateReturnsSentinel(t *testing.T) {
 			}},
 		},
 		"0.1.132.1",
-		"0.1.132",
 		"release",
 	)
 
@@ -83,7 +83,6 @@ func newRollbackTestService(current string, releases []*GitHubRelease) *UpdateSe
 		&updateServiceCacheStub{},
 		&updateServiceGitHubClientStub{recentReleases: releases},
 		current,
-		"0.1.179",
 		"release",
 	)
 }
@@ -146,7 +145,6 @@ func TestUpdateServiceListRollbackVersionsPropagatesFetchError(t *testing.T) {
 		&updateServiceCacheStub{},
 		&updateServiceGitHubClientStub{recentErr: errors.New("github unavailable")},
 		"0.1.179.7",
-		"0.1.179",
 		"release",
 	)
 
@@ -204,7 +202,7 @@ func TestCompareCustomVersionsUsesFourthSegment(t *testing.T) {
 	require.Zero(t, compareCustomVersions("0.1.179", "0.1.179.0"))
 }
 
-func TestUpdateServiceCheckUpdateReturnsIndependentChannels(t *testing.T) {
+func TestUpdateServiceCheckUpdateOnlyUsesCustomChannel(t *testing.T) {
 	client := &updateServiceGitHubClientStub{
 		release: &GitHubRelease{TagName: "v0.1.180", Name: "Sub2API 0.1.180"},
 		recentReleases: []*GitHubRelease{
@@ -212,7 +210,7 @@ func TestUpdateServiceCheckUpdateReturnsIndependentChannels(t *testing.T) {
 			{TagName: "custom-v0.1.179.2", Name: "Custom 0.1.179.2"},
 		},
 	}
-	svc := NewUpdateService(&updateServiceCacheStub{}, client, "0.1.179.1", "0.1.179", "release")
+	svc := NewUpdateService(&updateServiceCacheStub{}, client, "0.1.179.1", "release")
 
 	info, err := svc.CheckUpdate(context.Background(), true)
 
@@ -220,10 +218,33 @@ func TestUpdateServiceCheckUpdateReturnsIndependentChannels(t *testing.T) {
 	require.Equal(t, "0.1.179.1", info.Custom.CurrentVersion)
 	require.Equal(t, "0.1.179.2", info.Custom.LatestVersion)
 	require.True(t, info.Custom.HasUpdate)
-	require.Equal(t, "0.1.179", info.Upstream.CurrentVersion)
-	require.Equal(t, "0.1.180", info.Upstream.LatestVersion)
-	require.True(t, info.Upstream.HasUpdate)
 	require.Equal(t, info.Custom.CurrentVersion, info.CurrentVersion)
+	require.Equal(t, info.Custom.LatestVersion, info.LatestVersion)
+	require.Equal(t, info.Custom.HasUpdate, info.HasUpdate)
+	require.Empty(t, info.Warning)
 	require.Equal(t, []string{customGitHubRepo}, client.recentRepos)
-	require.Equal(t, []string{upstreamGitHubRepo}, client.latestRepos)
+	// The official Sub2API release channel is gone: nothing may query it.
+	require.Empty(t, client.latestRepos)
+}
+
+func TestUpdateServiceCheckUpdateIgnoresStaleUpstreamCacheEntry(t *testing.T) {
+	// A cache entry written before the official channel was removed still carries
+	// an "upstream" object; it must neither break decoding nor leak into the result.
+	cache := &updateServiceCacheStub{
+		data: `{"upstream":{"current_version":"0.2.8","latest_version":"0.9.9","has_update":true},` +
+			`"custom":{"current_version":"0.1.179.1","latest_version":"0.1.179.2","has_update":true},` +
+			`"timestamp":` + strconv.FormatInt(time.Now().Unix(), 10) + `}`,
+	}
+	client := &updateServiceGitHubClientStub{}
+	svc := NewUpdateService(cache, client, "0.1.179.2", "release")
+
+	info, err := svc.CheckUpdate(context.Background(), false)
+
+	require.NoError(t, err)
+	require.True(t, info.Cached)
+	require.Equal(t, "0.1.179.2", info.CurrentVersion)
+	require.Equal(t, "0.1.179.2", info.LatestVersion)
+	require.False(t, info.HasUpdate)
+	require.Empty(t, client.recentRepos)
+	require.Empty(t, client.latestRepos)
 }

@@ -28,7 +28,6 @@ jobs:
     outputs:
       tag: ${{ steps.version.outputs.tag }}
       version: ${{ steps.version.outputs.version }}
-      upstream_version: ${{ steps.version.outputs.upstream_version }}
     steps:
       - name: Checkout release source
         uses: actions/checkout@v6
@@ -47,19 +46,13 @@ jobs:
           fi
 
           FILE_VERSION="$(tr -d '\r\n' < backend/cmd/server/VERSION)"
-          UPSTREAM_VERSION="$(tr -d '\r\n' < backend/cmd/server/UPSTREAM_VERSION)"
           if [[ "$FILE_VERSION" != "$VERSION" ]]; then
             echo "VERSION ($FILE_VERSION) does not match tag ($VERSION)" >&2
-            exit 1
-          fi
-          if [[ ! "$UPSTREAM_VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
-            echo "Invalid UPSTREAM_VERSION: $UPSTREAM_VERSION" >&2
             exit 1
           fi
 
           echo "tag=$TAG" >> "$GITHUB_OUTPUT"
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"
-          echo "upstream_version=$UPSTREAM_VERSION" >> "$GITHUB_OUTPUT"
 
   build-frontend:
     needs: validate
@@ -143,7 +136,6 @@ jobs:
           GOOS: ${{ matrix.goos }}
           GOARCH: ${{ matrix.goarch }}
           VERSION: ${{ needs.validate.outputs.version }}
-          UPSTREAM_VERSION: ${{ needs.validate.outputs.upstream_version }}
         run: |
           mkdir -p package dist
           BINARY=sub2api
@@ -152,7 +144,7 @@ jobs:
           fi
           BUILD_DATE="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
           CGO_ENABLED=0 go build -C backend -tags embed \
-            -ldflags "-s -w -X main.Version=$VERSION -X main.UpstreamVersion=$UPSTREAM_VERSION -X main.Commit=$GITHUB_SHA -X main.Date=$BUILD_DATE -X main.BuildType=release" \
+            -ldflags "-s -w -X main.Version=$VERSION -X main.Commit=$GITHUB_SHA -X main.Date=$BUILD_DATE -X main.BuildType=release" \
             -o "../package/$BINARY" ./cmd/server
 
           ARCHIVE="sub2api_${VERSION}_${GOOS}_${GOARCH}.${{ matrix.extension }}"
@@ -274,7 +266,6 @@ jobs:
           generate_release_notes: false
           body: |
             自定义版本：`${{ needs.validate.outputs.version }}`
-            Sub2API 基线：`${{ needs.validate.outputs.upstream_version }}`
 
             Docker 镜像：
             ```bash

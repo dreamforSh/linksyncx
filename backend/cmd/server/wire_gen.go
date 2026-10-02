@@ -393,9 +393,8 @@ func providePrivacyClientFactory() service.PrivacyClientFactory {
 
 func provideServiceBuildInfo(buildInfo handler.BuildInfo) service.BuildInfo {
 	return service.BuildInfo{
-		Version:         buildInfo.Version,
-		UpstreamVersion: buildInfo.UpstreamVersion,
-		BuildType:       buildInfo.BuildType,
+		Version:   buildInfo.Version,
+		BuildType: buildInfo.BuildType,
 	}
 }
 

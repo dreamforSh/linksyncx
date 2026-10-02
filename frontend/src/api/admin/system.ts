@@ -27,7 +27,6 @@ export interface VersionInfo {
   cached: boolean
   warning?: string
   build_type: string // "source" for manual builds, "release" for CI builds
-  upstream?: UpdateChannelInfo
   custom?: UpdateChannelInfo
 }
 

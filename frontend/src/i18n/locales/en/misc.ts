@@ -26,7 +26,6 @@ export default {
     customVersion: 'Custom version',
     customLatestVersion: 'Latest custom version: v{version}',
     customUpdateAvailable: 'Custom update available',
-    upstreamUpdateAvailable: 'A new Sub2API release is available',
     releaseNotes: 'Release Notes',
     noReleaseNotes: 'No release notes',
     viewUpdate: 'View Update',

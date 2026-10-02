@@ -28,11 +28,10 @@ var (
 )
 
 const (
-	updateCacheKey     = "update_check_cache"
-	updateCacheTTL     = 1200 // 20 minutes
-	upstreamGitHubRepo = "Wei-Shaw/sub2api"
-	customGitHubRepo   = "dreamforSh/linksyncx"
-	customTagPrefix    = "custom-v"
+	updateCacheKey   = "update_check_cache"
+	updateCacheTTL   = 1200 // 20 minutes
+	customGitHubRepo = "dreamforSh/linksyncx"
+	customTagPrefix  = "custom-v"
 
 	// Security: allowed download domains for updates
 	allowedDownloadHost = "github.com"
@@ -63,21 +62,19 @@ type GitHubReleaseClient interface {
 
 // UpdateService handles software updates
 type UpdateService struct {
-	cache                  UpdateCache
-	githubClient           GitHubReleaseClient
-	currentVersion         string
-	currentUpstreamVersion string
-	buildType              string // "source" for manual builds, "release" for CI builds
+	cache          UpdateCache
+	githubClient   GitHubReleaseClient
+	currentVersion string
+	buildType      string // "source" for manual builds, "release" for CI builds
 }
 
 // NewUpdateService creates a new UpdateService
-func NewUpdateService(cache UpdateCache, githubClient GitHubReleaseClient, version, upstreamVersion, buildType string) *UpdateService {
+func NewUpdateService(cache UpdateCache, githubClient GitHubReleaseClient, version, buildType string) *UpdateService {
 	return &UpdateService{
-		cache:                  cache,
-		githubClient:           githubClient,
-		currentVersion:         version,
-		currentUpstreamVersion: upstreamVersion,
-		buildType:              buildType,
+		cache:          cache,
+		githubClient:   githubClient,
+		currentVersion: version,
+		buildType:      buildType,
 	}
 }
 
@@ -99,7 +96,6 @@ type UpdateInfo struct {
 	Cached         bool              `json:"cached"`
 	Warning        string            `json:"warning,omitempty"`
 	BuildType      string            `json:"build_type"` // "source" or "release"
-	Upstream       UpdateChannelInfo `json:"upstream"`
 	Custom         UpdateChannelInfo `json:"custom"`
 }
 
@@ -168,25 +164,10 @@ func (s *UpdateService) CheckUpdate(ctx context.Context, force bool) (*UpdateInf
 		info.Custom.Warning = customErr.Error()
 	}
 
-	upstream, upstreamErr := s.fetchLatestUpstreamRelease(ctx)
-	if upstreamErr == nil {
-		info.Upstream = *upstream
-	} else if cached != nil {
-		info.Upstream = cached.Upstream
-		info.Upstream.Warning = upstreamErr.Error()
-	} else {
-		info.Upstream.Warning = upstreamErr.Error()
-	}
-
 	info.syncCustomCompatibilityFields()
-	warnings := make([]string, 0, 2)
 	if customErr != nil {
-		warnings = append(warnings, "custom: "+customErr.Error())
+		info.Warning = "custom: " + customErr.Error()
 	}
-	if upstreamErr != nil {
-		warnings = append(warnings, "upstream: "+upstreamErr.Error())
-	}
-	info.Warning = strings.Join(warnings, "; ")
 
 	// Cache result
 	s.saveToCache(ctx, info)
@@ -427,16 +408,6 @@ func (s *UpdateService) fetchRollbackCandidates(ctx context.Context) ([]*GitHubR
 		candidates = candidates[:maxRollbackVersions]
 	}
 	return candidates, nil
-}
-
-func (s *UpdateService) fetchLatestUpstreamRelease(ctx context.Context) (*UpdateChannelInfo, error) {
-	release, err := s.githubClient.FetchLatestRelease(ctx, upstreamGitHubRepo)
-	if err != nil {
-		return nil, err
-	}
-
-	latestVersion := strings.TrimPrefix(release.TagName, "v")
-	return s.buildChannelInfo(release, s.currentUpstreamVersion, latestVersion, compareUpstreamVersions), nil
 }
 
 func (s *UpdateService) fetchLatestCustomRelease(ctx context.Context) (*UpdateChannelInfo, error) {
@@ -689,7 +660,6 @@ func (s *UpdateService) getFromCache(ctx context.Context) (*UpdateInfo, error) {
 	var cached struct {
 		Latest      string            `json:"latest"`
 		ReleaseInfo *ReleaseInfo      `json:"release_info"`
-		Upstream    UpdateChannelInfo `json:"upstream"`
 		Custom      UpdateChannelInfo `json:"custom"`
 		Timestamp   int64             `json:"timestamp"`
 	}
@@ -708,15 +678,10 @@ func (s *UpdateService) getFromCache(ctx context.Context) (*UpdateInfo, error) {
 		info.Custom.CurrentVersion = s.currentVersion
 		info.Custom.HasUpdate = compareCustomVersions(s.currentVersion, info.Custom.LatestVersion) < 0
 	} else if cached.Latest != "" {
-		// Read cache entries written by versions before dual-channel updates.
+		// Read cache entries written by versions before custom-channel updates.
 		info.Custom.LatestVersion = cached.Latest
 		info.Custom.ReleaseInfo = cached.ReleaseInfo
 		info.Custom.HasUpdate = compareCustomVersions(s.currentVersion, cached.Latest) < 0
-	}
-	if cached.Upstream.LatestVersion != "" {
-		info.Upstream = cached.Upstream
-		info.Upstream.CurrentVersion = s.currentUpstreamVersion
-		info.Upstream.HasUpdate = compareUpstreamVersions(s.currentUpstreamVersion, info.Upstream.LatestVersion) < 0
 	}
 	info.syncCustomCompatibilityFields()
 	return info, nil
@@ -724,11 +689,9 @@ func (s *UpdateService) getFromCache(ctx context.Context) (*UpdateInfo, error) {
 
 func (s *UpdateService) saveToCache(ctx context.Context, info *UpdateInfo) {
 	cacheData := struct {
-		Upstream  UpdateChannelInfo `json:"upstream"`
 		Custom    UpdateChannelInfo `json:"custom"`
 		Timestamp int64             `json:"timestamp"`
 	}{
-		Upstream:  info.Upstream,
 		Custom:    info.Custom,
 		Timestamp: time.Now().Unix(),
 	}
@@ -741,10 +704,6 @@ func (s *UpdateService) emptyUpdateInfo() *UpdateInfo {
 	info := &UpdateInfo{
 		Cached:    false,
 		BuildType: s.buildType,
-		Upstream: UpdateChannelInfo{
-			CurrentVersion: s.currentUpstreamVersion,
-			LatestVersion:  s.currentUpstreamVersion,
-		},
 		Custom: UpdateChannelInfo{
 			CurrentVersion: s.currentVersion,
 			LatestVersion:  s.currentVersion,
@@ -776,10 +735,6 @@ func parseCustomTag(tag string) (string, bool) {
 func normalizeCustomVersion(version string) string {
 	version = strings.TrimPrefix(version, customTagPrefix)
 	return strings.TrimPrefix(version, "v")
-}
-
-func compareUpstreamVersions(current, latest string) int {
-	return compareNumericVersions(current, latest, 3)
 }
 
 func compareCustomVersions(current, latest string) int {

@@ -8,16 +8,12 @@
         :class="[
           hasUpdate
             ? 'bg-amber-100 text-amber-700 hover:bg-amber-200 dark:bg-amber-900/30 dark:text-amber-400 dark:hover:bg-amber-900/50'
-            : hasUpstreamUpdate
-              ? 'bg-blue-100 text-blue-700 hover:bg-blue-200 dark:bg-blue-900/30 dark:text-blue-400 dark:hover:bg-blue-900/50'
-              : 'bg-gray-100 text-gray-600 hover:bg-gray-200 dark:bg-dark-800 dark:text-dark-400 dark:hover:bg-dark-700',
+            : 'bg-gray-100 text-gray-600 hover:bg-gray-200 dark:bg-dark-800 dark:text-dark-400 dark:hover:bg-dark-700',
         ]"
         :title="
           hasUpdate
             ? t('version.customUpdateAvailable')
-            : hasUpstreamUpdate
-              ? t('version.upstreamUpdateAvailable')
-              : t('version.upToDate')
+            : t('version.upToDate')
         "
       >
         <span v-if="currentVersion" class="font-medium"
@@ -28,17 +24,12 @@
           class="h-3 w-12 animate-pulse rounded bg-gray-200 font-medium dark:bg-dark-600"
         ></span>
         <!-- Update indicator -->
-        <span
-          v-if="hasUpdate || hasUpstreamUpdate"
-          class="relative flex h-2 w-2"
-        >
+        <span v-if="hasUpdate" class="relative flex h-2 w-2">
           <span
-            class="absolute inline-flex h-full w-full animate-ping rounded-full opacity-75"
-            :class="hasUpdate ? 'bg-amber-400' : 'bg-blue-400'"
+            class="absolute inline-flex h-full w-full animate-ping rounded-full bg-amber-400 opacity-75"
           ></span>
           <span
-            class="relative inline-flex h-2 w-2 rounded-full"
-            :class="hasUpdate ? 'bg-amber-500' : 'bg-blue-500'"
+            class="relative inline-flex h-2 w-2 rounded-full bg-amber-500"
           ></span>
         </span>
       </button>
@@ -113,9 +104,9 @@
                     class="text-2xl font-bold text-gray-400 dark:text-dark-500"
                     >--</span
                   >
-                  <!-- Show check mark when both channels are up to date -->
+                  <!-- Show check mark when up to date -->
                   <span
-                    v-if="!hasUpdate && !hasUpstreamUpdate"
+                    v-if="!hasUpdate"
                     class="flex h-5 w-5 items-center justify-center rounded-full bg-green-100 dark:bg-green-900/30"
                   >
                     <svg
@@ -141,55 +132,6 @@
                   }}
                 </p>
               </div>
-
-              <!-- Upstream releases are informational only. -->
-              <a
-                v-if="hasUpstreamUpdate"
-                :href="upstreamReleaseInfo?.html_url || undefined"
-                :target="upstreamReleaseInfo?.html_url ? '_blank' : undefined"
-                :rel="
-                  upstreamReleaseInfo?.html_url
-                    ? 'noopener noreferrer'
-                    : undefined
-                "
-                class="mb-3 flex items-center gap-3 rounded-lg border border-blue-200 bg-blue-50 p-3 text-left dark:border-blue-800/50 dark:bg-blue-900/20"
-                :class="{
-                  'transition-colors hover:bg-blue-100 dark:hover:bg-blue-900/30':
-                    upstreamReleaseInfo?.html_url,
-                }"
-              >
-                <span
-                  class="flex h-8 w-8 flex-shrink-0 items-center justify-center rounded-full bg-blue-100 dark:bg-blue-900/50"
-                >
-                  <Icon
-                    name="infoCircle"
-                    size="sm"
-                    :stroke-width="2"
-                    class="text-blue-600 dark:text-blue-400"
-                  />
-                </span>
-                <span class="min-w-0 flex-1">
-                  <span
-                    class="block text-sm font-medium text-blue-700 dark:text-blue-300"
-                  >
-                    {{ t("version.upstreamUpdateAvailable") }}
-                  </span>
-                  <span
-                    class="block text-xs text-blue-600/70 dark:text-blue-400/70"
-                  >
-                    v{{ upstreamCurrentVersion }} -> v{{
-                      upstreamLatestVersion
-                    }}
-                  </span>
-                </span>
-                <Icon
-                  v-if="upstreamReleaseInfo?.html_url"
-                  name="externalLink"
-                  size="xs"
-                  :stroke-width="2"
-                  class="text-blue-500 dark:text-blue-400"
-                />
-              </a>
 
               <!-- Priority 1: Update error (must check before hasUpdate) -->
               <div v-if="updateError" class="space-y-2">
@@ -796,10 +738,6 @@ const currentVersion = computed(
 const latestVersion = computed(() => appStore.latestVersion);
 const hasUpdate = computed(() => appStore.hasUpdate);
 const releaseInfo = computed(() => appStore.releaseInfo);
-const upstreamCurrentVersion = computed(() => appStore.upstreamCurrentVersion);
-const upstreamLatestVersion = computed(() => appStore.upstreamLatestVersion);
-const hasUpstreamUpdate = computed(() => appStore.upstreamHasUpdate);
-const upstreamReleaseInfo = computed(() => appStore.upstreamReleaseInfo);
 const buildType = computed(() => appStore.buildType);
 
 // Update process states (local to this component)

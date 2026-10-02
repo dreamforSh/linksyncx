@@ -43,10 +43,6 @@ export const useAppStore = defineStore('app', () => {
   const hasUpdate = ref<boolean>(false)
   const buildType = ref<string>('source')
   const releaseInfo = ref<ReleaseInfo | null>(null)
-  const upstreamCurrentVersion = ref<string>('')
-  const upstreamLatestVersion = ref<string>('')
-  const upstreamHasUpdate = ref<boolean>(false)
-  const upstreamReleaseInfo = ref<ReleaseInfo | null>(null)
 
   // Auto-incrementing ID for toasts
   let toastIdCounter = 0
@@ -259,12 +255,6 @@ export const useAppStore = defineStore('app', () => {
           has_update: hasUpdate.value,
           release_info: releaseInfo.value || undefined
         },
-        upstream: {
-          current_version: upstreamCurrentVersion.value,
-          latest_version: upstreamLatestVersion.value,
-          has_update: upstreamHasUpdate.value,
-          release_info: upstreamReleaseInfo.value || undefined
-        },
         cached: true
       }
     }
@@ -283,10 +273,6 @@ export const useAppStore = defineStore('app', () => {
       hasUpdate.value = custom.has_update
       buildType.value = data.build_type || 'source'
       releaseInfo.value = custom.release_info || null
-      upstreamCurrentVersion.value = data.upstream?.current_version || ''
-      upstreamLatestVersion.value = data.upstream?.latest_version || ''
-      upstreamHasUpdate.value = data.upstream?.has_update || false
-      upstreamReleaseInfo.value = data.upstream?.release_info || null
       versionLoaded.value = true
       return data
     } catch (error) {
@@ -483,10 +469,6 @@ export const useAppStore = defineStore('app', () => {
     hasUpdate,
     buildType,
     releaseInfo,
-    upstreamCurrentVersion,
-    upstreamLatestVersion,
-    upstreamHasUpdate,
-    upstreamReleaseInfo,
 
     // Computed
     hasActiveToasts,
