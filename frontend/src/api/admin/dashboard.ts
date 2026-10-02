@@ -13,7 +13,8 @@ import type {
   UserUsageTrendPoint,
   UserSpendingRankingResponse,
   UserBreakdownItem,
-  UsageRequestType
+  UsageRequestType,
+  CostTrendPoint
 } from '@/types'
 
 /**
@@ -74,6 +75,27 @@ export interface TrendResponse {
  */
 export async function getUsageTrend(params?: TrendParams): Promise<TrendResponse> {
   const { data } = await apiClient.get<TrendResponse>('/admin/dashboard/trend', { params })
+  return data
+}
+
+export interface CostTrendParams {
+  start_date?: string
+  end_date?: string
+  granularity?: 'day' | 'hour'
+}
+
+export interface CostTrendResponse {
+  trend: CostTrendPoint[]
+  start_date: string
+  end_date: string
+  granularity: string
+}
+
+/**
+ * Get revenue, standard cost and upstream account cost per bucket (admin only).
+ */
+export async function getCostTrend(params?: CostTrendParams): Promise<CostTrendResponse> {
+  const { data } = await apiClient.get<CostTrendResponse>('/admin/dashboard/cost-trend', { params })
   return data
 }
 
@@ -174,7 +196,7 @@ export interface UserBreakdownParams {
   endpoint_type?: 'inbound' | 'upstream' | 'path'
   limit?: number
   // Sort column for the ranking (allowlisted server-side; falls back to actual_cost)
-  sort_by?: 'total_tokens' | 'input_tokens' | 'output_tokens' | 'cache_tokens' | 'requests' | 'cost' | 'actual_cost'
+  sort_by?: 'total_tokens' | 'input_tokens' | 'output_tokens' | 'cache_tokens' | 'requests' | 'cost' | 'actual_cost' | 'account_cost'
   // Additional filter conditions
   user_id?: number
   api_key_id?: number
@@ -335,6 +357,7 @@ export const dashboardAPI = {
   getStats,
   getRealtimeMetrics,
   getUsageTrend,
+  getCostTrend,
   getModelStats,
   getGroupStats,
   getSnapshotV2,

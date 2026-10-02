@@ -408,6 +408,23 @@ func (s *DashboardService) GetUserSpendingRanking(ctx context.Context, startTime
 	return ranking, nil
 }
 
+// GetAdminCostTrend returns revenue and account cost per bucket. Account cost is
+// admin-only data; user-facing trend endpoints must keep using TrendDataPoint.
+func (s *DashboardService) GetAdminCostTrend(ctx context.Context, startTime, endTime time.Time, granularity string) ([]usagestats.CostTrendPoint, error) {
+	type adminCostTrendRepo interface {
+		GetAdminCostTrend(context.Context, time.Time, time.Time, string) ([]usagestats.CostTrendPoint, error)
+	}
+	repo, ok := s.usageRepo.(adminCostTrendRepo)
+	if !ok {
+		return []usagestats.CostTrendPoint{}, nil
+	}
+	trend, err := repo.GetAdminCostTrend(ctx, startTime, endTime, granularity)
+	if err != nil {
+		return nil, fmt.Errorf("get admin cost trend: %w", err)
+	}
+	return trend, nil
+}
+
 func (s *DashboardService) GetUserBreakdownStats(ctx context.Context, startTime, endTime time.Time, dim usagestats.UserBreakdownDimension, limit int) ([]usagestats.UserBreakdownItem, error) {
 	stats, err := s.usageRepo.GetUserBreakdownStats(ctx, startTime, endTime, dim, limit)
 	if err != nil {

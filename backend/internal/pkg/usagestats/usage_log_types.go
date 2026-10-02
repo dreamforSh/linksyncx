@@ -92,6 +92,17 @@ type TrendDataPoint struct {
 	ActualCost          float64 `json:"actual_cost"` // 实际扣除
 }
 
+// CostTrendPoint is one revenue/cost bucket of the admin dashboard. AccountCost
+// is the upstream account cost, so this type must never reach user-facing APIs;
+// TrendDataPoint (shared with them) deliberately has no such field.
+type CostTrendPoint struct {
+	Date        string  `json:"date"`
+	Requests    int64   `json:"requests"`
+	Cost        float64 `json:"cost"`         // 标准计费
+	ActualCost  float64 `json:"actual_cost"`  // 实际扣除（营收）
+	AccountCost float64 `json:"account_cost"` // 账号成本
+}
+
 // ModelStat represents usage statistics for a single model
 type ModelStat struct {
 	Model               string  `json:"model"`
@@ -176,6 +187,9 @@ type UserBreakdownItem struct {
 	Cost         float64 `json:"cost"`          // 标准计费
 	ActualCost   float64 `json:"actual_cost"`   // 实际扣除
 	AccountCost  float64 `json:"account_cost"`  // 账号成本
+	// 缓存读写拆分，用于计算命中率：缓存读 ÷ (输入 + 缓存写 + 缓存读)。
+	CacheCreationTokens int64 `json:"cache_creation_tokens"`
+	CacheReadTokens     int64 `json:"cache_read_tokens"`
 }
 
 // UserBreakdownDimension specifies the dimension to filter for user breakdown.

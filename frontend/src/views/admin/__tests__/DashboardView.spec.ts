@@ -5,10 +5,29 @@ import { createPinia, setActivePinia } from 'pinia'
 import type { DashboardStats } from '@/types'
 import DashboardView from '../DashboardView.vue'
 
-const { getSnapshotV2, getUserUsageTrend, getUserSpendingRanking } = vi.hoisted(() => ({
+const {
+  getSnapshotV2,
+  getUserUsageTrend,
+  getUserSpendingRanking,
+  getCostTrend,
+  getModelStats,
+  getUsageTrend,
+  getUserBreakdown
+} = vi.hoisted(() => ({
   getSnapshotV2: vi.fn(),
   getUserUsageTrend: vi.fn(),
-  getUserSpendingRanking: vi.fn()
+  getUserSpendingRanking: vi.fn(),
+  getCostTrend: vi.fn(),
+  getModelStats: vi.fn(),
+  getUsageTrend: vi.fn(),
+  getUserBreakdown: vi.fn()
+}))
+
+vi.mock('@/api/admin/dashboard', () => ({
+  getCostTrend,
+  getModelStats,
+  getUsageTrend,
+  getUserBreakdown
 }))
 
 vi.mock('@/api/admin', () => ({
@@ -38,7 +57,8 @@ vi.mock('vue-i18n', async () => {
   return {
     ...actual,
     useI18n: () => ({
-      t: (key: string) => key
+      t: (key: string) => key,
+      locale: { value: 'en' }
     })
   }
 })
@@ -113,6 +133,11 @@ describe('admin DashboardView', () => {
       start_date: '',
       end_date: ''
     })
+    for (const fn of [getCostTrend, getModelStats, getUsageTrend, getUserBreakdown]) fn.mockReset()
+    getCostTrend.mockResolvedValue({ trend: [], start_date: '', end_date: '', granularity: 'hour' })
+    getModelStats.mockResolvedValue({ models: [], start_date: '', end_date: '' })
+    getUsageTrend.mockResolvedValue({ trend: [], start_date: '', end_date: '', granularity: 'hour' })
+    getUserBreakdown.mockResolvedValue({ users: [], start_date: '', end_date: '' })
   })
 
   it('uses last 24 hours as default dashboard range', async () => {
@@ -140,7 +165,38 @@ describe('admin DashboardView', () => {
     expect(getSnapshotV2).toHaveBeenCalledWith(expect.objectContaining({
       start_date: formatLocalDate(yesterday),
       end_date: formatLocalDate(now),
-      granularity: 'hour'
+      granularity: 'hour',
+      include_group_stats: true
     }))
+  })
+
+  it('loads today, cost, customer and heatmap data for the insight cards', async () => {
+    mount(DashboardView, {
+      global: {
+        stubs: {
+          AppLayout: { template: '<div><slot /></div>' },
+          Icon: true,
+          DateRangePicker: true,
+          ModelDistributionChart: true,
+          TokenUsageTrend: true,
+          RevenueProfitTrend: true,
+          GroupDistributionChart: true,
+          Line: true
+        }
+      }
+    })
+
+    await flushPromises()
+
+    const now = new Date()
+    const yesterday = new Date(now.getTime() - 24 * 60 * 60 * 1000)
+    const range = { start_date: formatLocalDate(yesterday), end_date: formatLocalDate(now) }
+
+    // Today's per-model card ignores the range filter
+    expect(getModelStats).toHaveBeenCalledWith({ start_date: formatLocalDate(now), end_date: formatLocalDate(now) })
+    expect(getCostTrend).toHaveBeenCalledWith({ ...range, granularity: 'hour' })
+    expect(getUserBreakdown).toHaveBeenCalledWith({ ...range, sort_by: 'actual_cost', limit: 15 })
+    // The hourly main trend already feeds the heatmap; no second hourly fetch
+    expect(getUsageTrend).not.toHaveBeenCalled()
   })
 })

@@ -15,6 +15,7 @@ var (
 	dashboardGroupStatsCache   = newSnapshotCache(30 * time.Second)
 	dashboardUsersTrendCache   = newSnapshotCache(30 * time.Second)
 	dashboardAPIKeysTrendCache = newSnapshotCache(30 * time.Second)
+	dashboardCostTrendCache    = newSnapshotCache(30 * time.Second)
 )
 
 type dashboardTrendCacheKey struct {
@@ -210,6 +211,22 @@ func (h *DashboardHandler) getAPIKeyUsageTrendCached(ctx context.Context, startT
 		return nil, hit, err
 	}
 	trend, err := snapshotPayloadAs[[]usagestats.APIKeyUsageTrendPoint](entry.Payload)
+	return trend, hit, err
+}
+
+func (h *DashboardHandler) getCostTrendCached(ctx context.Context, startTime, endTime time.Time, granularity string) ([]usagestats.CostTrendPoint, bool, error) {
+	key := mustMarshalDashboardCacheKey(dashboardEntityTrendCacheKey{
+		StartTime:   startTime.UTC().Format(time.RFC3339),
+		EndTime:     endTime.UTC().Format(time.RFC3339),
+		Granularity: granularity,
+	})
+	entry, hit, err := dashboardCostTrendCache.GetOrLoad(key, func() (any, error) {
+		return h.dashboardService.GetAdminCostTrend(ctx, startTime, endTime, granularity)
+	})
+	if err != nil {
+		return nil, hit, err
+	}
+	trend, err := snapshotPayloadAs[[]usagestats.CostTrendPoint](entry.Payload)
 	return trend, hit, err
 }
 

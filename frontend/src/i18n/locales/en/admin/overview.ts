@@ -103,7 +103,12 @@ export default {
         uptime: 'Up for {value}',
         uptimeDays: '{days}d {hours}h',
         uptimeHours: '{hours}h {minutes}m',
-        uptimeMinutes: '{minutes}m'
+        uptimeMinutes: '{minutes}m',
+        cacheHitToday: 'Cache hit rate today',
+        cacheHitBreakdown: 'Read {read} · Write {write}',
+        profitToday: 'Gross profit today',
+        profitBreakdown: 'Margin {margin}',
+        profitHint: 'Actual charges − account cost'
       },
       health: {
         title: 'Account health',
@@ -142,7 +147,80 @@ export default {
         total: 'Total',
         viewChart: 'Chart',
         viewTable: 'Table',
-        time: 'Time'
+        time: 'Time',
+        metricCacheRate: 'Cache hit rate',
+        chartType: 'Chart type',
+        viewBar: 'Bar chart',
+        viewLine: 'Line chart'
+      },
+      today: {
+        title: 'Today',
+        subtitle: 'Since midnight; not affected by the range below'
+      },
+      todayModels: {
+        title: 'Usage by model today',
+        subtitle: '{count} models used today',
+        sortBy: 'Sort by',
+        byRevenue: 'Spend',
+        byTokens: 'Tokens',
+        byRequests: 'Requests',
+        share: 'Share of {metric}',
+        model: 'Model',
+        requests: 'Requests',
+        tokens: 'Tokens',
+        cacheHit: 'Cache hit',
+        revenue: 'Actual',
+        accountCost: 'Account cost',
+        margin: 'Margin',
+        total: 'Total',
+        other: '{count} other models',
+        empty: 'No usage yet today'
+      },
+      heatmap: {
+        title: 'Usage heatmap',
+        subtitleDate: 'One cell per hour; darker means more usage',
+        subtitleWeekday: 'Average usage per hour, by day of week',
+        peak: 'Peak',
+        layout: 'Layout',
+        metric: 'Metric',
+        byDate: 'By date',
+        byWeekday: 'By weekday',
+        requests: 'Requests',
+        tokens: 'Tokens',
+        cost: 'Actual',
+        dailyAverage: 'Daily avg. {metric}',
+        less: 'Less',
+        more: 'More',
+        max: 'Max {value}',
+        truncated: 'Long range; showing the last {days} days'
+      },
+      revenue: {
+        title: 'Revenue and cost',
+        subtitle: 'Revenue is actual charges; cost is the upstream account cost',
+        margin: 'Margin',
+        revenue: 'Revenue',
+        accountCost: 'Account cost',
+        profit: 'Gross profit'
+      },
+      customers: {
+        title: 'Customer usage and spend',
+        subtitle: 'Top {count} customers in the selected range; click for details',
+        sortBy: 'Sort by',
+        byRevenue: 'Spend',
+        byTokens: 'Tokens',
+        byRequests: 'Requests',
+        customer: 'Customer',
+        revenueShare: 'Share of revenue',
+        requests: 'Requests',
+        tokens: 'Tokens',
+        cacheHit: 'Cache hit',
+        revenue: 'Actual',
+        accountCost: 'Account cost',
+        profit: 'Gross profit',
+        margin: 'Margin'
+      },
+      groupUsage: {
+        title: 'Usage by group'
       }
     },
 

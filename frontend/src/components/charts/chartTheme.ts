@@ -34,6 +34,15 @@ export const CATEGORICAL_DARK = [
   '#e66767'
 ] as const
 
+/**
+ * 热力图顺序色阶：单一青色，按数量由浅到深；深色模式翻转锚点（近零贴近深色底）。
+ * 已用 validate_palette.js --ordinal 校验：亮度单调、相邻 ΔL ≥ 0.06、色相单一。
+ * 最浅一档允许贴近底色（顺序色阶里近零值本应退后），所以不套用浅端 2:1 对比度；
+ * 无数据的格子用独立的灰色，数值始终可在提示框与数据表视图读到。
+ */
+export const HEAT_LIGHT = ['#99f6e4', '#2dd4bf', '#0d9488', '#0f766e', '#134e4a'] as const
+export const HEAT_DARK = ['#134e4a', '#0f766e', '#14b8a6', '#5eead4', '#ccfbf1'] as const
+
 /** 状态色：只表达好/坏，永不当作序列色；使用时必须配图标 + 文字。 */
 export const STATUS_COLORS = {
   good: '#0ca30c',
@@ -54,6 +63,9 @@ export interface ChartTheme {
   tick: string
   textPrimary: string
   textSecondary: string
+  /** 热力图顺序色阶（低 → 高）与无数据格子 */
+  heat: readonly string[]
+  heatEmpty: string
 }
 
 const LIGHT: ChartTheme = {
@@ -66,7 +78,9 @@ const LIGHT: ChartTheme = {
   axis: '#e5e7eb',
   tick: '#6b7280',
   textPrimary: '#111827',
-  textSecondary: '#4b5563'
+  textSecondary: '#4b5563',
+  heat: HEAT_LIGHT,
+  heatEmpty: '#eef2f6'
 }
 
 const DARK: ChartTheme = {
@@ -79,7 +93,9 @@ const DARK: ChartTheme = {
   axis: '#334155',
   tick: '#94a3b8',
   textPrimary: '#f8fafc',
-  textSecondary: '#cbd5e1'
+  textSecondary: '#cbd5e1',
+  heat: HEAT_DARK,
+  heatEmpty: '#1e293b'
 }
 
 export function useChartTheme() {
@@ -155,6 +171,23 @@ export function formatDurationMs(ms: unknown): string {
 
 export function formatPercent(ratio: unknown, digits = 1): string {
   return `${(toFinite(ratio) * 100).toFixed(digits)}%`
+}
+
+/**
+ * 缓存命中率：缓存读 ÷ (输入 + 缓存写 + 缓存读)。各平台写入用量日志时
+ * input_tokens 已扣除缓存读写，所以三者相加就是完整的提示词 token。
+ * 没有提示词 token 时返回 null（显示为“—”，不能当成 0%）。
+ */
+export function cacheHitRatio(input: unknown, cacheCreation: unknown, cacheRead: unknown): number | null {
+  const read = toFinite(cacheRead)
+  const prompt = toFinite(input) + toFinite(cacheCreation) + read
+  return prompt > 0 ? read / prompt : null
+}
+
+/** 毛利率：(营收 − 成本) ÷ 营收；没有营收时返回 null */
+export function marginRatio(revenue: unknown, cost: unknown): number | null {
+  const r = toFinite(revenue)
+  return r > 0 ? (r - toFinite(cost)) / r : null
 }
 
 // ==================== Chart.js 公共配置 ====================

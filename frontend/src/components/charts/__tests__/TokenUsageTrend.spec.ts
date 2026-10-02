@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from 'vitest'
+import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { mount } from '@vue/test-utils'
 
 import TokenUsageTrend from '../TokenUsageTrend.vue'
@@ -10,6 +10,8 @@ const messages: Record<string, string> = {
   'admin.dashboard.trend.metricCost': 'Cost',
   'admin.dashboard.trend.viewTable': 'Table',
   'admin.dashboard.trend.viewChart': 'Chart',
+  'admin.dashboard.trend.viewBar': 'Bar',
+  'admin.dashboard.trend.viewLine': 'Line',
 }
 
 vi.mock('vue-i18n', async () => {
@@ -25,7 +27,7 @@ vi.mock('vue-i18n', async () => {
 vi.mock('vue-chartjs', () => ({
   Bar: {
     props: ['data', 'options'],
-    template: '<div class="bar-chart"><span class="chart-data">{{ JSON.stringify(data) }}</span><span class="chart-scales">{{ Object.keys(options.scales).join(",") }}</span></div>',
+    template: '<div class="bar-chart"><span class="chart-data">{{ JSON.stringify(data) }}</span><span class="chart-scales">{{ Object.keys(options.scales).join(",") }}</span><span class="chart-stacked">{{ String(options.scales.y.stacked) }}</span></div>',
   },
   Line: {
     props: ['data', 'options'],
@@ -50,6 +52,10 @@ const mountTrend = (trendData: Array<ReturnType<typeof point>>) =>
   mount(TokenUsageTrend, { props: { trendData } })
 
 describe('TokenUsageTrend', () => {
+  beforeEach(() => {
+    window.localStorage.clear()
+  })
+
   it('calculates cache hit rate against all prompt tokens', () => {
     // Hit rate = 1500 / (500 + 1500 + 0) = 75%
     const wrapper = mountTrend([point()])
@@ -116,5 +122,55 @@ describe('TokenUsageTrend', () => {
     expect(rows).toHaveLength(2)
     expect(rows[0].text()).toContain('2026-05-08')
     expect(rows[0].text()).toContain('500')
+  })
+
+  it('offers a line chart for token composition without stacking', async () => {
+    const wrapper = mountTrend([point(), point({ date: '2026-05-09' })])
+    expect(wrapper.find('.bar-chart').exists()).toBe(true)
+
+    await wrapper.get('button[aria-label="Line"]').trigger('click')
+
+    expect(wrapper.find('.bar-chart').exists()).toBe(false)
+    const data = JSON.parse(wrapper.get('.line-chart .chart-data').text())
+    expect(data.datasets).toHaveLength(4)
+    expect(data.datasets[0].data).toEqual([1500, 1500])
+    expect(wrapper.get('.line-chart .chart-scales').text()).toBe('x,y')
+  })
+
+  it('keeps the chosen chart type across metrics and reloads', async () => {
+    const wrapper = mountTrend([point({ requests: 3, actual_cost: 0.2 }), point({ date: '2026-05-09', requests: 7, actual_cost: 0.3 })])
+    await wrapper.findAll('button').find((b) => b.text() === 'Requests')!.trigger('click')
+    // Requests default to a line until a chart type is chosen
+    expect(wrapper.find('.line-chart').exists()).toBe(true)
+
+    await wrapper.get('button[aria-label="Bar"]').trigger('click')
+    let data = JSON.parse(wrapper.get('.bar-chart .chart-data').text())
+    expect(data.datasets[0].data).toEqual([3, 7])
+    expect(window.localStorage.getItem('sub2api.usageTrend.chartType')).toBe('bar')
+
+    // Cost also defaults to a line; the explicit bar choice carries over
+    await wrapper.findAll('button').find((b) => b.text() === 'Cost')!.trigger('click')
+    expect(wrapper.find('.bar-chart').exists()).toBe(true)
+
+    await wrapper.get('button[aria-label="Line"]').trigger('click')
+    const reloaded = mountTrend([point(), point({ date: '2026-05-09' })])
+    // Tokens default to bars, but the saved line preference applies after a reload
+    expect(reloaded.find('.line-chart').exists()).toBe(true)
+    data = JSON.parse(reloaded.get('.line-chart .chart-data').text())
+    expect(data.datasets).toHaveLength(4)
+  })
+
+  it('draws cost bars side by side instead of stacking them', async () => {
+    const wrapper = mountTrend([point({ actual_cost: 0.2, cost: 0.4 })])
+    await wrapper.findAll('button').find((b) => b.text() === 'Cost')!.trigger('click')
+    await wrapper.get('button[aria-label="Bar"]').trigger('click')
+
+    expect(wrapper.get('.bar-chart .chart-stacked').text()).toBe('false')
+    const data = JSON.parse(wrapper.get('.bar-chart .chart-data').text())
+    expect(data.datasets.map((ds: { data: number[] }) => ds.data)).toEqual([[0.2], [0.4]])
+
+    // Token composition still stacks in bar mode
+    await wrapper.findAll('button').find((b) => b.text() === 'Tokens')!.trigger('click')
+    expect(wrapper.get('.bar-chart .chart-stacked').text()).toBe('true')
   })
 })

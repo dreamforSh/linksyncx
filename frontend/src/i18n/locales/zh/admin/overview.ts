@@ -103,7 +103,12 @@ export default {
         uptime: '服务已运行 {value}',
         uptimeDays: '{days} 天 {hours} 小时',
         uptimeHours: '{hours} 小时 {minutes} 分',
-        uptimeMinutes: '{minutes} 分钟'
+        uptimeMinutes: '{minutes} 分钟',
+        cacheHitToday: '今日缓存命中率',
+        cacheHitBreakdown: '缓存读 {read} · 缓存写 {write}',
+        profitToday: '今日毛利',
+        profitBreakdown: '毛利率 {margin}',
+        profitHint: '实际扣费 − 账号成本'
       },
       health: {
         title: '账号健康',
@@ -142,7 +147,80 @@ export default {
         total: '合计',
         viewChart: '图表',
         viewTable: '数据表',
-        time: '时间'
+        time: '时间',
+        metricCacheRate: '缓存命中率',
+        chartType: '图表类型',
+        viewBar: '柱状图',
+        viewLine: '曲线图'
+      },
+      today: {
+        title: '今日用量',
+        subtitle: '今天 0 点至今，不受下方时间范围影响'
+      },
+      todayModels: {
+        title: '今日各模型用量',
+        subtitle: '今日共 {count} 个模型产生用量',
+        sortBy: '排序方式',
+        byRevenue: '消费',
+        byTokens: 'Token',
+        byRequests: '请求',
+        share: '{metric}占比',
+        model: '模型',
+        requests: '请求',
+        tokens: 'Token',
+        cacheHit: '缓存命中',
+        revenue: '实际扣费',
+        accountCost: '账号成本',
+        margin: '毛利率',
+        total: '合计',
+        other: '其他 {count} 个模型',
+        empty: '今天还没有用量'
+      },
+      heatmap: {
+        title: '用量热力图',
+        subtitleDate: '每格一小时，颜色越深用量越大',
+        subtitleWeekday: '按星期几汇总的每小时日均用量',
+        peak: '高峰',
+        layout: '布局',
+        metric: '指标',
+        byDate: '按日期',
+        byWeekday: '按星期',
+        requests: '请求',
+        tokens: 'Token',
+        cost: '实际扣费',
+        dailyAverage: '日均{metric}',
+        less: '少',
+        more: '多',
+        max: '最高 {value}',
+        truncated: '时间范围较长，仅显示最近 {days} 天'
+      },
+      revenue: {
+        title: '营收与成本',
+        subtitle: '营收为实际扣费，成本为上游账号成本',
+        margin: '毛利率',
+        revenue: '营收',
+        accountCost: '账号成本',
+        profit: '毛利'
+      },
+      customers: {
+        title: '客户用量与消费',
+        subtitle: '所选时间范围内的前 {count} 位客户，点击查看明细',
+        sortBy: '排序方式',
+        byRevenue: '消费',
+        byTokens: 'Token',
+        byRequests: '请求',
+        customer: '客户',
+        revenueShare: '营收占比',
+        requests: '请求',
+        tokens: 'Token',
+        cacheHit: '缓存命中',
+        revenue: '实际扣费',
+        accountCost: '账号成本',
+        profit: '毛利',
+        margin: '毛利率'
+      },
+      groupUsage: {
+        title: '分组用量'
       }
     },
 

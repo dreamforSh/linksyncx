@@ -626,7 +626,9 @@ func (r *usageLogRepository) GetUserBreakdownStats(ctx context.Context, startTim
 			COALESCE(SUM(ul.input_tokens + ul.output_tokens + ul.cache_creation_tokens + ul.cache_read_tokens), 0) as total_tokens,
 			COALESCE(SUM(ul.total_cost), 0) as cost,
 			COALESCE(SUM(ul.actual_cost), 0) as actual_cost,
-			COALESCE(SUM(COALESCE(ul.account_stats_cost, ul.total_cost) * COALESCE(ul.account_rate_multiplier, 1)), 0) as account_cost
+			COALESCE(SUM(COALESCE(ul.account_stats_cost, ul.total_cost) * COALESCE(ul.account_rate_multiplier, 1)), 0) as account_cost,
+			COALESCE(SUM(ul.cache_creation_tokens), 0) as cache_creation_tokens,
+			COALESCE(SUM(ul.cache_read_tokens), 0) as cache_read_tokens
 		FROM usage_logs ul
 		LEFT JOIN users u ON u.id = ul.user_id
 		WHERE ul.created_at >= $1 AND ul.created_at < $2
@@ -676,7 +678,7 @@ func (r *usageLogRepository) GetUserBreakdownStats(ctx context.Context, startTim
 	// ORDER BY 列来自固定 allowlist(非用户原样字符串),避免 SQL 注入。
 	orderBy := "actual_cost"
 	switch dim.SortBy {
-	case "total_tokens", "input_tokens", "output_tokens", "cache_tokens", "requests", "cost", "actual_cost":
+	case "total_tokens", "input_tokens", "output_tokens", "cache_tokens", "requests", "cost", "actual_cost", "account_cost":
 		orderBy = dim.SortBy
 	}
 	query += " GROUP BY ul.user_id, u.email ORDER BY " + orderBy + " DESC"
@@ -709,7 +711,89 @@ func (r *usageLogRepository) GetUserBreakdownStats(ctx context.Context, startTim
 			&row.Cost,
 			&row.ActualCost,
 			&row.AccountCost,
+			&row.CacheCreationTokens,
+			&row.CacheReadTokens,
 		); err != nil {
+			return nil, err
+		}
+		results = append(results, row)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return results, nil
+}
+
+// GetAdminCostTrend returns revenue and account cost per hour or day for the
+// admin dashboard. It reads the pre-aggregated tables, like the unfiltered
+// usage trend, and falls back to usage_logs when they hold no rows for the
+// range (fresh install, or aggregation not caught up yet).
+func (r *usageLogRepository) GetAdminCostTrend(ctx context.Context, startTime, endTime time.Time, granularity string) ([]usagestats.CostTrendPoint, error) {
+	if granularity != "hour" {
+		granularity = "day"
+	}
+	dateFormat := safeDateFormat(granularity)
+	var aggregatedQuery string
+	if granularity == "hour" {
+		aggregatedQuery = fmt.Sprintf(`
+			SELECT
+				TO_CHAR(bucket_start, '%s') as date,
+				total_requests,
+				total_cost,
+				actual_cost,
+				account_cost
+			FROM usage_dashboard_hourly
+			WHERE bucket_start >= $1 AND bucket_start < $2
+			ORDER BY bucket_start ASC
+		`, dateFormat)
+	} else {
+		aggregatedQuery = fmt.Sprintf(`
+			SELECT
+				TO_CHAR(bucket_date::timestamp, '%s') as date,
+				total_requests,
+				total_cost,
+				actual_cost,
+				account_cost
+			FROM usage_dashboard_daily
+			WHERE bucket_date >= $1::date AND bucket_date < $2::date
+			ORDER BY bucket_date ASC
+		`, dateFormat)
+	}
+	if aggregated, err := r.queryCostTrend(ctx, aggregatedQuery, startTime, endTime); err == nil && len(aggregated) > 0 {
+		return aggregated, nil
+	}
+
+	rawQuery := fmt.Sprintf(`
+		SELECT
+			TO_CHAR(created_at, '%s') as date,
+			COUNT(*) as requests,
+			COALESCE(SUM(total_cost), 0) as cost,
+			COALESCE(SUM(actual_cost), 0) as actual_cost,
+			COALESCE(SUM(COALESCE(account_stats_cost, total_cost) * COALESCE(account_rate_multiplier, 1)), 0) as account_cost
+		FROM usage_logs
+		WHERE created_at >= $1 AND created_at < $2
+		GROUP BY date
+		ORDER BY date ASC
+	`, dateFormat)
+	return r.queryCostTrend(ctx, rawQuery, startTime, endTime)
+}
+
+func (r *usageLogRepository) queryCostTrend(ctx context.Context, query string, startTime, endTime time.Time) (results []usagestats.CostTrendPoint, err error) {
+	rows, err := r.sql.QueryContext(ctx, query, startTime, endTime)
+	if err != nil {
+		return nil, err
+	}
+	defer func() {
+		if closeErr := rows.Close(); closeErr != nil && err == nil {
+			err = closeErr
+			results = nil
+		}
+	}()
+
+	results = make([]usagestats.CostTrendPoint, 0)
+	for rows.Next() {
+		var row usagestats.CostTrendPoint
+		if err := rows.Scan(&row.Date, &row.Requests, &row.Cost, &row.ActualCost, &row.AccountCost); err != nil {
 			return nil, err
 		}
 		results = append(results, row)

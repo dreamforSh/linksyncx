@@ -22,10 +22,11 @@
           :aria-label="t('admin.dashboard.trend.title')"
         />
         <SegmentedControl
-          v-model="view"
+          :model-value="displayMode"
           size="sm"
-          :options="viewOptions"
-          :aria-label="t('admin.dashboard.trend.viewTable')"
+          :options="displayOptions"
+          :aria-label="t('admin.dashboard.trend.chartType')"
+          @update:model-value="setDisplayMode"
         />
       </div>
     </header>
@@ -42,7 +43,7 @@
         @click="toggleSeries(s.key)"
       >
         <span
-          :class="s.kind === 'line' ? 'h-[3px] w-3 rounded-full' : 'h-2.5 w-2.5 rounded-sm'"
+          :class="chartType === 'line' ? 'h-[3px] w-3 rounded-full' : 'h-2.5 w-2.5 rounded-sm'"
           :style="{ backgroundColor: s.color }"
           aria-hidden="true"
         />
@@ -67,7 +68,7 @@
           class="relative h-60 transition-opacity"
           :class="loading ? 'opacity-50' : ''"
         >
-          <Bar v-if="metric === 'tokens'" :data="barData" :options="barOptions" />
+          <Bar v-if="chartType === 'bar'" :data="barData" :options="barOptions" />
           <Line v-else :data="lineData" :options="lineOptions" />
         </div>
         <!-- 数据表视图：图表的无障碍等价形式 -->
@@ -128,6 +129,7 @@ import {
   formatPercent,
   formatUSD,
   formatUSDCompact,
+  cacheHitRatio,
   htmlTooltip,
   seriesColor,
   useChartTheme,
@@ -137,7 +139,7 @@ import {
 
 ChartJS.register(CategoryScale, LinearScale, BarElement, PointElement, LineElement, Tooltip, Filler)
 
-type Metric = 'tokens' | 'requests' | 'cost'
+type Metric = 'tokens' | 'requests' | 'cost' | 'cacheRate'
 
 const props = withDefaults(
   defineProps<{
@@ -145,11 +147,14 @@ const props = withDefaults(
     loading?: boolean
     title?: string
     defaultMetric?: Metric
+    /** 额外提供“缓存命中率”指标（管理端仪表板开启） */
+    enableCacheRate?: boolean
   }>(),
   {
     loading: false,
     title: '',
-    defaultMetric: 'tokens'
+    defaultMetric: 'tokens',
+    enableCacheRate: false
   }
 )
 
@@ -163,13 +168,47 @@ const hidden = ref<Set<string>>(new Set())
 const metricOptions = computed(() => [
   { value: 'tokens' as Metric, label: t('admin.dashboard.trend.metricTokens') },
   { value: 'requests' as Metric, label: t('admin.dashboard.trend.metricRequests') },
-  { value: 'cost' as Metric, label: t('admin.dashboard.trend.metricCost') }
+  { value: 'cost' as Metric, label: t('admin.dashboard.trend.metricCost') },
+  ...(props.enableCacheRate ? [{ value: 'cacheRate' as Metric, label: t('admin.dashboard.trend.metricCacheRate') }] : [])
 ])
 
-const viewOptions = computed(() => [
-  { value: 'chart' as const, icon: 'chart' as const, title: t('admin.dashboard.trend.viewChart') },
-  { value: 'table' as const, icon: 'document' as const, title: t('admin.dashboard.trend.viewTable') }
+type ChartType = 'bar' | 'line'
+type DisplayMode = ChartType | 'table'
+
+// 图表类型偏好：未选择时沿用各指标的默认（Token 用堆叠柱，其余用曲线）；
+// 选择后在切换指标时保持，并记在本地，刷新后仍生效。
+const CHART_TYPE_STORAGE_KEY = 'sub2api.usageTrend.chartType'
+const loadChartTypePref = (): ChartType | null => {
+  try {
+    const value = window.localStorage.getItem(CHART_TYPE_STORAGE_KEY)
+    return value === 'bar' || value === 'line' ? value : null
+  } catch {
+    return null
+  }
+}
+const chartTypePref = ref<ChartType | null>(loadChartTypePref())
+const chartType = computed<ChartType>(() => chartTypePref.value ?? (metric.value === 'tokens' ? 'bar' : 'line'))
+
+const displayMode = computed<DisplayMode>(() => (view.value === 'table' ? 'table' : chartType.value))
+const displayOptions = computed(() => [
+  { value: 'bar' as DisplayMode, icon: 'chartBar' as const, title: t('admin.dashboard.trend.viewBar') },
+  { value: 'line' as DisplayMode, icon: 'trendingUp' as const, title: t('admin.dashboard.trend.viewLine') },
+  { value: 'table' as DisplayMode, icon: 'document' as const, title: t('admin.dashboard.trend.viewTable') }
 ])
+
+function setDisplayMode(mode: DisplayMode) {
+  if (mode === 'table') {
+    view.value = 'table'
+    return
+  }
+  view.value = 'chart'
+  chartTypePref.value = mode
+  try {
+    window.localStorage.setItem(CHART_TYPE_STORAGE_KEY, mode)
+  } catch {
+    // 存储不可用（隐私模式等）时只在本次会话内生效
+  }
+}
 
 const hasData = computed(() => (props.trendData?.length ?? 0) > 0)
 
@@ -185,7 +224,6 @@ interface SeriesDef {
   key: string
   label: string
   color: string
-  kind: 'bar' | 'line'
   values: number[]
   totalText: string
 }
@@ -206,19 +244,24 @@ const series = computed<SeriesDef[]>(() => {
     ]
     return defs.map(([key, label, field], index) => {
       const values = data.map((p) => num(p[field]))
-      return { key, label, color: seriesColor(th, index), kind: 'bar' as const, values, totalText: formatCompact(sum(values)) }
+      return { key, label, color: seriesColor(th, index), values, totalText: formatCompact(sum(values)) }
     })
   }
   if (metric.value === 'requests') {
     const values = data.map((p) => num(p.requests))
-    return [{ key: 'requests', label: t('admin.dashboard.trend.requests'), color: th.accent, kind: 'line' as const, values, totalText: formatCompact(sum(values)) }]
+    return [{ key: 'requests', label: t('admin.dashboard.trend.requests'), color: th.accent, values, totalText: formatCompact(sum(values)) }]
+  }
+  if (metric.value === 'cacheRate') {
+    // 没有提示词 token 的时段记为 null，折线在此断开，而不是画成 0%
+    const values = data.map((p) => cacheHitRatio(p.input_tokens, p.cache_creation_tokens, p.cache_read_tokens) as number)
+    return [{ key: 'cacheRate', label: t('admin.dashboard.trend.cacheHitRate'), color: th.accent, values, totalText: cacheHitRateText.value }]
   }
   // 费用：实际扣费为主，标准计费作为灰色上下文（强调式，而非两种分类色）
   const actual = data.map((p) => num(p.actual_cost))
   const standard = data.map((p) => num(p.cost))
   return [
-    { key: 'actual', label: t('admin.dashboard.trend.actualCost'), color: th.accent, kind: 'line' as const, values: actual, totalText: formatUSD(sum(actual)) },
-    { key: 'standard', label: t('admin.dashboard.trend.standardCost'), color: th.muted, kind: 'line' as const, values: standard, totalText: formatUSD(sum(standard)) }
+    { key: 'actual', label: t('admin.dashboard.trend.actualCost'), color: th.accent, values: actual, totalText: formatUSD(sum(actual)) },
+    { key: 'standard', label: t('admin.dashboard.trend.standardCost'), color: th.muted, values: standard, totalText: formatUSD(sum(standard)) }
   ]
 })
 
@@ -231,12 +274,16 @@ function toggleSeries(key: string) {
   hidden.value = next
 }
 
-const formatValue = (value: number) => (metric.value === 'cost' ? formatUSD(value) : formatCompact(value))
+const formatValue = (value: number | null) => {
+  if (metric.value === 'cacheRate') return value === null || value === undefined ? '—' : formatPercent(value)
+  return metric.value === 'cost' ? formatUSD(value) : formatCompact(value)
+}
 
 const totalText = computed(() => {
   const data = props.trendData ?? []
   if (metric.value === 'tokens') return formatCompact(data.reduce((a, p) => a + (num(p.total_tokens) || tokenSum(p)), 0))
   if (metric.value === 'requests') return formatCompact(data.reduce((a, p) => a + num(p.requests), 0))
+  if (metric.value === 'cacheRate') return cacheHitRateText.value
   return formatUSD(data.reduce((a, p) => a + num(p.actual_cost), 0))
 })
 
@@ -285,7 +332,7 @@ const tooltipExternal = htmlTooltip((tooltip) => {
     color: s.color,
     label: s.label,
     value: formatValue(s.values[index]),
-    key: s.kind === 'bar' ? 'rect' : 'line'
+    key: chartType.value === 'bar' ? 'rect' : 'line'
   }))
   const footer: string[] = []
   if (metric.value === 'tokens') {
@@ -293,6 +340,9 @@ const tooltipExternal = htmlTooltip((tooltip) => {
     footer.push(`${t('admin.dashboard.trend.cacheHitRate')} ${formatPercent(cacheHitRate([point]))}`)
   } else if (metric.value === 'requests') {
     footer.push(`${t('admin.dashboard.trend.actualCost')} ${formatUSD(point.actual_cost)}`)
+  } else if (metric.value === 'cacheRate') {
+    footer.push(`${t('admin.dashboard.trend.cacheRead')} ${formatCompact(point.cache_read_tokens)}`)
+    footer.push(`${t('admin.dashboard.trend.input')} ${formatCompact(point.input_tokens)} · ${t('admin.dashboard.trend.cacheCreation')} ${formatCompact(point.cache_creation_tokens)}`)
   }
   return { title: point.date, rows, footer }
 })
@@ -324,9 +374,17 @@ const xAxis = computed(() => ({
   }
 }))
 
-// ==================== Token：堆叠柱 ====================
+// ==================== 柱状图：Token 构成堆叠，其余指标为单列或并列柱 ====================
+const stackedBars = computed(() => metric.value === 'tokens')
+
+const valueAxisFormat = computed<(v: number) => string>(() =>
+  metric.value === 'cost' ? formatUSDCompact : metric.value === 'cacheRate' ? (v: number) => formatPercent(v, 0) : formatCompact
+)
+
 const barData = computed(() => {
   const vis = visibleSeries.value
+  const stacked = stackedBars.value
+  const roundedTop = { topLeft: 4, topRight: 4, bottomLeft: 0, bottomRight: 0 }
   return {
     labels: labels.value,
     datasets: vis.map((s, i) => ({
@@ -334,14 +392,14 @@ const barData = computed(() => {
       data: s.values,
       backgroundColor: s.color,
       hoverBackgroundColor: s.color,
-      // 2px 底色间隙分隔堆叠段；只有最顶层的段做 4px 圆角
+      // 2px 底色间隙分隔堆叠段；堆叠时只有最顶层的段做 4px 圆角，并列柱每根都做
       borderColor: theme.value.surface,
-      borderWidth: { top: 2, right: 0, bottom: 0, left: 0 },
-      borderRadius: i === vis.length - 1 ? { topLeft: 4, topRight: 4, bottomLeft: 0, bottomRight: 0 } : 0,
+      borderWidth: stacked ? { top: 2, right: 0, bottom: 0, left: 0 } : 0,
+      borderRadius: !stacked || i === vis.length - 1 ? roundedTop : 0,
       borderSkipped: false as const,
       maxBarThickness: 24,
       categoryPercentage: 0.8,
-      barPercentage: 0.9
+      barPercentage: stacked ? 0.9 : 0.8
     }))
   }
 })
@@ -349,12 +407,17 @@ const barData = computed(() => {
 const barOptions = computed(() => ({
   ...baseOptions.value,
   scales: {
-    x: { ...xAxis.value, stacked: true },
-    y: { ...axisOptions(theme.value, { format: formatCompact }), stacked: true, beginAtZero: true }
+    x: { ...xAxis.value, stacked: stackedBars.value },
+    y: {
+      ...axisOptions(theme.value, { format: valueAxisFormat.value }),
+      stacked: stackedBars.value,
+      beginAtZero: true,
+      ...(metric.value === 'cacheRate' ? { max: 1 } : {})
+    }
   }
 }))
 
-// ==================== 请求 / 费用：折线 ====================
+// ==================== 曲线图：所有指标都可用；多序列共用一个数值轴，不堆叠 ====================
 const lineData = computed(() => ({
   labels: labels.value,
   datasets: visibleSeries.value.map((s, i) => ({
@@ -381,8 +444,9 @@ const lineOptions = computed(() => ({
   scales: {
     x: xAxis.value,
     y: {
-      ...axisOptions(theme.value, { format: metric.value === 'cost' ? formatUSDCompact : formatCompact }),
-      beginAtZero: true
+      ...axisOptions(theme.value, { format: valueAxisFormat.value }),
+      beginAtZero: true,
+      ...(metric.value === 'cacheRate' ? { max: 1 } : {})
     }
   }
 }))

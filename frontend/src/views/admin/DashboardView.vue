@@ -107,7 +107,7 @@
       </div>
 
       <!-- 次要指标 -->
-      <div class="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-4">
+      <div class="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3 2xl:grid-cols-6">
         <StatTile
           compact
           :label="t('admin.dashboard.apiKeys')"
@@ -160,7 +160,44 @@
         >
           <template v-if="stats && uptimeText">{{ t('admin.dashboard.kpi.uptime', { value: uptimeText }) }}</template>
         </StatTile>
+        <StatTile
+          compact
+          :label="t('admin.dashboard.kpi.cacheHitToday')"
+          icon="database"
+          :value="todayCacheHit === null ? '—' : formatPercent(todayCacheHit)"
+          :loading="loading && !stats"
+        >
+          <template v-if="stats">
+            {{ t('admin.dashboard.kpi.cacheHitBreakdown', {
+              read: formatCompact(stats.today_cache_read_tokens || 0),
+              write: formatCompact(stats.today_cache_creation_tokens || 0)
+            }) }}
+          </template>
+          <!-- 比率对 100% 的进度：同色系浅色轨道 -->
+          <template v-if="stats && todayCacheHit !== null" #footer>
+            <div class="h-1.5 overflow-hidden rounded-full bg-primary-100 dark:bg-primary-900/40" aria-hidden="true">
+              <div class="h-full rounded-full bg-primary-600 dark:bg-primary-500" :style="{ width: formatPercent(todayCacheHit) }" />
+            </div>
+          </template>
+        </StatTile>
+        <StatTile
+          compact
+          :label="t('admin.dashboard.kpi.profitToday')"
+          icon="dollar"
+          :value="stats ? formatUSD(todayProfit) : '—'"
+          :value-title="t('admin.dashboard.kpi.profitHint')"
+          :loading="loading && !stats"
+        >
+          <template v-if="stats">
+            {{ t('admin.dashboard.kpi.profitBreakdown', { margin: todayMargin === null ? '—' : formatPercent(todayMargin) }) }}
+            <span class="mx-1" aria-hidden="true">·</span>
+            {{ t('admin.dashboard.kpi.profitHint') }}
+          </template>
+        </StatTile>
       </div>
+
+      <!-- 今日各模型用量：固定看今天，放在时间筛选之上，不受其影响 -->
+      <TodayModelUsageCard :models="todayModels" :loading="todayModelsLoading" />
 
       <!-- 用量分析：筛选放在它所控制的图表正上方 -->
       <section class="space-y-4" :aria-label="t('admin.dashboard.analytics.title')">
@@ -194,7 +231,17 @@
           </div>
         </div>
 
-        <TokenUsageTrend :trend-data="trendData" :loading="chartsLoading" />
+        <TokenUsageTrend :trend-data="trendData" :loading="chartsLoading" enable-cache-rate />
+
+        <div class="grid grid-cols-1 gap-4 xl:grid-cols-2">
+          <RevenueProfitTrend :points="costTrendPoints" :loading="costTrendLoading" />
+          <UsageHeatmap
+            :points="heatmapPoints"
+            :start-date="startDate"
+            :end-date="endDate"
+            :loading="granularity === 'hour' ? chartsLoading : hourlyTrendLoading"
+          />
+        </div>
 
         <div class="grid grid-cols-1 gap-4 xl:grid-cols-2">
           <ModelDistributionChart
@@ -223,6 +270,35 @@
             </template>
           </TopUsersCard>
         </div>
+
+        <CustomerUsageTable
+          v-model:sort-by="customerSortBy"
+          :users="customers"
+          :total-revenue="rangeRevenue"
+          :loading="customersLoading"
+          :error="customersError"
+          @select="goToUserUsageById"
+          @update:sort-by="loadCustomers"
+        >
+          <template #actions>
+            <router-link
+              to="/admin/usage"
+              class="inline-flex items-center gap-1 text-xs font-medium text-primary-700 hover:text-primary-800 dark:text-primary-300 dark:hover:text-primary-200"
+            >
+              {{ t('admin.dashboard.topUsers.viewAll') }}
+              <Icon name="arrowRight" size="xs" class="h-3.5 w-3.5" :stroke-width="2" />
+            </router-link>
+          </template>
+        </CustomerUsageTable>
+
+        <GroupDistributionChart
+          v-model:metric="groupMetric"
+          :group-stats="groupStats"
+          :loading="chartsLoading"
+          :show-metric-toggle="true"
+          :start-date="startDate"
+          :end-date="endDate"
+        />
       </section>
     </div>
   </AppLayout>
@@ -238,12 +314,16 @@ import { useAuthStore } from '@/stores/auth'
 const { t } = useI18n()
 import { adminAPI } from '@/api/admin'
 import type {
+  CostTrendPoint,
   DashboardStats,
+  GroupStat,
   TrendDataPoint,
   ModelStat,
+  UserBreakdownItem,
   UserUsageTrendPoint,
   UserSpendingRankingItem
 } from '@/types'
+import { getCostTrend, getModelStats, getUsageTrend, getUserBreakdown } from '@/api/admin/dashboard'
 import AppLayout from '@/components/layout/AppLayout.vue'
 import Icon from '@/components/icons/Icon.vue'
 import DateRangePicker from '@/components/common/DateRangePicker.vue'
@@ -253,7 +333,19 @@ import ModelDistributionChart from '@/components/charts/ModelDistributionChart.v
 import TokenUsageTrend from '@/components/charts/TokenUsageTrend.vue'
 import AccountHealthMeter from '@/components/admin/dashboard/AccountHealthMeter.vue'
 import TopUsersCard from '@/components/admin/dashboard/TopUsersCard.vue'
-import { formatCompact, formatDurationMs, formatUSD } from '@/components/charts/chartTheme'
+import TodayModelUsageCard from '@/components/admin/dashboard/TodayModelUsageCard.vue'
+import UsageHeatmap from '@/components/admin/dashboard/UsageHeatmap.vue'
+import RevenueProfitTrend from '@/components/admin/dashboard/RevenueProfitTrend.vue'
+import CustomerUsageTable from '@/components/admin/dashboard/CustomerUsageTable.vue'
+import GroupDistributionChart from '@/components/charts/GroupDistributionChart.vue'
+import {
+  cacheHitRatio,
+  formatCompact,
+  formatDurationMs,
+  formatPercent,
+  formatUSD,
+  marginRatio
+} from '@/components/charts/chartTheme'
 import { useBatchImageAccess } from '@/composables/useBatchImageAccess'
 
 const appStore = useAppStore()
@@ -275,10 +367,26 @@ const rankingItems = ref<UserSpendingRankingItem[]>([])
 const rankingTotalActualCost = ref(0)
 const rankingTotalRequests = ref(0)
 const rankingTotalTokens = ref(0)
+const groupStats = ref<GroupStat[]>([])
+const groupMetric = ref<'tokens' | 'actual_cost'>('actual_cost')
+const todayModels = ref<ModelStat[]>([])
+const todayModelsLoading = ref(false)
+const costTrendPoints = ref<CostTrendPoint[]>([])
+const costTrendLoading = ref(false)
+const hourlyTrend = ref<TrendDataPoint[]>([])
+const hourlyTrendLoading = ref(false)
+const customers = ref<UserBreakdownItem[]>([])
+const customersLoading = ref(false)
+const customersError = ref(false)
+const customerSortBy = ref<'actual_cost' | 'total_tokens' | 'requests'>('actual_cost')
 let chartLoadSeq = 0
 let usersTrendLoadSeq = 0
 let rankingLoadSeq = 0
+let costTrendLoadSeq = 0
+let hourlyTrendLoadSeq = 0
+let customersLoadSeq = 0
 const rankingLimit = 12
+const customersLimit = 15
 
 // Helper function to format date in local timezone
 const formatLocalDate = (date: Date): string => {
@@ -331,6 +439,19 @@ const updatedAtText = computed(() => {
 const requestsTrend = computed(() => trendData.value.map((p) => p.requests))
 const tokensTrend = computed(() => trendData.value.map((p) => p.total_tokens))
 const costTrend = computed(() => trendData.value.map((p) => p.actual_cost))
+
+// 今日缓存命中率与毛利：口径与图表一致（缓存读 ÷ 全部提示词 token；实际扣费 − 账号成本）
+const todayCacheHit = computed(() =>
+  stats.value
+    ? cacheHitRatio(stats.value.today_input_tokens, stats.value.today_cache_creation_tokens, stats.value.today_cache_read_tokens)
+    : null
+)
+const todayProfit = computed(() => toFiniteNumber(stats.value?.today_actual_cost) - toFiniteNumber(stats.value?.today_account_cost))
+const todayMargin = computed(() => marginRatio(stats.value?.today_actual_cost, stats.value?.today_account_cost))
+
+// 热力图要小时粒度：主图已是小时粒度时直接复用，否则单独拉一份
+const heatmapPoints = computed(() => (granularity.value === 'hour' ? trendData.value : hourlyTrend.value))
+const rangeRevenue = computed(() => costTrendPoints.value.reduce((acc, p) => acc + toFiniteNumber(p.actual_cost), 0))
 
 const activeUserShare = computed(() => {
   const total = stats.value?.total_users ?? 0
@@ -408,7 +529,7 @@ const loadDashboardSnapshot = async (includeStats: boolean) => {
       include_stats: includeStats,
       include_trend: true,
       include_model_stats: true,
-      include_group_stats: false,
+      include_group_stats: true,
       include_users_trend: false
     })
     if (currentSeq !== chartLoadSeq) return
@@ -417,6 +538,7 @@ const loadDashboardSnapshot = async (includeStats: boolean) => {
     }
     trendData.value = response.trend || []
     modelStats.value = response.models || []
+    groupStats.value = response.groups || []
   } catch (error) {
     if (currentSeq !== chartLoadSeq) return
     appStore.showError(t('admin.dashboard.failedToLoad'))
@@ -482,20 +604,97 @@ const loadUserSpendingRanking = async () => {
   }
 }
 
+const loadTodayModels = async () => {
+  todayModelsLoading.value = true
+  try {
+    const today = formatLocalDate(new Date())
+    const response = await getModelStats({ start_date: today, end_date: today })
+    todayModels.value = response.models || []
+  } catch (error) {
+    console.error('Error loading today model stats:', error)
+  } finally {
+    todayModelsLoading.value = false
+  }
+}
+
+const loadCostTrend = async () => {
+  const currentSeq = ++costTrendLoadSeq
+  costTrendLoading.value = true
+  try {
+    const response = await getCostTrend({
+      start_date: startDate.value,
+      end_date: endDate.value,
+      granularity: granularity.value
+    })
+    if (currentSeq !== costTrendLoadSeq) return
+    costTrendPoints.value = response.trend || []
+  } catch (error) {
+    if (currentSeq !== costTrendLoadSeq) return
+    console.error('Error loading cost trend:', error)
+    costTrendPoints.value = []
+  } finally {
+    if (currentSeq === costTrendLoadSeq) costTrendLoading.value = false
+  }
+}
+
+const loadHourlyTrend = async () => {
+  const currentSeq = ++hourlyTrendLoadSeq
+  if (granularity.value === 'hour') {
+    hourlyTrend.value = []
+    hourlyTrendLoading.value = false
+    return
+  }
+  hourlyTrendLoading.value = true
+  try {
+    const response = await getUsageTrend({ start_date: startDate.value, end_date: endDate.value, granularity: 'hour' })
+    if (currentSeq !== hourlyTrendLoadSeq) return
+    hourlyTrend.value = response.trend || []
+  } catch (error) {
+    if (currentSeq !== hourlyTrendLoadSeq) return
+    console.error('Error loading hourly trend:', error)
+    hourlyTrend.value = []
+  } finally {
+    if (currentSeq === hourlyTrendLoadSeq) hourlyTrendLoading.value = false
+  }
+}
+
+const loadCustomers = async () => {
+  const currentSeq = ++customersLoadSeq
+  customersLoading.value = true
+  customersError.value = false
+  try {
+    const response = await getUserBreakdown({
+      start_date: startDate.value,
+      end_date: endDate.value,
+      sort_by: customerSortBy.value,
+      limit: customersLimit
+    })
+    if (currentSeq !== customersLoadSeq) return
+    customers.value = response.users || []
+  } catch (error) {
+    if (currentSeq !== customersLoadSeq) return
+    console.error('Error loading customer usage:', error)
+    customers.value = []
+    customersError.value = true
+  } finally {
+    if (currentSeq === customersLoadSeq) customersLoading.value = false
+  }
+}
+
+const loadRangeData = () => [
+  loadUsersTrend(),
+  loadUserSpendingRanking(),
+  loadCostTrend(),
+  loadHourlyTrend(),
+  loadCustomers()
+]
+
 const loadDashboardStats = async () => {
-  await Promise.all([
-    loadDashboardSnapshot(true),
-    loadUsersTrend(),
-    loadUserSpendingRanking()
-  ])
+  await Promise.all([loadDashboardSnapshot(true), loadTodayModels(), ...loadRangeData()])
 }
 
 const loadChartData = async () => {
-  await Promise.all([
-    loadDashboardSnapshot(false),
-    loadUsersTrend(),
-    loadUserSpendingRanking()
-  ])
+  await Promise.all([loadDashboardSnapshot(false), ...loadRangeData()])
 }
 
 onMounted(() => {

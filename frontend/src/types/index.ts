@@ -2373,6 +2373,17 @@ export interface UserBreakdownItem {
   cost: number
   actual_cost: number
   account_cost: number
+  cache_creation_tokens?: number
+  cache_read_tokens?: number
+}
+
+/** 管理端营收/成本趋势点：account_cost 是上游账号成本，仅管理端接口返回 */
+export interface CostTrendPoint {
+  date: string
+  requests: number
+  cost: number // 标准计费
+  actual_cost: number // 实际扣除（营收）
+  account_cost: number // 账号成本
 }
 
 export interface UserUsageTrendPoint {

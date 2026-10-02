@@ -288,6 +288,32 @@ func (h *DashboardHandler) GetUsageTrend(c *gin.Context) {
 	})
 }
 
+// GetCostTrend returns revenue, standard cost and account cost per bucket.
+// GET /api/v1/admin/dashboard/cost-trend
+// Query params: start_date, end_date (YYYY-MM-DD), granularity (day/hour)
+func (h *DashboardHandler) GetCostTrend(c *gin.Context) {
+	startTime, endTime := parseTimeRange(c)
+	granularity := c.DefaultQuery("granularity", "day")
+	if granularity != "day" && granularity != "hour" {
+		response.BadRequest(c, "Invalid granularity, use day or hour")
+		return
+	}
+
+	trend, hit, err := h.getCostTrendCached(c.Request.Context(), startTime, endTime, granularity)
+	if err != nil {
+		response.Error(c, 500, "Failed to get cost trend")
+		return
+	}
+	c.Header("X-Snapshot-Cache", cacheStatusValue(hit))
+
+	response.Success(c, gin.H{
+		"trend":       trend,
+		"start_date":  startTime.Format("2006-01-02"),
+		"end_date":    endTime.Add(-24 * time.Hour).Format("2006-01-02"),
+		"granularity": granularity,
+	})
+}
+
 // GetModelStats handles getting model usage statistics
 // GET /api/v1/admin/dashboard/models
 // Query params: start_date, end_date (YYYY-MM-DD), user_id, api_key_id, account_id, group_id, request_type, stream, billing_type
