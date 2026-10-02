@@ -14,6 +14,7 @@ import (
 
 	"github.com/Wei-Shaw/sub2api/internal/config"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/apicompat"
+	"github.com/Wei-Shaw/sub2api/internal/pkg/xai"
 	"github.com/gin-gonic/gin"
 	"github.com/tidwall/gjson"
 )
@@ -1020,7 +1021,7 @@ func resolveGrokWSUpstreamModel(account *Account, body []byte, originalModel str
 		}
 	}
 	if upstreamModel == "" {
-		upstreamModel = grokDefaultResponsesModel
+		upstreamModel = xai.RuntimeDefaultTextModel()
 	}
 	return upstreamModel
 }

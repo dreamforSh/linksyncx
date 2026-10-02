@@ -3,12 +3,74 @@ package service
 import (
 	"context"
 	"encoding/json"
+	"log/slog"
 	"net/http"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"github.com/tidwall/gjson"
+
+	"github.com/Wei-Shaw/sub2api/internal/pkg/xai"
 )
+
+// grokCLIVersionOutdatedOpsKind tags ops error events for the CLI proxy's 426.
+const grokCLIVersionOutdatedOpsKind = "client_version_outdated"
+
+// grokCLIVersionRejectionLogInterval throttles the operator log line. Every
+// OAuth request fails the same way until the pin moves, so one line per
+// interval is enough to page on.
+const grokCLIVersionRejectionLogInterval = time.Minute
+
+var grokCLIVersionRejectionLastLog atomic.Int64
+
+// isGrokCLIVersionRejection reports whether xAI's CLI proxy refused the
+// gateway's advertised Grok CLI version (HTTP 426). That is an operator
+// problem shared by every OAuth account, not an account failure: callers must
+// not cool down, disable or fail over the account.
+func isGrokCLIVersionRejection(statusCode int, responseBody []byte) bool {
+	_, ok := xai.ParseCLIVersionRejection(statusCode, responseBody)
+	return ok
+}
+
+// logGrokCLIVersionRejection emits a searchable operator line naming the
+// version the proxy now requires and how to override the pin without a release.
+func logGrokCLIVersionRejection(account *Account, statusCode int, responseBody []byte) {
+	rejection, ok := xai.ParseCLIVersionRejection(statusCode, responseBody)
+	if !ok {
+		return
+	}
+	now := time.Now().UnixNano()
+	last := grokCLIVersionRejectionLastLog.Load()
+	if now-last < int64(grokCLIVersionRejectionLogInterval) || !grokCLIVersionRejectionLastLog.CompareAndSwap(last, now) {
+		return
+	}
+	var accountID int64
+	if account != nil {
+		accountID = account.ID
+	}
+	slog.Error("grok_cli_version_outdated",
+		"account_id", accountID,
+		"advertised_version", firstNonEmpty(rejection.Advertised, xai.ResolveCLIVersion()),
+		"required_version", rejection.Required,
+		"remedy", "set "+xai.CLIVersionEnv+" to the version at https://x.ai/cli/stable and restart, or upgrade the gateway",
+	)
+}
+
+// grokCLIVersionRejectionHint is the operator hint appended to account-test
+// errors for the CLI proxy's 426.
+func grokCLIVersionRejectionHint(statusCode int, responseBody []byte) string {
+	rejection, ok := xai.ParseCLIVersionRejection(statusCode, responseBody)
+	if !ok {
+		return ""
+	}
+	required := "a newer version"
+	if rejection.Required != "" {
+		required = rejection.Required + " or later"
+	}
+	return " (the gateway advertises Grok CLI " + firstNonEmpty(rejection.Advertised, xai.ResolveCLIVersion()) +
+		"; xAI requires " + required + ". Set " + xai.CLIVersionEnv + " to the version at https://x.ai/cli/stable or upgrade the gateway)"
+}
 
 // isGrokContentPolicyRejection identifies request-scoped safety refusals from
 // xAI. These failures are caused by the prompt or media, so retrying another
@@ -199,6 +261,11 @@ func grokContentPolicyClientMessage(responseBody []byte) string {
 // status alone would not (e.g. 400 with free-usage-exhausted).
 func (s *OpenAIGatewayService) shouldFailoverGrokUpstreamError(statusCode int, responseBody []byte) bool {
 	if isGrokContentPolicyRejection(statusCode, responseBody) {
+		return false
+	}
+	// Every account advertises the same client version, so another account
+	// would get the same 426.
+	if isGrokCLIVersionRejection(statusCode, responseBody) {
 		return false
 	}
 	// A 422 emitted by xAI's ModelInput decoder is account/runtime compatibility,

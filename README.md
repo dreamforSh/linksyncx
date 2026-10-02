@@ -769,7 +769,9 @@ The Grok OAuth flow uses PKCE and does not require committing private secrets. T
 | `XAI_OAUTH_AUTHORIZE_URL` | `https://auth.x.ai/oauth2/authorize` |
 | `XAI_OAUTH_TOKEN_URL` | `https://auth.x.ai/oauth2/token` |
 | `XAI_BASE_URL` | `https://api.x.ai/v1`; runtime-diagnostics override (account `base_url` controls request forwarding) |
-| `XAI_GROK_CLI_VERSION` | `0.2.114`; optional override for the client identity sent to `cli-chat-proxy.grok.com`. The pinned value is also the floor: an override below it is dropped |
+| `XAI_GROK_CLI_VERSION` | Unset by default (the binary pins Grok Build `1.0.46`); optional override for the client version sent to `cli-chat-proxy.grok.com`. Overrides below the proxy's floor (`1.0.13`) or that are not plain semver are ignored |
+
+xAI raises the lowest Grok CLI version that `cli-chat-proxy.grok.com` accepts without notice. Below it, the proxy answers inference with HTTP 426 ("Your Grok CLI version (…) is outdated") while `/v1/models` keeps working. The gateway logs `grok_cli_version_outdated` with the required version and does not cool down or disable accounts for it. To recover without a release, set `XAI_GROK_CLI_VERSION` to the current stable version from `https://x.ai/cli/stable` and restart.
 
 Administrators can create Grok OAuth or API-key accounts from the dashboard. OAuth authorization and reauthorization are also available through the admin API:
 

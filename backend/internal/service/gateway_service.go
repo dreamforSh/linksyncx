@@ -1351,7 +1351,11 @@ func (s *GatewayService) DoGrokNativeResponsesJSON(ctx context.Context, account 
 	upstreamReq.Header.Set("Content-Type", "application/json")
 	upstreamReq.Header.Set("Accept", "application/json")
 	upstreamReq.Header.Set("User-Agent", defaultGrokUpstreamUserAgent())
-	applyGrokCLIHeaders(upstreamReq.Header)
+	if account.IsGrokOAuth() {
+		applyGrokCLISamplerHeaders(upstreamReq.Header, account, gjson.GetBytes(body, "model").String(), "")
+	} else {
+		applyGrokCLIHeaders(upstreamReq.Header)
+	}
 	account.ApplyHeaderOverrides(upstreamReq.Header)
 	proxyURL, proxyErr := account.ProxyURLForOutbound()
 	if proxyErr != nil {

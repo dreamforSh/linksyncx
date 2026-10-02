@@ -96,6 +96,12 @@ func (s *OpenAIGatewayService) handleOpenAIAccountUpstreamError(ctx context.Cont
 	if account != nil && account.Platform == PlatformGrok && isGrokContentPolicyRejection(statusCode, responseBody) {
 		return false
 	}
+	// A 426 from the Grok CLI proxy rejects the gateway's client version, which
+	// every account shares; it says nothing about this account.
+	if account != nil && account.Platform == PlatformGrok && isGrokCLIVersionRejection(statusCode, responseBody) {
+		logGrokCLIVersionRejection(account, statusCode, responseBody)
+		return false
+	}
 	// Any non-2xx upstream HTTP response means the model request was actually sent.
 	if s != nil {
 		scheduleOllamaCloudUsageActivity(s.deferredService, account)

@@ -1,0 +1,35 @@
+name: Grok CLI version check
+
+# xAI raises the lowest Grok CLI version cli-chat-proxy.grok.com accepts
+# without notice; below it every OAuth inference request fails with HTTP 426.
+# This job fails when the pinned CLIClientVersion falls behind the published
+# stable release, so the bump lands before the floor moves past the pin.
+# Until a release ships, operators can set XAI_GROK_CLI_VERSION instead.
+
+on:
+  schedule:
+    - cron: "17 3 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - name: Compare pinned version with https://x.ai/cli/stable
+        run: |
+          set -eu
+          pinned=$(sed -n 's/^[[:space:]]*CLIClientVersion = "\(.*\)"$/\1/p' backend/internal/pkg/xai/billing.go)
+          stable=$(curl -fsS --retry 3 --max-time 20 https://x.ai/cli/stable | tr -d '[:space:]')
+          echo "pinned=${pinned} stable=${stable}"
+          if [ -z "${pinned}" ] || [ -z "${stable}" ]; then
+            echo "::error::could not read the pinned or the stable Grok CLI version"
+            exit 1
+          fi
+          if [ "${pinned}" != "${stable}" ]; then
+            echo "::error::Grok CLI pin ${pinned} differs from stable ${stable}; bump CLIClientVersion in backend/internal/pkg/xai/billing.go"
+            exit 1
+          fi

@@ -448,6 +448,9 @@ gateway:
   # Grok free-tier local soft gate (scheduler filter only; admin QueryQuota/import probe bypasses it).
   # Enabled by default because free detection requires an explicit subscription_tier/plan_type of "free".
   # Stats/query failures fail open so DB issues do not block all Grok traffic.
+  # The Grok CLI client version advertised to cli-chat-proxy.grok.com is not a
+  # config key: set the XAI_GROK_CLI_VERSION environment variable (see
+  # https://x.ai/cli/stable) when the proxy starts answering HTTP 426.
   grok:
     # Email/password OAuth is off by default and hidden in the admin UI.
     # Setting true enables POST /admin/grok/oauth/password (password → SSO → Build OAuth).

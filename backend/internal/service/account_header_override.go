@@ -30,7 +30,8 @@ const (
 //   - accept-encoding：强制压缩会破坏网关对上游流式响应（SSE/usage）的解析；
 //   - sec-websocket-*：WebSocket 握手头由拨号器管理（OpenAI WS 模式）；
 //   - session_id/x-claude-code-session-id/x-grok-conv-id 等：逐请求会话隔离头，
-//     固定值会造成会话串扰。
+//     固定值会造成会话串扰；Grok 的 x-grok-req-id/x-grok-session-id/x-grok-conv-group-id
+//     同理（由 x-grok-conv-id 逐请求派生）。
 var headerOverrideBlockedNames = map[string]struct{}{
 	"host":                     {},
 	"content-length":           {},
@@ -62,6 +63,9 @@ var headerOverrideBlockedNames = map[string]struct{}{
 	"x-claude-code-session-id": {},
 	"x-client-request-id":      {},
 	"x-grok-conv-id":           {},
+	"x-grok-req-id":            {},
+	"x-grok-session-id":        {},
+	"x-grok-conv-group-id":     {},
 }
 
 func isHeaderOverrideBlockedName(lowerName string) bool {

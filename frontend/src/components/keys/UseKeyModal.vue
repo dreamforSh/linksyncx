@@ -843,12 +843,12 @@ function generateGrokClaudeFiles(baseUrl: string, apiKey: string): FileConfig[] 
   const environment = {
     ANTHROPIC_BASE_URL: baseUrl,
     ANTHROPIC_AUTH_TOKEN: apiKey,
-    ANTHROPIC_MODEL: 'grok-4.5',
-    ANTHROPIC_DEFAULT_OPUS_MODEL: 'grok-4.5',
-    ANTHROPIC_DEFAULT_SONNET_MODEL: 'grok-4.5',
-    ANTHROPIC_DEFAULT_HAIKU_MODEL: 'grok-4.5',
-    ANTHROPIC_DEFAULT_FABLE_MODEL: 'grok-4.5',
-    CLAUDE_CODE_SUBAGENT_MODEL: 'grok-4.5',
+    ANTHROPIC_MODEL: 'grok-4.6',
+    ANTHROPIC_DEFAULT_OPUS_MODEL: 'grok-4.6',
+    ANTHROPIC_DEFAULT_SONNET_MODEL: 'grok-4.6',
+    ANTHROPIC_DEFAULT_HAIKU_MODEL: 'grok-4.6',
+    ANTHROPIC_DEFAULT_FABLE_MODEL: 'grok-4.6',
+    CLAUDE_CODE_SUBAGENT_MODEL: 'grok-4.6',
     CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: '1'
   }
   let path: string
@@ -1064,10 +1064,10 @@ cli_chat_proxy_base_url = "${baseUrl}"      # CLI chat-proxy base (env: GROK_CLI
 [auth]
 preferred_method = "api_key"
 
-[model."grok-4.5"]
-model = "grok-4.5"                          # id sent to the API
-name = "Grok 4.5"                           # shown in /model picker
-description = "Grok 4.5 via Sub2API (Responses)"
+[model."grok-4.6"]
+model = "grok-4.6"                          # id sent to the API
+name = "Grok 4.6"                           # shown in /model picker
+description = "Grok 4.6 via Sub2API (Responses)"
 # base_url inherits from [endpoints].models_base_url; override only if needed:
 # base_url = "${baseUrl}"
 env_key = "XAI_API_KEY"                     # or: api_key = "${apiKey}"  (not recommended)
@@ -1078,6 +1078,14 @@ context_window = 500000                     # drives auto-compaction timing
 # top_p = 0.95
 # max_completion_tokens = 8192
 # Server-side (backend) web_search tools — only if your gateway exposes them:
+supports_backend_search = true
+
+[model."grok-4.5"]
+model = "grok-4.5"
+name = "Grok 4.5"
+env_key = "XAI_API_KEY"
+api_backend = "responses"
+context_window = 500000
 supports_backend_search = true
 
 [model."grok-build-0.1"]
@@ -1109,7 +1117,7 @@ supports_backend_search = true
 
 # Optional short alias for /model grok:
 # [model."grok"]
-# model = "grok-4.5"
+# model = "grok-4.6"
 # name = "Grok"
 # env_key = "XAI_API_KEY"
 # api_backend = "responses"
@@ -1117,10 +1125,10 @@ supports_backend_search = true
 # supports_backend_search = true
 
 [models]
-# xAI recommends grok-build* for coding/agent sessions; use grok-4.5 for general chat.
-default = "grok-4.5"
-web_search = "grok-4.5"                     # client-side web_search tool model (must exist as [model.*])
-image_description = "grok-4.5"              # vision/describe-image helper model
+# xAI recommends grok-build* for coding/agent sessions; use grok-4.6 for general chat.
+default = "grok-4.6"
+web_search = "grok-4.6"                     # client-side web_search tool model (must exist as [model.*])
+image_description = "grok-4.6"              # vision/describe-image helper model
 # Optional environment-wide sampling defaults (per-model values win):
 # temperature = 0.7
 # top_p = 0.95
@@ -1158,7 +1166,7 @@ function generateGrokCodexFiles(baseUrl: string, apiKey: string): FileConfig[] {
   const shell = activeTab.value
   const isWindowsPath = shell === 'windows' || shell === 'cmd' || shell === 'powershell'
   const configDir = isWindowsPath ? '%userprofile%\\.codex' : '~/.codex'
-  const model = selectCodexCatalogModel('grok-4.5')
+  const model = selectCodexCatalogModel('grok-4.6')
 
   let envPath: string
   let envContent: string
@@ -1181,7 +1189,7 @@ function generateGrokCodexFiles(baseUrl: string, apiKey: string): FileConfig[] {
 # Docs: Codex config reference (model_providers.*, wire_api = "responses")
 #
 # Text models only. Image/video: grok-imagine-image / grok-imagine-video on media endpoints.
-# Switch model: grok-4.5 | grok-4.3 | grok-build-0.1 | grok-4.20-multi-agent-0309 (text / web_search)
+# Switch model: grok-4.6 | grok-4.5 | grok-4.3 | grok-build-0.1 | grok-4.20-multi-agent-0309 (text / web_search)
 
 model_provider = "sub2api"
 model = "${model}"
@@ -1233,7 +1241,7 @@ function generateRoutedCodexFiles(
     anthropic: 'claude-sonnet-4-6',
     gemini: 'gemini-2.5-pro',
     antigravity: 'claude-sonnet-4-6',
-    grok: 'grok-4.5',
+    grok: 'grok-4.6',
     kimi: 'kimi-k2.5',
     zhipu: 'glm-4.7',
     deepseek: 'deepseek-v4-pro',
@@ -1870,6 +1878,10 @@ function generateOpenCodeConfig(platform: string, baseUrl: string, apiKey: strin
   // Align context_window with Grok Build official sample (docs.x.ai/build/settings) where known.
   // Image/video: grok-imagine-image / grok-imagine-video on media endpoints — not this list.
   const grokModels = {
+    'grok-4.6': {
+      name: 'Grok 4.6',
+      limit: { context: 500000, output: 64000 }
+    },
     'grok-4.5': {
       name: 'Grok 4.5',
       limit: { context: 500000, output: 64000 }

@@ -21,7 +21,7 @@ import (
 const (
 	grokQuotaUpstreamTimeout = 20 * time.Second
 	grokQuotaProbeInput      = "hi"
-	grokQuotaDefaultModel    = grokDefaultResponsesModel
+	grokQuotaDefaultModel    = grokPlanSignalModel
 	grokBillingExtraKey      = "grok_billing_snapshot"
 	grokBillingMaxAttempts   = 2
 	grokBillingRetryDelay    = 100 * time.Millisecond
@@ -169,7 +169,7 @@ func (s *GrokQuotaService) probeUsage(ctx context.Context, accountID int64) (*Gr
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Accept", "application/json, text/event-stream")
 	if account.IsGrokOAuth() {
-		applyGrokCLIHeaders(req.Header)
+		applyGrokCLISamplerHeaders(req.Header, account, probeModel, "")
 	}
 	// 探测请求与真实转发保持同一套账号级请求头覆写，避免探测通过但转发失败。
 	account.ApplyHeaderOverrides(req.Header)

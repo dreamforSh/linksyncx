@@ -1667,7 +1667,7 @@ func TestProxyOpenAIWSHTTPBridgeTurnForGrokDefaultsEmptyModelTo45(t *testing.T) 
 
 	require.NoError(t, err)
 	require.NotNil(t, result)
-	require.Equal(t, grokDefaultResponsesModel, gjson.GetBytes(upstream.lastBody, "model").String())
+	require.Equal(t, xai.RuntimeDefaultTextModel(), gjson.GetBytes(upstream.lastBody, "model").String())
 	require.Len(t, events, 2)
 }
 
@@ -1897,7 +1897,7 @@ func TestProxyResponsesWebSocketFromClientForGrokUsesXAIHTTPBridgeAndPreservesMa
 	require.Equal(t, xai.DefaultCLIBaseURL+"/responses", upstream.lastReq.URL.String())
 	require.Equal(t, "Bearer access-token", upstream.lastReq.Header.Get("Authorization"))
 	require.Equal(t, xai.CLIUserAgent(xai.CLIClientVersion), upstream.lastReq.Header.Get("User-Agent"))
-	require.Equal(t, grokCLIVersion, upstream.lastReq.Header.Get("X-Grok-Client-Version"))
+	require.Equal(t, xai.CLIClientVersion, upstream.lastReq.Header.Get("X-Grok-Client-Version"))
 	require.Equal(t, "grok-4.6", gjson.GetBytes(upstream.bodies[0], "model").String())
 	require.Equal(t, "grok-4.3", gjson.GetBytes(upstream.bodies[1], "model").String())
 	require.Equal(t, "grok-4.3", gjson.GetBytes(upstream.bodies[2], "model").String())

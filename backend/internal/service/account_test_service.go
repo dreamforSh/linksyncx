@@ -1033,7 +1033,7 @@ func (s *AccountTestService) testGrokAccountConnection(c *gin.Context, account *
 		// Force text Responses even if model_id looks like media.
 		testModelID := strings.TrimSpace(modelID)
 		if testModelID == "" {
-			testModelID = grokDefaultResponsesModel
+			testModelID = grokPlanSignalModel
 		}
 		if mapped := strings.TrimSpace(account.GetMappedModel(testModelID)); mapped != "" {
 			testModelID = mapped
@@ -1044,7 +1044,7 @@ func (s *AccountTestService) testGrokAccountConnection(c *gin.Context, account *
 	// mode == default: infer from model family (legacy UI / API clients).
 	testModelID := strings.TrimSpace(modelID)
 	if testModelID == "" {
-		testModelID = grokDefaultResponsesModel
+		testModelID = grokPlanSignalModel
 	}
 	if mapped := strings.TrimSpace(account.GetMappedModel(testModelID)); mapped != "" {
 		testModelID = mapped
@@ -1144,7 +1144,11 @@ func (s *AccountTestService) applyGrokTestRequestHeaders(req *http.Request, acco
 	// api.x.ai media (images/videos) rejects or mistreats OAuth when CLI headers
 	// are stamped on the official API host (e.g. ZDR upload_url false positives).
 	if account.IsGrokOAuth() && req.URL != nil && isGrokCLIProxyTarget(req.URL.String()) {
-		applyGrokCLIHeaders(req.Header)
+		if xai.CLIRequestKindFor(req.Method, req.URL.Path) == xai.CLIRequestSampler {
+			applyGrokCLISamplerHeaders(req.Header, account, "", "")
+		} else {
+			applyGrokCLIHeaders(req.Header)
+		}
 	}
 	account.ApplyHeaderOverrides(req.Header)
 }
@@ -1191,6 +1195,10 @@ func (s *AccountTestService) observeGrokTestResponse(ctx context.Context, accoun
 		return
 	}
 	if isGrokContentPolicyRejection(resp.StatusCode, responseBody) {
+		return
+	}
+	if isGrokCLIVersionRejection(resp.StatusCode, responseBody) {
+		logGrokCLIVersionRejection(account, resp.StatusCode, responseBody)
 		return
 	}
 	decision := classifyGrokUpstreamFailure(resp.StatusCode, responseBody, "")
@@ -1278,7 +1286,7 @@ func (s *AccountTestService) testGrokResponsesConnection(c *gin.Context, ctx con
 
 	if resp.StatusCode != http.StatusOK {
 		body, _ := io.ReadAll(resp.Body)
-		return s.sendErrorAndEnd(c, fmt.Sprintf("Grok Responses API returned %d: %s", resp.StatusCode, string(body)))
+		return s.sendErrorAndEnd(c, fmt.Sprintf("Grok Responses API returned %d: %s%s", resp.StatusCode, string(body), grokCLIVersionRejectionHint(resp.StatusCode, body)))
 	}
 
 	return s.processOpenAIStream(c, resp.Body)
@@ -1467,7 +1475,7 @@ func (s *AccountTestService) testGrokVideoGeneration(c *gin.Context, ctx context
 		return s.sendErrorAndEnd(c, fmt.Sprintf("Failed to read Grok video response: %s", err.Error()))
 	}
 	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusAccepted && resp.StatusCode != http.StatusCreated {
-		return s.sendErrorAndEnd(c, fmt.Sprintf("Grok videos API returned %d: %s", resp.StatusCode, string(body)))
+		return s.sendErrorAndEnd(c, fmt.Sprintf("Grok videos API returned %d: %s%s", resp.StatusCode, string(body), grokCLIVersionRejectionHint(resp.StatusCode, body)))
 	}
 
 	requestID := strings.TrimSpace(gjson.GetBytes(body, "request_id").String())
@@ -1609,8 +1617,10 @@ func (s *AccountTestService) testGrokWebSearch(c *gin.Context, ctx context.Conte
 
 User query:
 %s`, maxResults, query)
+	// Grok Build runs web_search on its default model; grok-4.5 lacks backend search.
+	searchModel := xai.RuntimeDefaultTextModel()
 	payload := map[string]any{
-		"model":   grokDefaultResponsesModel,
+		"model":   searchModel,
 		"input":   prompt,
 		"tools":   []map[string]any{{"type": "web_search"}},
 		"include": []string{"web_search_call.action.sources"},
@@ -1638,7 +1648,7 @@ User query:
 		return s.sendErrorAndEnd(c, fmt.Sprintf("standalone web_search probe failed: %s", err.Error()))
 	}
 	defer func() { _ = resp.Body.Close() }()
-	s.observeGrokTestResponse(withGrokTeamRateLimitModel(ctx, grokDefaultResponsesModel), account, resp)
+	s.observeGrokTestResponse(withGrokTeamRateLimitModel(ctx, searchModel), account, resp)
 
 	body, _ := io.ReadAll(resp.Body)
 	if resp.StatusCode != http.StatusOK {

@@ -736,6 +736,12 @@ func (s *OpenAIGatewayService) handleErrorResponse(
 		statusCode = http.StatusTooManyRequests
 		errType = "rate_limit_error"
 		errMsg = "Upstream rate limit exceeded, please retry later"
+	case http.StatusUpgradeRequired:
+		// The upstream rejected the gateway's client identity; the caller cannot
+		// fix that by upgrading their own client.
+		statusCode = http.StatusBadGateway
+		errType = "upstream_error"
+		errMsg = "Upstream rejected the gateway's client version, please contact administrator"
 	default:
 		statusCode = http.StatusBadGateway
 		errType = "upstream_error"

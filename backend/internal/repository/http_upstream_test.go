@@ -244,7 +244,10 @@ func TestHTTPUpstreamDoAppliesGrokCLIIdentityBeforeOAuthRoundTrip(t *testing.T) 
 
 			require.Equal(t, xai.CLIClientVersion, capturedHeaders.Get("x-grok-client-version"))
 			require.Equal(t, "xai-grok-cli", capturedHeaders.Get("X-XAI-Token-Auth"))
-			require.Equal(t, xai.CLIUserAgent(xai.CLIClientVersion), capturedHeaders.Get("User-Agent"))
+			require.Equal(t, "grok-pager/"+xai.CLIClientVersion+" grok-shell/"+xai.CLIClientVersion+" (macos; aarch64)", capturedHeaders.Get("User-Agent"))
+			require.Equal(t, "grok-pager", capturedHeaders.Get("x-grok-client-identifier"))
+			require.Equal(t, "interactive", capturedHeaders.Get("x-grok-client-mode"))
+			require.Equal(t, "authenticate-response", capturedHeaders.Get("x-authenticateresponse"))
 		})
 	}
 }
@@ -302,6 +305,9 @@ func TestHTTPUpstreamDoFallsBackToOfficialGrokAPIOnCLIAccessDenied(t *testing.T)
 	req, err := http.NewRequest(http.MethodPost, "https://cli-chat-proxy.grok.com/v1/responses", bytes.NewReader(payload))
 	require.NoError(t, err)
 	req.Header.Set("Authorization", "Bearer oauth-token")
+	req.Header.Set("X-UserID", "user-1")
+	req.Header.Set("X-Grok-Conv-Id", "conv-1")
+	req.Header.Set("X-Grok-Model-Override", "grok-4.5")
 
 	resp, err := svc.Do(req, "", accountID, 1)
 	require.NoError(t, err)
@@ -315,7 +321,13 @@ func TestHTTPUpstreamDoFallsBackToOfficialGrokAPIOnCLIAccessDenied(t *testing.T)
 	require.Equal(t, "Bearer oauth-token", fallbackHeaders.Get("Authorization"))
 	require.Empty(t, fallbackHeaders.Get("X-XAI-Token-Auth"))
 	require.Empty(t, fallbackHeaders.Get("x-grok-client-version"))
+	require.Empty(t, fallbackHeaders.Get("x-grok-client-mode"))
+	require.Empty(t, fallbackHeaders.Get("x-authenticateresponse"))
+	require.Empty(t, fallbackHeaders.Get("X-UserID"))
 	require.Empty(t, fallbackHeaders.Get("User-Agent"))
+	// Per-turn ids are not CLI-proxy specific; the conv id keeps routing the cache.
+	require.Equal(t, "conv-1", fallbackHeaders.Get("X-Grok-Conv-Id"))
+	require.Equal(t, "grok-4.5", fallbackHeaders.Get("X-Grok-Model-Override"))
 }
 
 func TestGrokAccessDeniedFallbackRecognizesChatEndpointPermissionDenied(t *testing.T) {
@@ -471,18 +483,29 @@ func TestApplyGrokCLIProxyHeaders(t *testing.T) {
 	})
 
 	t.Run("accepts a valid operator override", func(t *testing.T) {
-		t.Setenv("XAI_GROK_CLI_VERSION", "0.2.121-alpha.1")
+		t.Setenv("XAI_GROK_CLI_VERSION", "1.0.47-alpha.1")
 		req, err := http.NewRequest(http.MethodPost, "https://cli-chat-proxy.grok.com/v1/chat/completions", nil)
 		require.NoError(t, err)
 
 		applyGrokCLIProxyHeaders(req)
 
-		require.Equal(t, "0.2.121-alpha.1", req.Header.Get("x-grok-client-version"))
-		require.Equal(t, xai.CLIUserAgent("0.2.121-alpha.1"), req.Header.Get("User-Agent"))
+		require.Equal(t, "1.0.47-alpha.1", req.Header.Get("x-grok-client-version"))
+		require.Equal(t, xai.CLIUserAgent("1.0.47-alpha.1"), req.Header.Get("User-Agent"))
+	})
+
+	t.Run("accepts an override between the floor and the pin", func(t *testing.T) {
+		// Operators can roll back below the pin while the proxy still accepts it.
+		t.Setenv("XAI_GROK_CLI_VERSION", xai.CLIStableVersion)
+		req, err := http.NewRequest(http.MethodPost, "https://cli-chat-proxy.grok.com/v1/responses", nil)
+		require.NoError(t, err)
+
+		applyGrokCLIProxyHeaders(req)
+
+		require.Equal(t, xai.CLIStableVersion, req.Header.Get("x-grok-client-version"))
 	})
 
 	t.Run("rejects an unsafe override", func(t *testing.T) {
-		t.Setenv("XAI_GROK_CLI_VERSION", "0.2.121\r\nX-Injected: true")
+		t.Setenv("XAI_GROK_CLI_VERSION", "1.0.47\r\nX-Injected: true")
 		req, err := http.NewRequest(http.MethodPost, "https://cli-chat-proxy.grok.com/v1/responses", nil)
 		require.NoError(t, err)
 
@@ -493,7 +516,7 @@ func TestApplyGrokCLIProxyHeaders(t *testing.T) {
 	})
 
 	t.Run("rejects an override below the supported minimum", func(t *testing.T) {
-		t.Setenv("XAI_GROK_CLI_VERSION", "0.2.119")
+		t.Setenv("XAI_GROK_CLI_VERSION", "0.2.120")
 		req, err := http.NewRequest(http.MethodPost, "https://cli-chat-proxy.grok.com/v1/responses", nil)
 		require.NoError(t, err)
 
@@ -504,7 +527,7 @@ func TestApplyGrokCLIProxyHeaders(t *testing.T) {
 	})
 
 	t.Run("rejects a prerelease override at the minimum version", func(t *testing.T) {
-		t.Setenv("XAI_GROK_CLI_VERSION", "0.2.120-beta.1")
+		t.Setenv("XAI_GROK_CLI_VERSION", xai.CLIStableVersion+"-beta.1")
 		req, err := http.NewRequest(http.MethodPost, "https://cli-chat-proxy.grok.com/v1/responses", nil)
 		require.NoError(t, err)
 
@@ -514,14 +537,14 @@ func TestApplyGrokCLIProxyHeaders(t *testing.T) {
 		require.Equal(t, xai.CLIUserAgent(xai.CLIClientVersion), req.Header.Get("User-Agent"))
 	})
 
-	// Every entry sits above the pinned minimum, so a rejection here can only be
+	// Every entry sits above the minimum, so a rejection here can only be
 	// caused by the malformed semver and never by the version being too old.
 	for _, version := range []string{
-		"0.2.0121",
-		"0.2.121-alpha..1",
-		"0.3",
-		"1",
-		"0.2.121+build.1",
+		"1.0.047",
+		"1.0.47-alpha..1",
+		"1.1",
+		"2",
+		"1.0.47+build.1",
 	} {
 		t.Run("rejects invalid semver "+version, func(t *testing.T) {
 			t.Setenv("XAI_GROK_CLI_VERSION", version)
@@ -535,8 +558,22 @@ func TestApplyGrokCLIProxyHeaders(t *testing.T) {
 		})
 	}
 
+	t.Run("model list carries the account-read identity", func(t *testing.T) {
+		t.Setenv("XAI_GROK_CLI_VERSION", "")
+		req, err := http.NewRequest(http.MethodGet, "https://cli-chat-proxy.grok.com/v1/models", nil)
+		require.NoError(t, err)
+		req.Header.Set("x-grok-client-identifier", "grok-shell")
+		req.Header.Set("x-authenticateresponse", "authenticate-response")
+
+		applyGrokCLIProxyHeaders(req)
+
+		require.Equal(t, xai.CLIClientVersion, req.Header.Get("x-grok-client-version"))
+		require.Empty(t, req.Header.Get("x-grok-client-identifier"))
+		require.Empty(t, req.Header.Get("x-authenticateresponse"))
+	})
+
 	t.Run("leaves direct xAI API requests unchanged", func(t *testing.T) {
-		t.Setenv("XAI_GROK_CLI_VERSION", "0.2.95")
+		t.Setenv("XAI_GROK_CLI_VERSION", "1.0.50")
 		req, err := http.NewRequest(http.MethodPost, "https://api.x.ai/v1/responses", nil)
 		require.NoError(t, err)
 		req.Header.Set("User-Agent", "direct-api-client/1.0")
@@ -545,6 +582,7 @@ func TestApplyGrokCLIProxyHeaders(t *testing.T) {
 
 		require.Empty(t, req.Header.Get("x-grok-client-version"))
 		require.Empty(t, req.Header.Get("X-XAI-Token-Auth"))
+		require.Empty(t, req.Header.Get("x-authenticateresponse"))
 		require.Equal(t, "direct-api-client/1.0", req.Header.Get("User-Agent"))
 	})
 }

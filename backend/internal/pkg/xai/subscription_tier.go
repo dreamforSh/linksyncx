@@ -11,6 +11,11 @@ import (
 // influence SuperGrok vs Heavy inference.
 const GrokQuotaSignalMaxAge = 24 * time.Hour
 
+// PlanSignalModel is the only model whose Responses rate-limit windows tell
+// SuperGrok from Heavy. Quota probes and default account tests use it so the
+// plan can be inferred; it is not the default model for traffic.
+const PlanSignalModel = grok45ResponsesModel
+
 const (
 	grok45ResponsesModel             = "grok-4.5"
 	grokHeavyQuotaRequestLimit int64 = 8_300

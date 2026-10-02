@@ -28,6 +28,12 @@ func RuntimeModelMappingVersion() uint64 {
 	return runtimeMappingVersion.Load()
 }
 
+// RuntimeDefaultTextModel is the default text model in effect: the operator
+// setting grok_default_text_model, else DefaultTextModel.
+func RuntimeDefaultTextModel() string {
+	return RuntimeModelMappingOptions().defaultText()
+}
+
 // RuntimeModelMappingOptions returns the last options set via SetRuntimeModelMappingOptions.
 func RuntimeModelMappingOptions() ModelMappingOptions {
 	if v := runtimeMappingOpts.Load(); v != nil {

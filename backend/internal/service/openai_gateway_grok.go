@@ -22,13 +22,14 @@ import (
 const (
 	grokComposerImageBridgeVisionModel     = "grok-build-0.1"
 	grokComposerImageBridgeMaxOutputTokens = 512
-	grokCLIVersion                         = xai.CLIClientVersion
-	grokDefaultResponsesModel              = "grok-4.5"
-	grokRateLimitFallbackCooldown          = 2 * time.Minute
-	grokRateLimitRepeatCooldown            = 10 * time.Minute
-	grokRateLimitSustainedCooldown         = 30 * time.Minute
-	grokRateLimitMaxAdaptiveCooldown       = time.Hour
-	grokRateLimitBackoffQuietPeriod        = time.Hour
+	// grokPlanSignalModel is the model of quota probes and default account
+	// tests; see xai.PlanSignalModel.
+	grokPlanSignalModel              = xai.PlanSignalModel
+	grokRateLimitFallbackCooldown    = 2 * time.Minute
+	grokRateLimitRepeatCooldown      = 10 * time.Minute
+	grokRateLimitSustainedCooldown   = 30 * time.Minute
+	grokRateLimitMaxAdaptiveCooldown = time.Hour
+	grokRateLimitBackoffQuietPeriod  = time.Hour
 )
 
 func (s *OpenAIGatewayService) forwardGrokResponses(
@@ -46,12 +47,12 @@ func (s *OpenAIGatewayService) forwardGrokResponses(
 
 	upstreamModel := account.GetMappedModel(originalModel)
 	if strings.TrimSpace(upstreamModel) == "" {
-		upstreamModel = grokDefaultResponsesModel
+		upstreamModel = xai.RuntimeDefaultTextModel()
 	}
 	// Account mappings are optional. Canonicalize client aliases even when the
 	// account has no model_mapping, matching the Chat Completions path and xAI's
 	// actual Responses model IDs.
-	upstreamModel = xai.ResolveGrokTextResponsesModelID(upstreamModel, grokDefaultResponsesModel)
+	upstreamModel = xai.ResolveGrokTextResponsesModelID(upstreamModel, xai.RuntimeDefaultTextModel())
 	if isGrokImageGenerationModel(upstreamModel) {
 		return nil, fmt.Errorf("model %s is an image model and is not available on the Responses endpoint; use /v1/images/generations instead", upstreamModel)
 	}
@@ -168,6 +169,8 @@ func (s *OpenAIGatewayService) forwardGrokResponses(
 		kind := "http_error"
 		if s.shouldFailoverGrokUpstreamError(resp.StatusCode, respBody) {
 			kind = "failover"
+		} else if isGrokCLIVersionRejection(resp.StatusCode, respBody) {
+			kind = grokCLIVersionOutdatedOpsKind
 		}
 		appendOpsUpstreamError(c, OpsUpstreamErrorEvent{
 			ProxyID:            opsUpstreamProxyID(account),
@@ -1421,6 +1424,8 @@ func (s *OpenAIGatewayService) describeGrokComposerImage(
 		kind := "http_error"
 		if s.shouldFailoverGrokUpstreamError(resp.StatusCode, respBody) {
 			kind = "failover"
+		} else if isGrokCLIVersionRejection(resp.StatusCode, respBody) {
+			kind = grokCLIVersionOutdatedOpsKind
 		}
 		appendOpsUpstreamError(c, OpsUpstreamErrorEvent{
 			ProxyID:            opsUpstreamProxyID(account),
@@ -1586,7 +1591,10 @@ func buildGrokResponsesRequest(ctx context.Context, c *gin.Context, account *Acc
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Accept", "application/json, text/event-stream")
 	if account.IsGrokOAuth() {
-		applyGrokCLIHeaders(req.Header)
+		applyGrokCLISamplerHeaders(req.Header, account, gjson.GetBytes(body, "model").String(), cacheIdentity)
+		if gjson.GetBytes(body, "stream").Bool() {
+			req.Header.Set("Accept", "text/event-stream")
+		}
 	}
 	applyGrokCacheHeaders(req.Header, cacheIdentity)
 	if c != nil {
@@ -1598,23 +1606,6 @@ func buildGrokResponsesRequest(ctx context.Context, c *gin.Context, account *Acc
 	// 打到官方 CLI 网关时身份头仍由共享传输层最终强制。
 	account.ApplyHeaderOverrides(req.Header)
 	return req, nil
-}
-
-// applyGrokCLIHeaders identifies subscription traffic as a supported Grok CLI
-// version. The CLI gateway rejects otherwise valid OAuth requests without it.
-// Identity pins come from package xai so service-layer headers match the final
-// transport rewrite on cli-chat-proxy.grok.com.
-func applyGrokCLIHeaders(headers http.Header) {
-	if headers == nil {
-		return
-	}
-	version := xai.ResolveCLIVersion()
-	headers.Set("User-Agent", xai.CLIUserAgent(version))
-	headers.Set("X-Grok-Client-Version", version)
-	headers.Set("x-grok-client-version", version)
-	headers.Set("x-grok-client-identifier", xai.CLIClientIdentifier)
-	// Historical mode value expected by some unit tests / older CLI probes.
-	headers.Set("X-Grok-Client-Mode", "interactive")
 }
 
 func (s *OpenAIGatewayService) updateGrokUsageSnapshot(ctx context.Context, account *Account, snapshot *xai.QuotaSnapshot) {
@@ -2013,6 +2004,10 @@ func (s *OpenAIGatewayService) handleGrokAccountUpstreamError(ctx context.Contex
 		return
 	}
 	if isGrokContentPolicyRejection(statusCode, responseBody) {
+		return
+	}
+	if isGrokCLIVersionRejection(statusCode, responseBody) {
+		logGrokCLIVersionRejection(account, statusCode, responseBody)
 		return
 	}
 	now := time.Now()
