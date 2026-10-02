@@ -39,6 +39,10 @@ const (
 	//     默认关闭，普通对话流量不携带。
 	BetaStructuredOutputs = "structured-outputs-2025-12-15"
 
+	// per-turn-control：2.1.287 抓包实证 sonnet-5-5 携带（另有 opus-5-5/fable-5-1
+	// 或调用方显式请求时携带）。仅按模型/请求条件加入，不进固定默认列表。
+	BetaPerTurnControl = "per-turn-control-2026-07-01"
+
 	// SDK surfaceCapabilities.sdkBetas 能力位（2.1.280 第一方抓包实证：每次
 	// /v1/messages?beta=true 均携带，经 mf()→surfaceCapabilities.sdkBetas() 注入）。
 	BetaAdvancedToolUse              = "advanced-tool-use-2025-11-20"
@@ -117,7 +121,7 @@ const DefaultCacheControlTTL = "5m"
 //
 // ⚠️ 读取实际生效的版本号请用 CLIVersion()，它会叠加 SUB2API_CLAUDE_CLI_VERSION 覆盖。
 // 直接引用本常量只在"表达内置基线"时才正确（例如覆盖值的下限校验）。
-const CLICurrentVersion = "2.1.280"
+const CLICurrentVersion = "2.1.287"
 
 // ClaudeCodeMimicryBetas 按真实 Claude Code 2.1.280 的 beta 规则计算 OAuth mimic
 // 请求的 anthropic-beta 集合（不再是固定列表）。
@@ -132,7 +136,9 @@ const CLICurrentVersion = "2.1.280"
 //   - thinking 开启：interleaved-thinking（抓包中 display=omitted 时不带 redact-thinking，
 //     且 HEAD 旧列表亦无，故本集合不含 redact-thinking；客户端显式传入时由合并逻辑保留）
 //   - thinking-token-count / context-management / prompt-caching-scope：第一方携带
-//   - mid-conversation-system 仅非 haiku；mid-conversation-tool-changes 再排除 sonnet-5
+//   - mid-conversation-system 仅非 haiku；per-turn-control 仅 sonnet-5-5/
+//     opus-5-5/fable-5-1（2.1.287 抓包实证）；mid-conversation-tool-changes
+//     排除 sonnet-5（sonnet-5-5 起恢复携带，2.1.287 实证）
 //
 // SDK surfaceCapabilities.sdkBetas 能力位（抓包顺序，非 kw/Aw 选择表；二进制单看选择
 // 表会漏掉，故以抓包为准）：advanced-tool-use、mid-conversation-system-clear-at、
@@ -166,7 +172,13 @@ func ClaudeCodeMimicryBetas(modelID string, thinkingEnabled bool) []string {
 	out = append(out, BetaThinkingTokenCount, BetaContextManagement, BetaPromptCachingScope)
 	if !isHaiku {
 		out = append(out, BetaMidConversationSystem)
-		if !strings.Contains(lower, "sonnet-5") {
+		// per-turn-control：2.1.287 抓包实证 sonnet-5-5 携带（另有 opus-5-5/fable-5-1）
+		if strings.Contains(lower, "sonnet-5-5") || strings.Contains(lower, "opus-5-5") || strings.Contains(lower, "fable-5-1") {
+			out = append(out, BetaPerTurnControl)
+		}
+		// sonnet-5 不带 mid-conversation-tool-changes；sonnet-5-5 恢复携带（2.1.287 实证）
+		isSonnet5Legacy := strings.Contains(lower, "sonnet-5") && !strings.Contains(lower, "sonnet-5-5")
+		if !isSonnet5Legacy {
 			out = append(out, BetaMidConversationToolChanges)
 		}
 		// SDK 能力位（抓包顺序）
@@ -182,9 +194,9 @@ func ClaudeCodeMimicryBetas(modelID string, thinkingEnabled bool) []string {
 	return out
 }
 
-// SDKTSVersion 是真实 CLI 2.1.280 内置的 @anthropic-ai/sdk 版本。
+// SDKTSVersion 是真实 CLI 2.1.287 内置的 @anthropic-ai/sdk 版本。
 // SDK 版本与 CLI 版本绑定发布，更新 CLICurrentVersion 时必须成对更新。
-const SDKTSVersion = "0.112.1"
+const SDKTSVersion = "0.127.0"
 
 // SDKTSRuntimeVersion 是真实客户端上报的 X-Stainless-Runtime-Version。
 // SDK 的运行时探测 oa() 只区分 deno/edge/node，无 bun 分支：Bun 提供
@@ -293,6 +305,12 @@ var DefaultModels = []Model{
 		Type:        "model",
 		DisplayName: "Claude Opus 5",
 		CreatedAt:   "2026-07-25T00:00:00Z",
+	},
+	{
+		ID:          "claude-sonnet-5-5",
+		Type:        "model",
+		DisplayName: "Claude Sonnet 5.5",
+		CreatedAt:   "2026-09-29T00:00:00Z",
 	},
 	{
 		ID:          "claude-sonnet-5",
