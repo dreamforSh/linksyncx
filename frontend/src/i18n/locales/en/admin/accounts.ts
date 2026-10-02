@@ -1733,6 +1733,19 @@ export default {
         weeklyTitle: 'A weekly 5-hour session reset (a limited rollout for some Max accounts); usable only once the 5-hour limit is used up',
         ineligible: 'Not eligible for resets',
         ineligibleTitle: 'Upstream reason: {reason}',
+        ineligibleReasons: {
+          config_off: 'not enabled upstream',
+          tier: 'plan not supported',
+          seat: 'team seat not supported',
+          mobile: 'mobile subscription not supported',
+          surface: 'client type not accepted',
+          cli_version: 'Claude Code version too old',
+          no_grant: 'no reset granted to this account',
+          tenure: 'subscription too new',
+          other_experiment: 'enrolled in another experiment',
+          unavailable: 'upstream could not decide right now',
+          unknown: 'unknown reason'
+        },
         limits: {
           five_hour: '5-hour',
           seven_day: 'weekly',

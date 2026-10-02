@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"testing"
 
+	"github.com/Wei-Shaw/sub2api/internal/pkg/claude"
 	infraerrors "github.com/Wei-Shaw/sub2api/internal/pkg/errors"
 	"github.com/Wei-Shaw/sub2api/internal/service"
 	"github.com/stretchr/testify/require"
@@ -60,6 +61,48 @@ func TestClaudeOAuthAPIClientFetchProfile(t *testing.T) {
 	require.Equal(t, "Bearer at", authorization)
 	require.Equal(t, "oauth-2025-04-20", beta)
 	require.Equal(t, "claude-cli/2.1.283 (external, cli)", userAgent, "the cached fingerprint UA is reused")
+}
+
+// Real Claude Code sends /api/oauth/* and reset_rate_limits with its inference
+// UA builder, claude-cli/<version> (external, <entrypoint>). Reset grants are an
+// interactive-CLI feature, so the entrypoint is always cli.
+func TestClaudeOAuthUserAgentMatchesInteractiveCLI(t *testing.T) {
+	cliUA := "claude-cli/" + claude.EffectiveCLIVersion() + " (external, cli)"
+	cases := []struct {
+		name        string
+		fingerprint *service.Fingerprint
+		want        string
+	}{
+		{"no fingerprint", nil, cliUA},
+		{"empty fingerprint UA", &service.Fingerprint{}, cliUA},
+		{"interactive CLI fingerprint", &service.Fingerprint{UserAgent: "claude-cli/2.1.290 (external, cli)"}, "claude-cli/2.1.290 (external, cli)"},
+		{"SDK entrypoint keeps version, not entrypoint", &service.Fingerprint{UserAgent: "claude-cli/2.1.288 (external, sdk-cli, agent-sdk/0.3.1)"}, "claude-cli/2.1.288 (external, cli)"},
+		{"desktop entrypoint", &service.Fingerprint{UserAgent: "claude-cli/2.1.287 (external, claude-desktop)"}, "claude-cli/2.1.287 (external, cli)"},
+		{"non-CLI fingerprint", &service.Fingerprint{UserAgent: "Mozilla/5.0"}, cliUA},
+		{"malformed version", &service.Fingerprint{UserAgent: "claude-cli/2.1 (external, cli)"}, cliUA},
+	}
+	for _, tc := range cases {
+		require.Equal(t, tc.want, claudeOAuthUserAgent(tc.fingerprint), tc.name)
+		require.NotContains(t, claudeOAuthUserAgent(tc.fingerprint), "claude-code/", tc.name)
+	}
+
+	var usageUA, claimUA string
+	srv := newLocalTestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodPost {
+			claimUA = r.Header.Get("User-Agent")
+			_, _ = io.WriteString(w, `{"result":"reset"}`)
+			return
+		}
+		usageUA = r.Header.Get("User-Agent")
+		_, _ = io.WriteString(w, `{}`)
+	}))
+	client := &claudeUsageService{usageURL: srv.URL, organizationsURL: srv.URL + "/api/organizations", allowPrivateHosts: true}
+	_, err := client.FetchUsageWithOptions(context.Background(), &service.ClaudeUsageFetchOptions{AccessToken: "at", Query: "cedar_ember=1&skip_spend=1"})
+	require.NoError(t, err)
+	require.Equal(t, cliUA, usageUA)
+	_, err = client.ClaimRateLimitReset(context.Background(), &service.ClaudeUsageFetchOptions{AccessToken: "at"}, "org-1", &service.ClaudeRateLimitResetRequest{Program: "juniper_tide"})
+	require.NoError(t, err)
+	require.Equal(t, cliUA, claimUA)
 }
 
 func TestClaudeOAuthAPIClientClaimRateLimitReset(t *testing.T) {

@@ -105,7 +105,8 @@
       <span
         v-if="ineligibleReason"
         class="text-[10px] text-gray-500 dark:text-gray-400"
-        :title="t('admin.accounts.claudeQuotaReset.ineligibleTitle', { reason: ineligibleReason })"
+        data-testid="claude-reset-ineligible"
+        :title="t('admin.accounts.claudeQuotaReset.ineligibleTitle', { reason: ineligibleReasonText })"
       >
         {{ t('admin.accounts.claudeQuotaReset.ineligible') }}
       </span>
@@ -264,6 +265,12 @@ const juniperNextAvailable = computed(() => {
 const ineligibleReason = computed(() =>
   cedar.value && !cedar.value.eligible ? cedar.value.ineligible_reason || '-' : ''
 )
+// Known upstream codes are explained; the raw code stays visible for support.
+const ineligibleReasonText = computed(() => {
+  const code = ineligibleReason.value
+  const key = `admin.accounts.claudeQuotaReset.ineligibleReasons.${code}`
+  return code && te(key) ? `${t(key)} (${code})` : code
+})
 const hasDetails = computed(
   () => !!primaryGrant.value || nextGrantNeedsLimit.value || juniperClaimable.value || !!juniperNextAvailable.value || !!ineligibleReason.value
 )

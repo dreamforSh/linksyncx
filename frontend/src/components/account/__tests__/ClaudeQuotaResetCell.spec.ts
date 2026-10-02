@@ -14,7 +14,8 @@ vi.mock('@/api/admin/accounts', () => ({
 const KNOWN_KEYS = new Set([
   'admin.accounts.claudeQuotaReset.limits.five_hour',
   'admin.accounts.claudeQuotaReset.limits.seven_day',
-  'admin.accounts.claudeQuotaReset.errors.CLAUDE_RESET_REQUIRES_LIMIT'
+  'admin.accounts.claudeQuotaReset.errors.CLAUDE_RESET_REQUIRES_LIMIT',
+  'admin.accounts.claudeQuotaReset.ineligibleReasons.surface'
 ])
 
 vi.mock('vue-i18n', async () => {
@@ -108,6 +109,23 @@ describe('ClaudeQuotaResetCell', () => {
     expect(wrapper.get('[data-testid="claude-reset-details"]').text()).toContain('admin.accounts.claudeQuotaReset.expiresAt')
     expect(wrapper.get('[data-testid="claude-reset-weekly"]').text()).toBe('admin.accounts.claudeQuotaReset.weeklyAvailable')
     expect(useButton(wrapper).attributes('disabled')).toBeUndefined()
+  })
+
+  it('explains the upstream ineligible reason and keeps the raw code', () => {
+    const ineligible = (reason: string) =>
+      mount(ClaudeQuotaResetCell, {
+        props: {
+          account: withSnapshot(snapshot({
+            cedar_ember: { eligible: false, ineligible_reason: reason, at_limit: false, exhausted: [], grants: [] }
+          }))
+        }
+      }).get('[data-testid="claude-reset-ineligible"]')
+
+    const known = ineligible('surface')
+    expect(known.text()).toBe('admin.accounts.claudeQuotaReset.ineligible')
+    expect(known.attributes('title')).toContain('admin.accounts.claudeQuotaReset.ineligibleReasons.surface (surface)')
+    // Codes the UI does not know yet are shown verbatim.
+    expect(ineligible('brand_new_reason').attributes('title')).toContain('"reason":"brand_new_reason"')
   })
 
   it('keeps the reset disabled until a snapshot is loaded', () => {

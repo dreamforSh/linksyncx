@@ -24,16 +24,23 @@ import (
 
 func NewClaudeOAuthClient() service.ClaudeOAuthClient {
 	return &claudeOAuthService{
-		baseURL:       "https://claude.ai",
-		tokenURL:      oauth.TokenURL,
-		clientFactory: createReqClient,
+		baseURL:              "https://claude.ai",
+		tokenURL:             oauth.TokenURL,
+		clientFactory:        createReqClient,
+		browserClientFactory: createBrowserReqClient,
 	}
 }
 
 type claudeOAuthService struct {
-	baseURL       string
-	tokenURL      string
+	baseURL  string
+	tokenURL string
+	// clientFactory serves the token endpoint on platform.claude.com, which the
+	// real CLI calls itself (CLI persona).
 	clientFactory func(proxyURL string) (*req.Client, error)
+	// browserClientFactory serves the sessionKey-cookie steps on claude.ai. They
+	// stand in for the user's browser, and claude.ai's Cloudflare answers
+	// non-browser TLS with a "Just a moment..." challenge (HTTP 403).
+	browserClientFactory func(proxyURL string) (*req.Client, error)
 }
 
 // claudeOAuthExchangeBody / claudeOAuthRefreshBody 固定 JSON 字段序，与真实 CLI 的
@@ -56,11 +63,6 @@ type claudeOAuthRefreshBody struct {
 }
 
 func (s *claudeOAuthService) GetOrganizationUUID(ctx context.Context, sessionKey, proxyURL string) (string, error) {
-	client, err := s.clientFactory(proxyURL)
-	if err != nil {
-		return "", fmt.Errorf("create HTTP client: %w", err)
-	}
-
 	var orgs []struct {
 		UUID      string  `json:"uuid"`
 		Name      string  `json:"name"`
@@ -70,18 +72,19 @@ func (s *claudeOAuthService) GetOrganizationUUID(ctx context.Context, sessionKey
 	targetURL := s.baseURL + "/api/organizations"
 	logger.LegacyPrintf("repository.claude_oauth", "[OAuth] Step 1: Getting organization UUID from %s", targetURL)
 
-	resp, err := client.R().
-		SetContext(ctx).
-		SetCookies(&http.Cookie{
-			Name:  "sessionKey",
-			Value: sessionKey,
-		}).
-		SetSuccessResult(&orgs).
-		Get(targetURL)
-
+	resp, err := s.doClaudeAIBrowserRequest(ctx, proxyURL, "Step 1", func(client *req.Client) (*req.Response, error) {
+		orgs = nil
+		return client.R().
+			SetContext(ctx).
+			SetCookies(&http.Cookie{
+				Name:  "sessionKey",
+				Value: sessionKey,
+			}).
+			SetSuccessResult(&orgs).
+			Get(targetURL)
+	})
 	if err != nil {
-		logger.LegacyPrintf("repository.claude_oauth", "[OAuth] Step 1 FAILED - Request error: %v", err)
-		return "", fmt.Errorf("request failed: %w", err)
+		return "", err
 	}
 
 	logger.LegacyPrintf("repository.claude_oauth", "[OAuth] Step 1 Response - Status: %d", resp.StatusCode)
@@ -115,11 +118,6 @@ func (s *claudeOAuthService) GetOrganizationUUID(ctx context.Context, sessionKey
 }
 
 func (s *claudeOAuthService) GetAuthorizationCode(ctx context.Context, sessionKey, orgUUID, scope, codeChallenge, state, proxyURL string) (string, error) {
-	client, err := s.clientFactory(proxyURL)
-	if err != nil {
-		return "", fmt.Errorf("create HTTP client: %w", err)
-	}
-
 	authURL := fmt.Sprintf("%s/v1/oauth/%s/authorize", s.baseURL, orgUUID)
 
 	reqBody := map[string]any{
@@ -141,25 +139,26 @@ func (s *claudeOAuthService) GetAuthorizationCode(ctx context.Context, sessionKe
 		RedirectURI string `json:"redirect_uri"`
 	}
 
-	resp, err := client.R().
-		SetContext(ctx).
-		SetCookies(&http.Cookie{
-			Name:  "sessionKey",
-			Value: sessionKey,
-		}).
-		SetHeader("Accept", "application/json").
-		SetHeader("Accept-Language", "en-US,en;q=0.9").
-		SetHeader("Cache-Control", "no-cache").
-		SetHeader("Origin", "https://claude.ai").
-		SetHeader("Referer", "https://claude.ai/new").
-		SetHeader("Content-Type", "application/json").
-		SetBody(reqBody).
-		SetSuccessResult(&result).
-		Post(authURL)
-
+	resp, err := s.doClaudeAIBrowserRequest(ctx, proxyURL, "Step 2", func(client *req.Client) (*req.Response, error) {
+		result.RedirectURI = ""
+		return client.R().
+			SetContext(ctx).
+			SetCookies(&http.Cookie{
+				Name:  "sessionKey",
+				Value: sessionKey,
+			}).
+			SetHeader("Accept", "application/json").
+			SetHeader("Accept-Language", "en-US,en;q=0.9").
+			SetHeader("Cache-Control", "no-cache").
+			SetHeader("Origin", "https://claude.ai").
+			SetHeader("Referer", "https://claude.ai/new").
+			SetHeader("Content-Type", "application/json").
+			SetBody(reqBody).
+			SetSuccessResult(&result).
+			Post(authURL)
+	})
 	if err != nil {
-		logger.LegacyPrintf("repository.claude_oauth", "[OAuth] Step 2 FAILED - Request error: %v", err)
-		return "", fmt.Errorf("request failed: %w", err)
+		return "", err
 	}
 
 	logger.LegacyPrintf("repository.claude_oauth", "[OAuth] Step 2 Response - Status: %d, Body: %s", resp.StatusCode, logredact.RedactJSON(resp.Bytes()))
@@ -192,6 +191,57 @@ func (s *claudeOAuthService) GetAuthorizationCode(ctx context.Context, sessionKe
 
 	logger.LegacyPrintf("repository.claude_oauth", "[OAuth] Step 2 SUCCESS - Got authorization code")
 	return fullCode, nil
+}
+
+// claudeAIChallengeAttempts bounds how often a claude.ai cookie step is sent
+// when Cloudflare answers with a challenge. Even with the Chrome persona about
+// one request in eight is challenged (live check 2026-10-02, mostly the first
+// one); a challenged request never reaches the origin, so resending is safe.
+const claudeAIChallengeAttempts = 3
+
+var claudeAIChallengeRetryDelay = 600 * time.Millisecond
+
+// doClaudeAIBrowserRequest sends a claude.ai cookie step with the browser
+// client, resending on a fresh connection while Cloudflare challenges it.
+func (s *claudeOAuthService) doClaudeAIBrowserRequest(ctx context.Context, proxyURL, step string, send func(*req.Client) (*req.Response, error)) (*req.Response, error) {
+	for attempt := 1; ; attempt++ {
+		client, err := s.browserClientFactory(proxyURL)
+		if err != nil {
+			return nil, fmt.Errorf("create HTTP client: %w", err)
+		}
+		resp, err := send(client)
+		if err != nil {
+			logger.LegacyPrintf("repository.claude_oauth", "[OAuth] %s FAILED - Request error: %v", step, err)
+			return nil, fmt.Errorf("request failed: %w", err)
+		}
+		if !isCloudflareChallenge(resp) {
+			return resp, nil
+		}
+		logger.LegacyPrintf("repository.claude_oauth", "[OAuth] %s challenged by Cloudflare (attempt %d/%d)", step, attempt, claudeAIChallengeAttempts)
+		if attempt >= claudeAIChallengeAttempts {
+			return nil, fmt.Errorf("claude.ai Cloudflare challenged the request %d times (HTTP %d); retry later, use another proxy exit, or authorize manually with the authorization link", attempt, resp.StatusCode)
+		}
+		select {
+		case <-ctx.Done():
+			return nil, fmt.Errorf("request failed: %w", ctx.Err())
+		case <-time.After(claudeAIChallengeRetryDelay):
+		}
+	}
+}
+
+// isCloudflareChallenge reports a Cloudflare bot challenge, which is answered
+// in front of the origin.
+func isCloudflareChallenge(resp *req.Response) bool {
+	if resp == nil || resp.Response == nil {
+		return false
+	}
+	if resp.StatusCode != http.StatusForbidden && resp.StatusCode != http.StatusServiceUnavailable {
+		return false
+	}
+	if strings.EqualFold(strings.TrimSpace(resp.Header.Get("cf-mitigated")), "challenge") {
+		return true
+	}
+	return strings.Contains(resp.String(), "<title>Just a moment...</title>")
 }
 
 func (s *claudeOAuthService) ExchangeCodeForToken(ctx context.Context, code, codeVerifier, state, proxyURL string, isSetupToken bool) (*oauth.TokenResponse, error) {
@@ -303,6 +353,27 @@ func (s *claudeOAuthService) RefreshToken(ctx context.Context, refreshToken, pro
 
 func createReqClient(proxyURL string) (*req.Client, error) {
 	return newControlPlaneReqClient(proxyURL, nil)
+}
+
+// createBrowserReqClient builds the client for the sessionKey-cookie steps on
+// claude.ai with req's Chrome persona (TLS, HTTP/2 and headers). The CLI
+// persona is blocked there by Cloudflare, and Firefox is still challenged on
+// GET /api/organizations (live check 2026-10-02). An invalid proxy is an
+// error; only an empty proxy URL connects directly.
+func createBrowserReqClient(proxyURL string) (*req.Client, error) {
+	trimmed, _, err := proxyurl.Parse(proxyURL)
+	if err != nil {
+		return nil, err
+	}
+	// 禁用 CookieJar，确保每次授权都是干净的会话
+	client := req.C().
+		SetTimeout(60 * time.Second).
+		ImpersonateChrome().
+		SetCookieJar(nil)
+	if trimmed != "" {
+		client.SetProxyURL(trimmed)
+	}
+	return instrumentReqClient(client), nil
 }
 
 // newControlPlaneReqClient 构建控制面（platform.claude.com 等）的 req 客户端。

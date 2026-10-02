@@ -651,6 +651,19 @@ export default {
         weeklyTitle: '每周一次的 5 小时会话重置（部分 Max 账号的灰度功能），只能在 5 小时额度用尽时使用',
         ineligible: '无重置资格',
         ineligibleTitle: '上游原因：{reason}',
+        ineligibleReasons: {
+          config_off: '上游未开放此功能',
+          tier: '当前套餐不支持',
+          seat: '团队席位不支持',
+          mobile: '移动端订阅不支持',
+          surface: '客户端类型不符',
+          cli_version: 'Claude Code 版本过低',
+          no_grant: '账号未获发重置卡',
+          tenure: '订阅时长不足',
+          other_experiment: '账号参与了其他实验',
+          unavailable: '上游暂时无法判定',
+          unknown: '未知原因'
+        },
         limits: {
           five_hour: '5 小时',
           seven_day: '每周',

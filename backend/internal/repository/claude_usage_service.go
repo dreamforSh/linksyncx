@@ -8,6 +8,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"regexp"
 	"strings"
 	"time"
 
@@ -30,11 +31,38 @@ const (
 	claudeAPIMaxErrorBody   = 4 << 10
 )
 
-// 默认 User-Agent 跟随运行期生效的 CLI 版本（真实客户端 2.1.280 的
-// /api/oauth/usage UA 形如 claude-code/2.1.280）；指纹缓存命中时优先用账号指纹 UA。
-func defaultUsageUserAgent() string {
-	return "claude-code/" + claude.EffectiveCLIVersion()
+// claudeOAuthUserAgent 是 /api/oauth/usage、/api/oauth/profile 与 reset_rate_limits 的 UA。
+// 真实 Claude Code（2.1.280 至 2.1.287 二进制实证）的这几条请求都走同一个 API 封装，
+// UA 由与推理请求相同的构造器生成：claude-cli/<版本> (external, <入口>)；
+// claude-code/<版本> 是另一类旁路请求的 UA，用在这里是错的。
+//
+// 重置卡只在交互式 CLI 里提供，上游按客户端 surface 判定资格（ineligible_reason
+// 含 surface / cli_version），所以入口固定为 cli，不沿用入站流量的 sdk-cli、
+// claude-desktop 等入口；版本跟随账号指纹里的 claude-cli 版本，取不到时用运行期版本。
+func claudeOAuthUserAgent(fp *service.Fingerprint) string {
+	version := claude.EffectiveCLIVersion()
+	if fp != nil {
+		if fpVersion, ok := claudeCLIUserAgentVersion(fp.UserAgent); ok {
+			version = fpVersion
+		}
+	}
+	return "claude-cli/" + version + " (external, cli)"
 }
+
+// claudeCLIUserAgentVersion 从 "claude-cli/2.1.287 (external, cli)" 取出版本号。
+func claudeCLIUserAgentVersion(userAgent string) (string, bool) {
+	rest, ok := strings.CutPrefix(strings.TrimSpace(userAgent), "claude-cli/")
+	if !ok {
+		return "", false
+	}
+	version, _, _ := strings.Cut(rest, " ")
+	if !claudeCLIVersionPattern.MatchString(version) {
+		return "", false
+	}
+	return version, true
+}
+
+var claudeCLIVersionPattern = regexp.MustCompile(`^[0-9]+\.[0-9]+\.[0-9]+$`)
 
 type claudeUsageService struct {
 	usageURL          string
@@ -160,11 +188,7 @@ func setClaudeOAuthHeaders(req *http.Request, opts *service.ClaudeUsageFetchOpti
 	req.Header.Set("anthropic-beta", "oauth-2025-04-20")
 
 	// 设置 User-Agent（优先使用缓存的 Fingerprint，否则使用默认值）
-	userAgent := defaultUsageUserAgent()
-	if opts.Fingerprint != nil && opts.Fingerprint.UserAgent != "" {
-		userAgent = opts.Fingerprint.UserAgent
-	}
-	req.Header.Set("User-Agent", userAgent)
+	req.Header.Set("User-Agent", claudeOAuthUserAgent(opts.Fingerprint))
 }
 
 // do 发送请求：有 TLS Profile 且有 HTTPUpstream 时走 DoWithTLS，否则走普通 HTTP 客户端。
