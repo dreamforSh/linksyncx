@@ -621,6 +621,144 @@ describe('AccountUsageCell', () => {
     expect(wrapper.text()).not.toMatch(/Infinity|NaN/)
   })
 
+  it('Anthropic OAuth 7d 窗口展示本地费用并计算预计总费用', async () => {
+    getUsage.mockResolvedValue({
+      five_hour: {
+        utilization: 25,
+        resets_at: null,
+        remaining_seconds: 0,
+        window_stats: { requests: 1, tokens: 100, cost: 2 }
+      },
+      seven_day: {
+        utilization: 40,
+        resets_at: null,
+        remaining_seconds: 0,
+        window_stats: { requests: 2, tokens: 200, cost: 12 }
+      },
+      seven_day_sonnet: {
+        utilization: 50,
+        resets_at: null,
+        remaining_seconds: 0
+      }
+    })
+
+    const wrapper = mount(AccountUsageCell, {
+      props: {
+        account: makeAccount({ id: 6901, platform: 'anthropic', type: 'oauth', extra: {} })
+      },
+      global: {
+        stubs: {
+          UsageProgressBar: {
+            props: ['label', 'windowStats', 'estimatedTotalCost'],
+            template: '<div class="usage-bar">{{ label }}|{{ windowStats?.cost ?? "-" }}|{{ estimatedTotalCost ?? "none" }}</div>'
+          },
+          ClaudeQuotaResetCell: true,
+          AccountQuotaInfo: true
+        }
+      }
+    })
+
+    await flushPromises()
+
+    expect(wrapper.text()).toContain('5h|2|none')
+    expect(wrapper.text()).toContain('7d|12|30')
+    expect(wrapper.text()).toContain('7d S|-|none')
+  })
+
+  it('Anthropic OAuth 7d 无本地费用时不显示预计总费用', async () => {
+    getUsage.mockResolvedValue({
+      seven_day: {
+        utilization: 40,
+        resets_at: null,
+        remaining_seconds: 0
+      }
+    })
+
+    const wrapper = mount(AccountUsageCell, {
+      props: {
+        account: makeAccount({ id: 6902, platform: 'anthropic', type: 'oauth', extra: {} })
+      },
+      global: {
+        stubs: {
+          UsageProgressBar: {
+            props: ['label', 'estimatedTotalCost'],
+            template: '<div class="usage-bar">{{ label }}|{{ estimatedTotalCost ?? "none" }}</div>'
+          },
+          ClaudeQuotaResetCell: true,
+          AccountQuotaInfo: true
+        }
+      }
+    })
+
+    await flushPromises()
+
+    expect(wrapper.text()).toContain('7d|none')
+  })
+
+  it('Grok 付费 7d / 30d 窗口按官方使用率计算预计总费用', async () => {
+    getUsage.mockResolvedValue({
+      subscription_tier: 'SuperGrok Heavy',
+      grok_billing: {
+        period_type: 'weekly',
+        usage_percent: 40,
+        used_percent: 8,
+        monthly_limit_cents: 150_000,
+        plan: 'SuperGrok Heavy'
+      },
+      grok_local_usage_7d: { requests: 8, tokens: 2_200_000, cost: 10, standard_cost: 10 },
+      grok_local_usage_monthly: { requests: 20, tokens: 8_000_000, cost: 9.2, standard_cost: 9.2 }
+    })
+
+    const wrapper = mount(AccountUsageCell, {
+      props: {
+        account: makeAccount({ id: 6903, platform: 'grok', type: 'oauth', extra: {} })
+      },
+      global: {
+        stubs: {
+          UsageProgressBar: {
+            props: ['label', 'estimatedTotalCost'],
+            template: '<div class="usage-bar">{{ label }}|{{ estimatedTotalCost?.toFixed(2) ?? "none" }}</div>'
+          },
+          GrokQuotaProbeCell: true,
+          AccountQuotaInfo: true
+        }
+      }
+    })
+
+    await flushPromises()
+
+    expect(wrapper.text()).toContain('7d|25.00')
+    expect(wrapper.text()).toContain('30d|115.00')
+  })
+
+  it('Grok Free 24h 窗口不显示预计总费用', async () => {
+    getUsage.mockResolvedValue({
+      subscription_tier: 'Free',
+      grok_free_token_limit: 1_000_000,
+      grok_local_usage_24h: { requests: 3, tokens: 250_000, cost: 1.5, standard_cost: 1.5 }
+    })
+
+    const wrapper = mount(AccountUsageCell, {
+      props: {
+        account: makeAccount({ id: 6904, platform: 'grok', type: 'oauth', extra: {} })
+      },
+      global: {
+        stubs: {
+          UsageProgressBar: {
+            props: ['label', 'estimatedTotalCost'],
+            template: '<div class="usage-bar">{{ label }}|{{ estimatedTotalCost ?? "none" }}</div>'
+          },
+          GrokQuotaProbeCell: true,
+          AccountQuotaInfo: true
+        }
+      }
+    })
+
+    await flushPromises()
+
+    expect(wrapper.text()).toContain('24h|none')
+  })
+
   it('OpenAI OAuth 有现成快照时，手动刷新信号会触发 usage 重拉', async () => {
     getUsage.mockResolvedValue({
       five_hour: {

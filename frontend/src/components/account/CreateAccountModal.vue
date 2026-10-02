@@ -4872,8 +4872,14 @@ function applyPresetGroup(group: AdminGroup | null | undefined) {
 
 watch(
   () => props.presetGroup,
-  (group) => {
-    if (props.show) applyPresetGroup(group)
+  (group, previous) => {
+    if (!props.show) return
+    // 取消目标分组（选择器里选「不指定分组」）时一并移除它，其余手选分组保留
+    if (!group && previous) {
+      form.group_ids = form.group_ids.filter(id => id !== previous.id)
+      return
+    }
+    applyPresetGroup(group)
   }
 )
 
@@ -5748,11 +5754,8 @@ const handleVertexServiceAccountDrop = async (event: DragEvent) => {
   applyVertexServiceAccountJson(await file.text())
 }
 
+// 分组可选：未选分组的账号只供未绑定分组的 API Key 调度；选了分组时仍需满足管理分组独占
 const validateGroupSelection = (): boolean => {
-  if (!form.group_ids.length) {
-    appStore.showError(t('admin.accounts.groupRequired'))
-    return false
-  }
   if (violatesManagedExclusivity(form.group_ids, props.groups)) {
     appStore.showError(t('admin.accounts.managedGroupExclusive'))
     return false

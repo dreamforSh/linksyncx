@@ -58,7 +58,7 @@ const PickerStub = defineComponent({
     initialGroupId: { type: Number, default: null },
     zIndex: { type: Number, default: 50 }
   },
-  emits: ['select', 'close', 'create-group'],
+  emits: ['select', 'skip', 'close', 'create-group'],
   template: '<div v-if="show" data-test="picker" />'
 })
 
@@ -134,27 +134,23 @@ describe('admin AccountsView target group flow', () => {
     getAllGroups.mockReset().mockResolvedValue(groups)
   })
 
-  it('asks for a target group before opening the account form', async () => {
+  it('opens the account form directly without requiring a group', async () => {
     const wrapper = mountView()
     await flushPromises()
 
     await wrapper.get('[data-test="create-account"]').trigger('click')
-    expect(wrapper.find('[data-test="picker"]').exists()).toBe(true)
-    expect(wrapper.find('[data-test="create-modal"]').exists()).toBe(false)
-
-    wrapper.getComponent(PickerStub).vm.$emit('select', groups[0])
     await flushPromises()
 
     expect(wrapper.find('[data-test="picker"]').exists()).toBe(false)
-    expect(wrapper.get('[data-test="create-modal"]').text()).toBe('openai-pool')
+    expect(wrapper.getComponent(CreateModalStub).props('presetGroup')).toBeNull()
+    expect(wrapper.find('[data-test="create-modal"]').exists()).toBe(true)
   })
 
   it('reopens the picker above the form to change the target group', async () => {
+    route = reactive({ query: { create: '1', group: '5' } })
     const wrapper = mountView()
     await flushPromises()
-    await wrapper.get('[data-test="create-account"]').trigger('click')
-    wrapper.getComponent(PickerStub).vm.$emit('select', groups[0])
-    await flushPromises()
+    expect(wrapper.get('[data-test="create-modal"]').text()).toBe('openai-pool')
 
     wrapper.getComponent(CreateModalStub).vm.$emit('change-group')
     await flushPromises()
@@ -166,19 +162,38 @@ describe('admin AccountsView target group flow', () => {
 
     picker.vm.$emit('select', groups[1])
     await flushPromises()
+    expect(wrapper.find('[data-test="picker"]').exists()).toBe(false)
     expect(wrapper.get('[data-test="create-modal"]').text()).toBe('acme-claude')
   })
 
-  it('sends the admin to the groups page to create a missing group', async () => {
+  it('lets the admin drop the target group from the picker', async () => {
+    route = reactive({ query: { create: '1', group: '5' } })
     const wrapper = mountView()
     await flushPromises()
-    await wrapper.get('[data-test="create-account"]').trigger('click')
+
+    wrapper.getComponent(CreateModalStub).vm.$emit('change-group')
+    await flushPromises()
+    wrapper.getComponent(PickerStub).vm.$emit('skip')
+    await flushPromises()
+
+    expect(wrapper.find('[data-test="picker"]').exists()).toBe(false)
+    expect(wrapper.getComponent(CreateModalStub).props('presetGroup')).toBeNull()
+    expect(wrapper.find('[data-test="create-modal"]').exists()).toBe(true)
+  })
+
+  it('sends the admin to the groups page to create a missing group', async () => {
+    route = reactive({ query: { create: '1', group: '5' } })
+    const wrapper = mountView()
+    await flushPromises()
+    wrapper.getComponent(CreateModalStub).vm.$emit('change-group')
+    await flushPromises()
 
     wrapper.getComponent(PickerStub).vm.$emit('create-group', 'managed')
     await flushPromises()
 
     expect(router.push).toHaveBeenCalledWith({ path: '/admin/groups', query: { create: '1', kind: 'managed' } })
     expect(wrapper.find('[data-test="picker"]').exists()).toBe(false)
+    expect(wrapper.find('[data-test="create-modal"]').exists()).toBe(false)
   })
 
   it('opens the form with the group from the route and filters the list by it', async () => {
@@ -191,14 +206,14 @@ describe('admin AccountsView target group flow', () => {
     expect(router.replace).toHaveBeenCalledWith({ query: { group: '7' } })
   })
 
-  it('falls back to the picker when the route group is unknown', async () => {
+  it('opens the form without a group when the route group is unknown', async () => {
     route = reactive({ query: { create: '1', group: '999' } })
     const wrapper = mountView()
     await flushPromises()
 
-    expect(wrapper.find('[data-test="create-modal"]').exists()).toBe(false)
-    expect(wrapper.getComponent(PickerStub).props('initialGroupId')).toBe(999)
-    expect(wrapper.find('[data-test="picker"]').exists()).toBe(true)
+    expect(wrapper.find('[data-test="picker"]').exists()).toBe(false)
+    expect(wrapper.getComponent(CreateModalStub).props('presetGroup')).toBeNull()
+    expect(wrapper.find('[data-test="create-modal"]').exists()).toBe(true)
   })
 
   it('highlights ungrouped accounts and filters to them on demand', async () => {

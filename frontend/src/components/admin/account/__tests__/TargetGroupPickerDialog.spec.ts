@@ -88,6 +88,15 @@ describe('TargetGroupPickerDialog', () => {
     expect(wrapper.emitted('create-group')?.[0]).toEqual(['managed'])
   })
 
+  it('lets the admin continue without a group', async () => {
+    const wrapper = mountPicker([])
+
+    await wrapper.get('[data-testid="target-group-skip"]').trigger('click')
+
+    expect(wrapper.emitted('skip')).toHaveLength(1)
+    expect(wrapper.emitted('select')).toBeUndefined()
+  })
+
   it('filters long lists by name', async () => {
     const many = Array.from({ length: 8 }, (_, index) =>
       group({ id: 10 + index, name: index === 5 ? 'special-pool' : `pool-${index}`, platform: 'openai' })

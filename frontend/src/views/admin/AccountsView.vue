@@ -14,7 +14,7 @@
           <AccountTableActions
             :loading="loading"
             @refresh="handleManualRefresh"
-            @create="openCreateFlow()"
+            @create="openCreateAccount()"
           >
             <template #after>
               <!-- Auto Refresh Dropdown -->
@@ -496,6 +496,7 @@
       :z-index="showCreate ? 60 : 50"
       @close="showTargetGroupPicker = false"
       @select="handleTargetGroupSelected"
+      @skip="openCreateAccount()"
       @create-group="handleCreateGroupFromPicker"
     />
     <CreateAccountModal
@@ -506,7 +507,7 @@
       :preset-group="createPresetGroup"
       @close="closeCreateAccount"
       @created="handleAccountCreated"
-      @change-group="openCreateFlow(createPresetGroup?.id ?? null)"
+      @change-group="openTargetGroupPicker(createPresetGroup?.id ?? null)"
     />
     <EditAccountModal :show="showEdit" :account="edAcc" :proxies="proxies" :clash-exits="clashExits" :groups="groups" @close="showEdit = false" @updated="handleAccountEdited" />
     <ReAuthAccountModal :show="showReAuth" :account="reAuthAcc" @close="closeReAuthModal" @reauthorized="handleAccountUpdated" />
@@ -2214,17 +2215,20 @@ const handleBulkUpdated = () => {
 const handleDataImported = () => { showImportData.value = false; reload() }
 const ACCOUNT_UNGROUPED_GROUP_QUERY_VALUE = 'ungrouped'
 
-// ==================== 先选分组再建号 ====================
-const openCreateFlow = (initialGroupId: number | null = null) => {
-  targetGroupPickerInitialId.value = initialGroupId
-  showTargetGroupPicker.value = true
-}
-const handleTargetGroupSelected = (group: AdminGroup) => {
+// ==================== 建号（分组可选） ====================
+// 分组不是建号前置条件：直接打开表单，分组可在表单内选择或留空。
+// 目标分组只来自路由意图（分组页「添加账号」），表单内可通过选择器更换或取消。
+const openCreateAccount = (group: AdminGroup | null = null) => {
   createPresetGroup.value = group
   showTargetGroupPicker.value = false
   showCreate.value = true
   void loadClashExits()
 }
+const openTargetGroupPicker = (initialGroupId: number | null = null) => {
+  targetGroupPickerInitialId.value = initialGroupId
+  showTargetGroupPicker.value = true
+}
+const handleTargetGroupSelected = (group: AdminGroup) => openCreateAccount(group)
 const closeCreateAccount = () => {
   showCreate.value = false
   createPresetGroup.value = null
@@ -2253,7 +2257,7 @@ const showUngroupedAccounts = () => {
   reload()
 }
 
-// 路由意图：?group=ID|ungrouped 预置分组筛选；?create=1 直接进入建号流程（可配合 group 预选分组）
+// 路由意图：?group=ID|ungrouped 预置分组筛选；?create=1 直接打开建号表单（可配合 group 预选分组）
 const POSITIVE_ID_PATTERN = /^[1-9]\d*$/
 const firstQueryValue = (value: unknown): string => {
   const raw = Array.isArray(value) ? value[0] : value
@@ -2269,8 +2273,7 @@ const consumeCreateIntent = () => {
   if (firstQueryValue(route?.query.create) !== '1') return
   const groupId = POSITIVE_ID_PATTERN.test(routeGroupFilter) ? Number(routeGroupFilter) : null
   const preset = groupId === null ? undefined : groups.value.find(group => group.id === groupId)
-  if (preset) handleTargetGroupSelected(preset)
-  else openCreateFlow(groupId)
+  openCreateAccount(preset ?? null)
   const rest = { ...(route?.query ?? {}) }
   delete rest.create
   void router?.replace({ query: rest })

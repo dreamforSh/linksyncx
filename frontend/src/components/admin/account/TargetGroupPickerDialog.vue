@@ -142,6 +142,14 @@
       <button type="button" class="btn btn-secondary" @click="emit('close')">{{ t('common.cancel') }}</button>
       <button
         type="button"
+        class="btn btn-secondary"
+        data-testid="target-group-skip"
+        @click="emit('skip')"
+      >
+        {{ t('admin.accounts.targetGroup.skip') }}
+      </button>
+      <button
+        type="button"
         class="btn btn-primary"
         :disabled="!selectedGroup"
         data-tour="account-target-group-next"
@@ -180,6 +188,8 @@ const props = withDefaults(defineProps<{
 const emit = defineEmits<{
   (e: 'close'): void
   (e: 'select', group: AdminGroup): void
+  // 不指定分组：分组是可选项，账号可以先不归属任何分组
+  (e: 'skip'): void
   (e: 'create-group', kind: GroupKind): void
 }>()
 

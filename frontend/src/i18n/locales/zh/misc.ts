@@ -210,16 +210,6 @@ export default {
         description:
           '<div style="line-height: 1.7;"><p style="margin-bottom: 12px;">点击按钮开始添加您的第一个上游账号。</p><p style="padding: 8px 12px; background: #f0fdf4; border-left: 3px solid #10b981; border-radius: 4px; font-size: 13px;"><b>💡 提示：</b>建议使用 OAuth 方式，更安全且无需手动提取密钥</p><p style="margin-top: 12px; color: #10b981; font-weight: 600;">👉 点击"添加账号"按钮</p></div>'
       },
-      accountTargetGroup: {
-        title: '🗂️ 选择目标分组',
-        description:
-          '<div style="line-height: 1.7;"><p style="margin-bottom: 12px;">账号必须归属分组。选中刚才创建的分组，新账号会直接加入其中，平台也由分组决定。</p><p style="padding: 8px 12px; background: #eff6ff; border-left: 3px solid #3b82f6; border-radius: 4px; font-size: 13px;"><b>💡 两类分组：</b>渠道分组是公共账号池；管理分组面向企业 / Team，账号只属于该分组。</p></div>'
-      },
-      accountTargetGroupNext: {
-        title: '👉 进入账号表单',
-        description:
-          '<div style="line-height: 1.7;"><p>选好分组后，点击「下一步」填写账号信息。</p></div>'
-      },
       accountName: {
         title: '✏️ 1. 账号名称',
         description:

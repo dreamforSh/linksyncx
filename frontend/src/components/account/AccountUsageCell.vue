@@ -56,6 +56,8 @@
           label="7d"
           :utilization="usageInfo.seven_day.utilization"
           :resets-at="usageInfo.seven_day.resets_at"
+          :window-stats="usageInfo.seven_day.window_stats"
+          :estimated-total-cost="sevenDayEstimatedTotalCost"
           color="emerald"
         />
 
@@ -179,7 +181,7 @@
           :utilization="usageInfo.seven_day.utilization"
           :resets-at="usageInfo.seven_day.resets_at"
           :window-stats="usageInfo.seven_day.window_stats"
-          :estimated-total-cost="openAISevenDayEstimatedTotalCost"
+          :estimated-total-cost="sevenDayEstimatedTotalCost"
           :show-now-when-idle="true"
           color="emerald"
         />
@@ -426,6 +428,7 @@
             :utilization="grokWeeklyBillingBar.utilization"
             :resets-at="grokWeeklyBillingBar.resetsAt"
             :window-stats="grokWeeklyBillingBar.windowStats"
+            :estimated-total-cost="grokWeeklyBillingBar.estimatedTotalCost"
             :show-now-when-idle="true"
             color="indigo"
           />
@@ -435,6 +438,7 @@
             :utilization="grokMonthlyBillingBar.utilization"
             :resets-at="grokMonthlyBillingBar.resetsAt"
             :window-stats="grokMonthlyBillingBar.windowStats"
+            :estimated-total-cost="grokMonthlyBillingBar.estimatedTotalCost"
             :show-now-when-idle="true"
             color="indigo"
           />
@@ -855,10 +859,9 @@ const hasOpenAIUsageFallback = computed(() => {
   return !!usageInfo.value?.five_hour || !!usageInfo.value?.seven_day
 })
 
-const openAISevenDayEstimatedTotalCost = computed(() => {
-  const sevenDay = usageInfo.value?.seven_day
-  const utilization = sevenDay?.utilization
-  const currentCost = sevenDay?.window_stats?.cost
+// 按窗口内已产生的本地费用与使用率线性外推到 100% 使用率时的总费用；输入无效时不展示
+const estimateTotalCost = (utilization?: number | null, windowStats?: WindowStats | null): number | null => {
+  const currentCost = windowStats?.cost
   if (
     typeof utilization !== 'number' ||
     typeof currentCost !== 'number' ||
@@ -872,6 +875,12 @@ const openAISevenDayEstimatedTotalCost = computed(() => {
 
   const estimate = (currentCost * 100) / utilization
   return Number.isFinite(estimate) && estimate > 0 ? estimate : null
+}
+
+// OpenAI / Claude OAuth 的 7d 窗口
+const sevenDayEstimatedTotalCost = computed(() => {
+  const sevenDay = usageInfo.value?.seven_day
+  return estimateTotalCost(sevenDay?.utilization, sevenDay?.window_stats)
 })
 
 const openAIUsageRefreshKey = computed(() => buildOpenAIUsageRefreshKey(props.account))
@@ -1213,6 +1222,7 @@ interface GrokQuotaBarInfo {
   utilization: number
   resetsAt: string | null
   windowStats?: WindowStats | null
+  estimatedTotalCost: number | null
 }
 
 const grokBilling = computed(() => usageInfo.value?.grok_billing || null)
@@ -1227,10 +1237,12 @@ const grokWeeklyBillingBar = computed((): GrokQuotaBarInfo | null => {
   if (billing?.period_type?.toLowerCase() !== 'weekly' || billing.usage_percent == null) {
     return null
   }
+  const utilization = Math.min(100, Math.max(0, billing.usage_percent))
   return {
-    utilization: Math.min(100, Math.max(0, billing.usage_percent)),
+    utilization,
     resetsAt: billing.period_end || null,
-    windowStats: grokLocalUsage7d.value
+    windowStats: grokLocalUsage7d.value,
+    estimatedTotalCost: estimateTotalCost(utilization, grokLocalUsage7d.value)
   }
 })
 // Monthly used/limit % from billing probe (used_percent or derived from cents).
@@ -1252,10 +1264,12 @@ const grokMonthlyBillingBar = computed((): GrokQuotaBarInfo | null => {
   if (billing.period_type?.toLowerCase() === 'weekly' && billing.monthly_limit_cents == null) {
     return null
   }
+  const clamped = Math.min(100, Math.max(0, utilization))
   return {
-    utilization: Math.min(100, Math.max(0, utilization)),
+    utilization: clamped,
     resetsAt: billing.billing_period_end || billing.period_end || null,
-    windowStats: grokLocalUsageMonthly.value
+    windowStats: grokLocalUsageMonthly.value,
+    estimatedTotalCost: estimateTotalCost(clamped, grokLocalUsageMonthly.value)
   }
 })
 const formatGrokMoney = (value?: number | null) => {

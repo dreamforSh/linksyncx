@@ -117,13 +117,14 @@ const (
 
 // UsageCache 封装账户使用量相关的缓存
 type UsageCache struct {
-	apiCache          sync.Map           // accountID -> *apiUsageCache
-	windowStatsCache  sync.Map           // accountID -> *windowStatsCache
-	antigravityCache  sync.Map           // accountID -> *antigravityUsageCache
-	apiFlight         singleflight.Group // 防止同一账号的并发请求击穿缓存（Anthropic）
-	antigravityFlight singleflight.Group // 防止同一 Antigravity 账号的并发请求击穿缓存
-	openAIProbeCache  sync.Map           // accountID -> time.Time
-	grokProbeCache    sync.Map           // accountID -> last billing probe attempt
+	apiCache           sync.Map           // accountID -> *apiUsageCache
+	windowStatsCache   sync.Map           // accountID -> *windowStatsCache（5h 窗口）
+	sevenDayStatsCache sync.Map           // accountID -> *windowStatsCache（7d 窗口）
+	antigravityCache   sync.Map           // accountID -> *antigravityUsageCache
+	apiFlight          singleflight.Group // 防止同一账号的并发请求击穿缓存（Anthropic）
+	antigravityFlight  singleflight.Group // 防止同一 Antigravity 账号的并发请求击穿缓存
+	openAIProbeCache   sync.Map           // accountID -> time.Time
+	grokProbeCache     sync.Map           // accountID -> last billing probe attempt
 }
 
 // NewUsageCache 创建 UsageCache 实例
@@ -1402,50 +1403,42 @@ func enrichUsageWithAccountError(info *UsageInfo, account *Account) {
 // addWindowStats 为 usage 数据添加窗口期统计
 // 使用独立缓存（1 分钟），与 API 缓存分离
 func (s *AccountUsageService) addWindowStats(ctx context.Context, account *Account, usage *UsageInfo) {
-	// 修复：即使 FiveHour 为 nil，也要尝试获取统计数据
-	// 因为 SevenDay/SevenDaySonnet/SevenDayFable 可能需要
-	if usage.FiveHour == nil && usage.SevenDay == nil && usage.SevenDaySonnet == nil && usage.SevenDayFable == nil {
-		return
-	}
-
-	// 检查窗口统计缓存（1 分钟）
-	var windowStats *WindowStats
-	if cached, ok := s.cache.windowStatsCache.Load(account.ID); ok {
-		if cache, ok := cached.(*windowStatsCache); ok && time.Since(cache.timestamp) < windowStatsCacheTTL {
-			windowStats = cache.stats
-		}
-	}
-
-	// 如果没有缓存，从数据库查询
-	if windowStats == nil {
-		// 使用统一的窗口开始时间计算逻辑（考虑窗口过期情况）
-		startTime := account.GetCurrentWindowStartTime()
-
-		stats, err := s.usageLogRepo.GetAccountWindowStats(ctx, account.ID, startTime)
-		if err != nil {
-			log.Printf("Failed to get window stats for account %d: %v", account.ID, err)
-			return
-		}
-
-		windowStats = &WindowStats{
-			Requests:     stats.Requests,
-			Tokens:       stats.Tokens,
-			Cost:         stats.Cost,
-			StandardCost: stats.StandardCost,
-			UserCost:     stats.UserCost,
-		}
-
-		// 缓存窗口统计（1 分钟）
-		s.cache.windowStatsCache.Store(account.ID, &windowStatsCache{
-			stats:     windowStats,
-			timestamp: time.Now(),
-		})
-	}
-
-	// 为 FiveHour 添加 WindowStats（5h 窗口统计）
 	if usage.FiveHour != nil {
-		usage.FiveHour.WindowStats = windowStats
+		// 使用统一的窗口开始时间计算逻辑（考虑窗口过期情况）
+		if stats := s.cachedWindowStats(ctx, &s.cache.windowStatsCache, account.ID, account.GetCurrentWindowStartTime()); stats != nil {
+			usage.FiveHour.WindowStats = stats
+		}
 	}
+
+	// 7d 窗口统计：前端据此按 7d 使用率估算满额总费用（与 OpenAI 7d 窗口一致）
+	if usage.SevenDay != nil {
+		start := codexWindowStatsStart(usage.SevenDay, 7*24*time.Hour, time.Now())
+		if stats := s.cachedWindowStats(ctx, &s.cache.sevenDayStatsCache, account.ID, start); stats != nil {
+			usage.SevenDay.WindowStats = stats
+		}
+	}
+}
+
+// cachedWindowStats 查询账号自 startTime 起的本地窗口统计，按账号缓存 1 分钟；查询失败返回 nil。
+func (s *AccountUsageService) cachedWindowStats(ctx context.Context, cache *sync.Map, accountID int64, startTime time.Time) *WindowStats {
+	if cached, ok := cache.Load(accountID); ok {
+		if entry, ok := cached.(*windowStatsCache); ok && time.Since(entry.timestamp) < windowStatsCacheTTL {
+			return entry.stats
+		}
+	}
+
+	stats, err := s.usageLogRepo.GetAccountWindowStats(ctx, accountID, startTime)
+	if err != nil {
+		log.Printf("Failed to get window stats for account %d: %v", accountID, err)
+		return nil
+	}
+
+	windowStats := windowStatsFromAccountStats(stats)
+	cache.Store(accountID, &windowStatsCache{
+		stats:     windowStats,
+		timestamp: time.Now(),
+	})
+	return windowStats
 }
 
 // GetTodayStats 获取账号今日统计

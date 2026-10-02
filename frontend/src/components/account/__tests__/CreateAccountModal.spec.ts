@@ -738,7 +738,7 @@ describe('CreateAccountModal target group', () => {
     showErrorMock.mockReset()
   })
 
-  it('refuses to create an account without any group', async () => {
+  it('creates an account without any group', async () => {
     const wrapper = mountModal([], null)
     await selectButtonByText(wrapper, 'OpenAI')
     await selectButtonByText(wrapper, 'API Key')
@@ -747,8 +747,9 @@ describe('CreateAccountModal target group', () => {
     await wrapper.get('form#create-account-form').trigger('submit.prevent')
     await flushPromises()
 
-    expect(showErrorMock).toHaveBeenCalledWith('admin.accounts.groupRequired')
-    expect(createAccountMock).not.toHaveBeenCalled()
+    expect(showErrorMock).not.toHaveBeenCalled()
+    expect(createAccountMock).toHaveBeenCalledTimes(1)
+    expect(createAccountMock.mock.calls[0]?.[0]).toMatchObject({ platform: 'openai', group_ids: [] })
   })
 
   it('locks the platform to the preset channel group and binds it on submit', async () => {
@@ -788,6 +789,22 @@ describe('CreateAccountModal target group', () => {
 
     expect(showErrorMock).toHaveBeenCalledWith('admin.accounts.managedGroupExclusive')
     expect(createAccountMock).not.toHaveBeenCalled()
+  })
+
+  it('drops the preset group when the target group is cleared', async () => {
+    const wrapper = mountModal([openaiPool, acmeClaude], openaiPool)
+    await flushPromises()
+    await wrapper.setProps({ presetGroup: null })
+    await flushPromises()
+
+    expect(wrapper.find('[data-testid="create-account-target-group"]').exists()).toBe(false)
+    await selectButtonByText(wrapper, 'API Key')
+    await wrapper.get('form#create-account-form input[type="text"]').setValue('ungrouped')
+    await wrapper.get('form#create-account-form input[type="password"]').setValue('test-api-key')
+    await wrapper.get('form#create-account-form').trigger('submit.prevent')
+    await flushPromises()
+
+    expect(createAccountMock.mock.calls[0]?.[0]).toMatchObject({ platform: 'openai', group_ids: [] })
   })
 
   it('asks the parent to change the target group', async () => {
