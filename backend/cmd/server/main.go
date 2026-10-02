@@ -140,6 +140,10 @@ func runSetupServer() {
 }
 
 func runMainServer() {
+	shutdownTimeout, err := parseShutdownTimeout(os.Getenv("SHUTDOWN_TIMEOUT_SECONDS"))
+	if err != nil {
+		log.Fatal(err)
+	}
 	cfg, err := config.LoadForBootstrap()
 	if err != nil {
 		log.Fatalf("Failed to load config: %v", err)
@@ -161,7 +165,17 @@ func runMainServer() {
 	if err != nil {
 		log.Fatalf("Failed to initialize application: %v", err)
 	}
-	defer app.Cleanup()
+	cleanupSafe := true
+	defer func() {
+		if !cleanupSafe {
+			log.Println("Skipping dependency cleanup: request handlers remain active; settlement may be incomplete")
+			return
+		}
+		if !cleanupWithin(app.Cleanup, applicationCleanupTimeout) {
+			log.Printf("Application cleanup exceeded %s; pending work may remain", applicationCleanupTimeout)
+		}
+	}()
+	installHTTPDrain(app.Server)
 	if app.PluginManager != nil {
 		if err := app.PluginManager.Start(context.Background()); err != nil {
 			log.Printf("Plugin manager started in degraded state: %v", err)
@@ -198,15 +212,14 @@ func runMainServer() {
 	// 等待中断信号
 	quit := make(chan os.Signal, 1)
 	signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM)
+	defer signal.Stop(quit)
 	<-quit
 
 	log.Println("Shutting down server...")
 
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-
-	if err := app.Server.Shutdown(ctx); err != nil {
-		log.Printf("Server forced to shutdown: %v", err)
+	cleanupSafe, err = shutdownHTTPServer(app.Server, shutdownTimeout)
+	if err != nil {
+		log.Printf("Server shutdown ended with error (handlers drained=%t): %v", cleanupSafe, err)
 	}
 
 	log.Println("Server exited")

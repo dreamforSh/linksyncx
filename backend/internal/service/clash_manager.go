@@ -494,7 +494,7 @@ func (m *ClashManager) leaderCycle(ctx context.Context) {
 	// Probes need a core that runs the current configuration; otherwise a
 	// local outage would be mistaken for dead nodes.
 	synced := m.runtime.Ready() && m.currentHash() != ""
-	if synced {
+	if synced && settings.AutomaticProbesEnabled {
 		views, err := m.svc.repo.ListAllNodeViews(ctx)
 		if err != nil {
 			m.log().Warn("load clash nodes failed", zap.Error(err))

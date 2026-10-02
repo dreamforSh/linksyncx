@@ -11,9 +11,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// 自定义 curves 却没有写 key_share_groups 时，key_share 继承默认的 [4588, 29]，与 curves 不自洽：
-// 直连与经代理的 DialTLSContext 都要在建连之前拒绝，而不是发出一个不像任何客户端的 ClientHello。
-func TestValidateProfileRejectsKeyShareOutsideSupportedGroupsBeforeDial(t *testing.T) {
+func TestCRSTLSRejectsKeyShareOutsideSupportedGroupsBeforeDial(t *testing.T) {
 	calls := 0
 	dialer := NewDialer(&Profile{Curves: []uint16{29}}, func(context.Context, string, string) (net.Conn, error) {
 		calls++
@@ -22,12 +20,10 @@ func TestValidateProfileRejectsKeyShareOutsideSupportedGroupsBeforeDial(t *testi
 	_, err := dialer.DialTLSContext(t.Context(), "tcp", "example.invalid:443")
 	require.ErrorContains(t, err, "key share")
 	require.Zero(t, calls)
-
 	require.NoError(t, ValidateProfile(&Profile{Curves: []uint16{29}, KeyShareGroups: []uint16{29}}))
 	require.NoError(t, ValidateProfile(nil))
 	require.NoError(t, ValidateProfile(&Profile{}))
 	require.ErrorContains(t, ValidateProfile(&Profile{Curves: []uint16{29}, KeyShareGroups: []uint16{29, 23}}), "key share 23")
-
 	for _, raw := range []string{"http://proxy.invalid:8080", "https://proxy.invalid:443", "socks5h://proxy.invalid:1080"} {
 		t.Run(raw, func(t *testing.T) {
 			proxyURL, err := url.Parse(raw)
@@ -44,8 +40,17 @@ func TestValidateProfileRejectsKeyShareOutsideSupportedGroupsBeforeDial(t *testi
 	}
 }
 
-// 每个 dialer 独占一份会话票据缓存，不同账号/代理的 TLS 会话不会互相复用。
-func TestTLSSessionTicketsAreScopedToDialer(t *testing.T) {
+func TestCRSTLSProfileCacheKeyTracksWireConfiguration(t *testing.T) {
+	a := &Profile{Name: "before", Curves: []uint16{29}, KeyShareGroups: []uint16{29}}
+	b := *a
+	b.Name = "renamed"
+	require.Equal(t, ProfileCacheKey(a), ProfileCacheKey(&b))
+	b.KeyShareGroups = []uint16{23}
+	require.NotEqual(t, ProfileCacheKey(a), ProfileCacheKey(&b))
+	require.Equal(t, ProfileCacheKey(nil), ProfileCacheKey(&Profile{}))
+}
+
+func TestCRSTLSSessionTicketsAreScopedToDialer(t *testing.T) {
 	proxyURL, err := url.Parse("http://127.0.0.1:1080")
 	require.NoError(t, err)
 	caches := []utls.ClientSessionCache{

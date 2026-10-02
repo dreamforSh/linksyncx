@@ -103,7 +103,9 @@ func (s *ClashService) requireEnabled() error {
 func (s *ClashService) poolSettings(ctx context.Context) *ClashPoolSettings {
 	settings, err := s.settings.GetClashPoolSettings(ctx)
 	if err != nil || settings == nil {
-		return defaultClashPoolSettings()
+		fallback := defaultClashPoolSettings()
+		fallback.AutomaticProbesEnabled = false
+		return fallback
 	}
 	return settings
 }

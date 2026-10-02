@@ -34,9 +34,8 @@ const (
 )
 
 func (s *GatewayService) shouldRetryUpstreamError(account *Account, statusCode int) bool {
-	// OAuth/Setup Token 账号：不做同账号重试。403 是账号级的权限/封禁信号，用同一个 token
-	// 立刻再发几次结果不会变，只是多打上游风控；直接走 failover，账号标记见 handleFailoverSideEffects。
-	if account.IsOAuth() {
+	// Authentication and permission errors are terminal for this account.
+	if isTerminalClaudeAuthorizationError(account, statusCode) || account.IsOAuth() {
 		return false
 	}
 
@@ -242,7 +241,10 @@ func (s *GatewayService) Forward(ctx context.Context, c *gin.Context, account *A
 		normalizeOpts := claudeOAuthNormalizeOptions{}
 		if s.identityService != nil && c != nil {
 			fp, err := s.identityService.GetOrCreateFingerprint(ctx, account.ID, c.Request.Header)
-			if err == nil && fp != nil {
+			if err != nil {
+				return nil, fmt.Errorf("account identity unavailable: %w", err)
+			}
+			if fp != nil {
 				// metadata 透传开启时跳过 metadata 注入
 				_, mimicMPT, _ := s.settingService.GetGatewayForwardingSettings(ctx)
 				if !mimicMPT {
@@ -367,7 +369,6 @@ func (s *GatewayService) Forward(ctx context.Context, c *gin.Context, account *A
 	tlsProfile := s.tlsFPProfileService.ResolveTLSProfile(account)
 
 	// 调试日志：记录即将转发的账号信息
-	// 只记代理 ID，不记代理 URL（URL 里带代理账号密码）。
 	var logProxyID int64
 	if account.ProxyID != nil {
 		logProxyID = *account.ProxyID

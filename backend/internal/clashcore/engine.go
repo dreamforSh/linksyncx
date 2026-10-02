@@ -289,7 +289,7 @@ func moduleVersion() string {
 	}
 	for _, dep := range info.Deps {
 		if dep.Path == mihomoModulePath {
-			if dep.Replace != nil {
+			if dep.Replace != nil && dep.Replace.Version != "" {
 				return dep.Replace.Version
 			}
 			return dep.Version

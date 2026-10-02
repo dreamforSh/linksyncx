@@ -151,7 +151,7 @@ jobs:
             BINARY=sub2api.exe
           fi
           BUILD_DATE="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
-          CGO_ENABLED=0 go build -C backend -tags embed \
+          CGO_ENABLED=0 python3 backend/scripts/crs_go.py build -tags embed \
             -ldflags "-s -w -X main.Version=$VERSION -X main.UpstreamVersion=$UPSTREAM_VERSION -X main.Commit=$GITHUB_SHA -X main.Date=$BUILD_DATE -X main.BuildType=release" \
             -o "../package/$BINARY" ./cmd/server
 

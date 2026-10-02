@@ -6,7 +6,6 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
-	"log/slog"
 	"net/http"
 	"regexp"
 	"strconv"
@@ -147,16 +146,12 @@ type Fingerprint struct {
 
 // IdentityCache defines cache operations for identity service
 type IdentityCache interface {
-	// GetFingerprint 读取账号指纹：记录不存在返回 (nil, nil)；存储故障或记录损坏返回 error。
+	// A missing record is nil, nil; storage and decoding failures return an error.
 	GetFingerprint(ctx context.Context, accountID int64) (*Fingerprint, error)
-	// SetFingerprint 续期/更新指纹（原子）：只在存储中仍是同一 ClientID（或记录缺失/损坏）时写入；
-	// 若期间其它实例已写入不同身份，则不覆盖并返回存储中的胜者。返回值为写入后的当前记录。
+	// SetFingerprint refreshes only the same identity and returns the current winner.
 	SetFingerprint(ctx context.Context, accountID int64, fp *Fingerprint) (*Fingerprint, error)
-	// CreateFingerprint 首次创建指纹（原子）：存储中已有合法记录时返回该记录（先写者胜出），
-	// 否则写入 fp（损坏记录会被替换）。多实例并发首建时保证所有实例拿到同一身份。
+	// CreateFingerprint atomically returns the stored first-writer winner.
 	CreateFingerprint(ctx context.Context, accountID int64, fp *Fingerprint) (*Fingerprint, error)
-	// GetOrCreateMaskedSessionID 获取固定的伪装会话ID（原子 get-or-create）：已存在则返回现有值，
-	// 否则写入 candidate；两种情况都会刷新 15 分钟 TTL。返回值为 UUID 格式字符串。
 	GetOrCreateMaskedSessionID(ctx context.Context, accountID int64, candidate string) (string, error)
 }
 
@@ -178,12 +173,10 @@ func (s *IdentityService) GetOrCreateFingerprint(ctx context.Context, accountID 
 	clientUA := strings.TrimSpace(headers.Get("User-Agent"))
 	uaAcceptable := isAcceptableFingerprintUserAgent(clientUA)
 
-	// 尝试从缓存获取指纹。读取失败（Redis 不可用 / 记录损坏）不阻塞请求：按缓存缺失处理，
-	// 下方 CreateFingerprint 会原子地复用存储中仍合法的身份或替换损坏记录。
+	// 尝试从缓存获取指纹
 	cached, err := s.cache.GetFingerprint(ctx, accountID)
 	if err != nil {
-		logger.LegacyPrintf("service.identity", "Warning: failed to read fingerprint for account %d: %v", accountID, err)
-		cached = nil
+		return nil, fmt.Errorf("read account identity: %w", err)
 	}
 	if cached != nil {
 		needWrite := false
@@ -242,16 +235,9 @@ func (s *IdentityService) GetOrCreateFingerprint(ctx context.Context, accountID 
 
 		if needWrite {
 			cached.UpdatedAt = time.Now().Unix()
-			// 只续期同一身份：若本地快照已过期、其它实例先写入了新身份，以存储中的胜者为准，
-			// 避免过期快照把新身份覆盖回去。
-			stored, err := s.cache.SetFingerprint(ctx, accountID, cached)
+			cached, err = s.cache.SetFingerprint(ctx, accountID, cached)
 			if err != nil {
-				logger.LegacyPrintf("service.identity", "Warning: failed to refresh fingerprint for account %d: %v", accountID, err)
-			} else if stored != nil {
-				if stored.ClientID != cached.ClientID {
-					logger.LegacyPrintf("service.identity", "Fingerprint for account %d was replaced concurrently, using client_id: %s", accountID, stored.ClientID)
-				}
-				cached = stored
+				return nil, fmt.Errorf("persist account identity: %w", err)
 			}
 		}
 		return cached, nil
@@ -270,20 +256,8 @@ func (s *IdentityService) GetOrCreateFingerprint(ctx context.Context, accountID 
 	fp.ClientID = generateClientID()
 	fp.UpdatedAt = time.Now().Unix()
 
-	// 保存到缓存（7天TTL，每24小时自动续期）。多实例并发首建时由存储裁定先写者，
-	// 所有实例统一使用胜出的身份；写入失败则本次请求降级使用未持久化的临时指纹。
-	stored, err := s.cache.CreateFingerprint(ctx, accountID, fp)
-	if err != nil || stored == nil {
-		logger.LegacyPrintf("service.identity", "Warning: failed to cache fingerprint for account %d: %v", accountID, err)
-		return fp, nil
-	}
-	if stored.ClientID != fp.ClientID {
-		logger.LegacyPrintf("service.identity", "Fingerprint for account %d was created concurrently, using client_id: %s", accountID, stored.ClientID)
-		return stored, nil
-	}
-
-	logger.LegacyPrintf("service.identity", "Created new fingerprint for account %d with client_id: %s", accountID, fp.ClientID)
-	return stored, nil
+	// Redis decides the winner when replicas create the same account concurrently.
+	return s.cache.CreateFingerprint(ctx, accountID, fp)
 }
 
 // createFingerprintFromHeaders 从请求头创建指纹
@@ -473,27 +447,14 @@ func (s *IdentityService) RewriteUserIDWithMasking(ctx context.Context, body []b
 		return newBody, nil
 	}
 
-	// 获取或生成固定的伪装 session ID：原子 get-or-create 并顺带刷新 15 分钟 TTL，
-	// 并发首建时所有实例拿到同一个值，不会在一段会话内反复变化。
-	candidate := generateRandomUUID()
-	maskedSessionID, err := s.cache.GetOrCreateMaskedSessionID(ctx, account.ID, candidate)
+	maskedSessionID, err := s.cache.GetOrCreateMaskedSessionID(ctx, account.ID, generateRandomUUID())
 	if err != nil {
-		logger.LegacyPrintf("service.identity", "Warning: failed to get masked session ID for account %d: %v", account.ID, err)
-		return newBody, nil
-	}
-	if maskedSessionID == candidate {
-		logger.LegacyPrintf("service.identity", "Generated new masked session ID for account %d: %s", account.ID, maskedSessionID)
+		return nil, fmt.Errorf("account session unavailable: %w", err)
 	}
 
 	// 用 FormatMetadataUserID 重建（保持与 RewriteUserID 相同的格式）
 	version := ExtractCLIVersion(fingerprintUA)
 	newUserID := FormatMetadataUserID(uidParsed.DeviceID, uidParsed.AccountUUID, maskedSessionID, version)
-
-	slog.Debug("session_id_masking_applied",
-		"account_id", account.ID,
-		"before", userID,
-		"after", newUserID,
-	)
 
 	if newUserID == userID {
 		return newBody, nil
@@ -501,7 +462,7 @@ func (s *IdentityService) RewriteUserIDWithMasking(ctx context.Context, body []b
 
 	maskedBody, setErr := sjson.SetBytes(newBody, "metadata.user_id", newUserID)
 	if setErr != nil {
-		return newBody, nil
+		return nil, setErr
 	}
 	return maskedBody, nil
 }

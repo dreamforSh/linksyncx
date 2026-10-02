@@ -58,34 +58,16 @@ func decodeFingerprint(val string) (*service.Fingerprint, error) {
 	return &fp, nil
 }
 
-// storedClientIDLua 解析存储中的指纹记录并取出 ClientID；记录缺失、损坏或没有 ClientID 时为 nil。
-// cjson.decode 用 pcall 包住：真实 Redis 遇到非法 JSON 会抛错，miniredis 则返回 nil，两种都按损坏处理。
-const storedClientIDLua = `
-local function storedClientID(current)
-    if not current then return nil end
+var refreshFingerprintScript = redis.NewScript(`
+local current = redis.call('GET', KEYS[1])
+if current then
     local ok, identity = pcall(cjson.decode, current)
-    if not ok or type(identity) ~= 'table' then return nil end
-    if type(identity.ClientID) ~= 'string' or identity.ClientID == '' then return nil end
-    return identity.ClientID
+    if not ok or type(identity) ~= 'table' or type(identity.ClientID) ~= 'string' or identity.ClientID == '' then
+        return redis.error_reply('invalid stored account identity')
+    end
+    if identity.ClientID ~= ARGV[2] then return current end
 end
-`
-
-// refreshFingerprintScript 续期/更新指纹：存储中仍是同一 ClientID（或记录缺失/损坏）时写入 ARGV[1]，
-// 否则说明其它实例已写入新身份，不覆盖并返回存储中的记录。
-var refreshFingerprintScript = redis.NewScript(storedClientIDLua + `
-local current = redis.call('GET', KEYS[1])
-local clientID = storedClientID(current)
-if clientID and clientID ~= ARGV[2] then return current end
 redis.call('SET', KEYS[1], ARGV[1], 'PX', ARGV[3])
-return ARGV[1]
-`)
-
-// createFingerprintScript 首次创建指纹：存储中已有合法记录时原样返回（先写者胜出），
-// 否则写入 ARGV[1]；损坏记录（非法 JSON / 无 ClientID）视同缺失而被替换。
-var createFingerprintScript = redis.NewScript(storedClientIDLua + `
-local current = redis.call('GET', KEYS[1])
-if storedClientID(current) then return current end
-redis.call('SET', KEYS[1], ARGV[1], 'PX', ARGV[2])
 return ARGV[1]
 `)
 
@@ -103,6 +85,15 @@ func (c *identityCache) SetFingerprint(ctx context.Context, accountID int64, fp 
 	}
 	return decodeFingerprint(stored)
 }
+
+// Creation and winner selection share one Redis operation. Existing malformed
+// records are returned for decoding and never silently replaced with a new identity.
+var createFingerprintScript = redis.NewScript(`
+local current = redis.call('GET', KEYS[1])
+if current then return current end
+redis.call('SET', KEYS[1], ARGV[1], 'PX', ARGV[2])
+return ARGV[1]
+`)
 
 func (c *identityCache) CreateFingerprint(ctx context.Context, accountID int64, fp *service.Fingerprint) (*service.Fingerprint, error) {
 	if fp == nil || fp.ClientID == "" {

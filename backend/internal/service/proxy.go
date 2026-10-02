@@ -99,11 +99,7 @@ func resolveProxyURLByID(ctx context.Context, repo ProxyRepository, proxyID *int
 	if proxy == nil {
 		return "", fmt.Errorf("%w: proxy %d not found", ErrAccountProxyUnavailable, *proxyID)
 	}
-	proxyURL := proxy.URL()
-	if proxyURL == "" {
-		return "", fmt.Errorf("%w: proxy %d has an empty url", ErrAccountProxyUnavailable, *proxyID)
-	}
-	return proxyURL, nil
+	return (&Account{ProxyID: proxyID, Proxy: proxy}).ProxyURLForOutbound()
 }
 
 // accountProxyURLWithRepo 返回账号出站代理 URL：优先用已加载且与 ProxyID 一致的 Proxy 关系，
@@ -142,4 +138,12 @@ type ProxyAccountSummary struct {
 	Platform string
 	Type     string
 	Notes    *string
+}
+
+// accountProxyURL distinguishes intentional direct routing from a broken binding.
+func accountProxyURL(account *Account) (string, error) {
+	if account == nil {
+		return "", fmt.Errorf("account is required")
+	}
+	return account.ProxyURLForOutbound()
 }

@@ -491,6 +491,10 @@ export default {
           label: '出口 IP 变化时',
           hint: '节点出口 IP 原地变化后的处理方式'
         },
+        automatic_probes_enabled: {
+          label: '自动探测',
+          hint: '关闭后暂停后台延迟、出口 IP 和关联平台探测；手动检测仍可用。订阅刷新单独配置。'
+        },
         health_test_url: {
           label: '健康检查 URL',
           hint: '经节点请求该地址测量延迟'

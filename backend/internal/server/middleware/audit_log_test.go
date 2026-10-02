@@ -3,6 +3,7 @@ package middleware
 import (
 	"bytes"
 	"context"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"sync"
@@ -13,6 +14,50 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/require"
 )
+
+func TestCRSClashProfileAuditOmitsCredentialsAndPreservesHandlerBody(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	repository := &auditCaptureRepository{}
+	auditService := service.NewAuditLogService(repository, nil)
+	auditService.Start()
+	t.Cleanup(auditService.Stop)
+	router := gin.New()
+	router.Use(gin.HandlerFunc(NewAuditLogMiddleware(auditService)))
+	const secretBody = `{"url":"https://sub.example.com/path-canary?token=query-canary","content":"trojan://content-canary@node.example.com:443","local_config":"local-config-canary","source":"source-canary"}`
+	handler := func(c *gin.Context) {
+		body, err := io.ReadAll(c.Request.Body)
+		require.NoError(t, err)
+		require.Equal(t, secretBody, string(body))
+		c.Status(http.StatusNoContent)
+	}
+	router.POST("/api/v1/admin/clash/profiles", handler)
+	router.PUT("/api/v1/admin/clash/profiles/:id", handler)
+	router.POST("/api/v1/admin/clash/profiles/preview", handler)
+	router.PUT("/api/v1/admin/accounts/:id", func(c *gin.Context) { c.Status(http.StatusNoContent) })
+	for _, request := range []*http.Request{
+		httptest.NewRequest(http.MethodPost, "/api/v1/admin/clash/profiles", bytes.NewBufferString(secretBody)),
+		httptest.NewRequest(http.MethodPut, "/api/v1/admin/clash/profiles/42", bytes.NewBufferString(secretBody)),
+		httptest.NewRequest(http.MethodPost, "/api/v1/admin/clash/profiles/preview", bytes.NewBufferString(secretBody)),
+		httptest.NewRequest(http.MethodPut, "/api/v1/admin/accounts/42", bytes.NewBufferString(`{"base_url":"https://gateway.example.com","api_key":"api-key-canary"}`)),
+	} {
+		request.Header.Set("Content-Type", "application/json")
+		response := httptest.NewRecorder()
+		router.ServeHTTP(response, request)
+		require.Equal(t, http.StatusNoContent, response.Code)
+	}
+	auditService.Stop()
+	repository.mu.Lock()
+	defer repository.mu.Unlock()
+	require.Len(t, repository.logs, 4)
+	for _, entry := range repository.logs {
+		require.NotContains(t, entry.RequestBody, "canary")
+		if entry.Path == "/api/v1/admin/accounts/:id" {
+			require.Contains(t, entry.RequestBody, "https://gateway.example.com")
+		} else {
+			require.Equal(t, "<credential-bearing body omitted>", entry.RequestBody)
+		}
+	}
+}
 
 func TestDeriveAuditAction(t *testing.T) {
 	cases := []struct {

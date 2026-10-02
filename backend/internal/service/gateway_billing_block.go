@@ -72,18 +72,12 @@ func extractFirstUserText(body []byte) string {
 
 // buildBillingAttributionText 构造 system 数组的 billing attribution 文本。
 //
-// 形态对齐真实 Claude Code CLI 2.1.280：
+// 非 Claude Code 请求使用的旧合成模板：
 //
 //	x-anthropic-billing-header: cc_version=2.1.280.{fp}; cc_entrypoint=cli; cch=00000;
 //
-// cch 字段：2.1.280 二进制实证为**硬编码字面量 `00000` 占位符**（构造函数 t0n 中
-// `E = firstParty&&isFirstPartyBaseURL() ? " cch=00000;" : ""`，全二进制无任何签名
-// 计算）。第一方请求恒带该占位符；仅当客户端指向 localhost/第三方 base URL 时才省略。
-// 第三方实现（如 CLIProxyAPI）自行 xxhash 签名是旧版行为，对当前版本反而失真。
-// cc_version + cc_entrypoint 仍是客户端识别与第一方判定依赖的稳定信号。
-//
-// 此 block 不带 cache_control（与真实 CLI 一致；cache breakpoint 由后续的
-// Claude Code prompt block 承担）。
+// The legacy synthesized template retains a cch placeholder. Its wire value is
+// not verified for current clients; existing client billing blocks are preserved.
 func buildBillingAttributionText(body []byte, cliVersion string) (string, error) {
 	if cliVersion == "" {
 		return "", fmt.Errorf("cliVersion required")
