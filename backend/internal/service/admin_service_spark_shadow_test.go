@@ -449,9 +449,9 @@ func (s *sparkShadowGroupRepoStub) GetByIDLite(_ context.Context, id int64) (*Gr
 	return &Group{ID: id, Platform: PlatformOpenAI, Kind: GroupKindChannel}, nil
 }
 
-// TestCreateShadow_RequiresGroupForUngroupedParent 验证账号必须归属分组:母账号无分组(存量
-// 未分组账号)且未显式指定 group_ids 时拒绝创建,不再隐式回落 openai-default。
-func TestCreateShadow_RequiresGroupForUngroupedParent(t *testing.T) {
+// TestCreateShadow_UngroupedParentKeepsShadowUngrouped 验证分组可选:母账号未分组且未显式指定
+// group_ids 时影子同样不分组(与母同为未分组路由域),不隐式回落 openai-default。
+func TestCreateShadow_UngroupedParentKeepsShadowUngrouped(t *testing.T) {
 	ctx := context.Background()
 	repo := newSparkShadowRepoStub()
 	groupRepo := &sparkShadowGroupRepoStub{groups: []Group{{ID: 99, Name: PlatformOpenAI + "-default"}}}
@@ -463,8 +463,10 @@ func TestCreateShadow_RequiresGroupForUngroupedParent(t *testing.T) {
 	}
 	require.NoError(t, repo.Create(ctx, parent))
 
-	_, err := svc.CreateShadow(ctx, parent.ID, ShadowOptions{Name: "grp-shadow"})
-	require.ErrorIs(t, err, ErrAccountGroupRequired)
+	shadow, err := svc.CreateShadow(ctx, parent.ID, ShadowOptions{Name: "grp-shadow"})
+	require.NoError(t, err)
+	require.Empty(t, repo.groupsOf[shadow.ID], "母账号未分组时影子不应被绑定到 openai-default")
+	require.Empty(t, shadow.GroupIDs)
 }
 
 // TestCreateShadow_InheritsParentGroups 验证外审 G1:未指定 group_ids 时

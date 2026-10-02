@@ -496,12 +496,9 @@ func (s *adminServiceImpl) CreateAccount(ctx context.Context, input *CreateAccou
 		return nil, err
 	}
 
-	// 账号必须归属至少一个分组：先建渠道分组 / 管理分组，再在分组下添加账号。
-	// 不再隐式绑定 <platform>-default，未指定分组直接拒绝。
+	// 分组可选：未指定分组时创建为未分组账号（只供未绑定分组的 API Key 调度），
+	// 不隐式绑定 <platform>-default。
 	groupIDs := input.GroupIDs
-	if len(groupIDs) == 0 {
-		return nil, ErrAccountGroupRequired
-	}
 
 	// 检查混合渠道风险（除非用户已确认）
 	if len(groupIDs) > 0 && !input.SkipMixedChannelCheck {
@@ -547,8 +544,10 @@ func (s *adminServiceImpl) CreateAccount(ctx context.Context, input *CreateAccou
 	}
 
 	// 绑定分组
-	if err := s.accountRepo.BindGroups(ctx, account.ID, groupIDs); err != nil {
-		return nil, err
+	if len(groupIDs) > 0 {
+		if err := s.accountRepo.BindGroups(ctx, account.ID, groupIDs); err != nil {
+			return nil, err
+		}
 	}
 
 	// OAuth 账号：创建后异步设置隐私。
@@ -849,10 +848,7 @@ func (s *adminServiceImpl) UpdateAccount(ctx context.Context, id int64, input *U
 
 	// 先验证分组是否存在（在任何写操作之前）
 	if input.GroupIDs != nil {
-		// 账号始终要归属至少一个分组，不允许通过编辑清空。
-		if len(*input.GroupIDs) == 0 {
-			return nil, ErrAccountGroupRequired
-		}
+		// 空列表表示清空分组，账号变为未分组账号。
 		if err := s.validateGroupIDsExist(ctx, *input.GroupIDs); err != nil {
 			return nil, err
 		}
@@ -1009,9 +1005,7 @@ func (s *adminServiceImpl) BulkUpdateAccounts(ctx context.Context, input *BulkUp
 	// 目标分组里的管理分组（若有，按独占规则它是唯一目标分组），供下方逐账号平台校验。
 	var managedTarget *Group
 	if input.GroupIDs != nil {
-		if len(*input.GroupIDs) == 0 {
-			return nil, ErrAccountGroupRequired
-		}
+		// 空列表表示把所选账号的分组全部清空。
 		if err := s.validateGroupIDsExist(ctx, *input.GroupIDs); err != nil {
 			return nil, err
 		}
@@ -1442,8 +1436,8 @@ func (s *adminServiceImpl) CreateShadow(ctx context.Context, parentID int64, opt
 	}
 
 	// 3. 解析分组。未指定 GroupIDs 时**继承母账号当前分组**(影子与母同路由域,母在自定义
-	// 组时该组的 spark 请求也能选到影子;G1 决策)。账号必须归属分组:母账号无分组(存量未分组
-	// 账号)时要求显式指定,不再隐式回落 openai-default。
+	// 组时该组的 spark 请求也能选到影子;G1 决策)。母账号未分组时影子同样不分组(与母同为
+	// 未分组路由域),不隐式回落 openai-default。
 	// 显式指定 GroupIDs 时,与 UpdateAccount 对齐先校验存在性(创建前),避免建出影子后再因无效组
 	// 失败而留下孤儿影子(一母一影唯一索引会挡住重试)——外审 C/P1。
 	groupIDs := opts.GroupIDs
@@ -1455,9 +1449,6 @@ func (s *adminServiceImpl) CreateShadow(ctx context.Context, parentID int64, opt
 		}
 	} else if len(parent.GroupIDs) > 0 {
 		groupIDs = append([]int64(nil), parent.GroupIDs...)
-	}
-	if len(groupIDs) == 0 {
-		return nil, ErrAccountGroupRequired
 	}
 	if err := s.validateAccountGroupPolicy(ctx, PlatformOpenAI, groupIDs); err != nil {
 		return nil, err

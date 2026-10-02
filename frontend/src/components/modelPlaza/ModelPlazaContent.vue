@@ -33,6 +33,35 @@
       {{ t('modelPlaza.loadFailed') }}
     </div>
     <template v-else>
+      <!-- 视图切换:按模型(API 价格目录) / 按分组(实付价目) -->
+      <div
+        role="tablist"
+        class="inline-flex rounded-lg bg-gray-100 p-1 dark:bg-dark-800"
+        data-testid="plaza-view-tabs"
+      >
+        <button
+          v-for="tab in viewTabs"
+          :key="tab.view"
+          type="button"
+          role="tab"
+          :aria-selected="view === tab.view"
+          class="inline-flex items-center gap-1.5 rounded-md px-3 py-1.5 text-sm font-medium transition-colors"
+          :class="view === tab.view
+            ? 'bg-white text-gray-900 shadow-sm dark:bg-dark-600 dark:text-white'
+            : 'text-gray-600 hover:text-gray-900 dark:text-dark-300 dark:hover:text-white'"
+          :data-testid="`plaza-view-${tab.view}`"
+          @click="view = tab.view"
+        >
+          {{ tab.label }}
+          <span class="rounded-full bg-gray-200/70 px-1.5 text-[11px] font-semibold tabular-nums text-gray-600 dark:bg-dark-700 dark:text-dark-200">
+            {{ tab.count }}
+          </span>
+        </button>
+      </div>
+
+      <PlazaModelCatalog v-if="view === 'models'" :models="catalogModels" />
+
+      <template v-else>
       <!-- 筛选区:平台 → 分组 → 倍率 -->
       <PlazaFilterBar
         :platforms="platforms"
@@ -58,6 +87,7 @@
       >
         {{ searchActive ? t('modelPlaza.noSearchResult') : t('modelPlaza.empty') }}
       </div>
+      </template>
     </template>
   </div>
 </template>
@@ -70,6 +100,7 @@ import DOMPurify from 'dompurify'
 import Icon from '@/components/icons/Icon.vue'
 import PlazaFilterBar from './PlazaFilterBar.vue'
 import PlazaGroupSection from './PlazaGroupSection.vue'
+import PlazaModelCatalog from './PlazaModelCatalog.vue'
 import type { ModelPlazaGroup, ModelPlazaResponse } from '@/api/modelPlaza'
 import { useAuthStore } from '@/stores/auth'
 
@@ -91,6 +122,14 @@ const selectedRate = ref<number | 'all'>('all')
 const searchQuery = ref('')
 
 const searchActive = computed(() => searchQuery.value.trim() !== '')
+
+/** 默认按模型展示 API 价格;按分组视图需要渠道配置才有数据。 */
+const view = ref<'models' | 'groups'>('models')
+const catalogModels = computed(() => props.response?.models ?? [])
+const viewTabs = computed(() => [
+  { view: 'models' as const, label: t('modelPlaza.views.models'), count: catalogModels.value.length },
+  { view: 'groups' as const, label: t('modelPlaza.views.groups'), count: props.response?.groups?.length ?? 0 }
+])
 
 const descriptionHtml = computed(() => {
   const md = props.response?.description?.trim()

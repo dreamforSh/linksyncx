@@ -92,17 +92,20 @@ describe('SyncFromCrsModal target groups', () => {
     }))
   })
 
-  it('requires target groups for new accounts', async () => {
+  it('syncs new accounts without target groups', async () => {
     const wrapper = await openPreview([{ id: 'a', platform: 'anthropic' }])
 
     await syncButton(wrapper).trigger('click')
     await flushPromises()
 
-    expect(showError).toHaveBeenCalledWith('admin.accounts.importTargetGroupsRequired')
-    expect(syncFromCrs).not.toHaveBeenCalled()
+    expect(showError).not.toHaveBeenCalled()
+    expect(syncFromCrs).toHaveBeenCalledWith(expect.objectContaining({
+      selected_account_ids: ['a'],
+      group_ids: []
+    }))
   })
 
-  it('blocks the sync while a selected platform has no target group', async () => {
+  it('syncs even when a selected platform has no target group', async () => {
     const wrapper = await openPreview([
       { id: 'a', platform: 'anthropic' },
       { id: 'b', platform: 'openai' }
@@ -115,8 +118,11 @@ describe('SyncFromCrsModal target groups', () => {
     await syncButton(wrapper).trigger('click')
     await flushPromises()
 
-    expect(showError).toHaveBeenCalledWith('admin.accounts.importTargetGroupsMissing')
-    expect(syncFromCrs).not.toHaveBeenCalled()
+    expect(showError).not.toHaveBeenCalled()
+    expect(syncFromCrs).toHaveBeenCalledWith(expect.objectContaining({
+      selected_account_ids: ['a', 'b'],
+      group_ids: [1]
+    }))
   })
 
   it('only checks platforms of the accounts that stay selected', async () => {

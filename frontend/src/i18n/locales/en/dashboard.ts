@@ -643,12 +643,27 @@ export default {
   // Model Plaza (public group/model pricing showcase)
   modelPlaza: {
     title: 'Model Plaza',
-    description: 'Browse available models and pricing by group',
+    description: 'Browse available models and their API prices',
     loading: 'Loading...',
     empty: 'No groups to display',
     loadFailed: 'Failed to load model plaza',
     noSearchResult: 'No matching models',
     anonymousHint: 'Sign in to see your exclusive groups and personal rates',
+    views: {
+      models: 'By model',
+      groups: 'By group'
+    },
+    catalog: {
+      hint: 'Base API prices (the official prices billing uses), in USD per 1M tokens. The amount charged is the base price times the group rate.',
+      cacheWrite: 'Cache write',
+      cacheRead: 'Cache read',
+      availableIn: 'Available in (rate)',
+      ungrouped: 'Ungrouped keys',
+      ungroupedHint: 'API keys without a group can use it too, billed at the base price',
+      tiered: 'Long-context tiers',
+      tierLine: 'Context {range}: input {input} / output {output}',
+      empty: 'No models to display'
+    },
     filters: {
       platformLabel: 'Platform',
       groupLabel: 'Group',

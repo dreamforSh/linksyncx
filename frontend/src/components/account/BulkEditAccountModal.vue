@@ -2259,16 +2259,10 @@ const handleSubmit = async () => {
     }
   }
 
-  // 批量改分组是整体替换：不允许替换成空，管理分组必须是唯一分组
-  if (enableGroups.value) {
-    if (!groupIds.value.length) {
-      appStore.showError(t('admin.accounts.groupRequired'))
-      return
-    }
-    if (violatesManagedExclusivity(groupIds.value, props.groups)) {
-      appStore.showError(t('admin.accounts.managedGroupExclusive'))
-      return
-    }
+  // 批量改分组是整体替换（替换成空即清空分组）；管理分组必须是唯一分组
+  if (enableGroups.value && violatesManagedExclusivity(groupIds.value, props.groups)) {
+    appStore.showError(t('admin.accounts.managedGroupExclusive'))
+    return
   }
 
   const built = buildUpdatePayload()

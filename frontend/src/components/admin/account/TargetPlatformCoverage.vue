@@ -6,7 +6,7 @@
       class="inline-flex items-center gap-1 rounded-md px-2 py-0.5 text-xs font-medium ring-1 ring-inset"
       :class="item.covered
         ? 'bg-emerald-50 text-emerald-700 ring-emerald-200 dark:bg-emerald-500/10 dark:text-emerald-300 dark:ring-emerald-500/30'
-        : 'bg-amber-50 text-amber-700 ring-amber-200 dark:bg-amber-500/10 dark:text-amber-300 dark:ring-amber-500/30'"
+        : 'bg-gray-50 text-gray-600 ring-gray-200 dark:bg-dark-700 dark:text-dark-300 dark:ring-dark-600'"
       :data-covered="item.covered"
     >
       <PlatformIcon :platform="item.platform" size="xs" />
@@ -24,7 +24,7 @@ import type { GroupPlatform } from '@/types'
 import { groupTargetsByPlatform, type TargetGroupLike } from '@/utils/importTargetGroups'
 import { platformLabel } from '@/utils/platformColors'
 
-// 多平台导入时逐平台提示「是否已选目标分组」，未覆盖的平台账号不会被创建
+// 多平台导入时逐平台提示「是否已选目标分组」，未覆盖的平台账号导入为未分组账号
 const props = defineProps<{
   platformCounts: Record<string, number>
   groupIds: number[]

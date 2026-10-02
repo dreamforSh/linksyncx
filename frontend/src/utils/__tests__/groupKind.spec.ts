@@ -41,28 +41,18 @@ describe('importTargetGroups', () => {
     expect(byPlatform.get('openai')?.map(group => group.id)).toEqual([3])
   })
 
-  it('needs no target group when nothing will be created', () => {
-    expect(findTargetGroupProblem([], [], groups)).toBeNull()
-  })
-
-  it('requires target groups when accounts will be created', () => {
-    expect(findTargetGroupProblem(['anthropic'], [], groups)).toEqual({ kind: 'required' })
-  })
-
-  it('reports platforms without any selected group', () => {
-    expect(findTargetGroupProblem(['anthropic', 'openai', 'openai'], [1], groups)).toEqual({
-      kind: 'missing',
-      platforms: ['openai']
-    })
-    expect(findTargetGroupProblem(['anthropic', 'openai'], [1, 3], groups)).toBeNull()
+  it('treats target groups as optional', () => {
+    expect(findTargetGroupProblem([], groups)).toBeNull()
+    expect(findTargetGroupProblem([1], groups)).toBeNull()
+    expect(findTargetGroupProblem([1, 3], groups)).toBeNull()
   })
 
   it('rejects a managed group that shares its platform with other targets', () => {
-    expect(findTargetGroupProblem(['anthropic'], [1, 4], groups)).toEqual({
+    expect(findTargetGroupProblem([1, 4], groups)).toEqual({
       kind: 'managed-exclusive',
       platform: 'anthropic'
     })
     // 管理分组独占按平台判断：其他平台的目标分组不受影响
-    expect(findTargetGroupProblem(['anthropic', 'openai'], [4, 3], groups)).toBeNull()
+    expect(findTargetGroupProblem([4, 3], groups)).toBeNull()
   })
 })

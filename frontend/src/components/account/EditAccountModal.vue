@@ -5157,19 +5157,15 @@ const handleSubmit = async () => {
 		}
 	}
 
-  // 账号必须归属分组：不允许清空已有分组；存量未分组账号未改动分组时不回写，避免阻塞停用等紧急操作
-  const hadGroups = (props.account.group_ids ?? []).length > 0
-  if (!form.group_ids.length && hadGroups) {
-    appStore.showError(t('admin.accounts.groupRequired'))
-    return
-  }
   if (violatesManagedExclusivity(form.group_ids, props.groups)) {
     appStore.showError(t('admin.accounts.managedGroupExclusive'))
     return
   }
 
+  // 分组可选：清空已有分组时发送空列表；本来就未分组且仍未选分组时不回写分组
+  const hadGroups = (props.account.group_ids ?? []).length > 0
   const updatePayload: Record<string, unknown> = { ...form }
-  if (!form.group_ids.length) {
+  if (!form.group_ids.length && !hadGroups) {
     delete updatePayload.group_ids
   }
   try {

@@ -322,7 +322,7 @@ func TestImportDataReusesProxyAndBindsTargetGroupByPlatform(t *testing.T) {
 	require.Equal(t, []int64{7}, adminSvc.createdAccounts[0].GroupIDs)
 }
 
-func TestImportDataRequiresTargetGroups(t *testing.T) {
+func TestImportDataWithoutTargetGroupsCreatesUngroupedAccounts(t *testing.T) {
 	router, adminSvc := setupAccountDataRouter()
 
 	body, _ := json.Marshal(map[string]any{
@@ -340,12 +340,12 @@ func TestImportDataRequiresTargetGroups(t *testing.T) {
 	req.Header.Set("Content-Type", "application/json")
 	router.ServeHTTP(rec, req)
 
-	require.Equal(t, http.StatusBadRequest, rec.Code)
-	require.Contains(t, rec.Body.String(), "ACCOUNT_GROUP_REQUIRED")
-	require.Empty(t, adminSvc.createdAccounts)
+	require.Equal(t, http.StatusOK, rec.Code)
+	require.Len(t, adminSvc.createdAccounts, 1)
+	require.Empty(t, adminSvc.createdAccounts[0].GroupIDs)
 }
 
-func TestImportDataSkipsAccountsWithoutMatchingPlatformGroup(t *testing.T) {
+func TestImportDataLeavesAccountsWithoutMatchingPlatformGroupUngrouped(t *testing.T) {
 	router, adminSvc := setupAccountDataRouter()
 	adminSvc.groups = []service.Group{{ID: 8, Name: "claude-pool", Platform: service.PlatformAnthropic, Status: service.StatusActive}}
 
@@ -366,7 +366,7 @@ func TestImportDataSkipsAccountsWithoutMatchingPlatformGroup(t *testing.T) {
 	router.ServeHTTP(rec, req)
 
 	require.Equal(t, http.StatusOK, rec.Code)
-	require.Empty(t, adminSvc.createdAccounts)
-	require.Contains(t, rec.Body.String(), `"account_failed":1`)
-	require.Contains(t, rec.Body.String(), "no target group selected for platform")
+	require.Len(t, adminSvc.createdAccounts, 1)
+	require.Empty(t, adminSvc.createdAccounts[0].GroupIDs)
+	require.Contains(t, rec.Body.String(), `"account_failed":0`)
 }

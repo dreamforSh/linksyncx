@@ -148,7 +148,7 @@ func TestDuplicateGroupRejectsManagedGroup(t *testing.T) {
 	require.ErrorIs(t, err, ErrManagedGroupDuplicate)
 }
 
-func TestCreateAccountRequiresGroup(t *testing.T) {
+func TestCreateAccountWithoutGroupStaysUngrouped(t *testing.T) {
 	accountRepo := &accountRepoStubForBulkUpdate{createID: 11}
 	svc := &adminServiceImpl{accountRepo: accountRepo, groupRepo: &groupRepoStubForAdmin{getByIDByID: managedTestGroups()}}
 
@@ -156,8 +156,9 @@ func TestCreateAccountRequiresGroup(t *testing.T) {
 		Name: "no-group", Platform: PlatformAnthropic, Type: AccountTypeAPIKey, Concurrency: 1,
 	})
 
-	require.ErrorIs(t, err, ErrAccountGroupRequired)
-	require.Nil(t, accountRepo.createAccount)
+	require.NoError(t, err)
+	require.NotNil(t, accountRepo.createAccount)
+	require.Empty(t, accountRepo.bindGroupsCalls)
 }
 
 func TestCreateAccountManagedGroupExclusiveAndPlatform(t *testing.T) {
@@ -204,11 +205,13 @@ func TestUpdateAccountKeepsGroupsAndManagedPlatform(t *testing.T) {
 	}
 	ctx := context.Background()
 
+	// 空列表清空分组，账号变为未分组账号
 	svc, accountRepo := newSvc()
 	empty := []int64{}
 	_, err := svc.UpdateAccount(ctx, 21, &UpdateAccountInput{GroupIDs: &empty})
-	require.ErrorIs(t, err, ErrAccountGroupRequired)
-	require.Empty(t, accountRepo.bindGroupsCalls)
+	require.NoError(t, err)
+	require.Equal(t, []int64{21}, accountRepo.bindGroupsCalls)
+	require.Empty(t, accountRepo.bindGroupsByAccount[21])
 
 	svc, accountRepo = newSvc()
 	managed := []int64{5}
@@ -230,9 +233,12 @@ func TestBulkUpdateAccountsManagedGroupRejectsMismatchedPlatform(t *testing.T) {
 	require.ErrorIs(t, err, ErrManagedGroupPlatformMismatch)
 	require.Empty(t, accountRepo.bindGroupsCalls)
 
+	// 空列表把所选账号的分组全部清空
 	empty := []int64{}
 	_, err = svc.BulkUpdateAccounts(ctx, &BulkUpdateAccountsInput{AccountIDs: []int64{1}, GroupIDs: &empty})
-	require.ErrorIs(t, err, ErrAccountGroupRequired)
+	require.NoError(t, err)
+	require.Equal(t, []int64{1}, accountRepo.bindGroupsCalls)
+	require.Empty(t, accountRepo.bindGroupsByAccount[1])
 }
 
 func TestChannelServiceRejectsManagedGroups(t *testing.T) {
@@ -246,9 +252,11 @@ func TestCreateCRSAccountInGroupsBindsPlatformTargets(t *testing.T) {
 	targets := map[string][]int64{PlatformAnthropic: {6, 8}}
 	ctx := context.Background()
 
+	// 平台没有目标分组：照常创建，不绑定分组
 	err := svc.createCRSAccountInGroups(ctx, &Account{Name: "gpt", Platform: PlatformOpenAI}, targets)
-	require.ErrorContains(t, err, "no target group selected")
-	require.Nil(t, accountRepo.createAccount)
+	require.NoError(t, err)
+	require.NotNil(t, accountRepo.createAccount)
+	require.Empty(t, accountRepo.bindGroupsCalls)
 
 	err = svc.createCRSAccountInGroups(ctx, &Account{Name: "claude", Platform: PlatformAnthropic}, targets)
 	require.NoError(t, err)

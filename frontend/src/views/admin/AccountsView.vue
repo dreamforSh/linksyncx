@@ -173,29 +173,6 @@
             {{ t('admin.accounts.listPendingSyncAction') }}
           </button>
         </div>
-        <div
-          v-if="showUngroupedBanner"
-          class="mt-2 flex flex-wrap items-center justify-between gap-2 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-800 dark:border-amber-700/40 dark:bg-amber-900/20 dark:text-amber-200"
-          role="status"
-          data-testid="accounts-ungrouped-banner"
-        >
-          <span class="flex min-w-0 items-start gap-2">
-            <Icon name="exclamationTriangle" size="sm" class="mt-0.5 shrink-0" />
-            <span>{{ t('admin.accounts.ungroupedBanner', { count: ungroupedCount }) }}</span>
-          </span>
-          <span class="flex shrink-0 items-center gap-1">
-            <button class="btn btn-secondary px-2 py-1 text-xs" @click="showUngroupedAccounts">
-              {{ t('admin.accounts.ungroupedView') }}
-            </button>
-            <button
-              class="rounded-md p-1 text-amber-700 transition-colors hover:bg-amber-100 dark:text-amber-300 dark:hover:bg-amber-900/40"
-              :aria-label="t('common.close')"
-              @click="ungroupedBannerDismissed = true"
-            >
-              <Icon name="x" size="sm" />
-            </button>
-          </span>
-        </div>
       </template>
       <template #table>
         <AccountBulkActionsBar
@@ -670,8 +647,6 @@ const showCreate = ref(false)
 const showTargetGroupPicker = ref(false)
 const targetGroupPickerInitialId = ref<number | null>(null)
 const createPresetGroup = ref<AdminGroup | null>(null)
-const ungroupedCount = ref(0)
-const ungroupedBannerDismissed = ref(false)
 const showEdit = ref(false)
 const showSync = ref(false)
 const showImportData = ref(false)
@@ -1249,7 +1224,6 @@ const load = async (options: AccountLoadOptions = {}) => {
 }
 
 const reload = async () => {
-  void refreshUngroupedCount()
   syncAccountListDerivedParams()
   hasPendingListSync.value = false
   resetAutoRefreshCache()
@@ -2239,24 +2213,6 @@ const handleCreateGroupFromPicker = (kind: GroupKind) => {
   void router?.push({ path: '/admin/groups', query: { create: '1', kind } })
 }
 
-// ==================== 存量未分组账号提示 ====================
-const showUngroupedBanner = computed(() =>
-  ungroupedCount.value > 0 && !ungroupedBannerDismissed.value && params.group !== ACCOUNT_UNGROUPED_GROUP_QUERY_VALUE
-)
-async function refreshUngroupedCount() {
-  try {
-    ungroupedCount.value = await adminAPI.accounts.countUngrouped()
-  } catch {
-    // 提示条只是引导，统计失败时静默隐藏
-    ungroupedCount.value = 0
-  }
-}
-const showUngroupedAccounts = () => {
-  params.group = ACCOUNT_UNGROUPED_GROUP_QUERY_VALUE
-  pagination.page = 1
-  reload()
-}
-
 // 路由意图：?group=ID|ungrouped 预置分组筛选；?create=1 直接打开建号表单（可配合 group 预选分组）
 const POSITIVE_ID_PATTERN = /^[1-9]\d*$/
 const firstQueryValue = (value: unknown): string => {
@@ -2724,7 +2680,6 @@ onMounted(async () => {
     console.error('Failed to load groups:', groupsResult.reason)
   }
   consumeCreateIntent()
-  void refreshUngroupedCount()
   window.addEventListener('scroll', handleScroll, true)
   window.addEventListener('resize', handleViewportResize)
   document.addEventListener('click', handleClickOutside)

@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { defineComponent } from 'vue'
-import { mount } from '@vue/test-utils'
+import { flushPromises, mount } from '@vue/test-utils'
 
 const { updateAccountMock, checkMixedChannelRiskMock, authIsSimpleMode } = vi.hoisted(() => ({
   updateAccountMock: vi.fn(),
@@ -443,6 +443,41 @@ describe('EditAccountModal', () => {
     expect(updateAccountMock).toHaveBeenCalledTimes(1)
     expect(updateAccountMock.mock.calls[0]?.[1]?.group_ids).toEqual([1])
     expect(account.group_ids).toEqual([1, 2])
+  })
+
+  it('clears every group when all of them are unchecked', async () => {
+    authIsSimpleMode.value = false
+    const account = buildAccount()
+    const group = { id: 1, name: 'Pool', platform: 'openai', status: 'active', subscription_type: 'standard', rate_multiplier: 1 }
+    account.group_ids = [1]
+    account.groups = [group as any]
+    updateAccountMock.mockReset()
+    checkMixedChannelRiskMock.mockReset()
+    checkMixedChannelRiskMock.mockResolvedValue({ has_risk: false })
+    updateAccountMock.mockResolvedValue(account)
+
+    const wrapper = mountModal(account, true)
+    await wrapper.setProps({ groups: [group] as any })
+    await wrapper.get('[data-tour="account-form-groups"] input[value="1"]').setValue(false)
+    await wrapper.get('form#edit-account-form').trigger('submit.prevent')
+    await flushPromises()
+
+    expect(updateAccountMock).toHaveBeenCalledTimes(1)
+    expect(updateAccountMock.mock.calls[0]?.[1]?.group_ids).toEqual([])
+  })
+
+  it('does not send groups for an account that stays ungrouped', async () => {
+    const account = buildAccount()
+    account.group_ids = []
+    updateAccountMock.mockReset()
+    updateAccountMock.mockResolvedValue(account)
+
+    const wrapper = mountModal(account, true)
+    await wrapper.get('form#edit-account-form').trigger('submit.prevent')
+    await flushPromises()
+
+    expect(updateAccountMock).toHaveBeenCalledTimes(1)
+    expect(updateAccountMock.mock.calls[0]?.[1]).not.toHaveProperty('group_ids')
   })
 
   it('reopening the same account rehydrates the OpenAI whitelist from props', async () => {

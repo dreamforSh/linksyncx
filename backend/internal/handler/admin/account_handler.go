@@ -1276,7 +1276,7 @@ type SyncFromCRSRequest struct {
 	Password           string   `json:"password" binding:"required"`
 	SyncProxies        *bool    `json:"sync_proxies"`
 	SelectedAccountIDs []string `json:"selected_account_ids"`
-	// GroupIDs 新建账号的目标分组：每个账号只绑定与其平台相同的目标分组，无匹配分组的新账号不会被创建。
+	// GroupIDs 新建账号的目标分组（可选）：每个账号只绑定与其平台相同的目标分组，无匹配分组的新账号创建为未分组账号。
 	GroupIDs []int64 `json:"group_ids"`
 }
 
@@ -2091,12 +2091,8 @@ func (h *AccountHandler) BatchCreate(c *gin.Context) {
 			return
 		}
 	}
-	// 逐账号校验分组：账号必须归属分组，且管理分组独占规则按账号计算，不能合并后统一校验。
+	// 逐账号校验分组：分组可选，但管理分组独占规则按账号计算，不能合并后统一校验。
 	for _, item := range req.Accounts {
-		if len(item.GroupIDs) == 0 {
-			response.ErrorFrom(c, service.ErrAccountGroupRequired)
-			return
-		}
 		if err := h.adminService.ValidateAccountGroupBindings(c.Request.Context(), item.GroupIDs); err != nil {
 			response.ErrorFrom(c, err)
 			return

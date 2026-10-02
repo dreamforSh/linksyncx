@@ -648,12 +648,27 @@ export default {
   // Model Plaza (public group/model pricing showcase)
   modelPlaza: {
     title: '模型广场',
-    description: '按分组浏览可用模型与价格',
+    description: '浏览可用模型与 API 价格',
     loading: '加载中...',
     empty: '暂无可展示的分组',
     loadFailed: '加载模型广场失败',
     noSearchResult: '没有匹配的模型',
     anonymousHint: '登录后可查看你的专属分组与专属倍率',
+    views: {
+      models: '按模型',
+      groups: '按分组'
+    },
+    catalog: {
+      hint: '基础 API 价格（与计费同源的官方价），单位为美元 / 每 100 万 token；实际扣费 = 基础价 × 分组倍率。',
+      cacheWrite: '缓存写入',
+      cacheRead: '缓存读取',
+      availableIn: '可用分组（倍率）',
+      ungrouped: '未分组 Key',
+      ungroupedHint: '未绑定分组的 API Key 也可使用，按基础价计费',
+      tiered: '长上下文阶梯价',
+      tierLine: '上下文 {range}：输入 {input} / 输出 {output}',
+      empty: '暂无可展示的模型'
+    },
     filters: {
       platformLabel: '平台',
       groupLabel: '分组',

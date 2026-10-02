@@ -1,6 +1,7 @@
 /**
  * Model Plaza API（公开端点，可匿名访问）
- * 以分组为中心的模型价目：分组信息 + 模型渠道定价 + LiteLLM 官方参考价。
+ * 两种口径：以分组为中心的模型价目（分组信息 + 模型渠道定价 + 官方参考价），
+ * 以及以模型为中心的 API 价格目录（站点账号实际能服务的模型 + 基础价 + 可用分组）。
  * 带 token 请求时后端会额外返回专属分组与用户专属倍率。
  */
 
@@ -78,10 +79,30 @@ export interface ModelPlazaGroup {
   models: PlazaModel[]
 }
 
+/** 「按模型」条目里能服务该模型的分组；实付 = 基础价 × (user_rate_multiplier ?? rate_multiplier)。 */
+export interface ModelPlazaCatalogGroupRef {
+  id: number
+  name: string
+  rate_multiplier: number
+  user_rate_multiplier?: number
+}
+
+/** 「按模型」视图条目：基础 API 价（与计费同源的官方价，未乘任何倍率）。 */
+export interface ModelPlazaCatalogModel {
+  name: string
+  platform: string
+  official_pricing: PlazaOfficialPricing | null
+  groups: ModelPlazaCatalogGroupRef[]
+  /** 未绑定分组的 API Key 也能使用（按基础价计费）。 */
+  ungrouped: boolean
+}
+
 export interface ModelPlazaResponse {
   /** 管理员配置的全局价格说明（Markdown）。 */
   description: string
   groups: ModelPlazaGroup[]
+  /** 按模型汇总的价格目录；旧版后端不返回。 */
+  models?: ModelPlazaCatalogModel[]
 }
 
 /** 获取模型广场数据。开关未启用时后端返回 404。 */

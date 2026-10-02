@@ -126,7 +126,6 @@ import { adminAPI } from '@/api/admin'
 import { useAppStore } from '@/stores/app'
 import type { AdminDataImportResult, AdminDataPayload, AdminGroup } from '@/types'
 import { findTargetGroupProblem } from '@/utils/importTargetGroups'
-import { platformLabel } from '@/utils/platformColors'
 
 interface Props {
   show: boolean
@@ -362,23 +361,8 @@ const handleImport = async () => {
     }
     const dataPayload = mergeDataPayloads(dataPayloads)
 
-    const problem = findTargetGroupProblem(
-      dataPayload.accounts.map((account) => String(account.platform || '')),
-      targetGroupIds.value,
-      targetGroupOptions.value
-    )
-    if (problem?.kind === 'required') {
-      appStore.showError(t('admin.accounts.importTargetGroupsRequired'))
-      return
-    }
-    if (problem?.kind === 'managed-exclusive') {
+    if (findTargetGroupProblem(targetGroupIds.value, targetGroupOptions.value)) {
       appStore.showError(t('admin.accounts.managedGroupExclusive'))
-      return
-    }
-    if (problem?.kind === 'missing') {
-      appStore.showError(t('admin.accounts.importTargetGroupsMissing', {
-        platforms: problem.platforms.map(platformLabel).join(', ')
-      }))
       return
     }
 

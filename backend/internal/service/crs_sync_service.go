@@ -77,8 +77,8 @@ type SyncFromCRSInput struct {
 	Password           string
 	SyncProxies        bool
 	SelectedAccountIDs []string // if non-empty, only create new accounts with these CRS IDs
-	// GroupIDsByPlatform 新建账号的目标分组（按平台分桶）；账号必须归属分组，
-	// 平台没有目标分组的新账号记为失败、不会被创建。已存在账号的更新不受影响。
+	// GroupIDsByPlatform 新建账号的目标分组（按平台分桶，可选）；平台没有目标分组的
+	// 新账号创建为未分组账号。已存在账号的更新不受影响。
 	GroupIDsByPlatform map[string][]int64
 }
 
@@ -1146,15 +1146,15 @@ func (s *CRSSyncService) SyncFromCRS(ctx context.Context, input SyncFromCRSInput
 	return result, nil
 }
 
-// createCRSAccountInGroups 创建 CRS 新账号并绑定同平台的目标分组：账号必须归属分组，
-// 平台没有目标分组时不创建（避免产生无分组账号）。
+// createCRSAccountInGroups 创建 CRS 新账号并绑定同平台的目标分组；平台没有目标分组时
+// 创建为未分组账号。
 func (s *CRSSyncService) createCRSAccountInGroups(ctx context.Context, account *Account, groupIDsByPlatform map[string][]int64) error {
-	groupIDs := groupIDsByPlatform[account.Platform]
-	if len(groupIDs) == 0 {
-		return fmt.Errorf("no target group selected for platform %q", account.Platform)
-	}
 	if err := s.accountRepo.Create(ctx, account); err != nil {
 		return fmt.Errorf("create failed: %w", err)
+	}
+	groupIDs := groupIDsByPlatform[account.Platform]
+	if len(groupIDs) == 0 {
+		return nil
 	}
 	if err := s.accountRepo.BindGroups(ctx, account.ID, groupIDs); err != nil {
 		return fmt.Errorf("bind groups failed: %w", err)

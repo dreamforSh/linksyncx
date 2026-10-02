@@ -229,8 +229,15 @@ describe('ImportDataModal', () => {
     expect(values).toEqual(['1', '2', '3'])
   })
 
-  it('有账号但未选目标分组时拒绝导入', async () => {
+  it('未选目标分组时账号按未分组导入', async () => {
     const { adminAPI } = await import('@/api/admin')
+    vi.mocked(adminAPI.accounts.importData).mockResolvedValue({
+      proxy_created: 0,
+      proxy_reused: 0,
+      proxy_failed: 0,
+      account_created: 1,
+      account_failed: 0
+    })
     const wrapper = mountModal()
     const input = wrapper.find('input[type="file"]')
     setInputFiles(input.element, [exportFile('data.json', [{ name: 'a', platform: 'anthropic' }])])
@@ -239,8 +246,11 @@ describe('ImportDataModal', () => {
     await wrapper.find('form').trigger('submit')
     await flushPromises()
 
-    expect(showError).toHaveBeenCalledWith('admin.accounts.importTargetGroupsRequired')
-    expect(adminAPI.accounts.importData).not.toHaveBeenCalled()
+    expect(showError).not.toHaveBeenCalled()
+    expect(adminAPI.accounts.importData).toHaveBeenCalledWith({
+      data: expect.objectContaining({ accounts: [expect.objectContaining({ name: 'a' })] }),
+      group_ids: []
+    })
   })
 
   it('只有代理没有账号时无需目标分组', async () => {
@@ -266,8 +276,15 @@ describe('ImportDataModal', () => {
     })
   })
 
-  it('账号平台缺少目标分组时提示并拒绝导入', async () => {
+  it('账号平台缺少目标分组时仍可导入（该平台账号不分组）', async () => {
     const { adminAPI } = await import('@/api/admin')
+    vi.mocked(adminAPI.accounts.importData).mockResolvedValue({
+      proxy_created: 0,
+      proxy_reused: 0,
+      proxy_failed: 0,
+      account_created: 3,
+      account_failed: 0
+    })
     const wrapper = mountModal()
     const input = wrapper.find('input[type="file"]')
     setInputFiles(input.element, [
@@ -290,8 +307,8 @@ describe('ImportDataModal', () => {
     await wrapper.find('form').trigger('submit')
     await flushPromises()
 
-    expect(showError).toHaveBeenCalledWith('admin.accounts.importTargetGroupsMissing')
-    expect(adminAPI.accounts.importData).not.toHaveBeenCalled()
+    expect(showError).not.toHaveBeenCalled()
+    expect(adminAPI.accounts.importData).toHaveBeenCalledWith(expect.objectContaining({ group_ids: [1] }))
   })
 
   it('同一平台同时选择管理分组和其他分组时拒绝导入', async () => {

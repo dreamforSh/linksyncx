@@ -258,3 +258,44 @@ func TestFilterPlazaVisibleGroups_SubscribedExclusiveGroup(t *testing.T) {
 		require.Equal(t, int64(42), visible[0].ID)
 	}
 }
+
+func TestToModelPlazaCatalogDTO_Visibility(t *testing.T) {
+	price := 3e-6
+	catalog := &service.PlazaModelCatalog{
+		Groups: map[int64]service.PlazaCatalogGroup{
+			1: {ID: 1, Name: "public", RateMultiplier: 0.5},
+			2: {ID: 2, Name: "vip", RateMultiplier: 0.3, IsExclusive: true},
+		},
+		Models: []service.PlazaCatalogModel{
+			{Name: "both", Platform: "anthropic", GroupIDs: []int64{1, 2}, OfficialPricing: &service.PlazaOfficialPricing{InputPrice: &price}},
+			{Name: "vip-only", Platform: "anthropic", GroupIDs: []int64{2}},
+			{Name: "ungrouped-only", Platform: "openai", Ungrouped: true},
+		},
+	}
+
+	// 匿名 + 不允许未分组 Key：只剩公开分组可服务的模型，专属分组不出现
+	anon := toModelPlazaCatalogDTO(catalog, nil, false, false, nil)
+	require.Len(t, anon, 1)
+	require.Equal(t, "both", anon[0].Name)
+	require.Len(t, anon[0].Groups, 1)
+	require.Equal(t, int64(1), anon[0].Groups[0].ID)
+	require.InDelta(t, price, *anon[0].OfficialPricing.InputPrice, 1e-15)
+
+	// 允许未分组 Key 调度时，未分组账号的模型可见
+	withUngrouped := toModelPlazaCatalogDTO(catalog, nil, false, true, nil)
+	require.Len(t, withUngrouped, 2)
+	require.Equal(t, "ungrouped-only", withUngrouped[1].Name)
+	require.True(t, withUngrouped[1].Ungrouped)
+	require.Empty(t, withUngrouped[1].Groups)
+
+	// 登录且授权专属分组：可见专属分组并带个人倍率
+	authed := toModelPlazaCatalogDTO(catalog, map[int64]struct{}{2: {}}, false, false, map[int64]float64{2: 0.2})
+	require.Len(t, authed, 2)
+	require.Equal(t, "vip-only", authed[1].Name)
+	require.NotNil(t, authed[1].Groups[0].UserRateMultiplier)
+	require.InDelta(t, 0.2, *authed[1].Groups[0].UserRateMultiplier, 1e-9)
+
+	// 公开分组受限的用户：未授权的公开分组同样隐藏
+	restricted := toModelPlazaCatalogDTO(catalog, map[int64]struct{}{}, true, false, nil)
+	require.Empty(t, restricted)
+}

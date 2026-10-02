@@ -265,7 +265,6 @@ import { adminAPI } from '@/api/admin'
 import type { PreviewFromCRSResult } from '@/api/admin/accounts'
 import type { AdminGroup } from '@/types'
 import { findTargetGroupProblem } from '@/utils/importTargetGroups'
-import { platformLabel } from '@/utils/platformColors'
 
 interface Props {
   show: boolean
@@ -408,23 +407,8 @@ const handleSync = async () => {
     return
   }
 
-  const problem = findTargetGroupProblem(
-    selectedNewAccounts.value.map((account) => account.platform),
-    targetGroupIds.value,
-    targetGroupOptions.value
-  )
-  if (problem?.kind === 'required') {
-    appStore.showError(t('admin.accounts.importTargetGroupsRequired'))
-    return
-  }
-  if (problem?.kind === 'managed-exclusive') {
+  if (findTargetGroupProblem(targetGroupIds.value, targetGroupOptions.value)) {
     appStore.showError(t('admin.accounts.managedGroupExclusive'))
-    return
-  }
-  if (problem?.kind === 'missing') {
-    appStore.showError(t('admin.accounts.importTargetGroupsMissing', {
-      platforms: problem.platforms.map(platformLabel).join(', ')
-    }))
     return
   }
 

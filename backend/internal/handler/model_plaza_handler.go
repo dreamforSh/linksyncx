@@ -97,10 +97,29 @@ type modelPlazaGroup struct {
 	Models                    []modelPlazaModel `json:"models"`
 }
 
+// modelPlazaCatalogGroupRef 「按模型」条目里可服务该模型的分组（实付 = 基础价 × 倍率）。
+type modelPlazaCatalogGroupRef struct {
+	ID                 int64    `json:"id"`
+	Name               string   `json:"name"`
+	RateMultiplier     float64  `json:"rate_multiplier"`
+	UserRateMultiplier *float64 `json:"user_rate_multiplier,omitempty"`
+}
+
+// modelPlazaCatalogModel 「按模型」视图条目：基础 API 价（计费同源官方价）+ 可服务分组。
+type modelPlazaCatalogModel struct {
+	Name            string                      `json:"name"`
+	Platform        string                      `json:"platform"`
+	OfficialPricing *modelPlazaOfficialPricing  `json:"official_pricing"`
+	Groups          []modelPlazaCatalogGroupRef `json:"groups"`
+	// Ungrouped 未绑定分组的 API Key 也能使用（按基础价计费）。
+	Ungrouped bool `json:"ungrouped"`
+}
+
 // modelPlazaResponse 广场页响应。
 type modelPlazaResponse struct {
-	Description string            `json:"description"`
-	Groups      []modelPlazaGroup `json:"groups"`
+	Description string                   `json:"description"`
+	Groups      []modelPlazaGroup        `json:"groups"`
+	Models      []modelPlazaCatalogModel `json:"models"`
 }
 
 // Get 返回模型广场数据。
@@ -153,10 +172,61 @@ func (h *ModelPlazaHandler) Get(c *gin.Context) {
 	for i := range visible {
 		out = append(out, toModelPlazaGroupDTO(&visible[i], userRates))
 	}
+
+	catalog, err := h.plazaService.ListModelCatalog(c.Request.Context())
+	if err != nil {
+		response.ErrorFrom(c, err)
+		return
+	}
+	ungroupedAllowed := h.settingService.IsUngroupedKeySchedulingAllowed(c.Request.Context())
+
 	response.Success(c, modelPlazaResponse{
 		Description: rt.Description,
 		Groups:      out,
+		Models:      toModelPlazaCatalogDTO(catalog, allowedGroups, restrictPublicGroups, ungroupedAllowed, userRates),
 	})
+}
+
+// toModelPlazaCatalogDTO 按与分组视图相同的可见性规则裁剪「按模型」目录：只保留访客可见的分组；
+// 仅在允许未分组 Key 调度时才把未分组账号计入可用。没有任何可用途径的模型整条隐藏。
+func toModelPlazaCatalogDTO(
+	catalog *service.PlazaModelCatalog,
+	allowedGroups map[int64]struct{},
+	restrictPublicGroups bool,
+	ungroupedAllowed bool,
+	userRates map[int64]float64,
+) []modelPlazaCatalogModel {
+	out := make([]modelPlazaCatalogModel, 0)
+	if catalog == nil {
+		return out
+	}
+	for i := range catalog.Models {
+		m := &catalog.Models[i]
+		refs := make([]modelPlazaCatalogGroupRef, 0, len(m.GroupIDs))
+		for _, gid := range m.GroupIDs {
+			g, ok := catalog.Groups[gid]
+			if !ok || !plazaGroupVisible(g.ID, g.IsExclusive, allowedGroups, restrictPublicGroups) {
+				continue
+			}
+			ref := modelPlazaCatalogGroupRef{ID: g.ID, Name: g.Name, RateMultiplier: g.RateMultiplier}
+			if rate, ok := userRates[g.ID]; ok {
+				ref.UserRateMultiplier = &rate
+			}
+			refs = append(refs, ref)
+		}
+		ungrouped := m.Ungrouped && ungroupedAllowed
+		if len(refs) == 0 && !ungrouped {
+			continue
+		}
+		out = append(out, modelPlazaCatalogModel{
+			Name:            m.Name,
+			Platform:        m.Platform,
+			OfficialPricing: toModelPlazaOfficialPricing(m.OfficialPricing),
+			Groups:          refs,
+			Ungrouped:       ungrouped,
+		})
+	}
+	return out
 }
 
 // filterPlazaVisibleGroups 按登录态裁剪分组可见性。
@@ -170,17 +240,23 @@ func filterPlazaVisibleGroups(
 ) []service.PlazaGroup {
 	visible := make([]service.PlazaGroup, 0, len(groups))
 	for _, g := range groups {
-		if g.IsExclusive || (restrictPublicGroups && allowedGroups != nil) {
-			if allowedGroups == nil {
-				continue
-			}
-			if _, ok := allowedGroups[g.ID]; !ok {
-				continue
-			}
+		if plazaGroupVisible(g.ID, g.IsExclusive, allowedGroups, restrictPublicGroups) {
+			visible = append(visible, g)
 		}
-		visible = append(visible, g)
 	}
 	return visible
+}
+
+// plazaGroupVisible 单个分组对当前访客是否可见（规则见 filterPlazaVisibleGroups）。
+func plazaGroupVisible(groupID int64, isExclusive bool, allowedGroups map[int64]struct{}, restrictPublicGroups bool) bool {
+	if !isExclusive && (!restrictPublicGroups || allowedGroups == nil) {
+		return true
+	}
+	if allowedGroups == nil {
+		return false
+	}
+	_, ok := allowedGroups[groupID]
+	return ok
 }
 
 // toModelPlazaGroupDTO 将 service 层广场分组映射为白名单 DTO,并合并用户专属倍率。

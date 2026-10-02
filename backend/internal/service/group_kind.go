@@ -24,8 +24,6 @@ var (
 	ErrManagedGroupAsFallback       = infraerrors.BadRequest("MANAGED_GROUP_CONSTRAINT", "managed groups cannot be used as fallback groups")
 	ErrManagedGroupCopyAccounts     = infraerrors.BadRequest("MANAGED_GROUP_CONSTRAINT", "accounts cannot be copied into or out of managed groups")
 	ErrManagedGroupDuplicate        = infraerrors.BadRequest("MANAGED_GROUP_CONSTRAINT", "managed groups cannot be duplicated because their accounts are exclusive")
-
-	ErrAccountGroupRequired = infraerrors.BadRequest("ACCOUNT_GROUP_REQUIRED", "accounts must be bound to at least one group; create or pick a group first")
 )
 
 // NormalizeGroupKind 把空值视为渠道分组（存量数据与未显式指定 kind 的请求）；

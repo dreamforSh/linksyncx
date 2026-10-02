@@ -750,6 +750,7 @@ const ChevronDownIcon = {
 const flagChannelMonitor = makeSidebarFlag(FeatureFlags.channelMonitor)
 const flagPayment = makeSidebarFlag(FeatureFlags.payment)
 const flagAvailableChannels = makeSidebarFlag(FeatureFlags.availableChannels)
+const flagModelPlaza = makeSidebarFlag(FeatureFlags.modelPlaza)
 const flagSubscription = makeSidebarFlag(FeatureFlags.subscription)
 
 // 购买入口文案随站点计费模式切换：仅充值 → 「充值」，仅订阅 → 「订阅」，否则「充值/订阅」。
@@ -793,6 +794,8 @@ function buildSelfNavItems(withDashboard: boolean): NavItem[] {
     { path: '/batch-image', label: t('nav.batchImage'), icon: BatchImageIcon, hideInSimpleMode: true, featureFlag: flagBatchImageAccess },
     { path: '/usage', label: t('nav.usage'), icon: ChartIcon, hideInSimpleMode: true },
     { path: '/available-channels', label: t('nav.availableChannels'), icon: ChannelIcon, hideInSimpleMode: true, featureFlag: flagAvailableChannels },
+    // 模型广场在后台内嵌形态打开(带侧边栏);开关关闭时后端 404,入口随之隐藏
+    { path: '/model-plaza?embedded=1', label: t('nav.modelPlaza'), icon: PriceTagIcon, featureFlag: flagModelPlaza },
     { path: '/monitor', label: t('nav.channelStatus'), icon: SignalIcon, featureFlag: flagChannelMonitor },
     { path: '/subscriptions', label: t('nav.mySubscriptions'), icon: CreditCardIcon, hideInSimpleMode: true, featureFlag: flagSubscription },
     { path: '/purchase', label: purchaseNavLabel.value, icon: RechargeSubscriptionIcon, hideInSimpleMode: true, featureFlag: flagPayment },
@@ -1065,7 +1068,9 @@ function handleMenuItemClick(itemPath: string) {
 }
 
 function isActive(path: string): boolean {
-  return route.path === path || route.path.startsWith(path + '/')
+  // 入口可能带查询参数(如 /model-plaza?embedded=1),高亮只按路径匹配
+  const target = path.split('?')[0]
+  return route.path === target || route.path.startsWith(target + '/')
 }
 
 function isGroupActive(item: NavItem): boolean {

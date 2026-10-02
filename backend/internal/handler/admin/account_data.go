@@ -79,7 +79,7 @@ type DataAccount struct {
 
 type DataImportRequest struct {
 	Data DataPayload `json:"data"`
-	// GroupIDs 导入目标分组：账号必须归属分组，每个账号只绑定与其平台相同的目标分组。
+	// GroupIDs 导入目标分组（可选）：每个账号只绑定与其平台相同的目标分组，无匹配分组的账号导入为未分组账号。
 	GroupIDs []int64 `json:"group_ids"`
 }
 
@@ -256,10 +256,6 @@ func (h *AccountHandler) ImportData(c *gin.Context) {
 
 	if err := validateDataHeader(req.Data); err != nil {
 		response.BadRequest(c, err.Error())
-		return
-	}
-	if len(req.Data.Accounts) > 0 && len(req.GroupIDs) == 0 {
-		response.ErrorFrom(c, service.ErrAccountGroupRequired)
 		return
 	}
 
@@ -445,15 +441,6 @@ func (h *AccountHandler) importData(ctx context.Context, req DataImportRequest) 
 	for i := range dataPayload.Accounts {
 		item := dataPayload.Accounts[i]
 		targetGroupIDs := groupsByPlatform[item.Platform]
-		if len(targetGroupIDs) == 0 {
-			result.AccountFailed++
-			result.Errors = append(result.Errors, DataImportError{
-				Kind:    "account",
-				Name:    item.Name,
-				Message: fmt.Sprintf("no target group selected for platform %q", item.Platform),
-			})
-			continue
-		}
 		if err := validateDataAccount(item); err != nil {
 			result.AccountFailed++
 			result.Errors = append(result.Errors, DataImportError{

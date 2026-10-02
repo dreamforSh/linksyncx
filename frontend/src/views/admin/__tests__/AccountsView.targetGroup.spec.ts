@@ -5,9 +5,8 @@ import { routeLocationKey, routerKey } from 'vue-router'
 
 import AccountsView from '../AccountsView.vue'
 
-const { listAccounts, countUngrouped, getAllGroups } = vi.hoisted(() => ({
+const { listAccounts, getAllGroups } = vi.hoisted(() => ({
   listAccounts: vi.fn(),
-  countUngrouped: vi.fn(),
   getAllGroups: vi.fn()
 }))
 
@@ -15,7 +14,6 @@ vi.mock('@/api/admin', () => ({
   adminAPI: {
     accounts: {
       list: listAccounts,
-      countUngrouped,
       listWithEtag: vi.fn(),
       getBatchTodayStats: vi.fn().mockResolvedValue({ stats: {} }),
       getUpstreamBillingProbeSettings: vi.fn().mockResolvedValue({ enabled: true, interval_minutes: 30 }),
@@ -130,7 +128,6 @@ describe('admin AccountsView target group flow', () => {
     router.push.mockReset()
     router.replace.mockReset()
     listAccounts.mockReset().mockResolvedValue({ items: [], total: 0, page: 1, page_size: 20, pages: 0 })
-    countUngrouped.mockReset().mockResolvedValue(0)
     getAllGroups.mockReset().mockResolvedValue(groups)
   })
 
@@ -216,29 +213,7 @@ describe('admin AccountsView target group flow', () => {
     expect(wrapper.find('[data-test="create-modal"]').exists()).toBe(true)
   })
 
-  it('highlights ungrouped accounts and filters to them on demand', async () => {
-    countUngrouped.mockResolvedValue(3)
-    const wrapper = mountView()
-    await flushPromises()
-
-    const banner = wrapper.get('[data-testid="accounts-ungrouped-banner"]')
-    expect(banner.text()).toContain('admin.accounts.ungroupedBanner')
-
-    const viewButton = banner.findAll('button').find(button => button.text() === 'admin.accounts.ungroupedView')
-    await viewButton!.trigger('click')
-    await flushPromises()
-
-    expect(listAccounts).toHaveBeenLastCalledWith(
-      1,
-      20,
-      expect.objectContaining({ group: 'ungrouped' }),
-      expect.anything()
-    )
-    expect(wrapper.find('[data-testid="accounts-ungrouped-banner"]').exists()).toBe(false)
-  })
-
-  it('keeps the banner hidden when the count is unavailable', async () => {
-    countUngrouped.mockRejectedValue(new Error('boom'))
+  it('does not nag about ungrouped accounts', async () => {
     const wrapper = mountView()
     await flushPromises()
 

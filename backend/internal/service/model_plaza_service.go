@@ -67,6 +67,8 @@ type ModelPlazaService struct {
 	pricingService *PricingService
 	billingService *BillingService
 	resolver       *ModelPricingResolver
+	// accountRepo 供「按模型」目录枚举可调度账号能服务的模型；nil 时只用渠道模型。
+	accountRepo AccountRepository
 }
 
 // NewModelPlazaService 创建模型广场服务。
@@ -76,6 +78,7 @@ func NewModelPlazaService(
 	pricingService *PricingService,
 	billingService *BillingService,
 	resolver *ModelPricingResolver,
+	accountRepo AccountRepository,
 ) *ModelPlazaService {
 	return &ModelPlazaService{
 		channelRepo:    channelRepo,
@@ -83,6 +86,7 @@ func NewModelPlazaService(
 		pricingService: pricingService,
 		billingService: billingService,
 		resolver:       resolver,
+		accountRepo:    accountRepo,
 	}
 }
 
