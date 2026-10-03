@@ -30,6 +30,10 @@ const (
 	// OpsSystemLogSkipField keeps an event in the standard logger while
 	// preventing the database-backed Ops system-log sink from indexing it.
 	OpsSystemLogSkipField = "ops_system_log_skip"
+
+	// 文件日志攒批写入，避免每条日志一次 write 系统调用；最迟 1 秒落盘。
+	fileLogBufferSize          = 256 * 1024
+	fileLogBufferFlushInterval = time.Second
 )
 
 type Sink interface {
@@ -54,6 +58,11 @@ var (
 	currentSink   atomic.Value // sinkState
 	stdLogUndo    func()
 	bootstrapOnce sync.Once
+
+	// fileOutputs 按"路径 + 轮转参数"复用文件输出。运行时 Reconfigure 只调级别、采样等
+	// 选项，新旧 logger 共用同一个缓冲写入器：仍被持有的旧 logger 继续写入也会按时落盘。
+	fileOutputsMu sync.Mutex
+	fileOutputs   = map[string]*zapcore.BufferedWriteSyncer{}
 )
 
 type sinkState struct {
@@ -203,9 +212,23 @@ func With(fields ...zap.Field) *zap.Logger {
 }
 
 func Sync() {
+	flushFileOutputs()
 	l := global.Load()
 	if l != nil {
 		_ = l.Sync()
+	}
+}
+
+// flushFileOutputs 把所有文件输出的缓冲写盘；不触碰 stdout/stderr。
+func flushFileOutputs() {
+	fileOutputsMu.Lock()
+	outputs := make([]*zapcore.BufferedWriteSyncer, 0, len(fileOutputs))
+	for _, ws := range fileOutputs {
+		outputs = append(outputs, ws)
+	}
+	fileOutputsMu.Unlock()
+	for _, ws := range outputs {
+		_ = ws.Sync()
 	}
 }
 
@@ -330,15 +353,57 @@ func buildFileCore(enc zapcore.Encoder, atomic zap.AtomicLevel, options InitOpti
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return nil, filePath, err
 	}
-	lj := &lumberjack.Logger{
-		Filename:   filePath,
-		MaxSize:    options.Rotation.MaxSizeMB,
-		MaxBackups: options.Rotation.MaxBackups,
-		MaxAge:     options.Rotation.MaxAgeDays,
-		Compress:   options.Rotation.Compress,
-		LocalTime:  options.Rotation.LocalTime,
+	ws := fileOutputFor(filePath, options.Rotation)
+	return flushOnErrorCore{Core: zapcore.NewCore(enc, ws, atomic), ws: ws}, filePath, nil
+}
+
+func fileOutputFor(filePath string, rotation RotationOptions) *zapcore.BufferedWriteSyncer {
+	key := fmt.Sprintf("%s|%d|%d|%d|%t|%t", filePath, rotation.MaxSizeMB, rotation.MaxBackups, rotation.MaxAgeDays, rotation.Compress, rotation.LocalTime)
+	fileOutputsMu.Lock()
+	defer fileOutputsMu.Unlock()
+	if ws, ok := fileOutputs[key]; ok {
+		return ws
 	}
-	return zapcore.NewCore(enc, zapcore.AddSync(lj), atomic), filePath, nil
+	ws := &zapcore.BufferedWriteSyncer{
+		WS: zapcore.AddSync(&lumberjack.Logger{
+			Filename:   filePath,
+			MaxSize:    rotation.MaxSizeMB,
+			MaxBackups: rotation.MaxBackups,
+			MaxAge:     rotation.MaxAgeDays,
+			Compress:   rotation.Compress,
+			LocalTime:  rotation.LocalTime,
+		}),
+		Size:          fileLogBufferSize,
+		FlushInterval: fileLogBufferFlushInterval,
+	}
+	fileOutputs[key] = ws
+	return ws
+}
+
+// flushOnErrorCore 在写入 Error 及以上级别后立即刷新缓冲：log.Fatalf 等直接
+// os.Exit 的路径会跳过 defer 的 Sync，缓冲里的致命错误不能丢。
+type flushOnErrorCore struct {
+	zapcore.Core
+	ws zapcore.WriteSyncer
+}
+
+func (c flushOnErrorCore) With(fields []zapcore.Field) zapcore.Core {
+	return flushOnErrorCore{Core: c.Core.With(fields), ws: c.ws}
+}
+
+func (c flushOnErrorCore) Check(entry zapcore.Entry, ce *zapcore.CheckedEntry) *zapcore.CheckedEntry {
+	if c.Enabled(entry.Level) {
+		return ce.AddCore(entry, c)
+	}
+	return ce
+}
+
+func (c flushOnErrorCore) Write(entry zapcore.Entry, fields []zapcore.Field) error {
+	err := c.Core.Write(entry, fields)
+	if entry.Level >= zapcore.ErrorLevel {
+		_ = c.ws.Sync()
+	}
+	return err
 }
 
 type sinkCore struct {

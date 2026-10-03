@@ -620,8 +620,10 @@ log:
     # Keep stdout/stderr output for container log collection
     # 保持标准输出用于容器日志采集
     to_stdout: true
-    # Enable file output (default path auto-derived)
-    # 启用文件输出（默认路径自动推导）
+    # Enable file output (default path auto-derived). File writes are buffered:
+    # flushed at least once per second, immediately for error level and above.
+    # 启用文件输出（默认路径自动推导）。文件写入带缓冲：最迟 1 秒落盘，
+    # error 及以上级别立即落盘。
     to_file: true
     # Empty means:
     # - DATA_DIR set: {{DATA_DIR}}/logs/sub2api.log

@@ -31,6 +31,8 @@ const (
 	outboxRebuildRetryBaseDelay           = 5 * time.Second
 	outboxRebuildRetryMaxDelay            = 5 * time.Minute
 	outboxMaxIDErrorLogSampleInterval     = time.Minute
+	// schedulerEmptyBucketMemoryTTL 是 DB 回源确认为空的分桶在进程内的记忆时长。
+	schedulerEmptyBucketMemoryTTL = 5 * time.Second
 )
 
 // batchSeenKey tracks completed per-platform rebuilds and group lifecycle work
@@ -128,6 +130,7 @@ type SchedulerSnapshotService struct {
 	stopOnce                     sync.Once
 	wg                           sync.WaitGroup
 	fallbackLimit                *fallbackLimiter
+	emptyBuckets                 sync.Map // SchedulerBucket -> 记忆截止时间（UnixNano），见 KnownEmptyBucket
 	lagMu                        sync.Mutex
 	lagFailures                  int
 	outboxRebuildLatched         bool
@@ -257,6 +260,7 @@ func (s *SchedulerSnapshotService) ListSchedulableAccounts(ctx context.Context, 
 	if ctxErr := ctx.Err(); ctxErr != nil {
 		return nil, useMixed, ctxErr
 	}
+	s.rememberBucketEmptiness(bucket, len(accounts) == 0)
 
 	if s.cache != nil && canPublish {
 		if err := s.cache.SetSnapshot(fallbackCtx, bucket, writeToken, accounts); err != nil {
@@ -269,6 +273,37 @@ func (s *SchedulerSnapshotService) ListSchedulableAccounts(ctx context.Context, 
 	}
 
 	return accounts, useMixed, nil
+}
+
+// KnownEmptyBucket 报告分桶最近一次 DB 回源是否确认为空，且仍在记忆期内。
+//
+// 空快照在缓存层视同未命中，每次读取都会回源 DB。这里只供"分组里有没有某类账号"
+// 这种提示性判断短路热路径；选号必须继续走 ListSchedulableAccounts，保证新绑定的
+// 账号立即可见。
+func (s *SchedulerSnapshotService) KnownEmptyBucket(groupID *int64, platform string, hasForcePlatform bool) bool {
+	if s == nil {
+		return false
+	}
+	bucket := s.bucketFor(groupID, platform, s.resolveMode(platform, hasForcePlatform))
+	value, ok := s.emptyBuckets.Load(bucket)
+	if !ok {
+		return false
+	}
+	if expiresAt, _ := value.(int64); time.Now().UnixNano() < expiresAt {
+		return true
+	}
+	s.emptyBuckets.CompareAndDelete(bucket, value)
+	return false
+}
+
+func (s *SchedulerSnapshotService) rememberBucketEmptiness(bucket SchedulerBucket, empty bool) {
+	if empty {
+		s.emptyBuckets.Store(bucket, time.Now().Add(schedulerEmptyBucketMemoryTTL).UnixNano())
+		return
+	}
+	if _, ok := s.emptyBuckets.Load(bucket); ok {
+		s.emptyBuckets.Delete(bucket)
+	}
 }
 
 func (s *SchedulerSnapshotService) GetAccount(ctx context.Context, accountID int64) (*Account, error) {

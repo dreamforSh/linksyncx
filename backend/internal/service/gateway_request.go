@@ -123,6 +123,7 @@ func clearGatewayRequestDerivedState(parsed *ParsedRequest) {
 	parsed.systemRange = missingJSONRange()
 	parsed.messagesRange = missingJSONRange()
 	parsed.inputRange = missingJSONRange()
+	parsed.parsedBody = nil
 }
 
 func clearGatewayRequestRanges(parsed *ParsedRequest) {
@@ -133,6 +134,12 @@ func clearGatewayRequestRanges(parsed *ParsedRequest) {
 	parsed.systemRange = missingJSONRange()
 	parsed.messagesRange = missingJSONRange()
 	parsed.inputRange = missingJSONRange()
+	parsed.parsedBody = nil
+}
+
+// sameByteSlice 判断两个切片是否引用同一段底层字节（起点与长度都相同）。
+func sameByteSlice(a, b []byte) bool {
+	return len(a) > 0 && len(a) == len(b) && &a[0] == &b[0]
 }
 
 func setGatewayRequestRanges(parsed *ParsedRequest, protocol string, jsonStr string) {
@@ -240,6 +247,7 @@ func parseGatewayRequestCurrentBody(parsed *ParsedRequest, protocol string) erro
 	}
 
 	setGatewayRequestRanges(parsed, protocol, jsonStr)
+	parsed.parsedBody = bodyBytes
 	return nil
 }
 
@@ -295,6 +303,7 @@ type ParsedRequest struct {
 	systemRange   jsonRange // system/systemInstruction.parts 的 raw JSON 范围，绑定 Body 当前内容
 	messagesRange jsonRange // messages/contents 的 raw JSON 范围，绑定 Body 当前内容
 	inputRange    jsonRange // Responses API input 的 raw JSON 范围，绑定 Body 当前内容
+	parsedBody    []byte    // 派生字段与 raw range 所对应的那份字节；解析失败时为 nil
 
 	// GroupID 请求所属分组 ID（来自 API Key）
 	GroupID *int64
@@ -417,6 +426,10 @@ func (p *ParsedRequest) CloneForBody(body []byte) (*ParsedRequest, error) {
 	clone := *p
 	clone.Body = NewRequestBodyRef(body)
 	clone.OnUpstreamAccepted = nil
+	// 同一份字节的派生状态已随结构体拷贝过来，无需再全量解析一遍。
+	if sameByteSlice(p.parsedBody, body) {
+		return &clone, nil
+	}
 	if err := refreshGatewayRequestRanges(&clone, clone.protocol); err != nil {
 		return nil, err
 	}
@@ -432,6 +445,11 @@ func (p *ParsedRequest) ReplaceBody(data []byte) error {
 		p.Body = NewRequestBodyRef(data)
 	} else {
 		p.Body.Replace(data)
+	}
+	// 改写函数未改动请求体时会原样返回同一切片：派生状态已对应这份字节，跳过全量
+	// 重解析（大请求体单次即可达毫秒级，转发链路上会连续调用多次）。
+	if sameByteSlice(p.parsedBody, data) {
+		return nil
 	}
 	if err := refreshGatewayRequestRanges(p, p.protocol); err != nil {
 		clearGatewayRequestRanges(p)

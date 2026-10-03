@@ -828,17 +828,23 @@ func (s *GatewayService) Forward(ctx context.Context, c *gin.Context, account *A
 
 	// 处理正常响应
 
-	if !bytes.Equal(lastWireBody, body) {
-		// 成功后再同步最终 wire body，避免失败重试从已签名 CCH 的 body 继续派生。
-		if err := replaceBody(lastWireBody); err != nil {
-			return nil, err
-		}
-	}
-
 	// 触发上游接受回调（提前释放串行锁，不等流完成）
 	if parsed.OnUpstreamAccepted != nil {
 		parsed.OnUpstreamAccepted()
 	}
+
+	// 成功后再同步最终 wire body，避免失败重试从已签名 CCH 的 body 继续派生；usage
+	// 指纹与日志也要看到上游实际接受的请求体。同步是一次全量重解析，放到响应转发
+	// 之后执行，不卡在上游响应头与客户端首字节之间。此后不再从 body 派生重试，
+	// 同步失败只影响 usage 指纹，记录日志即可。
+	defer func() {
+		if bytes.Equal(lastWireBody, body) {
+			return
+		}
+		if err := replaceBody(lastWireBody); err != nil {
+			logger.LegacyPrintf("service.gateway", "Account %d: sync accepted wire body failed: %v", account.ID, err)
+		}
+	}()
 
 	var usage *ClaudeUsage
 	var firstTokenMs *int

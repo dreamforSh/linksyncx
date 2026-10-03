@@ -66,6 +66,8 @@ func TestInit_DualOutput(t *testing.T) {
 
 	// Skip Sync() — on Windows, fsync on pipes deadlocks (FlushFileBuffers).
 	// The log data is already in the pipe buffer; closing writers is sufficient.
+	// The file output is buffered, so flush only the file outputs.
+	flushFileOutputs()
 
 	_ = stdoutW.Close()
 	_ = stderrW.Close()
@@ -88,6 +90,93 @@ func TestInit_DualOutput(t *testing.T) {
 	fileText := string(fileBytes)
 	if !strings.Contains(fileText, "dual-output-info") || !strings.Contains(fileText, "dual-output-warn") {
 		t.Fatalf("file missing logs: %s", fileText)
+	}
+}
+
+func initFileOnlyLoggerForTest(t *testing.T) string {
+	t.Helper()
+	// Use os.MkdirTemp instead of t.TempDir to avoid cleanup failures
+	// when lumberjack holds file handles on Windows.
+	tmpDir, err := os.MkdirTemp("", "logger-buffer-test-*")
+	if err != nil {
+		t.Fatalf("create temp dir: %v", err)
+	}
+	t.Cleanup(func() { _ = os.RemoveAll(tmpDir) })
+	logPath := filepath.Join(tmpDir, "logs", "sub2api.log")
+	err = Init(InitOptions{
+		Level:  "info",
+		Format: "json",
+		Output: OutputOptions{
+			ToFile:   true,
+			FilePath: logPath,
+		},
+		Rotation: RotationOptions{
+			MaxSizeMB:  10,
+			MaxBackups: 1,
+			MaxAgeDays: 1,
+		},
+	})
+	if err != nil {
+		t.Fatalf("Init() error: %v", err)
+	}
+	return logPath
+}
+
+func readLogFileForTest(t *testing.T, logPath string) string {
+	t.Helper()
+	data, err := os.ReadFile(logPath)
+	if err != nil && !os.IsNotExist(err) {
+		t.Fatalf("read log file: %v", err)
+	}
+	return string(data)
+}
+
+func TestFileOutput_ErrorFlushesImmediatelyAndInfoAfterFlush(t *testing.T) {
+	logPath := initFileOnlyLoggerForTest(t)
+
+	L().Error("file-buffer-error")
+	if text := readLogFileForTest(t, logPath); !strings.Contains(text, "file-buffer-error") {
+		t.Fatalf("error log should be flushed immediately, got: %s", text)
+	}
+
+	L().Info("file-buffer-info")
+	flushFileOutputs()
+	if text := readLogFileForTest(t, logPath); !strings.Contains(text, "file-buffer-info") {
+		t.Fatalf("info log should be written after flush, got: %s", text)
+	}
+}
+
+func TestReconfigure_ReusesBufferedFileOutput(t *testing.T) {
+	logPath := initFileOnlyLoggerForTest(t)
+	countOutputs := func() int {
+		fileOutputsMu.Lock()
+		defer fileOutputsMu.Unlock()
+		n := 0
+		for key := range fileOutputs {
+			if strings.HasPrefix(key, logPath+"|") {
+				n++
+			}
+		}
+		return n
+	}
+
+	before := L()
+	if err := Reconfigure(func(opts *InitOptions) error {
+		opts.Level = "debug"
+		return nil
+	}); err != nil {
+		t.Fatalf("Reconfigure() error: %v", err)
+	}
+	if n := countOutputs(); n != 1 {
+		t.Fatalf("reconfigure should reuse the file output, got %d outputs", n)
+	}
+
+	before.Info("from-previous-logger")
+	L().Debug("from-current-logger")
+	flushFileOutputs()
+	text := readLogFileForTest(t, logPath)
+	if !strings.Contains(text, "from-previous-logger") || !strings.Contains(text, "from-current-logger") {
+		t.Fatalf("both logger generations should reach the file, got: %s", text)
 	}
 }
 
