@@ -13,6 +13,8 @@ import (
 	"strings"
 	"sync/atomic"
 	"time"
+	"unicode/utf8"
+	"unsafe"
 
 	"github.com/Wei-Shaw/sub2api/internal/pkg/apicompat"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/logger"
@@ -630,10 +632,7 @@ func (s *OpenAIGatewayService) handleStreamingResponseWithReasoning(ctx context.
 			}
 			streamDoneItems.Observe(dataBytes)
 			if responsesStreamEventMayContributeToOutput(eventType) {
-				var streamEvent apicompat.ResponsesStreamEvent
-				if err := json.Unmarshal(dataBytes, &streamEvent); err == nil {
-					streamOutputAccumulator.ProcessEvent(&streamEvent)
-				}
+				accumulateResponsesStreamEvent(streamOutputAccumulator, dataBytes)
 			}
 			if normalizedData, normalized := normalizeResponsesStreamingTerminalOutput(dataBytes, streamOutputAccumulator, streamDoneItems, streamImageOutputs); normalized {
 				dataBytes = normalizedData
@@ -2152,6 +2151,174 @@ func responsesStreamEventMayContributeToOutput(eventType string) bool {
 	}
 }
 
+// accumulateResponsesStreamEvent 把可能参与终止事件 output 补全的事件交给累加器，
+// 结果与 json.Unmarshal 后 ProcessEvent 一致。
+func accumulateResponsesStreamEvent(acc *apicompat.BufferedResponseAccumulator, data []byte) {
+	if event, ok := decodeResponsesStreamDeltaEvent(data); ok {
+		acc.ProcessEvent(&event)
+		return
+	}
+	var event apicompat.ResponsesStreamEvent
+	if err := json.Unmarshal(data, &event); err == nil {
+		acc.ProcessEvent(&event)
+	}
+}
+
+// responsesStreamEventFieldNames 是 apicompat.ResponsesStreamEvent 的全部 JSON 字段名，
+// 下标即 responsesStreamEventField 返回的 bit；结构体增删字段时须同步（有单测守护）。
+var responsesStreamEventFieldNames = [...]string{
+	"type", "delta", "text", "item_id", "call_id", "name", "arguments", "input", "code", "param",
+	"output_index", "content_index", "summary_index", "sequence_number",
+	"response", "usage", "item", "part",
+}
+
+// responsesStreamEventField 返回字段的 JSON 值类型与在 responsesStreamEventFieldNames 中的下标。
+func responsesStreamEventField(name string) (gjson.Type, int, bool) {
+	switch name {
+	case "type":
+		return gjson.String, 0, true
+	case "delta":
+		return gjson.String, 1, true
+	case "text":
+		return gjson.String, 2, true
+	case "item_id":
+		return gjson.String, 3, true
+	case "call_id":
+		return gjson.String, 4, true
+	case "name":
+		return gjson.String, 5, true
+	case "arguments":
+		return gjson.String, 6, true
+	case "input":
+		return gjson.String, 7, true
+	case "code":
+		return gjson.String, 8, true
+	case "param":
+		return gjson.String, 9, true
+	case "output_index":
+		return gjson.Number, 10, true
+	case "content_index":
+		return gjson.Number, 11, true
+	case "summary_index":
+		return gjson.Number, 12, true
+	case "sequence_number":
+		return gjson.Number, 13, true
+	case "response":
+		return gjson.JSON, 14, true
+	case "usage":
+		return gjson.JSON, 15, true
+	case "item":
+		return gjson.JSON, 16, true
+	case "part":
+		return gjson.JSON, 17, true
+	default:
+		return gjson.Null, 0, false
+	}
+}
+
+// decodeResponsesStreamDeltaEvent 只解码累加器用到的 type / delta / output_index。
+//
+// 文本、参数、推理摘要 delta 每个 token 一条，完整解码是流式热路径上最贵的一步。
+// 只要可能与 json.Unmarshal 结果不同（字段类型不符、重复键、键名大小写变体、
+// 嵌套对象、代理对转义、非法 UTF-8），就返回 ok=false 交给完整解码。
+func decodeResponsesStreamDeltaEvent(data []byte) (apicompat.ResponsesStreamEvent, bool) {
+	var event apicompat.ResponsesStreamEvent
+	trimmed := bytes.TrimLeft(data, " \t\r\n")
+	if len(trimmed) == 0 || trimmed[0] != '{' || !gjson.ValidBytes(data) {
+		return event, false
+	}
+	// 零拷贝只读视图：返回的 event 中的字符串引用 data，只在处理当次事件时使用
+	// （ProcessEvent 写入累加器时会复制）。
+	payload := unsafe.String(unsafe.SliceData(data), len(data))
+	ok := true
+	var seen uint32
+	gjson.Parse(payload).ForEach(func(key, value gjson.Result) bool {
+		kind, bit, known := responsesStreamEventField(key.Str)
+		if !known {
+			// 字段名都是小写 ASCII：只有含大写字母或非 ASCII 字符的键才可能大小写匹配上。
+			if hasUpperOrNonASCII(key.Str) {
+				for _, name := range responsesStreamEventFieldNames {
+					if strings.EqualFold(name, key.Str) {
+						ok = false
+						return false
+					}
+				}
+			}
+			return true
+		}
+		if seen&(1<<bit) != 0 {
+			ok = false
+			return false
+		}
+		seen |= 1 << bit
+		if value.Type == gjson.Null {
+			return true
+		}
+		if value.Type != kind {
+			ok = false
+			return false
+		}
+		switch kind {
+		case gjson.String:
+			switch bit {
+			case 0:
+				event.Type = value.Str
+			case 1:
+				if jsonStringHasSurrogateEscape(value.Raw) || !utf8.ValidString(value.Str) {
+					ok = false
+					return false
+				}
+				event.Delta = value.Str
+			}
+		case gjson.Number:
+			n, err := strconv.ParseInt(value.Raw, 10, 64)
+			if err != nil {
+				ok = false
+				return false
+			}
+			if bit == 10 {
+				event.OutputIndex = int(n)
+			}
+		default:
+			ok = false
+			return false
+		}
+		return true
+	})
+	if !ok {
+		return event, false
+	}
+	switch event.Type {
+	case "response.output_text.delta", "response.function_call_arguments.delta", "response.reasoning_summary_text.delta":
+		return event, true
+	default:
+		return event, false
+	}
+}
+
+func hasUpperOrNonASCII(s string) bool {
+	for i := 0; i < len(s); i++ {
+		if c := s[i]; c >= utf8.RuneSelf || ('A' <= c && c <= 'Z') {
+			return true
+		}
+	}
+	return false
+}
+
+// jsonStringHasSurrogateEscape 报告 JSON 字符串字面量中是否含 \uD800-\uDFFF 转义。
+func jsonStringHasSurrogateEscape(raw string) bool {
+	for i := 0; i < len(raw); i++ {
+		if raw[i] != '\\' || i+1 >= len(raw) {
+			continue
+		}
+		if raw[i+1] == 'u' && i+3 < len(raw) && (raw[i+2] == 'd' || raw[i+2] == 'D') && strings.IndexByte("89abcdefABCDEF", raw[i+3]) >= 0 {
+			return true
+		}
+		i++
+	}
+	return false
+}
+
 // collectRawResponsesOutputItemsFromSSE 按到达顺序收集 SSE 流中
 // response.output_item.done 携带的原始 item。除已产生结果但仍停留在进行中
 // 的图片状态外，item 以 raw JSON 逐字节保留，
@@ -2312,10 +2479,7 @@ func reconstructResponseOutputFromSSE(bodyText string) ([]byte, bool) {
 			imageOutputs = append(imageOutputs, imageOutput)
 		}
 		if responsesStreamEventMayContributeToOutput(eventType) {
-			var event apicompat.ResponsesStreamEvent
-			if err := json.Unmarshal(data, &event); err == nil {
-				acc.ProcessEvent(&event)
-			}
+			accumulateResponsesStreamEvent(acc, data)
 		}
 	})
 	return buildResponsesOutputJSON(acc, imageOutputs)

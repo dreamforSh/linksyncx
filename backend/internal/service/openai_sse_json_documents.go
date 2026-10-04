@@ -6,6 +6,8 @@ import (
 	"encoding/json"
 	"io"
 	"strings"
+
+	"github.com/tidwall/gjson"
 )
 
 const (
@@ -77,7 +79,8 @@ func (s *openAISSEJSONDocumentScanner) Scan() bool {
 		s.current = line
 		return true
 	}
-	if len(data) > maxOpenAIConcatenatedJSONBytes {
+	// 单个合法 JSON 值不可能是拼接损坏，跳过逐行拷贝与 encoding/json 校验。
+	if len(data) > maxOpenAIConcatenatedJSONBytes || gjson.Valid(data) {
 		s.current = line
 		return true
 	}

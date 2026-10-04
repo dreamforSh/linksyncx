@@ -1,6 +1,7 @@
 package service
 
 import (
+	"bytes"
 	"crypto/sha256"
 	"encoding/hex"
 	"strings"
@@ -63,7 +64,19 @@ func (c *openAIImageOutputCounter) AddJSONResponse(body []byte) {
 }
 
 func (c *openAIImageOutputCounter) AddSSEData(data []byte) {
-	if c == nil || len(data) == 0 || strings.TrimSpace(string(data)) == "[DONE]" || !gjson.ValidBytes(data) {
+	if c == nil || len(data) == 0 {
+		return
+	}
+	// 流式事件绝大多数是各类 delta：既不是会携带图片的类型，也没有顶层 data 数组，
+	// 先用两次轻量查找排除，不必逐事件全量校验与拷贝。
+	switch strings.TrimSpace(gjson.GetBytes(data, "type").String()) {
+	case "response.output_item.done", "response.completed", "response.done", "image_generation.completed", "image_edit.completed":
+	default:
+		if !gjson.GetBytes(data, "data").IsArray() {
+			return
+		}
+	}
+	if bytes.Equal(bytes.TrimSpace(data), []byte("[DONE]")) || !gjson.ValidBytes(data) {
 		return
 	}
 	root := gjson.ParseBytes(data)

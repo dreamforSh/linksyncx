@@ -81,23 +81,53 @@ func buildClaudeCodeNoopDeltaKeepalive(index int, deltaType string) (string, boo
 	return fmt.Sprintf("event: content_block_delta\ndata: {\"type\":\"content_block_delta\",\"index\":%d,\"delta\":{\"type\":\"%s\",\"%s\":\"\"}}\n\n", index, deltaType, fieldName), true
 }
 
-func sseEventIndex(event map[string]any) (int, bool) {
-	switch v := event["index"].(type) {
-	case float64:
-		return int(v), true
-	case int:
-		return v, true
-	case int64:
-		return int(v), true
-	case json.Number:
-		i, err := v.Int64()
-		if err != nil {
-			return 0, false
-		}
-		return int(i), true
-	default:
+// sseJSONEventIndex 读取事件的 index 字段，取整方式与解码到 float64 后转 int 一致。
+func sseJSONEventIndex(data string) (int, bool) {
+	r := gjson.Get(data, "index")
+	if r.Type != gjson.Number {
 		return 0, false
 	}
+	return int(r.Num), true
+}
+
+// sseJSONStringField 读取 JSON 字符串字段；字段缺失或不是字符串时返回空串。
+func sseJSONStringField(data, path string) string {
+	if r := gjson.Get(data, path); r.Type == gjson.String {
+		return r.Str
+	}
+	return ""
+}
+
+// anthropicSSEDataPayload 返回 SSE data 行的内容，兼容 "data: x" 与 "data:x"。
+func anthropicSSEDataPayload(trimmedLine string) (string, bool) {
+	if !strings.HasPrefix(trimmedLine, "data:") {
+		return "", false
+	}
+	return strings.TrimLeft(trimmedLine[len("data:"):], " \t\n\f\r"), true
+}
+
+// appendSSEBlockLines 把以 "\n" 连接的事件原始行拆回逐行（子串引用，不复制）。
+func appendSSEBlockLines(dst []string, block string) []string {
+	for {
+		i := strings.IndexByte(block, '\n')
+		if i < 0 {
+			return append(dst, block)
+		}
+		dst = append(dst, block[:i])
+		block = block[i+1:]
+	}
+}
+
+// appendAnthropicSSEBlock 按网关统一格式（可选 event 行 + data 行）追加一个 SSE 事件。
+func appendAnthropicSSEBlock(dst []byte, eventName, data string) []byte {
+	if eventName != "" {
+		dst = append(dst, "event: "...)
+		dst = append(dst, eventName...)
+		dst = append(dst, '\n')
+	}
+	dst = append(dst, "data: "...)
+	dst = append(dst, data...)
+	return append(dst, "\n\n"...)
 }
 
 // shouldRectifySignatureError 统一判断是否应触发签名整流（strip thinking blocks 并重试）。
@@ -733,8 +763,8 @@ func (s *GatewayService) handleStreamingResponse(ctx context.Context, resp *http
 	scanner.Buffer(scanBuf[:0], maxLineSize)
 
 	type scanEvent struct {
-		line string
-		err  error
+		block string // 一个完整 SSE 事件的原始行（不含结尾空行），以 "\n" 连接
+		err   error
 	}
 	// 独立 goroutine 读取上游，避免读取阻塞导致超时/keepalive无法处理
 	events := make(chan scanEvent, 16)
@@ -752,11 +782,29 @@ func (s *GatewayService) handleStreamingResponse(ctx context.Context, resp *http
 	go func(scanBuf *sseScannerBuf64K) {
 		defer putSSEScannerBuf64K(scanBuf)
 		defer close(events)
+		// 按空行攒成完整事件再交给主循环：每个事件只交接一次、只分配一次字符串。
+		// 读错误或 EOF 时缓冲中不完整的事件直接丢弃（主循环从不处理半个事件）。
+		var pending []byte
+		pendingLines := 0
 		for scanner.Scan() {
 			atomic.StoreInt64(&lastReadAt, time.Now().UnixNano())
-			if !sendEvent(scanEvent{line: scanner.Text()}) {
-				return
+			line := scanner.Bytes()
+			if len(bytes.TrimSpace(line)) == 0 {
+				if pendingLines == 0 {
+					continue
+				}
+				if !sendEvent(scanEvent{block: string(pending)}) {
+					return
+				}
+				pending = pending[:0]
+				pendingLines = 0
+				continue
 			}
+			if pendingLines > 0 {
+				pending = append(pending, '\n')
+			}
+			pending = append(pending, line...)
+			pendingLines++
 		}
 		if err := scanner.Err(); err != nil {
 			_ = sendEvent(scanEvent{err: err})
@@ -841,10 +889,17 @@ func (s *GatewayService) handleStreamingResponse(ctx context.Context, resp *http
 	useNoopDeltaKeepalive := c != nil && c.Request != nil && shouldUseClaudeCodeNoopDeltaKeepalive(c.GetHeader("User-Agent"))
 	noopDeltaKeepaliveBlockIndex := -1
 	noopDeltaKeepaliveDeltaType := ""
+	// 工具名映射在转发前写入 context，流式期间不变，只取一次。
+	toolNameRewrite := toolNameRewriteFromContext(c)
 
 	pendingEventLines := make([]string, 0, 4)
+	// 写出缓冲按事件复用：绝大多数事件原样转发，不必逐事件拼接字符串。
+	var eventBuf []byte
 
-	processSSEEvent := func(lines []string) ([]string, string, *sseUsagePatch, error) {
+	// processSSEEvent 把一个完整 SSE 事件规范化为待写出的块（指向 eventBuf，处理下一个事件前有效）。
+	// 只有 message_start / message_delta 以及需要回写模型名的事件才解码改写；占绝大多数的
+	// content_block_delta 等事件原样转发，只用 gjson 读取所需字段。
+	processSSEEvent := func(lines []string) ([]byte, string, *sseUsagePatch, error) {
 		if len(lines) == 0 {
 			return nil, "", nil, nil
 		}
@@ -857,8 +912,8 @@ func (s *GatewayService) handleStreamingResponse(ctx context.Context, resp *http
 				eventName = strings.TrimSpace(strings.TrimPrefix(trimmed, "event:"))
 				continue
 			}
-			if dataLine == "" && sseDataRe.MatchString(trimmed) {
-				dataLine = sseDataRe.ReplaceAllString(trimmed, "")
+			if dataLine == "" {
+				dataLine, _ = anthropicSSEDataPayload(trimmed)
 			}
 		}
 
@@ -867,63 +922,59 @@ func (s *GatewayService) handleStreamingResponse(ctx context.Context, resp *http
 		}
 
 		if dataLine == "" {
-			return []string{strings.Join(lines, "\n") + "\n\n"}, "", nil, nil
+			eventBuf = eventBuf[:0]
+			for i, line := range lines {
+				if i > 0 {
+					eventBuf = append(eventBuf, '\n')
+				}
+				eventBuf = append(eventBuf, line...)
+			}
+			eventBuf = append(eventBuf, "\n\n"...)
+			return eventBuf, "", nil, nil
 		}
 
 		if dataLine == "[DONE]" {
 			sawTerminalEvent = true
-			block := ""
-			if eventName != "" {
-				block = "event: " + eventName + "\n"
-			}
-			block += "data: " + dataLine + "\n\n"
-			return []string{block}, dataLine, nil, nil
+			eventBuf = appendAnthropicSSEBlock(eventBuf[:0], eventName, dataLine)
+			return eventBuf, dataLine, nil, nil
 		}
 
-		var event map[string]any
-		if err := json.Unmarshal([]byte(dataLine), &event); err != nil {
-			// JSON 解析失败，直接透传原始数据
-			block := ""
-			if eventName != "" {
-				block = "event: " + eventName + "\n"
-			}
-			block += "data: " + dataLine + "\n\n"
-			return []string{block}, dataLine, nil, nil
+		// 不是 JSON 对象的 data 直接透传原始数据，与解码失败时的处理一致。
+		if !strings.HasPrefix(dataLine, "{") || !gjson.Valid(dataLine) {
+			eventBuf = appendAnthropicSSEBlock(eventBuf[:0], eventName, dataLine)
+			return eventBuf, dataLine, nil, nil
 		}
 
-		eventType, _ := event["type"].(string)
-		observer.ObserveAnthropic([]byte(dataLine))
+		eventType := sseJSONStringField(dataLine, "type")
+		// 只有声明了 model 的事件（message_start）会被观察器记录，其余事件跳过查找。
+		if strings.Contains(dataLine, `"model"`) {
+			observer.ObserveAnthropic([]byte(dataLine))
+		}
 		if eventName == "" {
 			eventName = eventType
 		}
-		eventChanged := false
 
 		if useNoopDeltaKeepalive {
 			switch eventType {
 			case "content_block_start":
-				if idx, ok := sseEventIndex(event); ok {
+				if idx, ok := sseJSONEventIndex(dataLine); ok {
 					noopDeltaKeepaliveBlockIndex = -1
 					noopDeltaKeepaliveDeltaType = ""
-					if contentBlock, ok := event["content_block"].(map[string]any); ok {
-						blockType, _ := contentBlock["type"].(string)
-						if deltaType := claudeCodeKeepaliveDeltaTypeForContentBlock(blockType); deltaType != "" {
-							noopDeltaKeepaliveBlockIndex = idx
-							noopDeltaKeepaliveDeltaType = deltaType
-						}
+					if deltaType := claudeCodeKeepaliveDeltaTypeForContentBlock(sseJSONStringField(dataLine, "content_block.type")); deltaType != "" {
+						noopDeltaKeepaliveBlockIndex = idx
+						noopDeltaKeepaliveDeltaType = deltaType
 					}
 				}
 			case "content_block_delta":
-				if idx, ok := sseEventIndex(event); ok {
-					if delta, ok := event["delta"].(map[string]any); ok {
-						deltaType, _ := delta["type"].(string)
-						if claudeCodeKeepaliveFieldForDeltaType(deltaType) != "" {
-							noopDeltaKeepaliveBlockIndex = idx
-							noopDeltaKeepaliveDeltaType = deltaType
-						}
+				if idx, ok := sseJSONEventIndex(dataLine); ok {
+					deltaType := sseJSONStringField(dataLine, "delta.type")
+					if claudeCodeKeepaliveFieldForDeltaType(deltaType) != "" {
+						noopDeltaKeepaliveBlockIndex = idx
+						noopDeltaKeepaliveDeltaType = deltaType
 					}
 				}
 			case "content_block_stop":
-				if idx, ok := sseEventIndex(event); ok && idx == noopDeltaKeepaliveBlockIndex {
+				if idx, ok := sseJSONEventIndex(dataLine); ok && idx == noopDeltaKeepaliveBlockIndex {
 					noopDeltaKeepaliveBlockIndex = -1
 					noopDeltaKeepaliveDeltaType = ""
 				}
@@ -932,6 +983,25 @@ func (s *GatewayService) handleStreamingResponse(ctx context.Context, resp *http
 				noopDeltaKeepaliveDeltaType = ""
 			}
 		}
+
+		if strings.EqualFold(strings.TrimSpace(eventName), "message_stop") || eventType == "message_stop" {
+			sawTerminalEvent = true
+		}
+
+		rewritable := eventType == "message_start" || eventType == "message_delta" ||
+			(needModelReplace && sseJSONStringField(dataLine, "message.model") == mappedModel)
+		if !rewritable {
+			eventBuf = appendAnthropicSSEBlock(eventBuf[:0], eventName, dataLine)
+			return eventBuf, dataLine, nil, nil
+		}
+
+		var event map[string]any
+		if err := json.Unmarshal([]byte(dataLine), &event); err != nil {
+			// JSON 解析失败，直接透传原始数据
+			eventBuf = appendAnthropicSSEBlock(eventBuf[:0], eventName, dataLine)
+			return eventBuf, dataLine, nil, nil
+		}
+		eventChanged := false
 
 		// 兼容 Kimi cached_tokens → cache_read_input_tokens
 		if eventType == "message_start" {
@@ -974,35 +1044,21 @@ func (s *GatewayService) handleStreamingResponse(ctx context.Context, resp *http
 		}
 
 		usagePatch := s.extractSSEUsagePatch(event)
-		if anthropicStreamEventIsTerminal(eventName, dataLine) {
-			sawTerminalEvent = true
-		}
 		if !eventChanged {
-			block := ""
-			if eventName != "" {
-				block = "event: " + eventName + "\n"
-			}
-			block += "data: " + dataLine + "\n\n"
-			return []string{block}, dataLine, usagePatch, nil
+			eventBuf = appendAnthropicSSEBlock(eventBuf[:0], eventName, dataLine)
+			return eventBuf, dataLine, usagePatch, nil
 		}
 
 		newData, err := json.Marshal(event)
 		if err != nil {
 			// 序列化失败，直接透传原始数据
-			block := ""
-			if eventName != "" {
-				block = "event: " + eventName + "\n"
-			}
-			block += "data: " + dataLine + "\n\n"
-			return []string{block}, dataLine, usagePatch, nil
+			eventBuf = appendAnthropicSSEBlock(eventBuf[:0], eventName, dataLine)
+			return eventBuf, dataLine, usagePatch, nil
 		}
 
-		block := ""
-		if eventName != "" {
-			block = "event: " + eventName + "\n"
-		}
-		block += "data: " + string(newData) + "\n\n"
-		return []string{block}, string(newData), usagePatch, nil
+		newDataStr := string(newData)
+		eventBuf = appendAnthropicSSEBlock(eventBuf[:0], eventName, newDataStr)
+		return eventBuf, newDataStr, usagePatch, nil
 	}
 
 	for {
@@ -1058,52 +1114,40 @@ func (s *GatewayService) handleStreamingResponse(ctx context.Context, resp *http
 				sendErrorEvent("stream_read_error", disconnectMsg)
 				return &streamingResult{usage: usage, firstTokenMs: firstTokenMs}, fmt.Errorf("stream read error: %w", ev.err)
 			}
-			line := ev.line
-			trimmed := strings.TrimSpace(line)
-
-			if trimmed == "" {
-				if len(pendingEventLines) == 0 {
-					continue
+			pendingEventLines = appendSSEBlockLines(pendingEventLines[:0], ev.block)
+			block, data, usagePatch, err := processSSEEvent(pendingEventLines)
+			if err != nil {
+				if clientDisconnected {
+					return &streamingResult{usage: usage, firstTokenMs: firstTokenMs, clientDisconnect: true}, nil
 				}
-
-				outputBlocks, data, usagePatch, err := processSSEEvent(pendingEventLines)
-				pendingEventLines = pendingEventLines[:0]
-				if err != nil {
-					if clientDisconnected {
-						return &streamingResult{usage: usage, firstTokenMs: firstTokenMs, clientDisconnect: true}, nil
-					}
-					return nil, err
-				}
-
-				for _, block := range outputBlocks {
-					if !clientDisconnected {
-						restored := reverseToolNamesIfPresent(c, []byte(block))
-						if _, werr := fmt.Fprint(w, string(restored)); werr != nil {
-							clientDisconnected = true
-							logger.LegacyPrintf("service.gateway", "Client disconnected during streaming, continuing to drain upstream for billing")
-							// 不 break：客户端断开后仍需继续合并本事件及后续事件的 usage，
-							// 否则会漏计当前事件携带的 usage 导致少计费。后续写入由
-							// clientDisconnected 守卫跳过。
-						} else {
-							flusher.Flush()
-							lastDataAt = time.Now()
-							resetKeepaliveTimer()
-						}
-					}
-					if data != "" {
-						if firstTokenMs == nil && data != "[DONE]" {
-							ms := int(time.Since(startTime).Milliseconds())
-							firstTokenMs = &ms
-						}
-						if usagePatch != nil {
-							mergeSSEUsagePatch(usage, usagePatch)
-						}
-					}
-				}
+				return nil, err
+			}
+			if block == nil {
 				continue
 			}
 
-			pendingEventLines = append(pendingEventLines, line)
+			if !clientDisconnected {
+				if _, werr := w.Write(restoreToolNamesInBytes(block, toolNameRewrite)); werr != nil {
+					clientDisconnected = true
+					logger.LegacyPrintf("service.gateway", "Client disconnected during streaming, continuing to drain upstream for billing")
+					// 不 break：客户端断开后仍需继续合并本事件及后续事件的 usage，
+					// 否则会漏计当前事件携带的 usage 导致少计费。后续写入由
+					// clientDisconnected 守卫跳过。
+				} else {
+					flusher.Flush()
+					lastDataAt = time.Now()
+					resetKeepaliveTimer()
+				}
+			}
+			if data != "" {
+				if firstTokenMs == nil && data != "[DONE]" {
+					ms := int(time.Since(startTime).Milliseconds())
+					firstTokenMs = &ms
+				}
+				if usagePatch != nil {
+					mergeSSEUsagePatch(usage, usagePatch)
+				}
+			}
 
 		case <-intervalCh:
 			lastRead := time.Unix(0, atomic.LoadInt64(&lastReadAt))

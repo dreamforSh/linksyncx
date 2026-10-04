@@ -157,14 +157,18 @@ func collectGrokNativeSearchCallKeys(data []byte) []string {
 }
 
 func countGrokNativeSearchCallsInSSEDataWithKeys(data []byte) (int, []string) {
-	if len(data) == 0 || !gjson.ValidBytes(data) {
+	if len(data) == 0 {
 		return 0, nil
 	}
 	// Count once on item completion / completed response, not on every delta.
-	// An empty type is a bare item object without an SSE envelope.
+	// An empty type is a bare item object without an SSE envelope. Checking the
+	// type first keeps the full validation off the per-delta hot path.
 	switch strings.TrimSpace(gjson.GetBytes(data, "type").String()) {
 	case "response.output_item.done", "response.completed", "response.done", "":
 	default:
+		return 0, nil
+	}
+	if !gjson.ValidBytes(data) {
 		return 0, nil
 	}
 	var keys []string
