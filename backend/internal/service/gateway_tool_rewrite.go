@@ -308,19 +308,23 @@ func isDeferredLoadingTool(tool gjson.Result) bool {
 // stripDeferredToolCacheControl removes the cache marker Anthropic rejects on
 // deferred tools. Only the literal JSON boolean true enables deferred loading.
 func stripDeferredToolCacheControl(body []byte) []byte {
-	tools := gjson.GetBytes(body, "tools")
+	view := newJSONBodyView(body, nil)
+	stripDeferredToolCacheControlView(view)
+	return view.data
+}
+
+// stripDeferredToolCacheControlView 是 stripDeferredToolCacheControl 作用于 jsonBodyView 的版本。
+func stripDeferredToolCacheControlView(view *jsonBodyView) {
+	tools := view.get("tools")
 	if !tools.IsArray() {
-		return body
+		return
 	}
 	for idx, tool := range tools.Array() {
 		if !isDeferredLoadingTool(tool) || !tool.Get("cache_control").Exists() {
 			continue
 		}
-		if next, err := sjson.DeleteBytes(body, fmt.Sprintf("tools.%d.cache_control", idx)); err == nil {
-			body = next
-		}
+		_ = view.deletePath(fmt.Sprintf("tools.%d.cache_control", idx))
 	}
-	return body
 }
 
 // restoreToolNamesInBytes 对 bytes chunk 做逆向还原：假名 → 真名。

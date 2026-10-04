@@ -16,7 +16,6 @@ import (
 	"github.com/Wei-Shaw/sub2api/internal/pkg/claude"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/logger"
 	"github.com/tidwall/gjson"
-	"github.com/tidwall/sjson"
 )
 
 // 预编译正则表达式（避免每次调用重新编译）
@@ -385,31 +384,38 @@ func (s *IdentityService) ApplyFingerprint(req *http.Request, fp *Fingerprint) {
 // 重要：此函数使用 json.RawMessage 保留其他字段的原始字节，
 // 避免重新序列化导致 thinking 块等内容被修改。
 func (s *IdentityService) RewriteUserID(body []byte, accountID int64, accountUUID, cachedClientID, fingerprintUA string) ([]byte, error) {
-	if len(body) == 0 || accountUUID == "" || cachedClientID == "" {
-		return body, nil
+	view := newJSONBodyView(body, nil)
+	s.rewriteUserIDView(view, accountID, accountUUID, cachedClientID, fingerprintUA)
+	return view.data, nil
+}
+
+// rewriteUserIDView 是 RewriteUserID 作用于 jsonBodyView 的版本（原函数从不返回错误）。
+func (s *IdentityService) rewriteUserIDView(view *jsonBodyView, accountID int64, accountUUID, cachedClientID, fingerprintUA string) {
+	if len(view.data) == 0 || accountUUID == "" || cachedClientID == "" {
+		return
 	}
 
-	metadata := gjson.GetBytes(body, "metadata")
+	metadata := view.get("metadata")
 	if !metadata.Exists() || metadata.Type == gjson.Null {
-		return body, nil
+		return
 	}
 	if !strings.HasPrefix(strings.TrimSpace(metadata.Raw), "{") {
-		return body, nil
+		return
 	}
 
 	userIDResult := metadata.Get("user_id")
 	if !userIDResult.Exists() || userIDResult.Type != gjson.String {
-		return body, nil
+		return
 	}
 	userID := userIDResult.String()
 	if userID == "" {
-		return body, nil
+		return
 	}
 
 	// 解析 user_id（兼容旧拼接格式和新 JSON 格式）
 	parsed := ParseMetadataUserID(userID)
 	if parsed == nil {
-		return body, nil
+		return
 	}
 
 	sessionTail := parsed.SessionID // 原始session UUID
@@ -422,14 +428,10 @@ func (s *IdentityService) RewriteUserID(body []byte, accountID int64, accountUUI
 	version := ExtractCLIVersion(fingerprintUA)
 	newUserID := FormatMetadataUserID(cachedClientID, accountUUID, newSessionHash, version)
 	if newUserID == userID {
-		return body, nil
+		return
 	}
 
-	newBody, err := sjson.SetBytes(body, "metadata.user_id", newUserID)
-	if err != nil {
-		return body, nil
-	}
-	return newBody, nil
+	_ = view.setString("metadata.user_id", newUserID)
 }
 
 // RewriteUserIDWithMasking 重写body中的metadata.user_id，支持会话ID伪装
@@ -439,38 +441,43 @@ func (s *IdentityService) RewriteUserID(body []byte, accountID int64, accountUUI
 // 重要：此函数使用 json.RawMessage 保留其他字段的原始字节，
 // 避免重新序列化导致 thinking 块等内容被修改。
 func (s *IdentityService) RewriteUserIDWithMasking(ctx context.Context, body []byte, account *Account, accountUUID, cachedClientID, fingerprintUA string) ([]byte, error) {
+	view := newJSONBodyView(body, nil)
+	s.rewriteUserIDWithMaskingView(ctx, view, account, accountUUID, cachedClientID, fingerprintUA)
+	return view.data, nil
+}
+
+// rewriteUserIDWithMaskingView 是 RewriteUserIDWithMasking 作用于 jsonBodyView 的版本
+// （原函数从不返回错误）。
+func (s *IdentityService) rewriteUserIDWithMaskingView(ctx context.Context, view *jsonBodyView, account *Account, accountUUID, cachedClientID, fingerprintUA string) {
 	// 先执行常规的 RewriteUserID 逻辑
-	newBody, err := s.RewriteUserID(body, account.ID, accountUUID, cachedClientID, fingerprintUA)
-	if err != nil {
-		return newBody, err
-	}
+	s.rewriteUserIDView(view, account.ID, accountUUID, cachedClientID, fingerprintUA)
 
 	// 检查是否启用会话ID伪装
 	if !account.IsSessionIDMaskingEnabled() {
-		return newBody, nil
+		return
 	}
 
-	metadata := gjson.GetBytes(newBody, "metadata")
+	metadata := view.get("metadata")
 	if !metadata.Exists() || metadata.Type == gjson.Null {
-		return newBody, nil
+		return
 	}
 	if !strings.HasPrefix(strings.TrimSpace(metadata.Raw), "{") {
-		return newBody, nil
+		return
 	}
 
 	userIDResult := metadata.Get("user_id")
 	if !userIDResult.Exists() || userIDResult.Type != gjson.String {
-		return newBody, nil
+		return
 	}
 	userID := userIDResult.String()
 	if userID == "" {
-		return newBody, nil
+		return
 	}
 
 	// 解析已重写的 user_id
 	uidParsed := ParseMetadataUserID(userID)
 	if uidParsed == nil {
-		return newBody, nil
+		return
 	}
 
 	// 获取或生成固定的伪装 session ID：原子 get-or-create 并顺带刷新 15 分钟 TTL，
@@ -479,7 +486,7 @@ func (s *IdentityService) RewriteUserIDWithMasking(ctx context.Context, body []b
 	maskedSessionID, err := s.cache.GetOrCreateMaskedSessionID(ctx, account.ID, candidate)
 	if err != nil {
 		logger.LegacyPrintf("service.identity", "Warning: failed to get masked session ID for account %d: %v", account.ID, err)
-		return newBody, nil
+		return
 	}
 	if maskedSessionID == candidate {
 		logger.LegacyPrintf("service.identity", "Generated new masked session ID for account %d: %s", account.ID, maskedSessionID)
@@ -496,14 +503,10 @@ func (s *IdentityService) RewriteUserIDWithMasking(ctx context.Context, body []b
 	)
 
 	if newUserID == userID {
-		return newBody, nil
+		return
 	}
 
-	maskedBody, setErr := sjson.SetBytes(newBody, "metadata.user_id", newUserID)
-	if setErr != nil {
-		return newBody, nil
-	}
-	return maskedBody, nil
+	_ = view.setString("metadata.user_id", newUserID)
 }
 
 // generateRandomUUID 生成随机 UUID v4 格式字符串

@@ -5,7 +5,6 @@ import (
 	"encoding/hex"
 	"fmt"
 	"strings"
-	"unsafe"
 
 	"github.com/tidwall/gjson"
 )
@@ -26,7 +25,12 @@ const fingerprintSalt = "59cf53e54c78"
 // 算法来自 Parrot src/transform/cc_mimicry.py:compute_fingerprint，与官方 CLI 字节对齐。
 // 任何偏差都会导致 cc_version=X.Y.Z.{fp} 在上游侧与真实 CLI 不一致。
 func computeClaudeCodeFingerprint(body []byte, version string) string {
-	firstText := extractFirstUserText(body)
+	return computeClaudeCodeFingerprintView(newJSONBodyView(body, nil), version)
+}
+
+// computeClaudeCodeFingerprintView 是 computeClaudeCodeFingerprint 作用于 jsonBodyView 的版本。
+func computeClaudeCodeFingerprintView(view *jsonBodyView, version string) string {
+	firstText := extractFirstUserTextView(view)
 	indices := []int{4, 7, 20}
 	chars := make([]byte, 0, 3)
 	for _, i := range indices {
@@ -43,8 +47,13 @@ func computeClaudeCodeFingerprint(body []byte, version string) string {
 // extractFirstUserText 提取 messages 中第一条 user 消息的首段 text 内容。
 // 兼容 string 和 []block 两种 content 格式。
 func extractFirstUserText(body []byte) string {
-	// 只读视图：gjson.GetBytes 会把整个 messages 复制一份；命中的文本在返回前复制。
-	messages := gjson.Get(*(*string)(unsafe.Pointer(&body)), "messages")
+	return extractFirstUserTextView(newJSONBodyView(body, nil))
+}
+
+// extractFirstUserTextView 是 extractFirstUserText 作用于 jsonBodyView 的版本。查找结果直接
+// 引用请求体（gjson.GetBytes 会把整个 messages 复制一份），命中的文本在返回前复制。
+func extractFirstUserTextView(view *jsonBodyView) string {
+	messages := view.get("messages")
 	if !messages.IsArray() {
 		return ""
 	}

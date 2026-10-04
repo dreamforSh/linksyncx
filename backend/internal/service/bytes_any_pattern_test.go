@@ -10,7 +10,8 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-var anchoredPatternSetsUnderTest = []anchoredPatterns{emptyTextBlockPatterns, thinkingContentPatterns, webSearchHistoryBlockPatterns}
+var anchoredPatternSetsUnderTest = []anchoredPatterns{emptyTextBlockPatterns, thinkingContentPatterns, webSearchHistoryBlockPatterns,
+	outputConfigPattern, cacheControlKeyPattern, lowercaseLetterEscapePatterns}
 
 func requireAnchoredPatternsMatchContains(t *testing.T, data []byte) {
 	t.Helper()

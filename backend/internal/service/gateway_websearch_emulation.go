@@ -47,15 +47,15 @@ func getWebSearchManager() *websearch.Manager {
 	return webSearchManagerPtr.Load()
 }
 
-// shouldEmulateWebSearch checks whether a request should be intercepted.
+// shouldEmulateWebSearchView checks whether a request should be intercepted.
 //
 // Judgment chain: manager exists → only web_search tool → global enabled → account/channel enabled.
 // Account-level mode: "enabled" (force on), "disabled" (force off), "default" (follow channel).
-func (s *GatewayService) shouldEmulateWebSearch(ctx context.Context, account *Account, groupID *int64, body []byte) bool {
+func (s *GatewayService) shouldEmulateWebSearchView(ctx context.Context, account *Account, groupID *int64, view *jsonBodyView) bool {
 	if getWebSearchManager() == nil {
 		return false
 	}
-	if !isOnlyWebSearchToolInBody(body) {
+	if !isOnlyWebSearchToolInView(view) {
 		return false
 	}
 	if !s.settingService.IsWebSearchEmulationEnabled(ctx) {
@@ -80,9 +80,9 @@ func (s *GatewayService) shouldEmulateWebSearch(ctx context.Context, account *Ac
 	}
 }
 
-// isOnlyWebSearchToolInBody checks if the body contains exactly one web_search tool.
-func isOnlyWebSearchToolInBody(body []byte) bool {
-	tools := gjson.GetBytes(body, "tools")
+// isOnlyWebSearchToolInView checks if the body contains exactly one web_search tool.
+func isOnlyWebSearchToolInView(view *jsonBodyView) bool {
+	tools := view.get("tools")
 	if !tools.IsArray() {
 		return false
 	}

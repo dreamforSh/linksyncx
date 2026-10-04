@@ -13,6 +13,15 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+// isOnlyWebSearchToolInBody / shouldEmulateWebSearch 让本文件的用例继续以 []byte 请求体调用。
+func isOnlyWebSearchToolInBody(body []byte) bool {
+	return isOnlyWebSearchToolInView(newJSONBodyView(body, nil))
+}
+
+func (s *GatewayService) shouldEmulateWebSearch(ctx context.Context, account *Account, groupID *int64, body []byte) bool {
+	return s.shouldEmulateWebSearchView(ctx, account, groupID, newJSONBodyView(body, nil))
+}
+
 // --- isOnlyWebSearchToolInBody ---
 
 func TestIsOnlyWebSearchToolInBody_WebSearchType(t *testing.T) {

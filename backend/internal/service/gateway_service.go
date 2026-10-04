@@ -295,11 +295,8 @@ func safeHeaderValueForLog(key string, v string) string {
 	}
 }
 
-func extractSystemPreviewFromBody(body []byte) string {
-	if len(body) == 0 {
-		return ""
-	}
-	sys := gjson.GetBytes(body, "system")
+// extractSystemPreview 从 system 字段取出用于诊断日志的首段文本。
+func extractSystemPreview(sys gjson.Result) string {
 	if !sys.Exists() {
 		return ""
 	}
@@ -325,6 +322,11 @@ func extractSystemPreviewFromBody(body []byte) string {
 }
 
 func buildClaudeMimicDebugLine(req *http.Request, body []byte, account *Account, tokenType string, mimicClaudeCode bool) string {
+	return buildClaudeMimicDebugLineView(req, newJSONBodyView(body, nil), account, tokenType, mimicClaudeCode)
+}
+
+// buildClaudeMimicDebugLineView 是 buildClaudeMimicDebugLine 作用于 jsonBodyView 的版本。
+func buildClaudeMimicDebugLineView(req *http.Request, view *jsonBodyView, account *Account, tokenType string, mimicClaudeCode bool) string {
 	if req == nil {
 		return ""
 	}
@@ -358,8 +360,11 @@ func buildClaudeMimicDebugLine(req *http.Request, body []byte, account *Account,
 		}
 	}
 
-	metaUserID := strings.TrimSpace(gjson.GetBytes(body, "metadata.user_id").String())
-	sysPreview := strings.TrimSpace(extractSystemPreviewFromBody(body))
+	metaUserID := strings.TrimSpace(view.get("metadata.user_id").String())
+	sysPreview := ""
+	if len(view.data) > 0 {
+		sysPreview = strings.TrimSpace(extractSystemPreview(view.get("system")))
+	}
 
 	// Truncate preview to keep logs sane.
 	if len(sysPreview) > 300 {

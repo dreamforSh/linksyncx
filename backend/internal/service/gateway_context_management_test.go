@@ -18,6 +18,12 @@ import (
 	"github.com/tidwall/gjson"
 )
 
+// computeFinalAnthropicBeta 让本文件的用例继续以 []byte 请求体调用。
+func (s *GatewayService) computeFinalAnthropicBeta(tokenType string, mimicClaudeCode bool, modelID string,
+	clientHeaders http.Header, body []byte, effectiveDropSet map[string]struct{}) (string, bool) {
+	return s.computeFinalAnthropicBetaView(tokenType, mimicClaudeCode, modelID, clientHeaders, newJSONBodyView(body, nil), effectiveDropSet)
+}
+
 // ============================================================================
 // 背景
 // ============================================================================
