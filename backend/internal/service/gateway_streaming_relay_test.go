@@ -4,6 +4,7 @@ package service
 
 import (
 	"context"
+	"encoding/json"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -108,4 +109,66 @@ func TestRestoreToolNamesInBytes_NoMatchDoesNotAllocate(t *testing.T) {
 		_ = restoreToolNamesInBytes(chunk, rw)
 	})
 	require.Zero(t, allocs)
+}
+
+type anthropicSSEFieldCase struct {
+	name string
+	data string
+	fast bool
+}
+
+func anthropicSSEFieldCases() []anthropicSSEFieldCase {
+	esc := jsonUnicodeEscape
+	deep := strings.Repeat("[", 10001) + strings.Repeat("]", 10001)
+	return []anthropicSSEFieldCase{
+		{"常规 delta，字符串里的数字加 e 不影响快速路径", `{"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"1e5 v2E9 toolu_01E9"}}`, true},
+		{"重复 type：事件类型取最后一个，终止判断取第一个", `{"type":"message_stop","type":"content_block_delta","index":1}`, true},
+		{"重复 index 与 content_block 内重复 type", `{"type":"content_block_start","index":0,"content_block":{"type":"thinking","type":"text"},"index":2}`, true},
+		{"字段类型不符", `{"type":"content_block_delta","delta":{"type":"text_delta"},"delta":"str","index":"1"}`, true},
+		{"message 与 model 都重复", `{"type":"message_start","message":{"model":"a","model":"b"},"message":{"model":"c","model":"d"}}`, true},
+		{"转义键名与转义值", `{"typ` + esc("0065") + `":"message_` + esc("0073") + `top","ind` + esc("0065") + `x":3}`, true},
+		{"孤立代理后跟转义", `{"type":"content_block_delta` + esc("d800", "0041") + `","message":{"model":"m` + esc("dc00") + `"}}`, true},
+		{"非法 UTF-8", "{\"type\":\"content_block_delta\xff\",\"message\":{\"model\":\"m\xed\xa0\x80\"}}", true},
+		{"小数与负零下标", `{"type":"content_block_stop","index":3.0,"v":-0}`, true},
+		{"溢出的指数", `{"type":"message_stop","v":1e400}`, false},
+		{"溢出的长整数", `{"type":"message_stop","v":` + strings.Repeat("9", 400) + `}`, false},
+		{"不溢出的指数也保守走慢路径", `{"type":"message_stop","type":"ping","v":1e2}`, false},
+		{"超过嵌套上限", `{"type":"message_stop","v":` + deep + `}`, false},
+		{"超大载荷", `{"type":"message_stop","v":"` + strings.Repeat("x", jsonDepthSafeMaxBytes) + `"}`, false},
+		{"null", `null`, false},
+		{"非对象", `[{"type":"message_stop"}]`, false},
+		{"非法 JSON", `{"type":"message_stop"`, false},
+	}
+}
+
+// requireAnthropicSSEFieldsExact 断言：走快速路径的输入 json.Unmarshal 必然成功，且读出的
+// 字段与解码成 map 后读取的结果完全一致。
+func requireAnthropicSSEFieldsExact(t *testing.T, data string) {
+	t.Helper()
+	if !anthropicSSEFastPathSafe(data) {
+		return
+	}
+	var event map[string]any
+	require.NoError(t, json.Unmarshal([]byte(data), &event), "fast path accepted %.120q", data)
+	require.Equal(t, anthropicSSEEventFieldsFromMap(event, data), parseAnthropicSSEEventFields(data), "%.120q", data)
+}
+
+func TestAnthropicSSEEventFields_FastPathMatchesMapDecode(t *testing.T) {
+	for _, tc := range anthropicSSEFieldCases() {
+		t.Run(tc.name, func(t *testing.T) {
+			require.Equal(t, tc.fast, anthropicSSEFastPathSafe(tc.data))
+			requireAnthropicSSEFieldsExact(t, tc.data)
+		})
+	}
+}
+
+func FuzzAnthropicSSEEventFields(f *testing.F) {
+	for _, tc := range anthropicSSEFieldCases() {
+		if len(tc.data) < 2048 {
+			f.Add(tc.data)
+		}
+	}
+	f.Fuzz(func(t *testing.T, data string) {
+		requireAnthropicSSEFieldsExact(t, data)
+	})
 }

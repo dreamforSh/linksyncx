@@ -2220,11 +2220,12 @@ func responsesStreamEventField(name string) (gjson.Type, int, bool) {
 //
 // 文本、参数、推理摘要 delta 每个 token 一条，完整解码是流式热路径上最贵的一步。
 // 只要可能与 json.Unmarshal 结果不同（字段类型不符、重复键、键名大小写变体、
-// 嵌套对象、代理对转义、非法 UTF-8），就返回 ok=false 交给完整解码。
+// 嵌套对象、代理对转义、非法 UTF-8、可能超过嵌套上限的大载荷），就返回 ok=false
+// 交给完整解码。
 func decodeResponsesStreamDeltaEvent(data []byte) (apicompat.ResponsesStreamEvent, bool) {
 	var event apicompat.ResponsesStreamEvent
 	trimmed := bytes.TrimLeft(data, " \t\r\n")
-	if len(trimmed) == 0 || trimmed[0] != '{' || !gjson.ValidBytes(data) {
+	if len(data) > jsonDepthSafeMaxBytes || len(trimmed) == 0 || trimmed[0] != '{' || !gjson.ValidBytes(data) {
 		return event, false
 	}
 	// 零拷贝只读视图：返回的 event 中的字符串引用 data，只在处理当次事件时使用

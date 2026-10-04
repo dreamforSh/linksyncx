@@ -46,11 +46,11 @@ func TestResponsesStreamEventFieldTableMatchesStruct(t *testing.T) {
 
 // jsonUnicodeEscape 在运行时拼出 JSON 的 \uXXXX 转义，避免源码字面量被工具链提前解码。
 func jsonUnicodeEscape(hex ...string) string {
-	var sb strings.Builder
+	out := ""
 	for _, h := range hex {
-		sb.WriteString("\\" + "u" + h)
+		out += "\\" + "u" + h
 	}
-	return sb.String()
+	return out
 }
 
 func TestDecodeResponsesStreamDeltaEvent_FastPathAndFallback(t *testing.T) {
@@ -76,6 +76,8 @@ func TestDecodeResponsesStreamDeltaEvent_FastPathAndFallback(t *testing.T) {
 		{"非法 UTF-8", "{\"type\":\"response.output_text.delta\",\"delta\":\"\xff\"}", false},
 		{"嵌套对象", `{"type":"response.output_text.delta","part":{"type":"output_text"},"delta":"x"}`, false},
 		{"非法 JSON", `{"type":"response.output_text.delta","delta":`, false},
+		{"未知字段里的溢出数字不影响快速路径", `{"type":"response.output_text.delta","delta":"x","junk":1e400}`, true},
+		{"可能超过嵌套上限的大载荷走完整解码", `{"type":"response.output_text.delta","delta":"x","junk":` + strings.Repeat("[", 10001) + strings.Repeat("]", 10001) + `}`, false},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -114,4 +116,42 @@ func TestAccumulateResponsesStreamEvent_MatchesFullDecode(t *testing.T) {
 	}
 	require.Equal(t, legacy.BuildOutput(), optimized.BuildOutput())
 	require.True(t, optimized.HasContent())
+}
+
+// 任意单个事件经快速路径累加的结果必须与完整解码一致（前后夹上固定事件，让
+// output_index 等路由差异体现在输出里）。
+func FuzzAccumulateResponsesStreamEvent(f *testing.F) {
+	for _, seed := range []string{
+		`{"type":"response.function_call_arguments.delta","output_index":2,"delta":"{\"cmd\":"}`,
+		`{"type":"response.output_text.delta","item_id":"msg_1","output_index":0,"content_index":0,"delta":"hi","logprobs":[]}`,
+		`{"type":"response.reasoning_summary_text.delta","summary_index":0,"delta":"plan","ſequence_number":1}`,
+		`{"type":"response.output_text.delta","delta":"` + jsonUnicodeEscape("d800", "0041") + `"}`,
+		`{"type":"response.output_text.delta","delta":"x","junk":1e400,"OUTPUT_INDEX":1}`,
+	} {
+		f.Add(seed)
+	}
+	prefix := []string{
+		`{"type":"response.output_item.added","output_index":1,"item":{"type":"function_call","call_id":"call_1","name":"shell"}}`,
+		`{"type":"response.output_item.added","output_index":2,"item":{"type":"function_call","call_id":"call_2","name":"apply_patch"}}`,
+	}
+	suffix := `{"type":"response.output_text.delta","delta":"end"}`
+	f.Fuzz(func(t *testing.T, payload string) {
+		if event, fast := decodeResponsesStreamDeltaEvent([]byte(payload)); fast {
+			var want apicompat.ResponsesStreamEvent
+			require.NoError(t, json.Unmarshal([]byte(payload), &want), "fast path accepted %.120q", payload)
+			require.Equal(t, want.Type, event.Type)
+			require.Equal(t, want.Delta, event.Delta)
+			require.Equal(t, want.OutputIndex, event.OutputIndex)
+		}
+		legacy := apicompat.NewBufferedResponseAccumulator()
+		optimized := apicompat.NewBufferedResponseAccumulator()
+		for _, data := range append(append(append([]string(nil), prefix...), payload), suffix) {
+			var event apicompat.ResponsesStreamEvent
+			if err := json.Unmarshal([]byte(data), &event); err == nil {
+				legacy.ProcessEvent(&event)
+			}
+			accumulateResponsesStreamEvent(optimized, []byte(data))
+		}
+		require.Equal(t, legacy.BuildOutput(), optimized.BuildOutput(), "%.120q", payload)
+	})
 }

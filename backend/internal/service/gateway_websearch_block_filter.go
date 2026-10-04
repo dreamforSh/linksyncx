@@ -1,7 +1,6 @@
 package service
 
 import (
-	"bytes"
 	"encoding/json"
 	"strings"
 	"unsafe"
@@ -21,6 +20,9 @@ const (
 var (
 	patternServerToolUse       = []byte(`"server_tool_use"`)
 	patternWebSearchToolResult = []byte(`"web_search_tool_result"`)
+
+	// webSearchHistoryBlockPatterns 一次扫描（锚点 '_'）判断上面两个模式。
+	webSearchHistoryBlockPatterns = newAnchoredPatterns('_', patternServerToolUse, patternWebSearchToolResult)
 )
 
 // FilterWebSearchHistoryBlocks removes web-search content blocks from
@@ -44,7 +46,7 @@ var (
 // empty gets a placeholder text block (mirroring FilterThinkingBlocksForRetry).
 // Returns the original body unchanged when nothing needs stripping.
 func FilterWebSearchHistoryBlocks(body []byte, mappedModel string) []byte {
-	if !bytes.Contains(body, patternServerToolUse) && !bytes.Contains(body, patternWebSearchToolResult) {
+	if !webSearchHistoryBlockPatterns.containedIn(body) {
 		return body
 	}
 

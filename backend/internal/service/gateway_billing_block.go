@@ -4,6 +4,8 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
+	"strings"
+	"unsafe"
 
 	"github.com/tidwall/gjson"
 )
@@ -41,7 +43,8 @@ func computeClaudeCodeFingerprint(body []byte, version string) string {
 // extractFirstUserText 提取 messages 中第一条 user 消息的首段 text 内容。
 // 兼容 string 和 []block 两种 content 格式。
 func extractFirstUserText(body []byte) string {
-	messages := gjson.GetBytes(body, "messages")
+	// 只读视图：gjson.GetBytes 会把整个 messages 复制一份；命中的文本在返回前复制。
+	messages := gjson.Get(*(*string)(unsafe.Pointer(&body)), "messages")
 	if !messages.IsArray() {
 		return ""
 	}
@@ -67,7 +70,7 @@ func extractFirstUserText(body []byte) string {
 		}
 		return false
 	})
-	return first
+	return strings.Clone(first)
 }
 
 // buildBillingAttributionText 构造 system 数组的 billing attribution 文本。

@@ -6,7 +6,36 @@ import (
 
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/require"
+	"github.com/tidwall/gjson"
 )
+
+// 守卫返回 false 时，观察器原有的 gjson 查找必然什么也找不到，跳过查找不改变结果。
+func FuzzJSONMayHaveModelKey(f *testing.F) {
+	esc := func(hex string) string { return "\\" + "u" + hex }
+	for _, seed := range []string{
+		`{"type":"response.created","response":{"model":"gpt-5","service_tier":"priority"}}`,
+		`{"type":"message_start","message":{"model":"claude","usage":{"speed":"fast"}}}`,
+		`{"mod` + esc("0065") + `l":"x"}`,
+		`{"` + esc("006D") + `odel":"x","Model":"y"}`,
+		`{"type":"response.output_text.delta","delta":"model"}`,
+		`{"models":["a"],"model ":"b"}`,
+	} {
+		f.Add([]byte(seed))
+	}
+	f.Fuzz(func(t *testing.T, payload []byte) {
+		require.Equal(t, jsonMayHaveModelKey(payload), jsonStringMayHaveModelKey(string(payload)))
+		if jsonMayHaveModelKey(payload) {
+			return
+		}
+		require.Empty(t, firstValidTrimmedGJSONString(payload, "response.model", "model"))
+		require.Empty(t, firstValidTrimmedGJSONString(payload, "message.model", "model"))
+		if gjson.ValidBytes(payload) {
+			for _, path := range []string{"model", "response.model", "message.model"} {
+				require.False(t, gjson.GetBytes(payload, path).Exists(), path)
+			}
+		}
+	})
+}
 
 func TestUpstreamResponseModelObserverTerminalWinsAndRecordsConflict(t *testing.T) {
 	observer := &upstreamResponseModelObserver{}

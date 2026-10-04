@@ -40,6 +40,14 @@ var (
 	patternEmptyTextSp1    = []byte(`"text" : ""`)
 	patternEmptyTextSp2    = []byte(`"text" :""`)
 
+	// 一次扫描判断上面的空文本块模式（锚点 'x'）与 filterThinkingBlocksInternal 的
+	// thinking 模式（锚点 'k'），结果与逐个 bytes.Contains 相同。
+	emptyTextBlockPatterns  = newAnchoredPatterns('x', patternEmptyText, patternEmptyTextSpaced, patternEmptyTextSp1, patternEmptyTextSp2)
+	thinkingContentPatterns = newAnchoredPatterns('k',
+		[]byte(`"type":"thinking"`), []byte(`"type": "thinking"`),
+		[]byte(`"type":"redacted_thinking"`), []byte(`"type": "redacted_thinking"`),
+		[]byte(`"thinking":`), []byte(`"thinking" :`))
+
 	sessionUserAgentProductPattern = regexp.MustCompile(`([A-Za-z0-9._-]+)/[A-Za-z0-9._-]+`)
 	sessionUserAgentVersionPattern = regexp.MustCompile(`\bv?\d+(?:\.\d+){1,3}\b`)
 )
@@ -142,28 +150,62 @@ func sameByteSlice(a, b []byte) bool {
 	return len(a) > 0 && len(a) == len(b) && &a[0] == &b[0]
 }
 
-func setGatewayRequestRanges(parsed *ParsedRequest, protocol string, jsonStr string) {
+// gatewayRequestFieldPaths 是 parseGatewayRequestCurrentBody 读取的全部路径，顺序与
+// gatewayRequestFields 的字段一一对应。
+var gatewayRequestFieldPaths = newJSONTopLevelPaths(
+	"model", "stream", "metadata.user_id", "thinking.type", "output_config.effort", "speed", "max_tokens",
+	"system", "messages", "input", "systemInstruction.parts", "contents",
+)
+
+// gatewayRequestFields 中每个值都与对应路径的 gjson.Get 结果完全一致（含 Index 偏移）。
+type gatewayRequestFields struct {
+	model             gjson.Result // model
+	stream            gjson.Result // stream
+	metadataUserID    gjson.Result // metadata.user_id
+	thinkingType      gjson.Result // thinking.type
+	outputEffort      gjson.Result // output_config.effort
+	speed             gjson.Result // speed
+	maxTokens         gjson.Result // max_tokens
+	system            gjson.Result // system
+	messages          gjson.Result // messages
+	input             gjson.Result // input
+	geminiSystemParts gjson.Result // systemInstruction.parts
+	geminiContents    gjson.Result // contents
+}
+
+// scanGatewayRequestFields 一次遍历读出全部字段（逐个 gjson.Get 时大请求体要把 messages
+// 整段跳过近十遍）。调用前 jsonStr 须是合法 JSON。
+func scanGatewayRequestFields(jsonStr string) gatewayRequestFields {
+	var r [12]gjson.Result
+	jsonTopLevelPaths(jsonStr, gatewayRequestFieldPaths, r[:])
+	return gatewayRequestFields{
+		model: r[0], stream: r[1], metadataUserID: r[2], thinkingType: r[3], outputEffort: r[4], speed: r[5],
+		maxTokens: r[6], system: r[7], messages: r[8], input: r[9], geminiSystemParts: r[10], geminiContents: r[11],
+	}
+}
+
+func setGatewayRequestRanges(parsed *ParsedRequest, protocol string, fields *gatewayRequestFields) {
 	if parsed == nil {
 		return
 	}
 	switch protocol {
 	case domain.PlatformGemini:
-		if sysParts := gjson.Get(jsonStr, "systemInstruction.parts"); sysParts.Exists() && sysParts.IsArray() {
+		if sysParts := fields.geminiSystemParts; sysParts.Exists() && sysParts.IsArray() {
 			parsed.systemRange = rangeFromResult(sysParts)
 		}
-		if contents := gjson.Get(jsonStr, "contents"); contents.Exists() && contents.IsArray() {
+		if contents := fields.geminiContents; contents.Exists() && contents.IsArray() {
 			parsed.messagesRange = rangeFromResult(contents)
 		}
 	default:
-		if sys := gjson.Get(jsonStr, "system"); sys.Exists() {
+		if sys := fields.system; sys.Exists() {
 			parsed.HasSystem = true
 			parsed.systemRange = rangeFromResult(sys)
 		}
-		if msgs := gjson.Get(jsonStr, "messages"); msgs.Exists() && msgs.IsArray() {
+		if msgs := fields.messages; msgs.Exists() && msgs.IsArray() {
 			parsed.messagesRange = rangeFromResult(msgs)
 		}
 		if protocol == "responses" {
-			if input := gjson.Get(jsonStr, "input"); input.Exists() {
+			if input := fields.input; input.Exists() {
 				parsed.inputRange = rangeFromResult(input)
 			}
 		}
@@ -197,8 +239,9 @@ func parseGatewayRequestCurrentBody(parsed *ParsedRequest, protocol string) erro
 	jsonStr := *(*string)(unsafe.Pointer(&bodyBytes))
 	clearGatewayRequestDerivedState(parsed)
 	parsed.protocol = protocol
+	fields := scanGatewayRequestFields(jsonStr)
 
-	modelResult := gjson.Get(jsonStr, "model")
+	modelResult := fields.model
 	if modelResult.Exists() {
 		if modelResult.Type != gjson.String {
 			return fmt.Errorf("invalid model field type")
@@ -215,11 +258,13 @@ func parseGatewayRequestCurrentBody(parsed *ParsedRequest, protocol string) erro
 				bodyBytes = normalizedBody
 				jsonStr = *(*string)(unsafe.Pointer(&bodyBytes))
 				parsed.Model = normalizedModel
+				// 改写后偏移整体变化，其余字段按新请求体重新读取。
+				fields = scanGatewayRequestFields(jsonStr)
 			}
 		}
 	}
 
-	streamResult := gjson.Get(jsonStr, "stream")
+	streamResult := fields.stream
 	if streamResult.Exists() {
 		if streamResult.Type != gjson.True && streamResult.Type != gjson.False {
 			return fmt.Errorf("invalid stream field type")
@@ -227,17 +272,17 @@ func parseGatewayRequestCurrentBody(parsed *ParsedRequest, protocol string) erro
 		parsed.Stream = streamResult.Bool()
 	}
 
-	parsed.MetadataUserID = gjson.Get(jsonStr, "metadata.user_id").String()
+	parsed.MetadataUserID = fields.metadataUserID.String()
 
-	thinkingType := gjson.Get(jsonStr, "thinking.type").String()
+	thinkingType := fields.thinkingType.String()
 	parsed.ThinkingEnabled = thinkingType == "enabled" || thinkingType == "adaptive" || (protocol == domain.PlatformAnthropic && claude.IsOpus55(parsed.Model))
 
-	parsed.OutputEffort = strings.TrimSpace(gjson.Get(jsonStr, "output_config.effort").String())
+	parsed.OutputEffort = strings.TrimSpace(fields.outputEffort.String())
 	if protocol == domain.PlatformAnthropic {
-		parsed.Speed = strings.ToLower(strings.TrimSpace(gjson.Get(jsonStr, "speed").String()))
+		parsed.Speed = strings.ToLower(strings.TrimSpace(fields.speed.String()))
 	}
 
-	maxTokensResult := gjson.Get(jsonStr, "max_tokens")
+	maxTokensResult := fields.maxTokens
 	if maxTokensResult.Exists() && maxTokensResult.Type == gjson.Number {
 		f := maxTokensResult.Float()
 		if !math.IsNaN(f) && !math.IsInf(f, 0) && f == math.Trunc(f) &&
@@ -246,7 +291,7 @@ func parseGatewayRequestCurrentBody(parsed *ParsedRequest, protocol string) erro
 		}
 	}
 
-	setGatewayRequestRanges(parsed, protocol, jsonStr)
+	setGatewayRequestRanges(parsed, protocol, &fields)
 	parsed.parsedBody = bodyBytes
 	return nil
 }
@@ -534,11 +579,7 @@ func stripEmptyTextBlocksFromSlice(blocks []any) ([]any, bool) {
 // Returns the original body unchanged if no empty text blocks are found.
 func StripEmptyTextBlocks(body []byte) []byte {
 	// Fast path: check if body contains empty text patterns
-	hasEmptyTextBlock := bytes.Contains(body, patternEmptyText) ||
-		bytes.Contains(body, patternEmptyTextSpaced) ||
-		bytes.Contains(body, patternEmptyTextSp1) ||
-		bytes.Contains(body, patternEmptyTextSp2)
-	if !hasEmptyTextBlock {
+	if !emptyTextBlockPatterns.containedIn(body) {
 		return body
 	}
 
@@ -1025,13 +1066,14 @@ func sanitizeAnthropicBodyForBetaTokens(body []byte, anthropicBetaHeader string)
 // requiredTokens 中**任何一个** token 时删除该字段（保留条件：含任一 required token）。
 // 单 token 调用即「缺该 beta 则 strip」。返回 (newBody, deleted)。
 func stripAnthropicBodyFieldUnlessBeta(body []byte, field, anthropicBetaHeader string, requiredTokens ...string) ([]byte, bool) {
-	if !gjson.GetBytes(body, field).Exists() {
-		return body, false
-	}
+	// 先看 header：带了 beta 就不必在请求体里查字段（大请求体每次查找都要整段跳过 messages）。
 	for _, token := range requiredTokens {
 		if anthropicBetaTokensContains(anthropicBetaHeader, token) {
 			return body, false
 		}
+	}
+	if !gjson.GetBytes(body, field).Exists() {
+		return body, false
 	}
 	b, err := sjson.DeleteBytes(body, field)
 	if err != nil {
@@ -1361,15 +1403,19 @@ func FilterSignatureSensitiveBlocksForRetry(body []byte, mappedModel string) []b
 //   - 当 thinking.type 是 "enabled"/"adaptive"：仅移除缺失/无效 signature 的 thinking 块
 func filterThinkingBlocksInternal(body []byte, alwaysThinking bool) []byte {
 	// Fast path: if body doesn't contain "thinking", skip parsing
-	if !bytes.Contains(body, []byte(`"type":"thinking"`)) &&
-		!bytes.Contains(body, []byte(`"type": "thinking"`)) &&
-		!bytes.Contains(body, []byte(`"type":"redacted_thinking"`)) &&
-		!bytes.Contains(body, []byte(`"type": "redacted_thinking"`)) &&
-		!bytes.Contains(body, []byte(`"thinking":`)) &&
-		!bytes.Contains(body, []byte(`"thinking" :`)) {
+	if !thinkingContentPatterns.containedIn(body) {
 		return body
 	}
+	// 历史 thinking 块签名都有效时（开启 thinking 的正常多轮对话）不会删任何块，
+	// 免去整个请求体的 map 解码。
+	if !thinkingBlocksNeedFiltering(body, alwaysThinking) {
+		return body
+	}
+	return filterThinkingBlocksDecoded(body, alwaysThinking)
+}
 
+// filterThinkingBlocksDecoded 把请求体解码成 map 执行过滤；没有删除任何块时返回原 body。
+func filterThinkingBlocksDecoded(body []byte, alwaysThinking bool) []byte {
 	var req map[string]any
 	if err := json.Unmarshal(body, &req); err != nil {
 		return body
@@ -1460,6 +1506,104 @@ func filterThinkingBlocksInternal(body []byte, alwaysThinking bool) []byte {
 		return body
 	}
 	return newBody
+}
+
+// thinkingBlocksNeedFiltering 判断 filterThinkingBlocksInternal 是否会删除任何块，结论与把
+// 请求体解码成 map 后的判断完全一致：同名键取最后一次出现，字符串按 encoding/json 解码。
+// json.Unmarshal 失败时原逻辑同样原样返回，所以只需在能成功解码（即合法）的请求体上判断准确。
+// 各层成员用 forEachJSONMemberRaw 读取，不解码长文本值。
+func thinkingBlocksNeedFiltering(body []byte, alwaysThinking bool) bool {
+	root, ok := jsonRootObject(*(*string)(unsafe.Pointer(&body)))
+	if !ok {
+		// 顶层不是对象：解码失败或得到 nil map，原逻辑都不改动。
+		return false
+	}
+	var thinkingRaw, messagesRaw string
+	forEachJSONMemberRaw(root.Raw, func(key, raw string) bool {
+		switch key {
+		case "thinking":
+			thinkingRaw = raw
+		case "messages":
+			messagesRaw = raw
+		}
+		return true
+	})
+	thinkingEnabled := alwaysThinking
+	if strings.HasPrefix(thinkingRaw, "{") {
+		var typeRaw string
+		forEachJSONMemberRaw(thinkingRaw, func(key, raw string) bool {
+			if key == "type" {
+				typeRaw = raw
+			}
+			return true
+		})
+		if thinkType, _ := decodeJSONStringLiteral(typeRaw); thinkType == "enabled" || thinkType == "adaptive" {
+			thinkingEnabled = true
+		}
+	}
+	if !strings.HasPrefix(messagesRaw, "[") {
+		return false
+	}
+	need := false
+	gjson.Parse(messagesRaw).ForEach(func(_, msg gjson.Result) bool {
+		if !msg.IsObject() {
+			return true
+		}
+		var roleRaw, contentRaw string
+		forEachJSONMemberRaw(msg.Raw, func(key, raw string) bool {
+			switch key {
+			case "role":
+				roleRaw = raw
+			case "content":
+				contentRaw = raw
+			}
+			return true
+		})
+		if !strings.HasPrefix(contentRaw, "[") {
+			return true
+		}
+		role, _ := decodeJSONStringLiteral(roleRaw)
+		gjson.Parse(contentRaw).ForEach(func(_, block gjson.Result) bool {
+			if !block.IsObject() {
+				return true
+			}
+			var typeRaw, signatureRaw, dataRaw string
+			hasThinking := false
+			forEachJSONMemberRaw(block.Raw, func(key, raw string) bool {
+				switch key {
+				case "type":
+					typeRaw = raw
+				case "signature":
+					signatureRaw = raw
+				case "data":
+					dataRaw = raw
+				case "thinking":
+					hasThinking = true
+				}
+				return true
+			})
+			blockType, _ := decodeJSONStringLiteral(typeRaw)
+			switch {
+			case blockType == "thinking" || blockType == "redacted_thinking":
+				if thinkingEnabled && role == "assistant" {
+					if alwaysThinking && blockType == "redacted_thinking" {
+						if data, ok := decodeJSONStringLiteral(dataRaw); ok && data != "" {
+							return true
+						}
+					}
+					if signature, _ := decodeJSONStringLiteral(signatureRaw); signature != "" && signature != antigravity.DummyThoughtSignature {
+						return true
+					}
+				}
+				need = true
+			case blockType == "" && hasThinking:
+				need = true
+			}
+			return !need
+		})
+		return !need
+	})
+	return need
 }
 
 // NormalizeClaudeOutputEffort normalizes Claude's output_config.effort value.
