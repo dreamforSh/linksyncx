@@ -206,17 +206,13 @@ const SDKTSVersion = "0.127.0"
 // v26.3.0 与 Bun TLS/线级指纹是自洽的一对，不是 npm/Bun 画像混用。
 const SDKTSRuntimeVersion = "v26.3.0"
 
-// OAuthHelperUserAgent 是真实 CLI **token 刷新**路径的 UA（2.1.283 二进制实证：
-// userOAuthProvider 用裸 fetch，headers 仅 {Content-Type, anthropic-beta:
-// oauth-2025-04-20, User-Agent}，无 x-stainless-*、无显式 Accept）。
-// 授权码交换是另一条路径（见 OAuthLoginUserAgent）。
-const OAuthHelperUserAgent = "anthropic-sdk-typescript/" + SDKTSVersion + " userOAuthProvider"
-
-// OAuthLoginAxiosVersion / OAuthLoginUserAgent 对应真实 CLI **登录授权码交换**路径
-// （2.1.283 二进制实证：sNr 用 axios `mt.post(TOKEN_URL, body, {headers:{Content-Type}})`，
-// axios 1.9.0 的 Node http 适配器自动补 `User-Agent: axios/1.9.0`、
-// `Accept: application/json, text/plain, */*`、`Accept-Encoding: gzip, compress, deflate, br`；
-// **不带 anthropic-beta**——与刷新 helper 的形态不同，不能混用）。
+// OAuthLoginAxiosVersion / OAuthLoginUserAgent 对应真实 CLI 的 OAuth token 端点调用：
+// 授权码交换与 token 刷新都用 axios `_t.post(TOKEN_URL, body, {headers:{Content-Type}})`
+// （2.1.287 二进制实证：交换 zqr、刷新 npe），axios 1.9.0 的 Node http 适配器自动补
+// `User-Agent: axios/1.9.0`、`Accept: application/json, text/plain, */*`、
+// `Accept-Encoding: gzip, compress, deflate, br`；**不带 anthropic-beta**。
+// 二进制里带 anthropic-beta 的 `userOAuthProvider` 裸 fetch 是 SDK 凭据文件
+// profile 的刷新 helper，不是 Claude Code 自己登录态的刷新路径，不能拿来模仿。
 const (
 	OAuthLoginAxiosVersion = "1.9.0"
 	OAuthLoginUserAgent    = "axios/" + OAuthLoginAxiosVersion

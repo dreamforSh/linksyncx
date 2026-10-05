@@ -86,8 +86,9 @@ func (s *OpenAIOAuthService) GenerateAuthURL(ctx context.Context, proxyID *int64
 	}
 	s.sessionStore.Set(sessionID, session)
 
-	// Build authorization URL
-	authURL := openai.BuildAuthorizationURLForPlatform(state, codeChallenge, redirectURI, normalizedPlatform)
+	// Build authorization URL（originator 与 token 端点请求的身份一致，同 Codex CLI 的授权链接）
+	_, originator := CodexCanonicalAuthIdentity()
+	authURL := openai.BuildAuthorizationURLForPlatform(state, codeChallenge, redirectURI, normalizedPlatform, originator)
 
 	return &OpenAIAuthURLResult{
 		AuthURL:   authURL,

@@ -6,6 +6,7 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"net/url"
 	"testing"
 	"time"
 
@@ -22,15 +23,21 @@ type grokOAuthClientStub struct {
 	loginPassword       string
 	exchangeCalls       int
 	exchangeRedirectURI string
+	exchangeResponse    *xai.TokenResponse
+	refreshPrincipal    xai.TokenPrincipal
 }
 
 func (s *grokOAuthClientStub) ExchangeCode(_ context.Context, _, _, redirectURI, _, _ string) (*xai.TokenResponse, error) {
 	s.exchangeCalls++
 	s.exchangeRedirectURI = redirectURI
+	if s.exchangeResponse != nil {
+		return s.exchangeResponse, nil
+	}
 	return &xai.TokenResponse{AccessToken: "access-token"}, nil
 }
 
-func (s *grokOAuthClientStub) RefreshToken(context.Context, string, string, string) (*xai.TokenResponse, error) {
+func (s *grokOAuthClientStub) RefreshToken(_ context.Context, _, _, _ string, principal xai.TokenPrincipal) (*xai.TokenResponse, error) {
+	s.refreshPrincipal = principal
 	return s.refreshResponse, nil
 }
 
@@ -159,14 +166,17 @@ func TestGrokOAuthServiceExchangeCodeRejectsRedirectURIOverride(t *testing.T) {
 	require.Contains(t, err.Error(), "GROK_OAUTH_REDIRECT_URI_MISMATCH")
 	require.Zero(t, client.exchangeCalls)
 
+	parsedAuthURL, err := url.Parse(auth.AuthURL)
+	require.NoError(t, err)
+	sessionRedirect := parsedAuthURL.Query().Get("redirect_uri")
 	_, err = svc.ExchangeCode(context.Background(), &GrokExchangeCodeInput{
 		SessionID:   auth.SessionID,
 		Code:        "authorization-code",
 		State:       auth.State,
-		RedirectURI: xai.DefaultRedirectURI,
+		RedirectURI: sessionRedirect,
 	})
 	require.NoError(t, err)
-	require.Equal(t, xai.DefaultRedirectURI, client.exchangeRedirectURI)
+	require.Equal(t, sessionRedirect, client.exchangeRedirectURI)
 }
 
 func TestGrokOAuthServiceExternalFlowsRejectMissingClient(t *testing.T) {

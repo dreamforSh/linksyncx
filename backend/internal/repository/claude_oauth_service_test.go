@@ -10,6 +10,7 @@ import (
 	"strings"
 	"testing"
 
+	infraerrors "github.com/Wei-Shaw/sub2api/internal/pkg/errors"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/oauth"
 	"github.com/imroc/req/v3"
 	"github.com/stretchr/testify/require"
@@ -327,6 +328,7 @@ func (s *ClaudeOAuthServiceSuite) TestExchangeCodeForToken() {
 		name         string
 		handler      http.HandlerFunc
 		code         string
+		state        string
 		isSetupToken bool
 		wantErr      bool
 		wantResp     *oauth.TokenResponse
@@ -363,7 +365,23 @@ func (s *ClaudeOAuthServiceSuite) TestExchangeCodeForToken() {
 			},
 		},
 		{
-			name: "setup_token_omits_expires_in",
+			// 真实 CLI 交换时发自己生成的 state，而不是回调里粘回来的 state。
+			name: "session_state_wins_over_embedded_state",
+			handler: func(w http.ResponseWriter, r *http.Request) {
+				w.Header().Set("Content-Type", "application/json")
+				_ = json.NewEncoder(w).Encode(oauth.TokenResponse{AccessToken: "at"})
+			},
+			code:     "AUTH#EMBEDDED",
+			state:    "SESSION",
+			wantResp: &oauth.TokenResponse{AccessToken: "at"},
+			validate: func(captured requestCapture) {
+				require.Equal(s.T(), "AUTH", captured.bodyJSON["code"])
+				require.Equal(s.T(), "SESSION", captured.bodyJSON["state"])
+			},
+		},
+		{
+			// `claude setup-token` 请求一年有效期（expiresIn:c9）。
+			name: "setup_token_requests_one_year_expiry",
 			handler: func(w http.ResponseWriter, r *http.Request) {
 				w.Header().Set("Content-Type", "application/json")
 				_ = json.NewEncoder(w).Encode(oauth.TokenResponse{
@@ -373,12 +391,17 @@ func (s *ClaudeOAuthServiceSuite) TestExchangeCodeForToken() {
 				})
 			},
 			code:         "AUTH",
+			state:        "ST",
 			isSetupToken: true,
 			wantResp: &oauth.TokenResponse{
 				AccessToken: "at",
 			},
 			validate: func(captured requestCapture) {
-				require.Nil(s.T(), captured.bodyJSON["expires_in"], "setup token should not include expires_in")
+				require.Equal(s.T(), float64(31536000), captured.bodyJSON["expires_in"])
+				require.Equal(s.T(), "ST", captured.bodyJSON["state"])
+				wantBody := `{"grant_type":"authorization_code","code":"AUTH","redirect_uri":"` + oauth.RedirectURI +
+					`","client_id":"` + oauth.ClientID + `","code_verifier":"ver","state":"ST","expires_in":31536000}`
+				require.Equal(s.T(), wantBody, string(captured.body), "expires_in follows state, as in the real client")
 			},
 		},
 		{
@@ -388,6 +411,7 @@ func (s *ClaudeOAuthServiceSuite) TestExchangeCodeForToken() {
 				_, _ = w.Write([]byte("bad request"))
 			},
 			code:         "AUTH",
+			state:        "ST",
 			isSetupToken: false,
 			wantErr:      true,
 		},
@@ -411,7 +435,7 @@ func (s *ClaudeOAuthServiceSuite) TestExchangeCodeForToken() {
 			s.client.tokenURL = "http://in-process/token"
 			s.client.clientFactory = func(string) (*req.Client, error) { return newTestReqClient(rt), nil }
 
-			resp, err := s.client.ExchangeCodeForToken(context.Background(), tt.code, "ver", "", "", tt.isSetupToken)
+			resp, err := s.client.ExchangeCodeForToken(context.Background(), tt.code, "ver", tt.state, "", tt.isSetupToken)
 
 			if tt.wantErr {
 				require.Error(s.T(), err)
@@ -424,6 +448,79 @@ func (s *ClaudeOAuthServiceSuite) TestExchangeCodeForToken() {
 			if tt.validate != nil {
 				tt.validate(captured)
 			}
+		})
+	}
+}
+
+// token 端点对缺失/空 state 回 400 "Invalid request format"（2026-10-05 实测），
+// 没有 state 时不能发请求，而是直接告诉管理员要粘贴完整的 code#state。
+func (s *ClaudeOAuthServiceSuite) TestExchangeCodeForTokenRequiresState() {
+	client, ok := NewClaudeOAuthClient().(*claudeOAuthService)
+	require.True(s.T(), ok)
+	client.clientFactory = func(string) (*req.Client, error) {
+		s.T().Fatal("no request may be sent without a state")
+		return nil, errors.New("unexpected")
+	}
+
+	_, err := client.ExchangeCodeForToken(context.Background(), "AUTH", "ver", "", "", false)
+	require.Error(s.T(), err)
+	require.Equal(s.T(), "CLAUDE_OAUTH_STATE_REQUIRED", infraerrors.Reason(err))
+	require.Equal(s.T(), http.StatusBadRequest, infraerrors.Code(err))
+}
+
+func (s *ClaudeOAuthServiceSuite) TestRefreshTokenScope() {
+	for _, scope := range []string{oauth.ScopeAPI, ""} {
+		var captured requestCapture
+		rt := newInProcessTransport(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			captured.body, _ = io.ReadAll(r.Body)
+			_ = json.Unmarshal(captured.body, &captured.bodyJSON)
+			w.Header().Set("Content-Type", "application/json")
+			_ = json.NewEncoder(w).Encode(oauth.TokenResponse{AccessToken: "at", ExpiresIn: 28800})
+		}), nil)
+
+		client, ok := NewClaudeOAuthClient().(*claudeOAuthService)
+		require.True(s.T(), ok)
+		client.tokenURL = "http://in-process/token"
+		client.clientFactory = func(string) (*req.Client, error) { return newTestReqClient(rt), nil }
+
+		_, err := client.RefreshToken(context.Background(), "rt", scope, "")
+		require.NoError(s.T(), err)
+		if scope == "" {
+			_, has := captured.bodyJSON["scope"]
+			require.False(s.T(), has, "an empty scope must be omitted")
+			continue
+		}
+		require.Equal(s.T(), scope, captured.bodyJSON["scope"])
+	}
+}
+
+func TestSelectClaudeAIOrganization(t *testing.T) {
+	team := "team"
+	tests := []struct {
+		name string
+		orgs []claudeAIOrganization
+		want string
+	}{
+		{"single org", []claudeAIOrganization{{UUID: "a"}}, "a"},
+		{"chat org beats an api-only org listed first", []claudeAIOrganization{
+			{UUID: "api", Capabilities: []string{"api", "api_individual"}},
+			{UUID: "chat", Capabilities: []string{"chat", "claude_max"}},
+		}, "chat"},
+		{"team chat org preferred", []claudeAIOrganization{
+			{UUID: "personal", Capabilities: []string{"chat", "claude_pro"}},
+			{UUID: "team", RavenType: &team, Capabilities: []string{"chat", "raven"}},
+		}, "team"},
+		{"team without chat loses to a chat org", []claudeAIOrganization{
+			{UUID: "team-api", RavenType: &team, Capabilities: []string{"api"}},
+			{UUID: "personal", Capabilities: []string{"chat"}},
+		}, "personal"},
+		{"no capabilities reported keeps the old order", []claudeAIOrganization{
+			{UUID: "first"}, {UUID: "team", RavenType: &team},
+		}, "team"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			require.Equal(t, tt.want, selectClaudeAIOrganization(tt.orgs).UUID)
 		})
 	}
 }
@@ -507,7 +604,7 @@ func (s *ClaudeOAuthServiceSuite) TestRefreshToken() {
 			s.client.tokenURL = "http://in-process/token"
 			s.client.clientFactory = func(string) (*req.Client, error) { return newTestReqClient(rt), nil }
 
-			resp, err := s.client.RefreshToken(context.Background(), "rt", "")
+			resp, err := s.client.RefreshToken(context.Background(), "rt", oauth.ScopeAPI, "")
 
 			if tt.wantErr {
 				require.Error(s.T(), err)

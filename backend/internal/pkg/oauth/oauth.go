@@ -23,16 +23,97 @@ const (
 	TokenURL     = "https://platform.claude.com/v1/oauth/token"
 	RedirectURI  = "https://platform.claude.com/oauth/code/callback"
 
+	// Scopes 对齐 Claude Code 2.1.287：登录 URL 用 [org:create_api_key, user:profile]
+	// + 默认 scope 集（user:profile user:inference user:sessions:claude_code
+	// user:mcp_servers user:file_upload，PLUGINS_SCOPE_REGISTERED 时追加 user:plugins）。
+	//
 	// Scopes - Browser URL (includes org:create_api_key for user authorization)
-	ScopeOAuth = "org:create_api_key user:profile user:inference user:sessions:claude_code user:mcp_servers user:file_upload"
-	// Scopes - Internal API call (org:create_api_key not supported in API)
-	ScopeAPI = "user:profile user:inference user:sessions:claude_code user:mcp_servers user:file_upload"
+	ScopeOAuth = "org:create_api_key " + ScopeAPI
+	// Scopes - Internal API call (org:create_api_key not supported in API).
+	// 也是真实 CLI token 刷新默认请求的 scope 集。
+	ScopeAPI = "user:profile user:inference user:sessions:claude_code user:mcp_servers user:file_upload user:plugins"
 	// Scopes - Setup token (inference only)
 	ScopeInference = "user:inference"
+
+	// SetupTokenExpiresIn 是 `claude setup-token` 换取 token 时请求的有效期（一年，
+	// 真实 CLI 的 expiresIn:c9=31536000）。普通登录不发 expires_in。
+	SetupTokenExpiresIn int64 = 31536000
 
 	// Session TTL
 	SessionTTL = 30 * time.Minute
 )
+
+// projectsScopes 是刷新时从已授予 scope 里保留下来的可选 scope（真实 CLI 的 Cor 过滤）。
+var projectsScopes = []string{"user:projects:read", "user:projects:write"}
+
+// RefreshScope 计算真实 CLI 刷新订阅登录 token 时请求的 scope（2.1.287 的 T7r）：
+// 默认 scope 集 + 已授予 scope 中的 user:projects:*，去重保序、空格分隔。
+func RefreshScope(granted string) string {
+	scopes := strings.Fields(ScopeAPI)
+	seen := make(map[string]struct{}, len(scopes))
+	for _, s := range scopes {
+		seen[s] = struct{}{}
+	}
+	for _, s := range strings.Fields(granted) {
+		if _, ok := seen[s]; ok {
+			continue
+		}
+		for _, p := range projectsScopes {
+			if s == p {
+				scopes = append(scopes, s)
+				seen[s] = struct{}{}
+				break
+			}
+		}
+	}
+	return strings.Join(scopes, " ")
+}
+
+// HasScope reports whether the space-separated scope list contains scope.
+func HasScope(scopeList, scope string) bool {
+	for _, s := range strings.Fields(scopeList) {
+		if s == scope {
+			return true
+		}
+	}
+	return false
+}
+
+// ParseAuthorizationCode 解析管理员粘贴的授权码。回调页展示的是 "code#state"；
+// 也接受整条回调 URL（?code=...&state=...）或裸 query 串，以及只有 code 的情况
+// （state 返回空串）。
+func ParseAuthorizationCode(input string) (code, state string) {
+	trimmed := strings.TrimSpace(input)
+	if trimmed == "" {
+		return "", ""
+	}
+	if strings.Contains(trimmed, "code=") {
+		query := trimmed
+		if idx := strings.Index(query, "?"); idx >= 0 {
+			query = query[idx+1:]
+		}
+		if idx := strings.Index(query, "#"); idx >= 0 && !strings.Contains(query[:idx], "code=") {
+			query = query[idx+1:]
+		}
+		if values, err := url.ParseQuery(query); err == nil {
+			if c := strings.TrimSpace(values.Get("code")); c != "" {
+				code, state = splitCodeState(c)
+				if s := strings.TrimSpace(values.Get("state")); s != "" {
+					state = s
+				}
+				return code, state
+			}
+		}
+	}
+	return splitCodeState(trimmed)
+}
+
+func splitCodeState(raw string) (code, state string) {
+	if idx := strings.Index(raw, "#"); idx >= 0 {
+		return strings.TrimSpace(raw[:idx]), strings.TrimSpace(raw[idx+1:])
+	}
+	return strings.TrimSpace(raw), ""
+}
 
 // OAuthSession stores OAuth flow state
 

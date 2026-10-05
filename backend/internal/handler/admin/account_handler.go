@@ -1505,7 +1505,12 @@ func (h *AccountHandler) refreshSingleAccount(ctx context.Context, account *serv
 		// Use Anthropic/Claude OAuth service to refresh token
 		tokenInfo, err := h.oauthService.RefreshAccountToken(ctx, account)
 		if err != nil {
-			return nil, "", err
+			if infraerrors.FromError(err).Reason != infraerrors.UnknownReason {
+				return nil, "", err
+			}
+			// 刷新链路返回普通 error（后台刷新按子串分类），这里转成可读的接口错误，
+			// 否则管理端只能看到 "internal error"。
+			return nil, "", infraerrors.Newf(http.StatusBadGateway, "CLAUDE_OAUTH_REFRESH_FAILED", "%v", err).WithCause(err)
 		}
 
 		// Copy existing credentials to preserve non-token settings (e.g., intercept_warmup_requests)

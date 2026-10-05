@@ -210,7 +210,7 @@ func (c *grokOAuthHandlerClient) ExchangeCode(context.Context, string, string, s
 	return nil, errors.New("unexpected exchange")
 }
 
-func (c *grokOAuthHandlerClient) RefreshToken(context.Context, string, string, string) (*xai.TokenResponse, error) {
+func (c *grokOAuthHandlerClient) RefreshToken(context.Context, string, string, string, xai.TokenPrincipal) (*xai.TokenResponse, error) {
 	return &xai.TokenResponse{AccessToken: "access-token", RefreshToken: "refresh-token", ExpiresIn: 3600}, nil
 }
 

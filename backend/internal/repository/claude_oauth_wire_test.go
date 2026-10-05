@@ -12,28 +12,19 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// 控制面 token 刷新与数据面同一 persona：真实 CLI 2.1.283 的 fetch 只设
-// Content-Type / anthropic-beta / User-Agent，Accept: */* 等由 Bun 补在默认头块。
-// 直连与经 HTTP 代理两条路径的线级头序都要逐字节一致，gzip 响应能正常解码；
-// 请求体字段序固定为 grant_type, refresh_token, client_id（结构体，非 map 字母序）。
-func TestClaudeOAuthRefreshTokenEmitsBunWireShape(t *testing.T) {
+// 控制面 token 刷新走真实 CLI 2.1.287 的 axios 刷新路径（npe）：与授权码交换同一
+// 头部形状（axios/1.9.0 UA + axios 默认 Accept / Accept-Encoding，不带 anthropic-beta），
+// 请求体字段序固定为 grant_type, refresh_token, client_id, scope。直连与经 HTTP 代理
+// 两条路径的线级头部要一致，代理请求必须走 CONNECT 隧道。
+func TestClaudeOAuthRefreshTokenEmitsAxiosWireShape(t *testing.T) {
 	pool, cert := newWireTestPKI(t)
 	upstream := startWireCaptureServer(t, cert)
 	proxyAddr, tunnels := startWireConnectProxy(t, nil)
 
-	wantBody := `{"grant_type":"refresh_token","refresh_token":"rt-test","client_id":"` + oauth.ClientID + `"}`
-	want := strings.Join([]string{
-		"POST /v1/oauth/token HTTP/1.1",
-		"Content-Type: application/json",
-		"User-Agent: " + claude.OAuthHelperUserAgent,
-		"anthropic-beta: oauth-2025-04-20",
-		"Connection: keep-alive",
-		"Accept: */*",
-		"Host: " + upstream.addr,
-		"Accept-Encoding: gzip, deflate, br, zstd",
-		"Content-Length: " + strconv.Itoa(len(wantBody)),
-	}, "\r\n") + "\r\n\r\n"
+	wantBody := `{"grant_type":"refresh_token","refresh_token":"rt-test","client_id":"` + oauth.ClientID +
+		`","scope":"` + oauth.ScopeAPI + `"}`
 
+	var firstHead string
 	for _, proxyURL := range []string{"", "http://" + proxyAddr} {
 		svc := &claudeOAuthService{
 			tokenURL: "https://" + upstream.addr + "/v1/oauth/token",
@@ -42,14 +33,26 @@ func TestClaudeOAuthRefreshTokenEmitsBunWireShape(t *testing.T) {
 			},
 		}
 		before := len(upstream.capturedHeads())
-		_, err := svc.RefreshToken(context.Background(), "rt-test", proxyURL)
+		_, err := svc.RefreshToken(context.Background(), "rt-test", oauth.ScopeAPI, proxyURL)
 		require.NoError(t, err, "proxy=%q", proxyURL)
 
 		heads := upstream.capturedHeads()
 		bodies := upstream.capturedBodies()
 		require.Len(t, heads, before+1)
-		require.Equal(t, want, heads[before], "proxy=%q", proxyURL)
+		head := heads[before]
+		require.True(t, strings.HasPrefix(head, "POST /v1/oauth/token HTTP/1.1\r\n"), "proxy=%q head=%q", proxyURL, head)
+		require.Contains(t, head, "User-Agent: "+claude.OAuthLoginUserAgent)
+		require.Contains(t, head, "Accept: "+claude.OAuthLoginAccept)
+		require.Contains(t, head, "Accept-Encoding: "+claude.OAuthLoginAcceptEncoding)
+		require.Contains(t, head, "Content-Type: application/json")
+		require.Contains(t, head, "Content-Length: "+strconv.Itoa(len(wantBody)))
+		require.NotContains(t, strings.ToLower(head), "anthropic-beta", "the axios refresh must not send anthropic-beta")
 		require.Equal(t, wantBody, string(bodies[before]), "refresh body field order must match the real client")
+		if firstHead == "" {
+			firstHead = head
+		} else {
+			require.Equal(t, firstHead, head, "direct and proxied refresh must look the same on the wire")
+		}
 	}
 	require.Equal(t, int64(1), tunnels.Load(), "proxied refresh must go through the CONNECT tunnel")
 }

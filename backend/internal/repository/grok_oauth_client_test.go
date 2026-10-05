@@ -5,6 +5,7 @@ package repository
 import (
 	"context"
 	"encoding/json"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -14,19 +15,27 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+// token 端点请求对齐 Grok Build（xai-grok-login oidc/protocol.rs）：表单字段序固定，
+// UA 为 Grok Build 进程 UA，交换带 x-grok-client-version，刷新回传 principal；
+// 任何头部/字段都不能出现网关自身的标识。
 func TestGrokOAuthClientExchangeAndRefreshUseFormFields(t *testing.T) {
+	version := xai.ResolveCLIVersion()
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		require.Equal(t, http.MethodPost, r.Method)
-		require.NoError(t, r.ParseForm())
-		require.Equal(t, "client-id", r.Form.Get("client_id"))
+		raw, err := io.ReadAll(r.Body)
+		require.NoError(t, err)
+		body := string(raw)
+		require.Equal(t, "application/x-www-form-urlencoded", r.Header.Get("Content-Type"))
+		require.Equal(t, xai.CLIUserAgent(version), r.Header.Get("User-Agent"))
+		require.Equal(t, "*/*", r.Header.Get("Accept"))
+		for name, values := range r.Header {
+			require.NotContains(t, strings.ToLower(name+strings.Join(values, ",")), "sub2api", "no gateway identity on the wire")
+		}
 
-		switch r.Form.Get("grant_type") {
-		case "authorization_code":
-			require.Equal(t, "auth-code", r.Form.Get("code"))
-			require.Equal(t, "http://127.0.0.1:56121/callback", r.Form.Get("redirect_uri"))
-			require.Equal(t, "verifier", r.Form.Get("code_verifier"))
-			require.Empty(t, r.Form.Get("code_challenge"))
-			require.Empty(t, r.Form.Get("code_challenge_method"))
+		switch {
+		case strings.HasPrefix(body, "grant_type=authorization_code&"):
+			require.Equal(t, "grant_type=authorization_code&code=auth-code&redirect_uri=http%3A%2F%2F127.0.0.1%3A56121%2Fcallback&client_id=client-id&code_verifier=verifier", body)
+			require.Equal(t, version, r.Header.Get("x-grok-client-version"))
 			_ = json.NewEncoder(w).Encode(map[string]any{
 				"access_token":  "exchange-access",
 				"refresh_token": "exchange-refresh",
@@ -34,8 +43,9 @@ func TestGrokOAuthClientExchangeAndRefreshUseFormFields(t *testing.T) {
 				"expires_in":    3600,
 				"scope":         "openid api:access",
 			})
-		case "refresh_token":
-			require.Equal(t, "refresh-token", r.Form.Get("refresh_token"))
+		case strings.HasPrefix(body, "grant_type=refresh_token&"):
+			require.Empty(t, r.Header.Get("x-grok-client-version"), "Grok Build refresh carries no client-version header")
+			require.Equal(t, "grant_type=refresh_token&refresh_token=refresh-token&client_id=client-id&principal_type=Team&principal_id=team-1", body)
 			_ = json.NewEncoder(w).Encode(map[string]any{
 				"access_token":  "refresh-access",
 				"refresh_token": "refresh-rotated",
@@ -59,7 +69,7 @@ func TestGrokOAuthClientExchangeAndRefreshUseFormFields(t *testing.T) {
 	require.Equal(t, int64(3600), exchanged.ExpiresIn)
 	require.Equal(t, "openid api:access", exchanged.Scope)
 
-	refreshed, err := client.RefreshToken(context.Background(), "refresh-token", "", "client-id")
+	refreshed, err := client.RefreshToken(context.Background(), "refresh-token", "", "client-id", xai.TokenPrincipal{Type: "Team", ID: "team-1"})
 	require.NoError(t, err)
 	require.Equal(t, "refresh-access", refreshed.AccessToken)
 	require.Equal(t, "refresh-rotated", refreshed.RefreshToken)
@@ -86,7 +96,7 @@ func TestGrokOAuthClientRefreshForbiddenClassifiesOnlyExplicitEntitlement(t *tes
 			t.Setenv(xai.EnvTokenURL, server.URL)
 
 			client := NewGrokOAuthClient()
-			_, err := client.RefreshToken(context.Background(), "refresh-token", "", "client-id")
+			_, err := client.RefreshToken(context.Background(), "refresh-token", "", "client-id", xai.TokenPrincipal{})
 			require.Error(t, err)
 			require.Contains(t, strings.ToUpper(err.Error()), tt.wantReason)
 		})
@@ -103,7 +113,7 @@ func TestGrokOAuthClientStatusErrorRedactsSensitiveResponseBody(t *testing.T) {
 	t.Setenv(xai.EnvTokenURL, server.URL)
 
 	client := NewGrokOAuthClient()
-	_, err := client.RefreshToken(context.Background(), "refresh-secret", "", "client-id")
+	_, err := client.RefreshToken(context.Background(), "refresh-secret", "", "client-id", xai.TokenPrincipal{})
 	require.Error(t, err)
 
 	errText := err.Error()

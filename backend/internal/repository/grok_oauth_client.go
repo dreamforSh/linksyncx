@@ -56,18 +56,21 @@ func (c *grokOAuthClient) ExchangeCode(ctx context.Context, code, codeVerifier, 
 		clientID = xai.EffectiveClientID()
 	}
 
-	formData := url.Values{}
-	formData.Set("grant_type", "authorization_code")
-	formData.Set("client_id", clientID)
-	formData.Set("code", code)
-	formData.Set("redirect_uri", xai.EffectiveRedirectURI(redirectURI))
-	formData.Set("code_verifier", codeVerifier)
+	// 字段序对齐 Grok Build exchange_code：grant_type, code, redirect_uri, client_id, code_verifier。
+	body := encodeOrderedForm([][2]string{
+		{"grant_type", "authorization_code"},
+		{"code", code},
+		{"redirect_uri", xai.EffectiveRedirectURI(redirectURI)},
+		{"client_id", clientID},
+		{"code_verifier", codeVerifier},
+	})
 
+	version := xai.ResolveCLIVersion()
 	var tokenResp xai.TokenResponse
-	resp, err := client.R().
-		SetContext(ctx).
-		SetHeader("User-Agent", "sub2api-grok-oauth/1.0").
-		SetFormDataFromValues(formData).
+	resp, err := withGrokBuildOAuthHeaders(client.R().SetContext(ctx), version).
+		// 只有授权码交换带 x-grok-client-version（刷新不带）。
+		SetHeader("x-grok-client-version", version).
+		SetBodyString(body).
 		SetSuccessResult(&tokenResp).
 		Post(c.tokenURL)
 	if err != nil {
@@ -79,7 +82,7 @@ func (c *grokOAuthClient) ExchangeCode(ctx context.Context, code, codeVerifier, 
 	return &tokenResp, nil
 }
 
-func (c *grokOAuthClient) RefreshToken(ctx context.Context, refreshToken, proxyURL, clientID string) (*xai.TokenResponse, error) {
+func (c *grokOAuthClient) RefreshToken(ctx context.Context, refreshToken, proxyURL, clientID string, principal xai.TokenPrincipal) (*xai.TokenResponse, error) {
 	client, err := createGrokReqClient(proxyURL)
 	if err != nil {
 		return nil, infraerrors.Newf(http.StatusBadGateway, "GROK_OAUTH_CLIENT_INIT_FAILED", "create HTTP client: %v", err)
@@ -90,16 +93,23 @@ func (c *grokOAuthClient) RefreshToken(ctx context.Context, refreshToken, proxyU
 		clientID = xai.EffectiveClientID()
 	}
 
-	formData := url.Values{}
-	formData.Set("grant_type", "refresh_token")
-	formData.Set("client_id", clientID)
-	formData.Set("refresh_token", refreshToken)
+	// 字段序对齐 Grok Build refresh_tokens_once：grant_type, refresh_token, client_id
+	// [, principal_type][, principal_id]。
+	fields := [][2]string{
+		{"grant_type", "refresh_token"},
+		{"refresh_token", refreshToken},
+		{"client_id", clientID},
+	}
+	if principal.Type != "" {
+		fields = append(fields, [2]string{"principal_type", principal.Type})
+	}
+	if principal.ID != "" {
+		fields = append(fields, [2]string{"principal_id", principal.ID})
+	}
 
 	var tokenResp xai.TokenResponse
-	resp, err := client.R().
-		SetContext(ctx).
-		SetHeader("User-Agent", "sub2api-grok-oauth/1.0").
-		SetFormDataFromValues(formData).
+	resp, err := withGrokBuildOAuthHeaders(client.R().SetContext(ctx), xai.ResolveCLIVersion()).
+		SetBodyString(encodeOrderedForm(fields)).
 		SetSuccessResult(&tokenResp).
 		Post(c.tokenURL)
 	if err != nil {
@@ -149,6 +159,30 @@ func (c *grokOAuthClient) ConvertSSOToBuild(ctx context.Context, ssoToken, proxy
 		return nil, grokSSOConversionError(err)
 	}
 	return tokenResp, nil
+}
+
+// withGrokBuildOAuthHeaders 设置 Grok Build 调 token 端点时的头部：shared_client 的进程
+// UA（交互式 TUI 为 grok-pager/{v} grok-shell/{v} (os; arch)）与 reqwest 默认 Accept。
+func withGrokBuildOAuthHeaders(r *req.Request, version string) *req.Request {
+	return r.
+		SetHeader("User-Agent", xai.CLIUserAgent(version)).
+		SetHeader("Accept", "*/*").
+		SetHeader("Content-Type", "application/x-www-form-urlencoded")
+}
+
+// encodeOrderedForm 按给定顺序编码 application/x-www-form-urlencoded 请求体
+// （url.Values.Encode 会按键排序，与原生客户端的字段序不符）。
+func encodeOrderedForm(fields [][2]string) string {
+	var b strings.Builder
+	for i, field := range fields {
+		if i > 0 {
+			b.WriteByte('&')
+		}
+		b.WriteString(url.QueryEscape(field[0]))
+		b.WriteByte('=')
+		b.WriteString(url.QueryEscape(field[1]))
+	}
+	return b.String()
 }
 
 func createGrokReqClient(proxyURL string) (*req.Client, error) {

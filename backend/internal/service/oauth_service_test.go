@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	infraerrors "github.com/Wei-Shaw/sub2api/internal/pkg/errors"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/oauth"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/pagination"
 )
@@ -18,7 +19,7 @@ type mockClaudeOAuthClient struct {
 	getOrgUUIDFunc   func(ctx context.Context, sessionKey, proxyURL string) (string, error)
 	getAuthCodeFunc  func(ctx context.Context, sessionKey, orgUUID, scope, codeChallenge, state, proxyURL string) (string, error)
 	exchangeCodeFunc func(ctx context.Context, code, codeVerifier, state, proxyURL string, isSetupToken bool) (*oauth.TokenResponse, error)
-	refreshTokenFunc func(ctx context.Context, refreshToken, proxyURL string) (*oauth.TokenResponse, error)
+	refreshTokenFunc func(ctx context.Context, refreshToken, scope, proxyURL string) (*oauth.TokenResponse, error)
 }
 
 func (m *mockClaudeOAuthClient) GetOrganizationUUID(ctx context.Context, sessionKey, proxyURL string) (string, error) {
@@ -42,9 +43,9 @@ func (m *mockClaudeOAuthClient) ExchangeCodeForToken(ctx context.Context, code, 
 	panic("ExchangeCodeForToken not implemented")
 }
 
-func (m *mockClaudeOAuthClient) RefreshToken(ctx context.Context, refreshToken, proxyURL string) (*oauth.TokenResponse, error) {
+func (m *mockClaudeOAuthClient) RefreshToken(ctx context.Context, refreshToken, scope, proxyURL string) (*oauth.TokenResponse, error) {
 	if m.refreshTokenFunc != nil {
-		return m.refreshTokenFunc(ctx, refreshToken, proxyURL)
+		return m.refreshTokenFunc(ctx, refreshToken, scope, proxyURL)
 	}
 	panic("RefreshToken not implemented")
 }
@@ -236,8 +237,8 @@ func TestOAuthService_ExchangeCode_SessionNotFound(t *testing.T) {
 	if err == nil {
 		t.Fatal("ExchangeCode 应返回错误（session 不存在）")
 	}
-	if err.Error() != "session not found or expired" {
-		t.Fatalf("错误信息不匹配: got=%q", err.Error())
+	if reason := infraerrors.Reason(err); reason != "CLAUDE_OAUTH_SESSION_NOT_FOUND" {
+		t.Fatalf("错误 reason 不匹配: got=%q err=%v", reason, err)
 	}
 }
 
@@ -386,7 +387,7 @@ func TestOAuthService_RefreshToken(t *testing.T) {
 	t.Parallel()
 
 	client := &mockClaudeOAuthClient{
-		refreshTokenFunc: func(ctx context.Context, refreshToken, proxyURL string) (*oauth.TokenResponse, error) {
+		refreshTokenFunc: func(ctx context.Context, refreshToken, scope, proxyURL string) (*oauth.TokenResponse, error) {
 			if refreshToken != "my-refresh-token" {
 				t.Errorf("refreshToken 不匹配: got=%q", refreshToken)
 			}
@@ -428,7 +429,7 @@ func TestOAuthService_RefreshToken_Error(t *testing.T) {
 	t.Parallel()
 
 	client := &mockClaudeOAuthClient{
-		refreshTokenFunc: func(ctx context.Context, refreshToken, proxyURL string) (*oauth.TokenResponse, error) {
+		refreshTokenFunc: func(ctx context.Context, refreshToken, scope, proxyURL string) (*oauth.TokenResponse, error) {
 			return nil, fmt.Errorf("invalid_grant: token expired")
 		},
 	}
@@ -491,7 +492,7 @@ func TestOAuthService_RefreshAccountToken_Success(t *testing.T) {
 	t.Parallel()
 
 	client := &mockClaudeOAuthClient{
-		refreshTokenFunc: func(ctx context.Context, refreshToken, proxyURL string) (*oauth.TokenResponse, error) {
+		refreshTokenFunc: func(ctx context.Context, refreshToken, scope, proxyURL string) (*oauth.TokenResponse, error) {
 			if refreshToken != "account-refresh-token" {
 				t.Errorf("refreshToken 不匹配: got=%q", refreshToken)
 			}
@@ -542,7 +543,7 @@ func TestOAuthService_RefreshAccountToken_WithProxy(t *testing.T) {
 	}
 
 	client := &mockClaudeOAuthClient{
-		refreshTokenFunc: func(ctx context.Context, refreshToken, proxyURL string) (*oauth.TokenResponse, error) {
+		refreshTokenFunc: func(ctx context.Context, refreshToken, scope, proxyURL string) (*oauth.TokenResponse, error) {
 			if proxyURL != "socks5://user:pass@socks.example.com:1080" {
 				t.Errorf("proxyURL 不匹配: got=%q", proxyURL)
 			}

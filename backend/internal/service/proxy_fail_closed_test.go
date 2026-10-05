@@ -91,7 +91,7 @@ func TestAccountProxyURLWithRepo(t *testing.T) {
 // token 刷新：账号分配了代理但代理已被删除时，必须报错而不是直连刷新。
 func TestOAuthServiceRefreshAccountTokenRefusesDirectWhenProxyMissing(t *testing.T) {
 	client := &mockClaudeOAuthClient{
-		refreshTokenFunc: func(context.Context, string, string) (*oauth.TokenResponse, error) {
+		refreshTokenFunc: func(context.Context, string, string, string) (*oauth.TokenResponse, error) {
 			t.Fatal("token refresh must not be sent when the assigned proxy is unavailable")
 			return nil, nil
 		},

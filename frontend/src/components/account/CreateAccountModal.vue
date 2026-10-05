@@ -3981,6 +3981,7 @@ import Icon from '@/components/icons/Icon.vue'
 import ProxySelector from '@/components/common/ProxySelector.vue'
 import ProxyAdBanner from '@/components/common/ProxyAdBanner.vue'
 import { clashErrorMessage, estimateCodexImportCount, findClashExit } from '@/utils/clash'
+import { extractApiErrorMessage } from '@/utils/apiError'
 import GroupSelector from '@/components/common/GroupSelector.vue'
 import GroupBadge from '@/components/common/GroupBadge.vue'
 import GroupKindBadge from '@/components/admin/group/GroupKindBadge.vue'
@@ -7122,7 +7123,7 @@ const handleAnthropicExchange = async (authCode: string) => {
     applyInterceptWarmup(credentials, interceptWarmupRequests.value, 'create')
     await createAccountAndFinish(form.platform, addMethod.value as AccountType, credentials, extra)
   } catch (error: any) {
-    oauth.error.value = error.response?.data?.detail || t('admin.accounts.oauth.authFailed')
+    oauth.error.value = extractApiErrorMessage(error, t('admin.accounts.oauth.authFailed'))
     appStore.showError(oauth.error.value)
   } finally {
     oauth.loading.value = false
@@ -7281,7 +7282,7 @@ const handleCookieAuth = async (sessionKey: string) => {
         errors.push(
           t('admin.accounts.oauth.keyAuthFailed', {
             index: i + 1,
-            error: clashErrorMessage(error, t) ?? (error.response?.data?.detail || t('admin.accounts.oauth.authFailed'))
+            error: clashErrorMessage(error, t) ?? extractApiErrorMessage(error, t('admin.accounts.oauth.authFailed'))
           })
         )
       }
@@ -7301,7 +7302,7 @@ const handleCookieAuth = async (sessionKey: string) => {
       oauth.error.value = errors.join('\n')
     }
   } catch (error: any) {
-    oauth.error.value = error.response?.data?.detail || t('admin.accounts.oauth.cookieAuthFailed')
+    oauth.error.value = extractApiErrorMessage(error, t('admin.accounts.oauth.cookieAuthFailed'))
   } finally {
     oauth.loading.value = false
   }

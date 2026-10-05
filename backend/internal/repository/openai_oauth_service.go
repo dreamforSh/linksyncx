@@ -2,6 +2,7 @@ package repository
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"net/http"
 	"net/url"
@@ -37,12 +38,14 @@ func (s *openaiOAuthService) ExchangeCode(ctx context.Context, code, codeVerifie
 		clientID = openai.ClientID
 	}
 
-	formData := url.Values{}
-	formData.Set("grant_type", "authorization_code")
-	formData.Set("client_id", clientID)
-	formData.Set("code", code)
-	formData.Set("redirect_uri", redirectURI)
-	formData.Set("code_verifier", codeVerifier)
+	// 字段序对齐 Codex CLI exchange_code：grant_type, client_id, code, redirect_uri, code_verifier。
+	body := encodeOrderedForm([][2]string{
+		{"grant_type", "authorization_code"},
+		{"client_id", clientID},
+		{"code", code},
+		{"redirect_uri", redirectURI},
+		{"code_verifier", codeVerifier},
+	})
 
 	var tokenResp openai.TokenResponse
 
@@ -51,7 +54,8 @@ func (s *openaiOAuthService) ExchangeCode(ctx context.Context, code, codeVerifie
 		SetContext(ctx).
 		SetHeader("User-Agent", authUA).
 		SetHeader("originator", authOriginator).
-		SetFormDataFromValues(formData).
+		SetHeader("Content-Type", "application/x-www-form-urlencoded").
+		SetBodyString(body).
 		SetSuccessResult(&tokenResp).
 		Post(s.tokenURL)
 
@@ -88,22 +92,36 @@ func (s *openaiOAuthService) refreshTokenWithClientID(ctx context.Context, refre
 		return nil, infraerrors.Newf(http.StatusBadGateway, "OPENAI_OAUTH_CLIENT_INIT_FAILED", "create HTTP client: %v", err)
 	}
 
-	formData := url.Values{}
-	formData.Set("grant_type", "refresh_token")
-	formData.Set("refresh_token", refreshToken)
-	formData.Set("client_id", clientID)
-	formData.Set("scope", openai.RefreshScopes)
-
 	var tokenResp openai.TokenResponse
 
 	authUA, authOriginator := service.CodexCanonicalAuthIdentity()
-	resp, err := client.R().
+	r := client.R().
 		SetContext(ctx).
 		SetHeader("User-Agent", authUA).
 		SetHeader("originator", authOriginator).
-		SetFormDataFromValues(formData).
-		SetSuccessResult(&tokenResp).
-		Post(s.tokenURL)
+		SetSuccessResult(&tokenResp)
+	if clientID == openai.ClientID {
+		// Codex CLI 刷新（request_chatgpt_token_refresh）：JSON 体，键经 BTreeMap 排序为
+		// client_id, grant_type, refresh_token，不发 scope。
+		bodyBytes, err := json.Marshal(struct {
+			ClientID     string `json:"client_id"`
+			GrantType    string `json:"grant_type"`
+			RefreshToken string `json:"refresh_token"`
+		}{ClientID: clientID, GrantType: "refresh_token", RefreshToken: refreshToken})
+		if err != nil {
+			return nil, infraerrors.Newf(http.StatusInternalServerError, "OPENAI_OAUTH_ENCODE_FAILED", "encode request failed: %v", err)
+		}
+		r = r.SetHeader("Content-Type", "application/json").SetBodyBytes(bodyBytes)
+	} else {
+		// 其他 client_id（移动端等第三方渠道 RT）沿用表单 + scope 刷新。
+		formData := url.Values{}
+		formData.Set("grant_type", "refresh_token")
+		formData.Set("refresh_token", refreshToken)
+		formData.Set("client_id", clientID)
+		formData.Set("scope", openai.RefreshScopes)
+		r = r.SetFormDataFromValues(formData)
+	}
+	resp, err := r.Post(s.tokenURL)
 
 	if err != nil {
 		if shouldReturnOpenAINoProxyHint(ctx, proxyURL, err) {

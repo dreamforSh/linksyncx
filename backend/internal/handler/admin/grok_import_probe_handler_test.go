@@ -59,7 +59,7 @@ func (grokImportOAuthClientStub) ExchangeCode(context.Context, string, string, s
 	return &xai.TokenResponse{AccessToken: "access-token", RefreshToken: "refresh-token", ExpiresIn: 3600}, nil
 }
 
-func (grokImportOAuthClientStub) RefreshToken(context.Context, string, string, string) (*xai.TokenResponse, error) {
+func (grokImportOAuthClientStub) RefreshToken(context.Context, string, string, string, xai.TokenPrincipal) (*xai.TokenResponse, error) {
 	return &xai.TokenResponse{AccessToken: "access-token", RefreshToken: "refresh-token", ExpiresIn: 3600}, nil
 }
 

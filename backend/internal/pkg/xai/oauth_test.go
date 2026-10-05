@@ -3,10 +3,13 @@
 package xai
 
 import (
+	"encoding/base64"
 	"net/url"
+	"strconv"
 	"testing"
 
 	"github.com/Wei-Shaw/sub2api/internal/util/urlvalidator"
+	"github.com/google/uuid"
 	"github.com/stretchr/testify/require"
 )
 
@@ -64,7 +67,7 @@ func TestParseAuthorizationInput(t *testing.T) {
 	}
 }
 
-func TestBuildAuthorizationURLIncludesHermesCompatibleParameters(t *testing.T) {
+func TestBuildAuthorizationURLMatchesGrokBuild(t *testing.T) {
 	t.Setenv(EnvAuthorizeURL, "https://auth.example.test/oauth2/authorize")
 	t.Setenv(EnvClientID, "client-id")
 	t.Setenv(EnvScope, "openid profile offline_access api:access")
@@ -87,8 +90,52 @@ func TestBuildAuthorizationURLIncludesHermesCompatibleParameters(t *testing.T) {
 	require.Equal(t, "nonce", values.Get("nonce"))
 	require.Equal(t, "challenge", values.Get("code_challenge"))
 	require.Equal(t, "S256", values.Get("code_challenge_method"))
-	require.Equal(t, "generic", values.Get("plan"))
-	require.Equal(t, "sub2api", values.Get("referrer"))
+	// Grok Build 的默认 referrer；原生不发 plan，也绝不能出现网关自身标识。
+	require.Equal(t, "grok-build", values.Get("referrer"))
+	require.False(t, values.Has("plan"))
+	require.NotContains(t, authURL, "sub2api")
+	// 参数顺序与 %20 空格编码同 Grok Build build_authorize_url。
+	require.Equal(t, "https://auth.example.test/oauth2/authorize?response_type=code&client_id=client-id"+
+		"&redirect_uri=http%3A%2F%2F127.0.0.1%3A56121%2Fcallback&scope=openid%20profile%20offline_access%20api%3Aaccess"+
+		"&code_challenge=challenge&code_challenge_method=S256&state=state&nonce=nonce&referrer=grok-build", authURL)
+}
+
+func TestGrokStateNonceAndRedirectMatchGrokBuild(t *testing.T) {
+	t.Setenv(EnvRedirectURI, "")
+	state, err := GenerateState()
+	require.NoError(t, err)
+	parsedState, err := uuid.Parse(state)
+	require.NoError(t, err)
+	require.Equal(t, uuid.Version(7), parsedState.Version())
+
+	nonce, err := GenerateNonce()
+	require.NoError(t, err)
+	require.NotEqual(t, state, nonce)
+
+	redirect, err := SessionRedirectURI("")
+	require.NoError(t, err)
+	parsed, err := url.Parse(redirect)
+	require.NoError(t, err)
+	require.Equal(t, "127.0.0.1", parsed.Hostname())
+	require.Equal(t, "/callback", parsed.Path)
+	port, err := strconv.Atoi(parsed.Port())
+	require.NoError(t, err)
+	require.GreaterOrEqual(t, port, loopbackPortMin)
+	require.LessOrEqual(t, port, loopbackPortMax)
+
+	override, err := SessionRedirectURI("http://127.0.0.1:56121/callback")
+	require.NoError(t, err)
+	require.Equal(t, "http://127.0.0.1:56121/callback", override)
+}
+
+func TestPrincipalFromAccessToken(t *testing.T) {
+	jwt := func(payload string) string {
+		return "eyJhbGciOiJub25lIn0." + base64.RawURLEncoding.EncodeToString([]byte(payload)) + ".sig"
+	}
+	require.Equal(t, TokenPrincipal{Type: "Team", ID: "team-1"}, PrincipalFromAccessToken(jwt(`{"principal_type":"Team","principal_id":"team-1"}`)))
+	require.Equal(t, TokenPrincipal{Type: "User", ID: "u-1"}, PrincipalFromAccessToken(jwt(`{"principalType":"User","principalId":"u-1"}`)))
+	require.Equal(t, TokenPrincipal{}, PrincipalFromAccessToken(jwt(`{"principal_type":"Team"}`)), "both claims are required")
+	require.Equal(t, TokenPrincipal{}, PrincipalFromAccessToken("opaque-token"))
 }
 
 func TestValidateXAIURLsAllowOfficialOAuthAndGatewayHosts(t *testing.T) {

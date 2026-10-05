@@ -87,7 +87,10 @@ func (s *GrokOAuthService) GenerateAuthURL(ctx context.Context, proxyID *int64, 
 	if err != nil {
 		return nil, err
 	}
-	redirectURI = xai.EffectiveRedirectURI(redirectURI)
+	redirectURI, err = xai.SessionRedirectURI(redirectURI)
+	if err != nil {
+		return nil, infraerrors.Newf(http.StatusInternalServerError, "GROK_OAUTH_REDIRECT_FAILED", "failed to choose redirect uri: %v", err)
+	}
 	codeChallenge := xai.GenerateCodeChallenge(codeVerifier)
 
 	authURL, err := xai.BuildAuthorizationURL(state, codeChallenge, redirectURI, nonce)
@@ -135,6 +138,9 @@ type GrokTokenInfo struct {
 	TeamID            string `json:"team_id,omitempty"`
 	SubscriptionTier  string `json:"subscription_tier,omitempty"`
 	EntitlementStatus string `json:"entitlement_status,omitempty"`
+	// PrincipalType / PrincipalID 是 consent 页选定的主体（User / Team），刷新时回传。
+	PrincipalType string `json:"principal_type,omitempty"`
+	PrincipalID   string `json:"principal_id,omitempty"`
 }
 
 // GrokPasswordLoginResult is an ephemeral password-login outcome.
@@ -206,6 +212,10 @@ func (s *GrokOAuthService) requireOAuthClient() error {
 }
 
 func (s *GrokOAuthService) RefreshToken(ctx context.Context, refreshToken, proxyURL, clientID string) (*GrokTokenInfo, error) {
+	return s.refreshToken(ctx, refreshToken, proxyURL, clientID, xai.TokenPrincipal{})
+}
+
+func (s *GrokOAuthService) refreshToken(ctx context.Context, refreshToken, proxyURL, clientID string, principal xai.TokenPrincipal) (*GrokTokenInfo, error) {
 	refreshToken = strings.TrimSpace(refreshToken)
 	if refreshToken == "" {
 		return nil, infraerrors.New(http.StatusBadRequest, "GROK_OAUTH_NO_REFRESH_TOKEN", "refresh_token is required")
@@ -213,7 +223,7 @@ func (s *GrokOAuthService) RefreshToken(ctx context.Context, refreshToken, proxy
 	if err := s.requireOAuthClient(); err != nil {
 		return nil, err
 	}
-	tokenResp, err := s.oauthClient.RefreshToken(ctx, refreshToken, proxyURL, clientID)
+	tokenResp, err := s.oauthClient.RefreshToken(ctx, refreshToken, proxyURL, clientID, principal)
 	if err != nil {
 		return nil, err
 	}
@@ -224,7 +234,24 @@ func (s *GrokOAuthService) RefreshToken(ctx context.Context, refreshToken, proxy
 	if tokenInfo.RefreshToken == "" {
 		tokenInfo.RefreshToken = refreshToken
 	}
+	// Grok Build 刷新后沿用登录时确定的主体；新 token 里带主体时以新值为准。
+	if tokenInfo.PrincipalType == "" && principal.Type != "" && principal.ID != "" {
+		tokenInfo.PrincipalType, tokenInfo.PrincipalID = principal.Type, principal.ID
+	}
 	return tokenInfo, nil
+}
+
+// grokAccountPrincipal 取账号保存的授权主体；旧账号未保存时从当前 access token 解析
+// （Grok Build 登录时同样从 access token 读取）。
+func grokAccountPrincipal(account *Account) xai.TokenPrincipal {
+	principal := xai.TokenPrincipal{
+		Type: strings.TrimSpace(account.GetCredential("principal_type")),
+		ID:   strings.TrimSpace(account.GetCredential("principal_id")),
+	}
+	if principal.Type != "" && principal.ID != "" {
+		return principal
+	}
+	return xai.PrincipalFromAccessToken(account.GetCredential("access_token"))
 }
 
 func (s *GrokOAuthService) ValidateRefreshToken(ctx context.Context, refreshToken string, proxyID *int64) (*GrokTokenInfo, error) {
@@ -326,7 +353,7 @@ func (s *GrokOAuthService) RefreshAccountToken(ctx context.Context, account *Acc
 	}
 
 	clientID := account.GetCredential("client_id")
-	tokenInfo, err := s.RefreshToken(ctx, refreshToken, proxyURL, clientID)
+	tokenInfo, err := s.refreshToken(ctx, refreshToken, proxyURL, clientID, grokAccountPrincipal(account))
 	if err != nil {
 		return nil, err
 	}
@@ -380,6 +407,10 @@ func (s *GrokOAuthService) BuildAccountCredentials(tokenInfo *GrokTokenInfo) map
 	if tokenInfo.EntitlementStatus != "" {
 		creds["entitlement_status"] = tokenInfo.EntitlementStatus
 	}
+	if tokenInfo.PrincipalType != "" && tokenInfo.PrincipalID != "" {
+		creds["principal_type"] = tokenInfo.PrincipalType
+		creds["principal_id"] = tokenInfo.PrincipalID
+	}
 	creds["base_url"] = xai.DefaultCLIBaseURL
 	return creds
 }
@@ -412,6 +443,8 @@ func (s *GrokOAuthService) tokenInfoFromResponse(tokenResp *xai.TokenResponse, c
 	}
 	applyGrokTokenClaims(info, tokenResp.IDToken, false)
 	applyGrokTokenClaims(info, tokenResp.AccessToken, true)
+	principal := xai.PrincipalFromAccessToken(tokenResp.AccessToken)
+	info.PrincipalType, info.PrincipalID = principal.Type, principal.ID
 	if existing != nil {
 		if info.Email == "" {
 			if email, _ := existing["email"].(string); email != "" {

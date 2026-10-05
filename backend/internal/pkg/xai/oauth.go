@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"math/big"
 	"net/url"
 	"os"
 	"strings"
@@ -18,6 +19,7 @@ import (
 	"github.com/Wei-Shaw/sub2api/internal/pkg/redissession"
 	"github.com/Wei-Shaw/sub2api/internal/util/logredact"
 	"github.com/Wei-Shaw/sub2api/internal/util/urlvalidator"
+	"github.com/google/uuid"
 	"github.com/redis/go-redis/v9"
 )
 
@@ -526,20 +528,83 @@ func GenerateRandomBytes(n int) ([]byte, error) {
 	return b, nil
 }
 
+// GenerateState / GenerateNonce 与 Grok Build 一致使用 UUIDv7 字符串
+// （xai-grok-login oidc/login.rs：uuid::Uuid::now_v7()）。
 func GenerateState() (string, error) {
-	bytes, err := GenerateRandomBytes(32)
-	if err != nil {
-		return "", err
-	}
-	return hex.EncodeToString(bytes), nil
+	return newUUIDv7String()
 }
 
 func GenerateNonce() (string, error) {
-	bytes, err := GenerateRandomBytes(16)
+	return newUUIDv7String()
+}
+
+func newUUIDv7String() (string, error) {
+	id, err := uuid.NewV7()
 	if err != nil {
 		return "", err
 	}
-	return hex.EncodeToString(bytes), nil
+	return id.String(), nil
+}
+
+// NewLoopbackRedirectURI 返回 Grok Build 生产登录的回调形态：系统随机分配的
+// 127.0.0.1 端口 + /callback。固定的 56121 只在 GROK_LOCAL_AUTH 本地开发模式下使用。
+func NewLoopbackRedirectURI() (string, error) {
+	n, err := rand.Int(rand.Reader, big.NewInt(loopbackPortMax-loopbackPortMin+1))
+	if err != nil {
+		return "", err
+	}
+	return fmt.Sprintf("http://127.0.0.1:%d/callback", loopbackPortMin+n.Int64()), nil
+}
+
+// loopbackPortMin..loopbackPortMax 是 IANA 动态端口段（Windows/macOS 的临时端口范围）。
+const (
+	loopbackPortMin = 49152
+	loopbackPortMax = 65535
+)
+
+// SessionRedirectURI 决定一次授权使用的 redirect_uri：调用方覆盖 > XAI_OAUTH_REDIRECT_URI
+// > 随机回环端口。会话保存该值，换 token 时原样回传。
+func SessionRedirectURI(override string) (string, error) {
+	if trimmed := strings.TrimSpace(override); trimmed != "" {
+		return trimmed, nil
+	}
+	if value := strings.TrimSpace(os.Getenv(EnvRedirectURI)); value != "" {
+		return value, nil
+	}
+	return NewLoopbackRedirectURI()
+}
+
+// TokenPrincipal 是 consent 页上选定的授权主体（个人 User / 团队 Team）。
+// Grok Build 登录后从 access token 解析并保存，刷新时作为 principal_type /
+// principal_id 回传，团队授权的 token 才能续期为同一主体。
+type TokenPrincipal struct {
+	Type string
+	ID   string
+}
+
+// PrincipalFromAccessToken 对齐 Grok Build peek_access_token_principal：两项都非空才算有效。
+func PrincipalFromAccessToken(accessToken string) TokenPrincipal {
+	claims := DecodeJWTClaims(accessToken)
+	if claims == nil {
+		return TokenPrincipal{}
+	}
+	principal := TokenPrincipal{
+		Type: firstJWTClaimString(claims, "principal_type", "principalType"),
+		ID:   firstJWTClaimString(claims, "principal_id", "principalId"),
+	}
+	if principal.Type == "" || principal.ID == "" {
+		return TokenPrincipal{}
+	}
+	return principal
+}
+
+func firstJWTClaimString(claims map[string]any, keys ...string) string {
+	for _, key := range keys {
+		if value := JWTClaimString(claims, key); value != "" {
+			return value
+		}
+	}
+	return ""
 }
 
 func GenerateSessionID() (string, error) {
@@ -574,19 +639,27 @@ func BuildAuthorizationURL(state, codeChallenge, redirectURI, nonce string) (str
 		return "", fmt.Errorf("invalid authorize url: %w", err)
 	}
 
-	params := url.Values{}
-	params.Set("response_type", "code")
-	params.Set("client_id", EffectiveClientID())
-	params.Set("redirect_uri", redirectURI)
-	params.Set("scope", EffectiveScope())
-	params.Set("state", state)
-	params.Set("nonce", nonce)
-	params.Set("code_challenge", codeChallenge)
-	params.Set("code_challenge_method", "S256")
-	params.Set("plan", "generic")
-	params.Set("referrer", "sub2api")
+	// 参数顺序与编码对齐 Grok Build build_authorize_url（oidc/protocol.rs）：
+	// urlencoding::encode 把空格编码为 %20；referrer 未配置时固定为 "grok-build"。
+	// 原生不发 plan 参数。
+	return authorizeURL +
+		"?response_type=code" +
+		"&client_id=" + rfc3986Escape(EffectiveClientID()) +
+		"&redirect_uri=" + rfc3986Escape(redirectURI) +
+		"&scope=" + rfc3986Escape(EffectiveScope()) +
+		"&code_challenge=" + rfc3986Escape(codeChallenge) +
+		"&code_challenge_method=S256" +
+		"&state=" + rfc3986Escape(state) +
+		"&nonce=" + rfc3986Escape(nonce) +
+		"&referrer=" + authorizeReferrer, nil
+}
 
-	return fmt.Sprintf("%s?%s", authorizeURL, params.Encode()), nil
+// authorizeReferrer 是 Grok Build 授权链接的默认 referrer。
+const authorizeReferrer = "grok-build"
+
+// rfc3986Escape 编码除 unreserved 字符外的所有字符，空格为 %20（同 Rust urlencoding::encode）。
+func rfc3986Escape(s string) string {
+	return strings.ReplaceAll(url.QueryEscape(s), "+", "%20")
 }
 
 // AuthorizationInput is a parsed manual OAuth callback input.

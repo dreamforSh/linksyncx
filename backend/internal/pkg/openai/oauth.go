@@ -25,9 +25,10 @@ const (
 	// Default redirect URI (can be customized)
 	DefaultRedirectURI = "http://localhost:1455/auth/callback"
 
-	// Scopes
-	DefaultScopes = "openid profile email offline_access"
-	// RefreshScopes - scope for token refresh (without offline_access, aligned with CRS project)
+	// DefaultScopes 对齐 Codex CLI 0.159.2 build_authorize_url（login/src/server.rs）。
+	DefaultScopes = "openid profile email offline_access api.connectors.read api.connectors.invoke"
+	// RefreshScopes 只用于非 Codex client_id 的 RT（如移动端 RT，沿用 CRS 的表单刷新）；
+	// Codex client 的刷新与原生一致不发 scope。
 	RefreshScopes = "openid profile email"
 
 	// Session TTL
@@ -134,13 +135,14 @@ func GenerateRandomBytes(n int) ([]byte, error) {
 	return b, nil
 }
 
-// GenerateState generates a random state string for OAuth
+// GenerateState generates a random state string for OAuth: 32 random bytes,
+// base64url without padding, like Codex CLI generate_state.
 func GenerateState() (string, error) {
 	bytes, err := GenerateRandomBytes(32)
 	if err != nil {
 		return "", err
 	}
-	return hex.EncodeToString(bytes), nil
+	return base64URLEncode(bytes), nil
 }
 
 // GenerateSessionID generates a unique session ID
@@ -152,14 +154,14 @@ func GenerateSessionID() (string, error) {
 	return hex.EncodeToString(bytes), nil
 }
 
-// GenerateCodeVerifier generates a PKCE code verifier (64 bytes -> hex for OpenAI)
-// OpenAI uses hex encoding instead of base64url
+// GenerateCodeVerifier generates a PKCE code verifier: 64 random bytes,
+// base64url without padding (86 chars), like Codex CLI generate_pkce.
 func GenerateCodeVerifier() (string, error) {
 	bytes, err := GenerateRandomBytes(64)
 	if err != nil {
 		return "", err
 	}
-	return hex.EncodeToString(bytes), nil
+	return base64URLEncode(bytes), nil
 }
 
 // GenerateCodeChallenge generates a PKCE code challenge using S256 method
@@ -178,32 +180,50 @@ func base64URLEncode(data []byte) string {
 
 // BuildAuthorizationURL builds the OpenAI OAuth authorization URL
 func BuildAuthorizationURL(state, codeChallenge, redirectURI string) string {
-	return BuildAuthorizationURLForPlatform(state, codeChallenge, redirectURI, OAuthPlatformOpenAI)
+	return BuildAuthorizationURLForPlatform(state, codeChallenge, redirectURI, OAuthPlatformOpenAI, "")
 }
 
 // BuildAuthorizationURLForPlatform builds authorization URL by platform.
-func BuildAuthorizationURLForPlatform(state, codeChallenge, redirectURI, platform string) string {
+// 参数顺序与编码对齐 Codex CLI 0.159.2（login/src/oauth/authorization.rs 的
+// query_pairs_mut 追加顺序 + server.rs 的 extra_parameters）；originator 为空时不发。
+func BuildAuthorizationURLForPlatform(state, codeChallenge, redirectURI, platform, originator string) string {
 	if redirectURI == "" {
 		redirectURI = DefaultRedirectURI
 	}
 
 	clientID, codexFlow := OAuthClientConfigByPlatform(platform)
 
-	params := url.Values{}
-	params.Set("response_type", "code")
-	params.Set("client_id", clientID)
-	params.Set("redirect_uri", redirectURI)
-	params.Set("scope", DefaultScopes)
-	params.Set("state", state)
-	params.Set("code_challenge", codeChallenge)
-	params.Set("code_challenge_method", "S256")
-	// OpenAI specific parameters
-	params.Set("id_token_add_organizations", "true")
+	pairs := [][2]string{
+		{"response_type", "code"},
+		{"client_id", clientID},
+		{"redirect_uri", redirectURI},
+		{"code_challenge", codeChallenge},
+		{"code_challenge_method", "S256"},
+		{"state", state},
+		{"scope", DefaultScopes},
+		// OpenAI specific parameters
+		{"id_token_add_organizations", "true"},
+	}
 	if codexFlow {
-		params.Set("codex_cli_simplified_flow", "true")
+		pairs = append(pairs, [2]string{"codex_cli_simplified_flow", "true"})
+	}
+	if originator = strings.TrimSpace(originator); originator != "" {
+		pairs = append(pairs, [2]string{"originator", originator})
 	}
 
-	return fmt.Sprintf("%s?%s", AuthorizeURL, params.Encode())
+	var b strings.Builder
+	b.WriteString(AuthorizeURL)
+	for i, pair := range pairs {
+		if i == 0 {
+			b.WriteByte('?')
+		} else {
+			b.WriteByte('&')
+		}
+		b.WriteString(url.QueryEscape(pair[0]))
+		b.WriteByte('=')
+		b.WriteString(url.QueryEscape(pair[1]))
+	}
+	return b.String()
 }
 
 // OAuthClientConfigByPlatform returns oauth client_id and whether codex simplified flow should be enabled.
