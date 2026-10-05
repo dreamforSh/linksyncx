@@ -891,6 +891,12 @@ func TestOllamaCloudUsageRefreshUsesFixedURLCookieAndNoRedirects(t *testing.T) {
 	require.NotContains(t, upstream.lastRequest.Header.Get("Cookie"), "tracking")
 	require.Empty(t, upstream.lastRequest.Header.Get("Authorization"))
 	require.True(t, HTTPUpstreamRedirectsDisabled(upstream.lastRequest.Context()))
+	// 浏览器网页请求形态；出站请求不得出现网关自身标识。
+	require.Equal(t, ollamaCloudUsageUserAgent, upstream.lastRequest.Header.Get("User-Agent"))
+	require.True(t, strings.HasPrefix(upstream.lastRequest.Header.Get("Accept"), "text/html,"))
+	for name, values := range upstream.lastRequest.Header {
+		require.NotContains(t, strings.ToLower(name+" "+strings.Join(values, ",")), "sub2api")
+	}
 }
 
 func TestOllamaCloudUsageManualRefreshUsesShortIndependentInterval(t *testing.T) {

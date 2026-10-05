@@ -427,7 +427,7 @@ const handleExchangeCode = async () => {
       emit('reauthorized', updatedAccount)
       handleClose()
     } catch (error: any) {
-      oauthClient.error.value = error.response?.data?.detail || t('admin.accounts.oauth.authFailed')
+      oauthClient.error.value = extractApiErrorMessage(error, t('admin.accounts.oauth.authFailed'))
       appStore.showError(oauthClient.error.value)
     }
   } else if (isGemini.value) {
@@ -460,7 +460,7 @@ const handleExchangeCode = async () => {
       emit('reauthorized', updatedAccount)
       handleClose()
     } catch (error: any) {
-      geminiOAuth.error.value = error.response?.data?.detail || t('admin.accounts.oauth.authFailed')
+      geminiOAuth.error.value = extractApiErrorMessage(error, t('admin.accounts.oauth.authFailed'))
       appStore.showError(geminiOAuth.error.value)
     }
   } else if (isAntigravity.value) {
@@ -492,7 +492,7 @@ const handleExchangeCode = async () => {
       emit('reauthorized', updatedAccount)
       handleClose()
     } catch (error: any) {
-      antigravityOAuth.error.value = error.response?.data?.detail || t('admin.accounts.oauth.authFailed')
+      antigravityOAuth.error.value = extractApiErrorMessage(error, t('admin.accounts.oauth.authFailed'))
       appStore.showError(antigravityOAuth.error.value)
     }
   } else if (isGrok.value) {
@@ -525,7 +525,7 @@ const handleExchangeCode = async () => {
       emit('reauthorized', updatedAccount)
       handleClose()
     } catch (error: any) {
-      grokOAuth.error.value = error.response?.data?.detail || t('admin.accounts.oauth.authFailed')
+      grokOAuth.error.value = extractApiErrorMessage(error, t('admin.accounts.oauth.authFailed'))
       appStore.showError(grokOAuth.error.value)
     }
   } else {

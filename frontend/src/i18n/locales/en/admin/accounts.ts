@@ -785,8 +785,8 @@ export default {
         searchTestHint:
           'Standalone web_search probe (same as gateway /v1/web_search). Not a free-form chat with tools.',
         ttsTextLabel: 'TTS text',
-        ttsTextPlaceholder: 'Example: Hello from Sub2API connectivity test.',
-        ttsTextDefault: 'Hello from Sub2API account connectivity test.',
+        ttsTextPlaceholder: 'Example: Hello, this is a quick audio test.',
+        ttsTextDefault: 'Hello, this is a quick audio test.',
         ttsTestHint: 'Standalone /v1/tts with language=en; success reports audio byte size.',
         sttTestHint: 'Standalone /v1/stt with a synthetic silent WAV; success means the endpoint is reachable.',
         realtimeTestHint:

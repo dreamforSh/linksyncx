@@ -2,6 +2,7 @@ package repository
 
 import (
 	"context"
+	"encoding/json"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -38,6 +39,22 @@ func (s *OpenAIOAuthServiceSuite) TearDownTest() {
 func (s *OpenAIOAuthServiceSuite) setupServer(handler http.HandlerFunc) {
 	s.srv = newLocalTestServer(s.T(), handler)
 	s.svc = &openaiOAuthService{tokenURL: s.srv.URL}
+}
+
+// 授权码交换的表单字段序对齐 Codex CLI exchange_code（url.Values.Encode 会按键排序）。
+func (s *OpenAIOAuthServiceSuite) TestExchangeCode_FieldOrderMatchesCodexCLI() {
+	bodyCh := make(chan string, 1)
+	s.setupServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		bodyCh <- string(body)
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = io.WriteString(w, `{"access_token":"at","token_type":"bearer","expires_in":3600}`)
+	}))
+
+	_, err := s.svc.ExchangeCode(s.ctx, "ac code", "ver", "", "", "")
+	require.NoError(s.T(), err)
+	require.Equal(s.T(), "grant_type=authorization_code&client_id="+openai.ClientID+
+		"&code=ac+code&redirect_uri=http%3A%2F%2Flocalhost%3A1455%2Fauth%2Fcallback&code_verifier=ver", <-bodyCh)
 }
 
 func (s *OpenAIOAuthServiceSuite) TestExchangeCode_DefaultRedirectURI() {
@@ -105,31 +122,20 @@ func (s *OpenAIOAuthServiceSuite) TestExchangeCode_DefaultRedirectURI() {
 	require.Equal(s.T(), "rt", resp.RefreshToken)
 }
 
-func (s *OpenAIOAuthServiceSuite) TestRefreshToken_FormFields() {
+// Codex client 的刷新对齐 Codex CLI 0.159.2 request_chatgpt_token_refresh：JSON 体，
+// 键序 client_id, grant_type, refresh_token，不发 scope；身份头与交换一致。
+func (s *OpenAIOAuthServiceSuite) TestRefreshToken_CodexJSONBody() {
 	errCh := make(chan string, 1)
 	s.setupServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if err := r.ParseForm(); err != nil {
-			errCh <- "ParseForm failed"
+		body, _ := io.ReadAll(r.Body)
+		if got := r.Header.Get("Content-Type"); got != "application/json" {
+			errCh <- "content-type mismatch: " + got
 			w.WriteHeader(http.StatusBadRequest)
 			return
 		}
-		if got := r.PostForm.Get("grant_type"); got != "refresh_token" {
-			errCh <- "grant_type mismatch"
-			w.WriteHeader(http.StatusBadRequest)
-			return
-		}
-		if got := r.PostForm.Get("refresh_token"); got != "rt" {
-			errCh <- "refresh_token mismatch"
-			w.WriteHeader(http.StatusBadRequest)
-			return
-		}
-		if got := r.PostForm.Get("client_id"); got != openai.ClientID {
-			errCh <- "client_id mismatch"
-			w.WriteHeader(http.StatusBadRequest)
-			return
-		}
-		if got := r.PostForm.Get("scope"); got != openai.RefreshScopes {
-			errCh <- "scope mismatch"
+		want := `{"client_id":"` + openai.ClientID + `","grant_type":"refresh_token","refresh_token":"rt"}`
+		if string(body) != want {
+			errCh <- "body mismatch: " + string(body)
 			w.WriteHeader(http.StatusBadRequest)
 			return
 		}
@@ -160,17 +166,48 @@ func (s *OpenAIOAuthServiceSuite) TestRefreshToken_FormFields() {
 	require.Equal(s.T(), "rt2", resp.RefreshToken)
 }
 
+// 第三方渠道 RT（非 Codex client_id）保持表单 + scope 刷新。
+func (s *OpenAIOAuthServiceSuite) TestRefreshToken_ThirdPartyClientKeepsFormScope() {
+	errCh := make(chan string, 1)
+	s.setupServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if err := r.ParseForm(); err != nil {
+			errCh <- "ParseForm failed"
+			w.WriteHeader(http.StatusBadRequest)
+			return
+		}
+		if r.PostForm.Get("grant_type") != "refresh_token" || r.PostForm.Get("refresh_token") != "rt" ||
+			r.PostForm.Get("client_id") != "app_mobile" || r.PostForm.Get("scope") != openai.RefreshScopes {
+			errCh <- "form mismatch: " + r.PostForm.Encode()
+			w.WriteHeader(http.StatusBadRequest)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = io.WriteString(w, `{"access_token":"at3","token_type":"bearer","expires_in":3600}`)
+	}))
+
+	resp, err := s.svc.RefreshTokenWithClientID(s.ctx, "rt", "", "app_mobile")
+	require.NoError(s.T(), err)
+	select {
+	case msg := <-errCh:
+		require.Fail(s.T(), msg)
+	default:
+	}
+	require.Equal(s.T(), "at3", resp.AccessToken)
+}
+
 // TestRefreshToken_DefaultsToOpenAIClientID 验证未指定 client_id 时默认使用 OpenAI ClientID，
 // 且只发送一次请求（不再盲猜多个 client_id）。
 func (s *OpenAIOAuthServiceSuite) TestRefreshToken_DefaultsToOpenAIClientID() {
 	var seenClientIDs []string
 	s.setupServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if err := r.ParseForm(); err != nil {
+		var body struct {
+			ClientID string `json:"client_id"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 			w.WriteHeader(http.StatusBadRequest)
 			return
 		}
-		clientID := r.PostForm.Get("client_id")
-		seenClientIDs = append(seenClientIDs, clientID)
+		seenClientIDs = append(seenClientIDs, body.ClientID)
 		w.Header().Set("Content-Type", "application/json")
 		_, _ = io.WriteString(w, `{"access_token":"at","refresh_token":"rt","token_type":"bearer","expires_in":3600}`)
 	}))

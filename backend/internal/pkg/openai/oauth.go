@@ -211,19 +211,11 @@ func BuildAuthorizationURLForPlatform(state, codeChallenge, redirectURI, platfor
 		pairs = append(pairs, [2]string{"originator", originator})
 	}
 
-	var b strings.Builder
-	b.WriteString(AuthorizeURL)
-	for i, pair := range pairs {
-		if i == 0 {
-			b.WriteByte('?')
-		} else {
-			b.WriteByte('&')
-		}
-		b.WriteString(url.QueryEscape(pair[0]))
-		b.WriteByte('=')
-		b.WriteString(url.QueryEscape(pair[1]))
+	query := make([]string, 0, len(pairs))
+	for _, pair := range pairs {
+		query = append(query, url.QueryEscape(pair[0])+"="+url.QueryEscape(pair[1]))
 	}
-	return b.String()
+	return AuthorizeURL + "?" + strings.Join(query, "&")
 }
 
 // OAuthClientConfigByPlatform returns oauth client_id and whether codex simplified flow should be enabled.

@@ -8,6 +8,7 @@ import (
 	"io"
 	"net/http"
 	"reflect"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -300,6 +301,11 @@ func TestOpenCodeGoUsageRefresh200Success(t *testing.T) {
 	require.Equal(t, "Bearer key-7", stub.lastRequest.Header.Get("Authorization"))
 	require.Equal(t, "https://opencode.ai/zen/go/v1/usage", stub.lastRequest.URL.String())
 	require.Equal(t, "application/json", stub.lastRequest.Header.Get("Accept"))
+	// 与推理请求同一 opencode 客户端身份；出站请求不得出现网关自身标识。
+	require.Equal(t, openCodeUpstreamUserAgent, stub.lastRequest.Header.Get("User-Agent"))
+	for name, values := range stub.lastRequest.Header {
+		require.NotContains(t, strings.ToLower(name+" "+strings.Join(values, ",")), "sub2api")
+	}
 }
 
 func TestOpenCodeGoUsageRefresh401Unauthorized(t *testing.T) {

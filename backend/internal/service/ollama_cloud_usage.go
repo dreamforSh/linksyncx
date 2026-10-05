@@ -56,6 +56,11 @@ const (
 	ollamaCloudUsageMaxDelay               = 24 * time.Hour
 	ollamaCloudUsageLeaderLockKey          = "ollama:cloud:usage:leader"
 	ollamaCloudUsageLeaderLockTTL          = 2 * time.Minute
+
+	// 设置页是用浏览器 session cookie 打开的网页，按桌面 Chrome 的导航请求发出
+	// （Chrome 155 为 2026-10 稳定版）；出站请求不得出现网关自身标识。
+	ollamaCloudUsageUserAgent = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/155.0.0.0 Safari/537.36"
+	ollamaCloudUsageAccept    = "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7"
 )
 
 var (
@@ -900,9 +905,9 @@ func (s *OllamaCloudUsageService) refreshLoadedAccount(ctx context.Context, acco
 	if err != nil || !isExactOllamaCloudSettingsURL(req.URL) {
 		return nil, ErrOllamaCloudUsageUnavailable
 	}
-	req.Header.Set("Accept", "text/html,application/xhtml+xml")
+	req.Header.Set("Accept", ollamaCloudUsageAccept)
 	req.Header.Set("Cookie", cookie)
-	req.Header.Set("User-Agent", "sub2api-ollama-usage/1")
+	req.Header.Set("User-Agent", ollamaCloudUsageUserAgent)
 	resp, err := s.httpUpstream.Do(req, proxyURL, account.ID, account.Concurrency)
 	if err != nil {
 		return s.persistFailure(ctx, account, intervalMinutes, now, 0, "request_failed", 0, false)

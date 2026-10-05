@@ -173,16 +173,11 @@ func withGrokBuildOAuthHeaders(r *req.Request, version string) *req.Request {
 // encodeOrderedForm 按给定顺序编码 application/x-www-form-urlencoded 请求体
 // （url.Values.Encode 会按键排序，与原生客户端的字段序不符）。
 func encodeOrderedForm(fields [][2]string) string {
-	var b strings.Builder
-	for i, field := range fields {
-		if i > 0 {
-			b.WriteByte('&')
-		}
-		b.WriteString(url.QueryEscape(field[0]))
-		b.WriteByte('=')
-		b.WriteString(url.QueryEscape(field[1]))
+	pairs := make([]string, 0, len(fields))
+	for _, field := range fields {
+		pairs = append(pairs, url.QueryEscape(field[0])+"="+url.QueryEscape(field[1]))
 	}
-	return b.String()
+	return strings.Join(pairs, "&")
 }
 
 func createGrokReqClient(proxyURL string) (*req.Client, error) {
