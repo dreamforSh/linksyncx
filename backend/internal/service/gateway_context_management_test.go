@@ -447,7 +447,7 @@ func TestApplyClaudeCodeOAuthMimicryToBody_HaikuRewritesSystem(t *testing.T) {
 	body := []byte(`{"model":"claude-haiku-4-5","system":"Pi project instructions","messages":[{"role":"user","content":"hello"}]}`)
 	svc := &GatewayService{cfg: &config.Config{}}
 
-	out := svc.applyClaudeCodeOAuthMimicryToBody(
+	out, _ := svc.applyClaudeCodeOAuthMimicryToBody(
 		context.Background(), nil, account, body, "Pi project instructions", "claude-haiku-4-5",
 	)
 
@@ -468,7 +468,7 @@ func TestApplyClaudeCodeOAuthMimicryToBody_FableOmitsRefusedExpansion(t *testing
 	body := []byte(`{"model":"claude-fable-5","system":"Project instructions","messages":[{"role":"user","content":"hello"}]}`)
 	svc := &GatewayService{cfg: &config.Config{}}
 
-	out := svc.applyClaudeCodeOAuthMimicryToBody(
+	out, _ := svc.applyClaudeCodeOAuthMimicryToBody(
 		context.Background(), nil, account, body, "Project instructions", "claude-fable-5",
 	)
 

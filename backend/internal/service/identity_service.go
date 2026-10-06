@@ -5,12 +5,14 @@ import (
 	"crypto/rand"
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"log/slog"
 	"net/http"
 	"regexp"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/Wei-Shaw/sub2api/internal/pkg/claude"
@@ -157,16 +159,45 @@ type IdentityCache interface {
 	// GetOrCreateMaskedSessionID 获取固定的伪装会话ID（原子 get-or-create）：已存在则返回现有值，
 	// 否则写入 candidate；两种情况都会刷新 15 分钟 TTL。返回值为 UUID 格式字符串。
 	GetOrCreateMaskedSessionID(ctx context.Context, accountID int64, candidate string) (string, error)
+	// GetOrCreateAmbientSessionID 获取账号空闲时使用的环境会话 ID（原子 get-or-create，
+	// 刷新 15 分钟 TTL），供没有可映射会话、账号上也没有活跃会话的请求使用。
+	GetOrCreateAmbientSessionID(ctx context.Context, accountID int64, candidate string) (string, error)
+	// SetLastActiveSessionID 记录账号最近一次活跃的上游会话 ID（15 分钟 TTL）。
+	SetLastActiveSessionID(ctx context.Context, accountID int64, sessionID string) error
+	// GetLastActiveSessionID 读取账号最近活跃的上游会话 ID；不存在返回 ("", nil)。
+	GetLastActiveSessionID(ctx context.Context, accountID int64) (string, error)
 }
+
+// ErrClientIdentityUnavailable 表示账号的客户端身份（device_id 等）既读不到也无法持久化创建。
+// 此时绝不能带临时随机身份出站：同一账号的设备 ID 抖动是最容易被关联的信号。
+// 调用方应把它转成可换号的错误（见 claudeIdentityUnavailableFailover）。
+var ErrClientIdentityUnavailable = errors.New("account client identity is unavailable")
 
 // IdentityService 管理OAuth账号的请求身份指纹
 type IdentityService struct {
 	cache IdentityCache
+
+	// lastActiveWrites 节流「最近活跃会话」的 Redis 写入：同一账号会话不变时
+	// 每 lastActiveSessionRewriteInterval 才续期一次。
+	lastActiveMu     sync.Mutex
+	lastActiveWrites map[int64]lastActiveSessionWrite
 }
+
+type lastActiveSessionWrite struct {
+	sessionID string
+	at        time.Time
+}
+
+// lastActiveSessionRewriteInterval 是同一会话重复续期「最近活跃会话」键的最小间隔，
+// 远小于该键的 15 分钟 TTL。
+const lastActiveSessionRewriteInterval = time.Minute
+
+// ambientSessionBucket 是 Redis 不可用时环境会话的确定性分桶长度，与环境会话 TTL 一致。
+const ambientSessionBucket = 15 * time.Minute
 
 // NewIdentityService 创建新的IdentityService
 func NewIdentityService(cache IdentityCache) *IdentityService {
-	return &IdentityService{cache: cache}
+	return &IdentityService{cache: cache, lastActiveWrites: make(map[int64]lastActiveSessionWrite)}
 }
 
 // GetOrCreateFingerprint 获取或创建账号的指纹
@@ -270,11 +301,16 @@ func (s *IdentityService) GetOrCreateFingerprint(ctx context.Context, accountID 
 	fp.UpdatedAt = time.Now().Unix()
 
 	// 保存到缓存（7天TTL，每24小时自动续期）。多实例并发首建时由存储裁定先写者，
-	// 所有实例统一使用胜出的身份；写入失败则本次请求降级使用未持久化的临时指纹。
+	// 所有实例统一使用胜出的身份。写入失败时不能降级为未持久化的临时指纹：那样每个
+	// 请求都会带一个新的随机 device_id 出站，账号身份随 Redis 故障抖动。改为返回
+	// ErrClientIdentityUnavailable，由调用方换号。
 	stored, err := s.cache.CreateFingerprint(ctx, accountID, fp)
 	if err != nil || stored == nil {
-		logger.LegacyPrintf("service.identity", "Warning: failed to cache fingerprint for account %d: %v", accountID, err)
-		return fp, nil
+		logger.LegacyPrintf("service.identity", "Warning: failed to persist fingerprint for account %d, refusing to use an ephemeral identity: %v", accountID, err)
+		if err == nil {
+			err = errors.New("identity store returned no record")
+		}
+		return nil, fmt.Errorf("%w: account %d: %w", ErrClientIdentityUnavailable, accountID, err)
 	}
 	if stored.ClientID != fp.ClientID {
 		logger.LegacyPrintf("service.identity", "Fingerprint for account %d was created concurrently, using client_id: %s", accountID, stored.ClientID)
@@ -418,20 +454,36 @@ func (s *IdentityService) rewriteUserIDView(view *jsonBodyView, accountID int64,
 		return
 	}
 
-	sessionTail := parsed.SessionID // 原始session UUID
+	newSessionHash := upstreamSessionIDFor(accountID, parsed.SessionID)
 
-	// 生成新的session hash: SHA256(accountID::sessionTail) -> UUID格式
-	seed := fmt.Sprintf("%d::%s", accountID, sessionTail)
-	newSessionHash := generateUUIDFromSeed(seed)
-
-	// 根据客户端版本选择输出格式
+	// 根据客户端版本选择输出格式。新格式下原位改写：保留客户端的键序与其它字段，
+	// parent_session_id 用同一映射换成本账号作用域的值，父子会话关系不丢。
 	version := ExtractCLIVersion(fingerprintUA)
-	newUserID := FormatMetadataUserID(cachedClientID, accountUUID, newSessionHash, version)
+	var newUserID string
+	if parsed.IsNewFormat && IsNewMetadataFormatVersion(version) {
+		parent := ""
+		if parsed.ParentSessionID != "" {
+			parent = upstreamSessionIDFor(accountID, parsed.ParentSessionID)
+		}
+		if rewritten, ok := rewriteJSONMetadataUserID(userID, cachedClientID, accountUUID, newSessionHash, parent, false); ok {
+			newUserID = rewritten
+		}
+	}
+	if newUserID == "" {
+		newUserID = FormatMetadataUserID(cachedClientID, accountUUID, newSessionHash, version)
+	}
 	if newUserID == userID {
 		return
 	}
 
 	_ = view.setString("metadata.user_id", newUserID)
+}
+
+// upstreamSessionIDFor 把下游会话映射为账号作用域的上游会话 ID：SHA256(accountID::clientSession)
+// 取 UUID v4 形态。确定性映射：同一对话在同一账号上恒得同一会话 ID（等同真实 CLI
+// --resume 沿用会话 ID），换账号后自然变成新会话。
+func upstreamSessionIDFor(accountID int64, clientSessionID string) string {
+	return generateUUIDFromSeed(fmt.Sprintf("%d::%s", accountID, clientSessionID))
 }
 
 // RewriteUserIDWithMasking 重写body中的metadata.user_id，支持会话ID伪装
@@ -492,9 +544,18 @@ func (s *IdentityService) rewriteUserIDWithMaskingView(ctx context.Context, view
 		logger.LegacyPrintf("service.identity", "Generated new masked session ID for account %d: %s", account.ID, maskedSessionID)
 	}
 
-	// 用 FormatMetadataUserID 重建（保持与 RewriteUserID 相同的格式）
+	// 单会话模式下整个账号只有一个会话，parent_session_id 会暴露出另一个会话，删除；
+	// 新格式原位改写保留其它字段，旧格式用 FormatMetadataUserID 重建。
 	version := ExtractCLIVersion(fingerprintUA)
-	newUserID := FormatMetadataUserID(uidParsed.DeviceID, uidParsed.AccountUUID, maskedSessionID, version)
+	newUserID := ""
+	if uidParsed.IsNewFormat && IsNewMetadataFormatVersion(version) {
+		if rewritten, ok := rewriteJSONMetadataUserID(userID, uidParsed.DeviceID, uidParsed.AccountUUID, maskedSessionID, "", true); ok {
+			newUserID = rewritten
+		}
+	}
+	if newUserID == "" {
+		newUserID = FormatMetadataUserID(uidParsed.DeviceID, uidParsed.AccountUUID, maskedSessionID, version)
+	}
 
 	slog.Debug("session_id_masking_applied",
 		"account_id", account.ID,
@@ -507,6 +568,65 @@ func (s *IdentityService) rewriteUserIDWithMaskingView(ctx context.Context, view
 	}
 
 	_ = view.setString("metadata.user_id", newUserID)
+}
+
+// ResolveSessionIDWithoutMetadata 为请求体里没有可映射 metadata.user_id 的 OAuth 请求
+// （count_tokens、探测、metadata 透传关闭注入时）选出上游会话 ID，顺序：
+//  1. 单会话模式：账号的伪装会话；
+//  2. 客户端带了 X-Claude-Code-Session-Id：按同一映射换成本账号的会话 ID，
+//     与该对话 messages 请求的会话一致（真实 CLI 的 count_tokens 带当前会话 ID）；
+//  3. 账号上有活跃会话：复用最近活跃的那个（旁路请求挂在当前会话上）；
+//  4. 账号空闲：环境会话。
+//
+// 存储不可用时退回按 15 分钟分桶的确定性 ID，绝不逐请求随机。
+func (s *IdentityService) ResolveSessionIDWithoutMetadata(ctx context.Context, account *Account, clientSessionID string) string {
+	if account == nil {
+		return generateRandomUUID()
+	}
+	if account.IsSessionIDMaskingEnabled() {
+		if masked, err := s.cache.GetOrCreateMaskedSessionID(ctx, account.ID, generateRandomUUID()); err == nil && masked != "" {
+			return masked
+		}
+	}
+	if clientSessionID = strings.TrimSpace(clientSessionID); clientSessionID != "" && len(clientSessionID) <= 128 {
+		return upstreamSessionIDFor(account.ID, clientSessionID)
+	}
+	if last, err := s.cache.GetLastActiveSessionID(ctx, account.ID); err == nil && last != "" {
+		return last
+	} else if err != nil {
+		logger.LegacyPrintf("service.identity", "Warning: failed to read last active session for account %d: %v", account.ID, err)
+	}
+	ambient, err := s.cache.GetOrCreateAmbientSessionID(ctx, account.ID, generateRandomUUID())
+	if err == nil && ambient != "" {
+		return ambient
+	}
+	logger.LegacyPrintf("service.identity", "Warning: failed to get ambient session for account %d, using bucketed fallback: %v", account.ID, err)
+	bucket := time.Now().UnixNano() / int64(ambientSessionBucket)
+	return generateUUIDFromSeed(fmt.Sprintf("%d::ambient::%d", account.ID, bucket))
+}
+
+// TouchActiveSession 记录账号最近活跃的上游会话 ID，供 ResolveSessionIDWithoutMetadata 复用。
+// 同一会话在 lastActiveSessionRewriteInterval 内只写一次 Redis；写失败只记日志。
+func (s *IdentityService) TouchActiveSession(ctx context.Context, accountID int64, sessionID string) {
+	if s == nil || s.cache == nil || accountID <= 0 || sessionID == "" {
+		return
+	}
+	now := time.Now()
+	s.lastActiveMu.Lock()
+	prev, ok := s.lastActiveWrites[accountID]
+	if ok && prev.sessionID == sessionID && now.Sub(prev.at) < lastActiveSessionRewriteInterval {
+		s.lastActiveMu.Unlock()
+		return
+	}
+	s.lastActiveWrites[accountID] = lastActiveSessionWrite{sessionID: sessionID, at: now}
+	s.lastActiveMu.Unlock()
+
+	if err := s.cache.SetLastActiveSessionID(ctx, accountID, sessionID); err != nil {
+		s.lastActiveMu.Lock()
+		delete(s.lastActiveWrites, accountID)
+		s.lastActiveMu.Unlock()
+		logger.LegacyPrintf("service.identity", "Warning: failed to record last active session for account %d: %v", accountID, err)
+	}
 }
 
 // generateRandomUUID 生成随机 UUID v4 格式字符串

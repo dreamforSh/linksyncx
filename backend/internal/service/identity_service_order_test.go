@@ -27,6 +27,13 @@ func (s *identityCacheStub) GetOrCreateMaskedSessionID(_ context.Context, _ int6
 	}
 	return s.maskedSessionID, nil
 }
+func (s *identityCacheStub) GetOrCreateAmbientSessionID(_ context.Context, _ int64, candidate string) (string, error) {
+	return candidate, nil
+}
+func (s *identityCacheStub) SetLastActiveSessionID(context.Context, int64, string) error { return nil }
+func (s *identityCacheStub) GetLastActiveSessionID(context.Context, int64) (string, error) {
+	return "", nil
+}
 
 func TestIdentityService_RewriteUserID_PreservesTopLevelFieldOrder(t *testing.T) {
 	cache := &identityCacheStub{}

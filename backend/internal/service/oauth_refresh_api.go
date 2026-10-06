@@ -463,5 +463,9 @@ func BuildClaudeAccountCredentials(tokenInfo *TokenInfo) map[string]any {
 	if tokenInfo.Scope != "" {
 		creds["scope"] = tokenInfo.Scope
 	}
+	// 零值表示上游本次未给期限：不写，MergeCredentials 会沿用账号已存的值。
+	if tokenInfo.RefreshTokenExpiresAt > 0 {
+		creds["refresh_token_expires_at"] = strconv.FormatInt(tokenInfo.RefreshTokenExpiresAt, 10)
+	}
 	return creds
 }

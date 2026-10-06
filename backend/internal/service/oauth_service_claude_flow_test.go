@@ -7,7 +7,9 @@ import (
 	"errors"
 	"net/http"
 	"net/url"
+	"strconv"
 	"testing"
+	"time"
 
 	infraerrors "github.com/Wei-Shaw/sub2api/internal/pkg/errors"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/oauth"
@@ -197,4 +199,59 @@ func TestOAuthServiceRefreshSetupTokenKeepsInferenceScope(t *testing.T) {
 	_, err := svc.RefreshAccountToken(context.Background(), &Account{Platform: PlatformAnthropic, Type: AccountTypeSetupToken,
 		Credentials: map[string]any{"refresh_token": "rt", "scope": "user:inference"}})
 	require.NoError(t, err)
+}
+
+// refresh token 期限与真实 CLI 一致：授权时有 refresh_token_expires_in 就用它，否则估 30 天；
+// 刷新时只有上游返回才更新，否则留空由凭据合并沿用旧值。
+func TestOAuthServiceRecordsRefreshTokenExpiry(t *testing.T) {
+	ctx := context.Background()
+	var exchangeResp *oauth.TokenResponse
+	client := &mockClaudeOAuthClient{
+		exchangeCodeFunc: func(context.Context, string, string, string, string, bool) (*oauth.TokenResponse, error) {
+			return exchangeResp, nil
+		},
+	}
+	svc := NewOAuthService(&mockProxyRepoForOAuth{}, client)
+	defer svc.Stop()
+
+	exchange := func() *TokenInfo {
+		t.Helper()
+		result, err := svc.GenerateAuthURL(ctx, nil)
+		require.NoError(t, err)
+		info, err := svc.ExchangeCode(ctx, &ExchangeCodeInput{SessionID: result.SessionID, Code: "AUTHCODE"})
+		require.NoError(t, err)
+		return info
+	}
+
+	exchangeResp = &oauth.TokenResponse{AccessToken: "at", ExpiresIn: 3600, RefreshToken: "rt"}
+	info := exchange()
+	require.InDelta(t, time.Now().Add(oauth.DefaultRefreshTokenLifetime).Unix(), info.RefreshTokenExpiresAt, 5)
+
+	exchangeResp = &oauth.TokenResponse{AccessToken: "at", ExpiresIn: 3600, RefreshToken: "rt", RefreshTokenExpiresIn: 86400}
+	info = exchange()
+	require.InDelta(t, time.Now().Add(24*time.Hour).Unix(), info.RefreshTokenExpiresAt, 5)
+
+	exchangeResp = &oauth.TokenResponse{AccessToken: "at", ExpiresIn: 31536000}
+	require.Zero(t, exchange().RefreshTokenExpiresAt, "no refresh token, no refresh-token expiry")
+
+	var refreshResp *oauth.TokenResponse
+	client.refreshTokenFunc = func(context.Context, string, string, string) (*oauth.TokenResponse, error) {
+		return refreshResp, nil
+	}
+	account := &Account{Platform: PlatformAnthropic, Type: AccountTypeOAuth,
+		Credentials: map[string]any{"refresh_token": "rt", "refresh_token_expires_at": "1700000000"}}
+
+	refreshResp = &oauth.TokenResponse{AccessToken: "at2", ExpiresIn: 3600, RefreshToken: "rt2"}
+	refreshed, err := svc.RefreshAccountToken(ctx, account)
+	require.NoError(t, err)
+	require.Zero(t, refreshed.RefreshTokenExpiresAt)
+	merged := MergeCredentials(account.Credentials, BuildClaudeAccountCredentials(refreshed))
+	require.Equal(t, "1700000000", merged["refresh_token_expires_at"], "an absent expiry keeps the stored value")
+
+	refreshResp = &oauth.TokenResponse{AccessToken: "at3", ExpiresIn: 3600, RefreshToken: "rt3", RefreshTokenExpiresIn: 7200}
+	refreshed, err = svc.RefreshAccountToken(ctx, account)
+	require.NoError(t, err)
+	merged = MergeCredentials(account.Credentials, BuildClaudeAccountCredentials(refreshed))
+	require.Equal(t, strconv.FormatInt(refreshed.RefreshTokenExpiresAt, 10), merged["refresh_token_expires_at"])
+	require.InDelta(t, time.Now().Add(2*time.Hour).Unix(), refreshed.RefreshTokenExpiresAt, 5)
 }

@@ -195,3 +195,33 @@ func TestMaskedSessionConcurrentCreationAndRenewal(t *testing.T) {
 	_, err = cache.GetOrCreateMaskedSessionID(t.Context(), 15, "")
 	require.Error(t, err)
 }
+
+// 账号级会话键：环境会话原子 get-or-create 并滑动续期；最近活跃会话可覆盖、缺失返回空串。
+func TestIdentityCacheAccountSessionKeys(t *testing.T) {
+	server, cache := newIdentityCacheForTest(t)
+	ctx := t.Context()
+
+	first, err := cache.GetOrCreateAmbientSessionID(ctx, 5, "ambient-a")
+	require.NoError(t, err)
+	require.Equal(t, "ambient-a", first)
+	second, err := cache.GetOrCreateAmbientSessionID(ctx, 5, "ambient-b")
+	require.NoError(t, err)
+	require.Equal(t, "ambient-a", second, "an existing ambient session wins")
+	require.Equal(t, accountSessionTTL, server.TTL(ambientSessionKey(5)))
+	require.Equal(t, "claude:session:5:ambient", ambientSessionKey(5))
+
+	last, err := cache.GetLastActiveSessionID(ctx, 5)
+	require.NoError(t, err)
+	require.Empty(t, last)
+	require.NoError(t, cache.SetLastActiveSessionID(ctx, 5, "s1"))
+	require.NoError(t, cache.SetLastActiveSessionID(ctx, 5, "s2"))
+	last, err = cache.GetLastActiveSessionID(ctx, 5)
+	require.NoError(t, err)
+	require.Equal(t, "s2", last)
+	require.Equal(t, accountSessionTTL, server.TTL(lastActiveSessionKey(5)))
+
+	server.FastForward(accountSessionTTL + time.Second)
+	last, err = cache.GetLastActiveSessionID(ctx, 5)
+	require.NoError(t, err)
+	require.Empty(t, last, "the last active session expires with its TTL")
+}

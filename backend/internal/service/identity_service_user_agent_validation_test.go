@@ -47,6 +47,16 @@ func (s *stubIdentityCache) GetOrCreateMaskedSessionID(_ context.Context, _ int6
 	return candidate, nil
 }
 
+func (s *stubIdentityCache) GetOrCreateAmbientSessionID(_ context.Context, _ int64, candidate string) (string, error) {
+	return candidate, nil
+}
+
+func (s *stubIdentityCache) SetLastActiveSessionID(context.Context, int64, string) error { return nil }
+
+func (s *stubIdentityCache) GetLastActiveSessionID(context.Context, int64) (string, error) {
+	return "", nil
+}
+
 func headersWithUA(ua string) http.Header {
 	h := http.Header{}
 	if ua != "" {

@@ -9,7 +9,10 @@ import (
 )
 
 const (
-	claudeTokenRefreshSkew = 3 * time.Minute
+	// claudeTokenRefreshSkew 对齐真实 Claude Code 2.1.287：距过期不足 5 分钟时在请求
+	// 路径上刷新（pF: now+300000 >= expiresAt）。与 claudeTokenCacheSkew 相等，缓存
+	// 在过期前 5 分钟失效后的第一个请求即触发刷新，不会把将过期的令牌重新放回缓存。
+	claudeTokenRefreshSkew = 5 * time.Minute
 	claudeTokenCacheSkew   = 5 * time.Minute
 	claudeLockWaitTime     = 200 * time.Millisecond
 )

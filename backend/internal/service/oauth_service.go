@@ -141,10 +141,13 @@ type TokenInfo struct {
 	ExpiresIn    int64  `json:"expires_in"`
 	ExpiresAt    int64  `json:"expires_at"`
 	RefreshToken string `json:"refresh_token,omitempty"`
-	Scope        string `json:"scope,omitempty"`
-	OrgUUID      string `json:"org_uuid,omitempty"`
-	AccountUUID  string `json:"account_uuid,omitempty"`
-	EmailAddress string `json:"email_address,omitempty"`
+	// RefreshTokenExpiresAt 是 refresh token 的到期时间（Unix 秒）。授权码交换时总会给出
+	// （上游未返回则按 30 天估算）；刷新时只有上游返回才非零，零值表示沿用账号已存的值。
+	RefreshTokenExpiresAt int64  `json:"refresh_token_expires_at,omitempty"`
+	Scope                 string `json:"scope,omitempty"`
+	OrgUUID               string `json:"org_uuid,omitempty"`
+	AccountUUID           string `json:"account_uuid,omitempty"`
+	EmailAddress          string `json:"email_address,omitempty"`
 }
 
 // ExchangeCode exchanges authorization code for tokens
@@ -272,13 +275,22 @@ func (s *OAuthService) exchangeCodeForToken(ctx context.Context, code, codeVerif
 		return nil, err
 	}
 
+	now := time.Now()
 	tokenInfo := &TokenInfo{
 		AccessToken:  tokenResp.AccessToken,
 		TokenType:    tokenResp.TokenType,
 		ExpiresIn:    tokenResp.ExpiresIn,
-		ExpiresAt:    time.Now().Unix() + tokenResp.ExpiresIn,
+		ExpiresAt:    now.Unix() + tokenResp.ExpiresIn,
 		RefreshToken: tokenResp.RefreshToken,
 		Scope:        tokenResp.Scope,
+	}
+	// 与真实 CLI 登录一致：上游给了 refresh_token_expires_in 就用它，否则按 30 天估算。
+	if tokenResp.RefreshToken != "" {
+		if tokenResp.RefreshTokenExpiresIn > 0 {
+			tokenInfo.RefreshTokenExpiresAt = now.Unix() + tokenResp.RefreshTokenExpiresIn
+		} else {
+			tokenInfo.RefreshTokenExpiresAt = now.Add(oauth.DefaultRefreshTokenLifetime).Unix()
+		}
 	}
 
 	if tokenResp.Organization != nil && tokenResp.Organization.UUID != "" {
@@ -350,14 +362,21 @@ func (s *OAuthService) refreshToken(ctx context.Context, refreshToken string, sc
 		return nil, err
 	}
 
-	return &TokenInfo{
+	now := time.Now()
+	info := &TokenInfo{
 		AccessToken:  tokenResp.AccessToken,
 		TokenType:    tokenResp.TokenType,
 		ExpiresIn:    tokenResp.ExpiresIn,
-		ExpiresAt:    time.Now().Unix() + tokenResp.ExpiresIn,
+		ExpiresAt:    now.Unix() + tokenResp.ExpiresIn,
 		RefreshToken: tokenResp.RefreshToken,
 		Scope:        tokenResp.Scope,
-	}, nil
+	}
+	// 与真实 CLI 刷新一致：只有上游返回 refresh_token_expires_in 才更新期限，
+	// 否则保持零值，由凭据合并沿用账号已存的期限。
+	if tokenResp.RefreshTokenExpiresIn > 0 {
+		info.RefreshTokenExpiresAt = now.Unix() + tokenResp.RefreshTokenExpiresIn
+	}
+	return info, nil
 }
 
 // RefreshAccountToken refreshes token for an account

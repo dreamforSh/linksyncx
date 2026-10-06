@@ -1462,6 +1462,9 @@ func (s *CRSSyncService) refreshOAuthToken(ctx context.Context, account *Account
 			if tokenInfo.Scope != "" {
 				newCredentials["scope"] = tokenInfo.Scope
 			}
+			if tokenInfo.RefreshTokenExpiresAt > 0 {
+				newCredentials["refresh_token_expires_at"] = tokenInfo.RefreshTokenExpiresAt
+			}
 		}
 	case PlatformOpenAI:
 		if s.openaiOAuthService == nil {

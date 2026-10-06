@@ -15,7 +15,20 @@ const (
 	fingerprintTTL         = 7 * 24 * time.Hour // 7天，配合每24小时懒续期可保持活跃账号永不过期
 	maskedSessionKeyPrefix = "masked_session:"
 	maskedSessionTTL       = 15 * time.Minute
+
+	// 账号级会话键（新键按 {platform}:{layer}:{account}:{sub} 命名）。
+	// ambient：账号空闲时的环境会话；last：最近活跃的上游会话。
+	accountSessionKeyPrefix = "claude:session:"
+	accountSessionTTL       = 15 * time.Minute
 )
+
+func ambientSessionKey(accountID int64) string {
+	return fmt.Sprintf("%s%d:ambient", accountSessionKeyPrefix, accountID)
+}
+
+func lastActiveSessionKey(accountID int64) string {
+	return fmt.Sprintf("%s%d:last", accountSessionKeyPrefix, accountID)
+}
 
 // fingerprintKey generates the Redis key for account fingerprint cache.
 func fingerprintKey(accountID int64) string {
@@ -131,4 +144,28 @@ func (c *identityCache) GetOrCreateMaskedSessionID(ctx context.Context, accountI
 		return "", fmt.Errorf("session candidate must not be empty")
 	}
 	return maskedSessionScript.Run(ctx, c.rdb, []string{maskedSessionKey(accountID)}, candidate, maskedSessionTTL.Milliseconds()).Text()
+}
+
+// GetOrCreateAmbientSessionID 与伪装会话同一语义（原子 get-or-create + 滑动 TTL），
+// 键不同：环境会话只服务账号空闲时没有可映射会话的请求。
+func (c *identityCache) GetOrCreateAmbientSessionID(ctx context.Context, accountID int64, candidate string) (string, error) {
+	if candidate == "" {
+		return "", fmt.Errorf("session candidate must not be empty")
+	}
+	return maskedSessionScript.Run(ctx, c.rdb, []string{ambientSessionKey(accountID)}, candidate, accountSessionTTL.Milliseconds()).Text()
+}
+
+func (c *identityCache) SetLastActiveSessionID(ctx context.Context, accountID int64, sessionID string) error {
+	if sessionID == "" {
+		return fmt.Errorf("session id must not be empty")
+	}
+	return c.rdb.Set(ctx, lastActiveSessionKey(accountID), sessionID, accountSessionTTL).Err()
+}
+
+func (c *identityCache) GetLastActiveSessionID(ctx context.Context, accountID int64) (string, error) {
+	val, err := c.rdb.Get(ctx, lastActiveSessionKey(accountID)).Result()
+	if err == redis.Nil {
+		return "", nil
+	}
+	return val, err
 }

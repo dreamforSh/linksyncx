@@ -396,7 +396,8 @@ func (s *GatewayService) buildOAuthMetadataUserID(parsed *ParsedRequest, account
 //   - systemRaw：body 中原始 system 字段（用于判断是否需要 rewrite）。
 //   - model：最终会发给上游的模型 ID（用于模型规范化 + metadata 版本选择）。
 //
-// 返回：改写后的 body。即使中间任何一步失败，也会退化成原 body（不会 panic）。
+// 返回：改写后的 body。中间步骤失败时退化成原 body（不会 panic）；唯一的错误是账号
+// 客户端身份不可用（ErrClientIdentityUnavailable），此时返回可换号的错误，不带残缺的伪装出站。
 func (s *GatewayService) applyClaudeCodeOAuthMimicryToBody(
 	ctx context.Context,
 	c *gin.Context,
@@ -404,9 +405,9 @@ func (s *GatewayService) applyClaudeCodeOAuthMimicryToBody(
 	body []byte,
 	systemRaw any,
 	model string,
-) []byte {
+) ([]byte, error) {
 	if account == nil || !account.IsOAuth() || len(body) == 0 {
-		return body
+		return body, nil
 	}
 
 	systemPromptInjectionEnabled, systemPrompt, systemPromptBlocks := s.claudeOAuthSystemPromptInjectionSettings(ctx)
@@ -418,7 +419,11 @@ func (s *GatewayService) applyClaudeCodeOAuthMimicryToBody(
 	normalizeOpts := claudeOAuthNormalizeOptions{}
 
 	if s.identityService != nil && c != nil && c.Request != nil {
-		if fp, err := s.identityService.GetOrCreateFingerprint(ctx, account.ID, c.Request.Header); err == nil && fp != nil {
+		fp, err := s.identityService.GetOrCreateFingerprint(ctx, account.ID, c.Request.Header)
+		if err != nil {
+			return nil, claudeIdentityUnavailableFailover(account, err)
+		}
+		if fp != nil {
 			mimicMPT := false
 			if s.settingService != nil {
 				_, mimicMPT, _ = s.settingService.GetGatewayForwardingSettings(ctx)
@@ -450,7 +455,7 @@ func (s *GatewayService) applyClaudeCodeOAuthMimicryToBody(
 		body = applyToolsLastCacheBreakpoint(body)
 	}
 
-	return body
+	return body, nil
 }
 
 // buildOAuthMetadataUserIDFromBody 是 buildOAuthMetadataUserID 的变体，

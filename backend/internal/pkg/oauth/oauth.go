@@ -265,14 +265,20 @@ func BuildAuthorizationURL(state, codeChallenge, scope string) string {
 
 // TokenResponse represents the token response from OAuth provider
 type TokenResponse struct {
-	AccessToken  string       `json:"access_token"`
-	TokenType    string       `json:"token_type"`
-	ExpiresIn    int64        `json:"expires_in"`
-	RefreshToken string       `json:"refresh_token,omitempty"`
-	Scope        string       `json:"scope,omitempty"`
-	Organization *OrgInfo     `json:"organization,omitempty"`
-	Account      *AccountInfo `json:"account,omitempty"`
+	AccessToken  string `json:"access_token"`
+	TokenType    string `json:"token_type"`
+	ExpiresIn    int64  `json:"expires_in"`
+	RefreshToken string `json:"refresh_token,omitempty"`
+	// RefreshTokenExpiresIn 是 refresh token 的剩余有效秒数；上游不一定返回（0 表示未返回）。
+	RefreshTokenExpiresIn int64        `json:"refresh_token_expires_in,omitempty"`
+	Scope                 string       `json:"scope,omitempty"`
+	Organization          *OrgInfo     `json:"organization,omitempty"`
+	Account               *AccountInfo `json:"account,omitempty"`
 }
+
+// DefaultRefreshTokenLifetime 是登录响应未带 refresh_token_expires_in 时假定的 refresh
+// token 有效期，与真实 Claude Code 2.1.287 一致（formatTokens 的默认 TK = 30 天）。
+const DefaultRefreshTokenLifetime = 30 * 24 * time.Hour
 
 // OrgInfo represents organization info from OAuth response
 type OrgInfo struct {

@@ -10,7 +10,6 @@ import (
 	"strings"
 
 	"github.com/Wei-Shaw/sub2api/internal/pkg/claude"
-	"github.com/Wei-Shaw/sub2api/internal/pkg/logger"
 	"github.com/Wei-Shaw/sub2api/internal/util/urlvalidator"
 	"github.com/google/uuid"
 
@@ -68,24 +67,23 @@ func (s *GatewayService) buildUpstreamRequestIndexed(ctx context.Context, c *gin
 		enableFP, enableMPT, _ = s.settingService.GetGatewayForwardingSettings(ctx)
 	}
 	if account.IsOAuth() && s.identityService != nil {
-		// 1. 获取或创建指纹（包含随机生成的ClientID）
+		// 1. 获取或创建指纹（包含随机生成的ClientID）。拿不到身份时不能降级透传：
+		//    那会把下游客户端自己的 device_id / 会话原样发给上游，或带临时随机身份出站。
 		fp, err := s.identityService.GetOrCreateFingerprint(ctx, account.ID, clientHeaders)
 		if err != nil {
-			logger.LegacyPrintf("service.gateway", "Warning: failed to get fingerprint for account %d: %v", account.ID, err)
-			// 失败时降级为透传原始headers
-		} else {
-			if enableFP {
-				fingerprint = fp
-			}
+			return nil, nil, nil, claudeIdentityUnavailableFailover(account, err)
+		}
+		if enableFP {
+			fingerprint = fp
+		}
 
-			// 2. 重写metadata.user_id（需要指纹中的ClientID和账号的account_uuid）
-			// 如果启用了会话ID伪装，会在重写后替换 session 部分为固定值
-			// 当 metadata 透传开启时跳过重写
-			if !enableMPT {
-				accountUUID := account.GetExtraString("account_uuid")
-				if accountUUID != "" && fp.ClientID != "" {
-					s.identityService.rewriteUserIDWithMaskingView(ctx, view, account, accountUUID, fp.ClientID, fp.UserAgent)
-				}
+		// 2. 重写metadata.user_id（需要指纹中的ClientID和账号的account_uuid）
+		// 如果启用了会话ID伪装，会在重写后替换 session 部分为固定值
+		// 当 metadata 透传开启时跳过重写
+		if !enableMPT {
+			accountUUID := account.GetExtraString("account_uuid")
+			if accountUUID != "" && fp.ClientID != "" {
+				s.identityService.rewriteUserIDWithMaskingView(ctx, view, account, accountUUID, fp.ClientID, fp.UserAgent)
 			}
 		}
 	}
@@ -207,19 +205,11 @@ func (s *GatewayService) buildUpstreamRequestIndexed(ctx context.Context, c *gin
 
 	// 同步 X-Claude-Code-Session-Id 头：真实 CLI 每个请求都带，且与
 	// metadata.user_id 的 session_id 一致。OAuth 路径无条件从 body 重建
-	// （mimic 路径下客户端可能根本没发该头）；极端缺省时随机 UUID 兜底。
+	// （mimic 路径下客户端可能根本没发该头）。body 里没有可用 session 时，
+	// 按 ResolveSessionIDWithoutMetadata 选账号作用域的会话，覆盖透传来的客户端
+	// 原始会话头（未映射的原值会和本对话 messages 请求的会话对不上）。
 	if tokenType == "oauth" {
-		synced := false
-		if uid := view.get("metadata.user_id").String(); uid != "" {
-			if parsed := ParseMetadataUserID(uid); parsed != nil && parsed.SessionID != "" {
-				// uid 直接引用请求体，复制后再放进 header，避免 header 长期持有整个请求体。
-				setHeaderRaw(req.Header, "X-Claude-Code-Session-Id", strings.Clone(parsed.SessionID))
-				synced = true
-			}
-		}
-		if !synced && mimicClaudeCode && getHeaderRaw(req.Header, "X-Claude-Code-Session-Id") == "" {
-			setHeaderRaw(req.Header, "X-Claude-Code-Session-Id", uuid.NewString())
-		}
+		s.syncClaudeSessionHeader(ctx, account, req.Header, clientHeaders, view.get("metadata.user_id").String())
 	}
 
 	// 账号级请求头覆写（仅 anthropic/openai api_key 账号启用时生效；OAuth 路径 no-op）。

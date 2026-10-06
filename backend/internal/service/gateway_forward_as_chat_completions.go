@@ -108,7 +108,11 @@ func (s *GatewayService) ForwardAsChatCompletions(
 	shouldMimicClaudeCode := account.IsOAuth() && !isClaudeCode
 
 	if shouldMimicClaudeCode {
-		anthropicBody = s.applyClaudeCodeOAuthMimicryToBody(ctx, c, account, anthropicBody, anthropicReq.System, mappedModel)
+		mimicBody, mimicErr := s.applyClaudeCodeOAuthMimicryToBody(ctx, c, account, anthropicBody, anthropicReq.System, mappedModel)
+		if mimicErr != nil {
+			return nil, mimicErr
+		}
+		anthropicBody = mimicBody
 	}
 
 	// 7. Enforce cache_control block limit

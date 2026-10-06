@@ -1530,6 +1530,9 @@ func (h *AccountHandler) refreshSingleAccount(ctx context.Context, account *serv
 		if strings.TrimSpace(tokenInfo.Scope) != "" {
 			newCredentials["scope"] = tokenInfo.Scope
 		}
+		if tokenInfo.RefreshTokenExpiresAt > 0 {
+			newCredentials["refresh_token_expires_at"] = strconv.FormatInt(tokenInfo.RefreshTokenExpiresAt, 10)
+		}
 	}
 
 	updatedAccount, err := h.adminService.UpdateAccount(ctx, account.ID, &service.UpdateAccountInput{

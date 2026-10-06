@@ -10,7 +10,6 @@ import (
 
 	"github.com/Wei-Shaw/sub2api/internal/pkg/claude"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/logger"
-	"github.com/google/uuid"
 	"github.com/tidwall/gjson"
 
 	"github.com/gin-gonic/gin"
@@ -168,6 +167,10 @@ func (s *GatewayService) ForwardCountTokens(ctx context.Context, c *gin.Context,
 	// 构建上游请求
 	upstreamReq, wireBody, err := s.buildCountTokensRequest(ctx, c, account, body, token, tokenType, reqModel, shouldMimicClaudeCode)
 	if err != nil {
+		if errors.Is(err, ErrClientIdentityUnavailable) {
+			s.countTokensError(c, http.StatusServiceUnavailable, "overloaded_error", "Upstream account temporarily unavailable")
+			return err
+		}
 		s.countTokensError(c, http.StatusInternalServerError, "api_error", "Failed to build request")
 		return err
 	}
@@ -522,14 +525,16 @@ func (s *GatewayService) buildCountTokensRequest(ctx context.Context, c *gin.Con
 	var ctFingerprint *Fingerprint
 	if account.IsOAuth() && s.identityService != nil {
 		fp, err := s.identityService.GetOrCreateFingerprint(ctx, account.ID, clientHeaders)
-		if err == nil {
-			ctFingerprint = fp
-			if !ctEnableMPT {
-				accountUUID := account.GetExtraString("account_uuid")
-				if accountUUID != "" && fp.ClientID != "" {
-					if newBody, err := s.identityService.RewriteUserIDWithMasking(ctx, body, account, accountUUID, fp.ClientID, fp.UserAgent); err == nil && len(newBody) > 0 {
-						body = newBody
-					}
+		if err != nil {
+			// 不带临时随机身份、也不降级透传客户端身份出站。
+			return nil, nil, err
+		}
+		ctFingerprint = fp
+		if !ctEnableMPT {
+			accountUUID := account.GetExtraString("account_uuid")
+			if accountUUID != "" && fp.ClientID != "" {
+				if newBody, err := s.identityService.RewriteUserIDWithMasking(ctx, body, account, accountUUID, fp.ClientID, fp.UserAgent); err == nil && len(newBody) > 0 {
+					body = newBody
 				}
 			}
 		}
@@ -642,14 +647,13 @@ func (s *GatewayService) buildCountTokensRequest(ctx context.Context, c *gin.Con
 		setHeaderRaw(req.Header, "anthropic-beta", finalBetaHeader)
 	}
 
-	// 同步 X-Claude-Code-Session-Id（真实 CLI 恒带，即使 count_tokens body 无 metadata）
+	// 同步 X-Claude-Code-Session-Id（真实 CLI 恒带，即使 count_tokens body 无 metadata）。
+	// 真实 CLI 的 count_tokens body 不带 metadata：用客户端会话头映射成本账号的会话，
+	// 与该对话 messages 请求一致；都没有时复用账号最近活跃会话或环境会话。
 	if tokenType == "oauth" {
-		switch {
-		case ctSessionID != "":
-			setHeaderRaw(req.Header, "X-Claude-Code-Session-Id", ctSessionID)
-		case mimicClaudeCode && getHeaderRaw(req.Header, "X-Claude-Code-Session-Id") == "":
-			setHeaderRaw(req.Header, "X-Claude-Code-Session-Id", uuid.NewString())
-		}
+		sessionID := s.claudeUpstreamSessionID(ctx, account, clientHeaders, ctSessionID)
+		deleteHeaderAllForms(req.Header, "X-Claude-Code-Session-Id")
+		setHeaderRaw(req.Header, "X-Claude-Code-Session-Id", sessionID)
 	}
 
 	// 账号级请求头覆写（仅 anthropic/openai api_key 账号启用时生效；OAuth 路径 no-op）
