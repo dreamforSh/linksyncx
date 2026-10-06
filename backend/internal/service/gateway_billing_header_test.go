@@ -156,3 +156,60 @@ func TestBuildOAuthRequest_BillingMatchesWireUserAgent(t *testing.T) {
 		}
 	}
 }
+
+// ============================================================================
+// 2.1.290 billing 块扩展字段（2026-10-06 第一方直连 MITM 抓包实证）：
+//   cc_prompt_id / cc_turn_origin / cc_prompt_index / cc_turn_index
+// 以及 x-claude-code-prompt-id 头与块内 cc_prompt_id 的一致性镜像。
+// ============================================================================
+
+func TestBuildBillingAttributionText_290ExtendedFields(t *testing.T) {
+	body := []byte(`{"model":"claude-sonnet-5-5","messages":[{"role":"user","content":"hello world"},{"role":"assistant","content":[{"type":"text","text":"hi"}]},{"role":"user","content":[{"type":"tool_result","content":"ok"}]},{"role":"user","content":"second prompt"}]}`)
+	text, err := buildBillingAttributionText(body, "2.1.290")
+	require.NoError(t, err)
+	require.Contains(t, text, "cc_version=2.1.290.")
+	require.Contains(t, text, "cc_entrypoint=cli;")
+	require.Contains(t, text, "cch=00000;")
+	// prompt_index = 非 tool_result 的 user 消息数 - 1（本例 2 条真实 prompt → 1）
+	require.Contains(t, text, "cc_prompt_index=1;")
+	require.Contains(t, text, "cc_turn_origin=cli;")
+	require.Contains(t, text, "cc_turn_index=1;")
+	// cc_prompt_id 为 UUID 且可被镜像提取
+	pid := extractBillingPromptIDView(newJSONBodyView([]byte(`{"system":[{"type":"text","text":"`+text+`"}]}`), nil))
+	require.Regexp(t, `^[0-9a-f-]{36}$`, pid)
+	require.Contains(t, text, "cc_prompt_id="+pid+";")
+}
+
+func TestBuildUpstreamRequest_PromptIDHeaderMirrorsBillingBlock(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	resetGatewayForwardingSettingsCacheForTest(t)
+	c, _ := gin.CreateTestContext(httptest.NewRecorder())
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/messages", nil)
+	body := []byte(`{"model":"claude-haiku-4-5","system":[{"type":"text","text":""}],"messages":[{"role":"user","content":"hello world"}]}`)
+	billing, err := buildBillingAttributionText(body, "2.1.290")
+	require.NoError(t, err)
+	body, err = sjson.SetBytes(body, "system.0.text", billing)
+	require.NoError(t, err)
+
+	svc := &GatewayService{cfg: &config.Config{}}
+	account := &Account{ID: 1, Platform: PlatformAnthropic, Type: AccountTypeOAuth}
+	req, _, err := svc.buildUpstreamRequest(context.Background(), c, account,
+		body, "test-token", "oauth", "claude-haiku-4-5", true, true)
+	require.NoError(t, err)
+
+	wantPID := extractBillingPromptIDView(newJSONBodyView(reqBody(t, req), nil))
+	require.NotEmpty(t, wantPID)
+	require.Equal(t, wantPID, getHeaderRaw(req.Header, "x-claude-code-prompt-id"),
+		"prompt-id 头必须与 billing 块 cc_prompt_id 逐字一致")
+	require.Equal(t, "main", getHeaderRaw(req.Header, "x-claude-code-request-class"))
+}
+
+func reqBody(t *testing.T, req *http.Request) []byte {
+	t.Helper()
+	rc, err := req.GetBody()
+	require.NoError(t, err)
+	defer rc.Close()
+	b, err := io.ReadAll(rc)
+	require.NoError(t, err)
+	return b
+}

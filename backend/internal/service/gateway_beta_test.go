@@ -128,9 +128,12 @@ func TestClaudeCodeMimicryBetas_ThinkingGatesInterleavedAndEffort(t *testing.T) 
 	off := claude.ClaudeCodeMimicryBetas("claude-sonnet-4-5-20250929", false)
 	require.NotContains(t, off, claude.BetaInterleavedThinking)
 	require.NotContains(t, off, claude.BetaEffort)
+	// thinking-token-count 与 interleaved-thinking 同门控（2.1.290 二进制 aN 表实证）
+	require.NotContains(t, off, claude.BetaThinkingTokenCount)
 
 	on := claude.ClaudeCodeMimicryBetas("claude-sonnet-4-5-20250929", true)
 	require.Contains(t, on, claude.BetaInterleavedThinking)
+	require.Contains(t, on, claude.BetaThinkingTokenCount)
 	require.Contains(t, on, claude.BetaEffort)
 	require.Contains(t, on, claude.BetaClaudeCode)
 	require.Contains(t, on, claude.BetaOAuth)
@@ -138,10 +141,11 @@ func TestClaudeCodeMimicryBetas_ThinkingGatesInterleavedAndEffort(t *testing.T) 
 	require.NotContains(t, on, claude.BetaRedactThinking)
 }
 
-// 2.1.280 第一方抓包实证（多次 /v1/messages?beta=true）：非 haiku 请求携带 kw/Aw 基础位 +
-// SDK 能力位（advanced-tool-use / mid-conversation-system-clear-at / effort /
-// fallback-credit-2026-06-01 / thinking-binding-controls / cache-diagnosis）；
-// 从未出现 prompt-caching-evict / extended-cache-ttl / mid-conversation-output-config /
+// 2.1.290 第一方直连抓包实证（2026-10-06 MITM，/v1/messages?beta=true）：非 haiku 请求
+// 携带基础位 + SDK 能力位（advanced-tool-use / mid-conversation-system-clear-at /
+// effort / thinking-binding-controls / extended-cache-ttl / cache-diagnosis）；
+// fallback-credit(2026-06-01) 自 2.1.290 起取消；dangerous-tool-use / afk-mode 为
+// 3P 形态位，第一方不携带；从未出现 prompt-caching-evict / mid-conversation-output-config /
 // redact-thinking。
 func TestClaudeCodeMimicryBetas_MatchesCapturedFirstPartySet(t *testing.T) {
 	nonHaiku := claude.ClaudeCodeMimicryBetas("claude-opus-5", true)
@@ -150,8 +154,8 @@ func TestClaudeCodeMimicryBetas_MatchesCapturedFirstPartySet(t *testing.T) {
 		claude.BetaThinkingTokenCount, claude.BetaContextManagement, claude.BetaPromptCachingScope,
 		claude.BetaMidConversationSystem, claude.BetaMidConversationToolChanges,
 		claude.BetaAdvancedToolUse, claude.BetaMidConversationSystemClearAt,
-		claude.BetaEffort, claude.BetaFallbackCreditLegacy,
-		claude.BetaThinkingBindingControls, claude.BetaCacheDiagnosis,
+		claude.BetaEffort,
+		claude.BetaThinkingBindingControls, claude.BetaExtendedCacheTTL, claude.BetaCacheDiagnosis,
 	} {
 		require.Containsf(t, nonHaiku, want, "非 haiku 抓包集合缺 %s", want)
 	}
@@ -159,18 +163,47 @@ func TestClaudeCodeMimicryBetas_MatchesCapturedFirstPartySet(t *testing.T) {
 		for _, thinking := range []bool{false, true} {
 			got := claude.ClaudeCodeMimicryBetas(model, thinking)
 			require.NotContains(t, got, claude.BetaPromptCachingEvict, "model=%s thinking=%v", model, thinking)
-			require.NotContains(t, got, claude.BetaExtendedCacheTTL, "model=%s thinking=%v", model, thinking)
 			require.NotContains(t, got, claude.BetaMidConversationOutputConfig, "model=%s thinking=%v", model, thinking)
 			require.NotContains(t, got, claude.BetaRedactThinking, "model=%s thinking=%v", model, thinking)
+			// 2.1.290 起默认不再携带 / 仅 3P 形态携带
+			require.NotContains(t, got, claude.BetaFallbackCreditLegacy, "model=%s thinking=%v", model, thinking)
+			require.NotContains(t, got, claude.BetaDangerousToolUse, "model=%s thinking=%v", model, thinking)
+			require.NotContains(t, got, claude.BetaAfkMode, "model=%s thinking=%v", model, thinking)
 		}
 	}
 }
 
+// TestClaudeCodeMimicryBetas_ExactOrder 逐字节锁定 2.1.290 第一方直连抓包顺序。
+func TestClaudeCodeMimicryBetas_ExactOrder(t *testing.T) {
+	// 非 haiku + thinking（sonnet-5-5，含 per-turn-control）：基础位 + SDK 能力位。
+	require.Equal(t, []string{
+		"claude-code-20250219", "oauth-2025-04-20", "interleaved-thinking-2025-05-14",
+		"thinking-token-count-2026-05-13", "context-management-2025-06-27",
+		"prompt-caching-scope-2026-01-05", "mid-conversation-system-2026-04-07",
+		"per-turn-control-2026-07-01", "mid-conversation-tool-changes-2026-07-01",
+		"advanced-tool-use-2025-11-20", "mid-conversation-system-clear-at-2026-08-21",
+		"effort-2025-11-24", "thinking-binding-controls-2026-08-01",
+		"extended-cache-ttl-2025-04-11", "cache-diagnosis-2026-04-07",
+	}, claude.ClaudeCodeMimicryBetas("claude-sonnet-5-5", true))
+
+	// haiku + thinking（2026-10-06 第一方抓包实证序）：oauth 居首，claude-code 位于
+	// 基础位末尾，SDK 能力位（advanced-tool-use/thinking-binding-controls/
+	// extended-cache-ttl/cache-diagnosis）殿后。
+	require.Equal(t, []string{
+		"oauth-2025-04-20", "interleaved-thinking-2025-05-14", "thinking-token-count-2026-05-13",
+		"context-management-2025-06-27", "prompt-caching-scope-2026-01-05",
+		"claude-code-20250219", "advanced-tool-use-2025-11-20", "thinking-binding-controls-2026-08-01",
+		"extended-cache-ttl-2025-04-11", "cache-diagnosis-2026-04-07",
+	}, claude.ClaudeCodeMimicryBetas("claude-haiku-4-5-20251001", true))
+}
+
 func TestClaudeCodeMimicryBetas_HaikuMovesClaudeCodeToEnd(t *testing.T) {
-	// 2.1.280 反编译实证：haiku 的 claude-code 从头部剔除，agentic 请求在末尾补回；oauth 居首。
+	// 2.1.290 第一方抓包实证：haiku 的 claude-code 从头部剔除、位于基础位末尾
+	// （agentic 补回）；oauth 居首；SDK 能力位殿后（cache-diagnosis 收尾）。
 	got := claude.ClaudeCodeMimicryBetas("claude-haiku-4-5-20251001", true)
 	require.Equal(t, claude.BetaOAuth, got[0])
-	require.Equal(t, claude.BetaClaudeCode, got[len(got)-1])
+	require.Equal(t, claude.BetaCacheDiagnosis, got[len(got)-1])
+	require.Equal(t, claude.BetaClaudeCode, got[5])
 	require.NotContains(t, got, claude.BetaMidConversationSystem)
 }
 

@@ -7,8 +7,9 @@ import "strings"
 
 // Beta header 常量
 //
-// 对齐真实 Claude Code CLI 2.1.280 的实测流量（2026-09：本机二进制拆解 +
-// claude.exe 抓包 + CLIProxyAPI 2026-09-23 第一方实测序）。
+// 对齐真实 Claude Code CLI 2.1.290 的实测流量（2026-10-05：本机 win32-x64 2.1.290
+// 二进制注册表/选择表拆解 + 本地捕获服务器第一方形态抓包；早期基线为 2.1.280/
+// 2.1.287 claude.exe 抓包 + CLIProxyAPI 2026-09-23 第一方实测序）。
 // 原因：Anthropic 上游会基于 anthropic-beta 的完整集合判定请求来源；
 // 缺少任何"官方 Claude Code 请求才会带"的 beta，都会被降级到第三方额度，
 // 对应报错：`Third-party apps now draw from your extra usage, not your plan limits.`
@@ -44,10 +45,21 @@ const (
 	BetaPerTurnControl = "per-turn-control-2026-07-01"
 
 	// SDK surfaceCapabilities.sdkBetas 能力位（2.1.280 第一方抓包实证：每次
-	// /v1/messages?beta=true 均携带，经 mf()→surfaceCapabilities.sdkBetas() 注入）。
+	// /v1/messages?beta=true 均携带，经 mf()→surfaceCapabilities.sdkBetas() 注入；
+	// 2.1.290 二进制 $Pn 实证 SDK 位仅第一方发送——第三方连接被
+	// "SDK beta dropped on 3P" 白名单过滤，3P 抓包中只见 effort 及下列三个新位）。
 	BetaAdvancedToolUse              = "advanced-tool-use-2025-11-20"
 	BetaMidConversationSystemClearAt = "mid-conversation-system-clear-at-2026-08-21"
 	BetaCacheDiagnosis               = "cache-diagnosis-2026-04-07"
+
+	// dangerous-tool-use / afk-mode 是 2.1.290 新增的"第三方形态"位（2026-10-05
+	// 双形态抓包实证：仅自定义 base URL 的 3P 请求携带，与 body.safeguards 配对；
+	// 第一方直连由服务端完成对应分类，客户端不携带）。禁止加入第一方 mimic/默认列表。
+	BetaDangerousToolUse = "dangerous-tool-use-2026-09-03"
+	BetaAfkMode          = "afk-mode-2026-01-31"
+	// BetaExtendedCacheTTL（见上文 2.1.280 注册表块）自 2.1.290 起进入第一方默认
+	// 发送集（SDK 位，位于 thinking-binding-controls 与 cache-diagnosis 之间，
+	// 双形态抓包均携带）；早期"抓包未出现、禁止入列"的注记作废。
 
 	// fine-grained-tool-streaming：2.1.280 注册表已移除（二进制与抓包均无），
 	// 保留常量仅供历史数据/测试对照，禁止加入任何默认/伪装列表。
@@ -67,9 +79,12 @@ const (
 	// 白名单：body.fallbacks 会触发 server-side fallback（换模型、改计费）。
 	//
 	// 例外：BetaFallbackCreditLegacy（fallback-credit-2026-06-01）在 2.1.280 第一方抓包
-	// 中作为 SDK 能力位每次都出现（header only，body 不带 fallbacks），故纳入
-	// ClaudeCodeMimicryBetas。仅 header 令牌不会触发 fallback；body.fallbacks 仍由上述
-	// 门控独立剥离。
+	// 中作为 SDK 能力位每次都出现（header only，body 不带 fallbacks）。2.1.290 起默认
+	// 发送集不再携带（2026-10-05 第一方/第三方双形态抓包均无），故从
+	// ClaudeCodeMimicryBetas 移除；仅 header 令牌不会触发 fallback，body.fallbacks
+	// 仍由上述门控独立剥离。
+	// 注：fallback-credit-2026-07-01 在 2.1.290 二进制注册表中已移除（仅剩
+	// 2026-06-01），BetaFallbackCredit 仅留作历史 sanitize 对照，禁止加入任何列表。
 	BetaServerSideFallback   = "server-side-fallback-2026-07-01"
 	BetaFallbackCredit       = "fallback-credit-2026-07-01"
 	BetaFallbackCreditLegacy = "fallback-credit-2026-06-01"
@@ -80,8 +95,10 @@ const (
 var DroppedBetas = []string{}
 
 // DefaultBetaHeader Claude Code 客户端默认的 anthropic-beta header
-// （2.1.280 实测：非 haiku + thinking 开启的第一方形态，注册表序）。
-const DefaultBetaHeader = BetaClaudeCode + "," + BetaOAuth + "," + BetaInterleavedThinking + "," + BetaThinkingTokenCount + "," + BetaContextManagement + "," + BetaPromptCachingScope + "," + BetaMidConversationSystem + "," + BetaEffort
+// （2.1.290 第一方直连抓包实证：非 haiku + thinking 开启形态 = 基础选择表 +
+// SDK 能力位 advanced-tool-use/clear-at/effort/thinking-binding-controls/
+// extended-cache-ttl/cache-diagnosis；不含模型门控的 per-turn-control）。
+const DefaultBetaHeader = BetaClaudeCode + "," + BetaOAuth + "," + BetaInterleavedThinking + "," + BetaThinkingTokenCount + "," + BetaContextManagement + "," + BetaPromptCachingScope + "," + BetaMidConversationSystem + "," + BetaMidConversationToolChanges + "," + BetaAdvancedToolUse + "," + BetaMidConversationSystemClearAt + "," + BetaEffort + "," + BetaThinkingBindingControls + "," + BetaExtendedCacheTTL + "," + BetaCacheDiagnosis
 
 // MessageBetaHeaderNoTools /v1/messages 在无工具时的 beta header
 //
@@ -95,20 +112,26 @@ const MessageBetaHeaderNoTools = DefaultBetaHeader
 const MessageBetaHeaderWithTools = DefaultBetaHeader
 
 // CountTokensBetaHeader count_tokens 请求使用的 anthropic-beta header
-// （CLIProxyAPI 对 37 次真实调用验证的固定集合）。
+// （2.1.290 二进制实证：count_tokens 走 lte(model) 基础位 ∩ {claude-code,
+// interleaved-thinking, context-management, oauth} 后由 SDK 追加 token-counting。
+// 本固定值对应"非 haiku + thinking 开启"形态；两个未对齐的细节：thinking 关闭时
+// 真实客户端不含 interleaved-thinking、haiku 模型基础位无 claude-code——
+// count_tokens 均为辅助请求，固定值影响可忽略）。
 const CountTokensBetaHeader = BetaClaudeCode + "," + BetaOAuth + "," + BetaInterleavedThinking + "," + BetaContextManagement + "," + BetaTokenCounting
 
 // HaikuBetaHeader Haiku 模型在 OAuth 真实客户端透传路径上的默认 anthropic-beta header。
-// 2.1.280 抓包实证：haiku 不剔除 claude-code，而是挪到末尾；oauth 随之居首。
+// 2.1.290 第一方直连抓包实证：haiku 不剔除 claude-code，而是挪到基础位末尾；
+// oauth 居首；SDK 能力位（advanced-tool-use/thinking-binding-controls/
+// extended-cache-ttl/cache-diagnosis）殿后。
 // OAuth mimic 路径统一使用 ClaudeCodeMimicryBetas。
-const HaikuBetaHeader = BetaOAuth + "," + BetaInterleavedThinking + "," + BetaThinkingTokenCount + "," + BetaContextManagement + "," + BetaPromptCachingScope + "," + BetaClaudeCode
+const HaikuBetaHeader = BetaOAuth + "," + BetaInterleavedThinking + "," + BetaThinkingTokenCount + "," + BetaContextManagement + "," + BetaPromptCachingScope + "," + BetaClaudeCode + "," + BetaAdvancedToolUse + "," + BetaThinkingBindingControls + "," + BetaExtendedCacheTTL + "," + BetaCacheDiagnosis
 
 // APIKeyBetaHeader API-key 账号建议使用的 anthropic-beta header（不包含 oauth）
-const APIKeyBetaHeader = BetaClaudeCode + "," + BetaInterleavedThinking + "," + BetaThinkingTokenCount + "," + BetaContextManagement + "," + BetaPromptCachingScope + "," + BetaMidConversationSystem + "," + BetaEffort
+const APIKeyBetaHeader = BetaClaudeCode + "," + BetaInterleavedThinking + "," + BetaThinkingTokenCount + "," + BetaContextManagement + "," + BetaPromptCachingScope + "," + BetaMidConversationSystem + "," + BetaMidConversationToolChanges + "," + BetaAdvancedToolUse + "," + BetaMidConversationSystemClearAt + "," + BetaEffort + "," + BetaThinkingBindingControls + "," + BetaExtendedCacheTTL + "," + BetaCacheDiagnosis
 
 // APIKeyHaikuBetaHeader Haiku 模型在 API-key 账号下使用的 anthropic-beta header
-// （不包含 oauth；claude-code 在末尾，与真实客户端一致）
-const APIKeyHaikuBetaHeader = BetaInterleavedThinking + "," + BetaThinkingTokenCount + "," + BetaContextManagement + "," + BetaPromptCachingScope + "," + BetaClaudeCode
+// （不包含 oauth；序与 2.1.290 第一方 haiku 抓包一致）
+const APIKeyHaikuBetaHeader = BetaInterleavedThinking + "," + BetaThinkingTokenCount + "," + BetaContextManagement + "," + BetaPromptCachingScope + "," + BetaClaudeCode + "," + BetaAdvancedToolUse + "," + BetaThinkingBindingControls + "," + BetaExtendedCacheTTL + "," + BetaCacheDiagnosis
 
 // DefaultCacheControlTTL 是网关代理为自己生成的 cache_control 块默认使用的 ttl。
 // 真实 Claude Code CLI 当前使用 "1h"，但本仓策略是"客户端透传 ttl 优先；
@@ -121,35 +144,47 @@ const DefaultCacheControlTTL = "5m"
 //
 // ⚠️ 读取实际生效的版本号请用 CLIVersion()，它会叠加 SUB2API_CLAUDE_CLI_VERSION 覆盖。
 // 直接引用本常量只在"表达内置基线"时才正确（例如覆盖值的下限校验）。
-const CLICurrentVersion = "2.1.287"
+const CLICurrentVersion = "2.1.290"
 
-// ClaudeCodeMimicryBetas 按真实 Claude Code 2.1.280 的 beta 规则计算 OAuth mimic
+// ClaudeCodeMimicryBetas 按真实 Claude Code 2.1.290 的 beta 规则计算 OAuth mimic
 // 请求的 anthropic-beta 集合（不再是固定列表）。
 //
-// 依据：本机 claude.exe 2.1.280 第一方实测抓包（MITM 拦截 /v1/messages?beta=true）
-// 叠加二进制反编译。顺序与抓包逐字节一致。
+// 依据：本机 2.1.290 win32-x64 二进制注册表/选择表拆解 + 本地捕获服务器第一方
+// 形态抓包（2026-10-05），叠加 2.1.280/2.1.287 claude.exe 抓包基线。
+// 顺序与抓包逐字节一致。
 //
-// kw/Aw 基础选择表（模型相关）：
+// 基础选择表 aN（模型相关，2.1.290 二进制实证）：
 //   - claude-code-20250219：非 haiku 时携带；haiku 从头部剔除，agentic 请求在末尾补回
 //   - oauth-2025-04-20：OAuth 路径携带（claude-code 不在首位时——haiku——居首）
 //   - context-1m：仅模型名带 [1m] 后缀
 //   - thinking 开启：interleaved-thinking（抓包中 display=omitted 时不带 redact-thinking，
-//     且 HEAD 旧列表亦无，故本集合不含 redact-thinking；客户端显式传入时由合并逻辑保留）
-//   - thinking-token-count / context-management / prompt-caching-scope：第一方携带
+//     且 HEAD 旧列表亦无，故本集合不含 redact-thinking；客户端显式传入时由合并逻辑保留）；
+//     thinking-token-count 自 2.1.290 起与 interleaved-thinking 同门控
+//     （aN: interleavedThinking && !experimentalBetasOff）
+//   - context-management / prompt-caching-scope：第一方携带
 //   - mid-conversation-system 仅非 haiku；per-turn-control 仅 sonnet-5-5/
 //     opus-5-5/fable-5-1（2.1.287 抓包实证）；mid-conversation-tool-changes
 //     排除 sonnet-5（sonnet-5-5 起恢复携带，2.1.287 实证）
 //
-// SDK surfaceCapabilities.sdkBetas 能力位（抓包顺序，非 kw/Aw 选择表；二进制单看选择
-// 表会漏掉，故以抓包为准）：advanced-tool-use、mid-conversation-system-clear-at、
-// effort（thinking）、fallback-credit(2026-06-01)、thinking-binding-controls、cache-diagnosis。
+// SDK surfaceCapabilities.sdkBetas 能力位（仅第一方直连发送；2.1.290 二进制 $Pn
+// 实证第三方连接被 "SDK beta dropped on 3P" 白名单过滤。第一方抓包顺序，非 aN
+// 选择表；二进制单看选择表会漏掉，故以抓包为准）：
 //
-// ⚠️ prompt-caching-evict-2026-05-12、extended-cache-ttl-2025-04-11、
-// mid-conversation-output-config-2026-07-01 在多次第一方抓包中均未出现，故不纳入本集合。
+//   - 非 haiku：advanced-tool-use、mid-conversation-system-clear-at、
+//     effort（thinking）、thinking-binding-controls、extended-cache-ttl、cache-diagnosis
+//   - haiku：advanced-tool-use、thinking-binding-controls、extended-cache-ttl、
+//     cache-diagnosis（无 clear-at/effort，2026-10-05 第一方抓包实证）
+//   - fallback-credit(2026-06-01) 自 2.1.290 起不再携带（2.1.280 携带）；
+//     dangerous-tool-use / afk-mode 为 3P 形态位（与 body.safeguards 配对，
+//     第一方直连无此 body 字段），第一方不携带。
+//
+// ⚠️ prompt-caching-evict-2026-05-12、mid-conversation-output-config-2026-07-01
+// 在历次第一方抓包中均未出现，故不纳入本集合。
 //
 // 已知未对齐项（无法从本函数入参重现，见变更说明）：body 顶层不带 betas 字段（已在
-// gateway_upstream_request 移除注入）；cch 为逐请求计算的哈希（网关无算法，维持占位）；
-// SDK 能力位对 haiku 的取舍缺抓包样本，暂只对非 haiku 生效。
+// gateway_upstream_request 移除注入）；cch 在 2.1.290 官方构建上为逐请求签名哈希
+// （5 位 hex），JS 层字面量 00000 仅为签名不可用/vertex 的回退形态，网关无签名
+// 模块故维持 00000 占位（已知残留差异）。
 //
 // 使用建议：
 //   - OAuth mimic：使用本函数按请求计算。
@@ -158,7 +193,7 @@ const CLICurrentVersion = "2.1.287"
 func ClaudeCodeMimicryBetas(modelID string, thinkingEnabled bool) []string {
 	lower := strings.ToLower(modelID)
 	isHaiku := strings.Contains(lower, "haiku")
-	out := make([]string, 0, 16)
+	out := make([]string, 0, 20)
 	if !isHaiku {
 		out = append(out, BetaClaudeCode)
 	}
@@ -168,8 +203,10 @@ func ClaudeCodeMimicryBetas(modelID string, thinkingEnabled bool) []string {
 	}
 	if thinkingEnabled {
 		out = append(out, BetaInterleavedThinking)
+		// thinking-token-count 与 interleaved-thinking 同门控（2.1.290 aN 表实证）
+		out = append(out, BetaThinkingTokenCount)
 	}
-	out = append(out, BetaThinkingTokenCount, BetaContextManagement, BetaPromptCachingScope)
+	out = append(out, BetaContextManagement, BetaPromptCachingScope)
 	if !isHaiku {
 		out = append(out, BetaMidConversationSystem)
 		// per-turn-control：2.1.287 抓包实证 sonnet-5-5 携带（另有 opus-5-5/fable-5-1）
@@ -181,22 +218,26 @@ func ClaudeCodeMimicryBetas(modelID string, thinkingEnabled bool) []string {
 		if !isSonnet5Legacy {
 			out = append(out, BetaMidConversationToolChanges)
 		}
-		// SDK 能力位（抓包顺序）
+		// SDK 能力位（2.1.290 第一方直连抓包顺序）
 		out = append(out, BetaAdvancedToolUse, BetaMidConversationSystemClearAt)
 		if thinkingEnabled {
 			out = append(out, BetaEffort)
 		}
-		out = append(out, BetaFallbackCreditLegacy, BetaThinkingBindingControls, BetaCacheDiagnosis)
+		out = append(out, BetaThinkingBindingControls, BetaExtendedCacheTTL, BetaCacheDiagnosis)
 	}
 	if isHaiku {
 		out = append(out, BetaClaudeCode)
+		// 2.1.290 haiku 第一方抓包实证：SDK 位为 advanced-tool-use /
+		// thinking-binding-controls / extended-cache-ttl / cache-diagnosis
+		out = append(out, BetaAdvancedToolUse, BetaThinkingBindingControls, BetaExtendedCacheTTL, BetaCacheDiagnosis)
 	}
 	return out
 }
 
-// SDKTSVersion 是真实 CLI 2.1.287 内置的 @anthropic-ai/sdk 版本。
+// SDKTSVersion 是真实 CLI 2.1.290 内置的 @anthropic-ai/sdk 版本
+// （win32-x64 二进制实证：var Rk="0.128.0"，0.127.0 字符串已不存在）。
 // SDK 版本与 CLI 版本绑定发布，更新 CLICurrentVersion 时必须成对更新。
-const SDKTSVersion = "0.127.0"
+const SDKTSVersion = "0.128.0"
 
 // SDKTSRuntimeVersion 是真实客户端上报的 X-Stainless-Runtime-Version。
 // SDK 的运行时探测 oa() 只区分 deno/edge/node，无 bun 分支：Bun 提供
@@ -229,7 +270,7 @@ func DefaultHeaders() map[string]string {
 	return map[string]string{
 		// Keep these in sync with recent Claude CLI traffic to reduce the chance
 		// that Claude Code-scoped OAuth credentials are rejected as "non-CLI" usage.
-		// 版本组参考：本机 claude.exe 2.1.280 抓包（sdk 0.112.1 / node v26.3.0）。
+		// 版本组参考：本机 claude.exe 2.1.290 抓包（sdk 0.128.0 / node v26.3.0）。
 		"User-Agent":                                DefaultUserAgent(),
 		"X-Stainless-Lang":                          "js",
 		"X-Stainless-Package-Version":               SDKTSVersion,

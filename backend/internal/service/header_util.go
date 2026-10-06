@@ -67,6 +67,8 @@ var headerWireOrder = []string{
 	"anthropic-dangerous-direct-browser-access",
 	"anthropic-version",
 	"x-app",
+	"x-claude-code-prompt-id",
+	"x-claude-code-request-class",
 	"x-client-request-id",
 	"x-stainless-helper-method",
 	"accept-language",

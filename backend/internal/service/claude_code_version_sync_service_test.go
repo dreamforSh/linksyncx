@@ -113,21 +113,22 @@ func newClaudeCodeVersionSyncService(
 
 // 同仓库可能混入非 v 前缀 tag 与预发布 / 草稿，必须只认 v 前缀的稳定版，
 // 否则会把无关 tag 的版本号当成客户端版本同步出去。
+// 夹具版本号围绕内置基线（CLICurrentVersion，当前 2.1.290）取值。
 func TestLatestClaudeCodeStableReleaseVersion(t *testing.T) {
 	releases := []*GitHubRelease{
-		{TagName: "v2.1.288-beta.1", Prerelease: true},
-		{TagName: "v2.1.287"},
-		{TagName: "v2.1.286"},
+		{TagName: "v2.1.291-beta.1", Prerelease: true},
+		{TagName: "v2.1.290"},
+		{TagName: "v2.1.289"},
 		{TagName: "v2.999.0", Draft: true},
 		{TagName: "not-a-tag"},
 		nil,
 	}
 
-	require.Equal(t, "2.1.287", latestClaudeCodeStableReleaseVersion(releases))
+	require.Equal(t, "2.1.290", latestClaudeCodeStableReleaseVersion(releases))
 	require.Empty(t, latestClaudeCodeStableReleaseVersion(nil))
 	require.Empty(t, latestClaudeCodeStableReleaseVersion([]*GitHubRelease{{TagName: "not-a-tag"}}))
 	// 预发布 tag 即使漏标 Prerelease 也要被版本号后缀挡住。
-	require.Empty(t, latestClaudeCodeStableReleaseVersion([]*GitHubRelease{{TagName: "v2.1.288-beta.1"}}))
+	require.Empty(t, latestClaudeCodeStableReleaseVersion([]*GitHubRelease{{TagName: "v2.1.291-beta.1"}}))
 	// 低于内置基线的版本号即使形态合法也不得采信。
 	require.Empty(t, latestClaudeCodeStableReleaseVersion([]*GitHubRelease{{TagName: "v2.1.9"}}))
 }
@@ -135,21 +136,21 @@ func TestLatestClaudeCodeStableReleaseVersion(t *testing.T) {
 func TestClaudeCodeVersionSyncWritesLatestStableVersion(t *testing.T) {
 	repo := newClaudeCodeVersionSyncSettingRepoStub(nil)
 	github := &claudeCodeVersionSyncGitHubStub{releases: []*GitHubRelease{
-		{TagName: "v2.1.286"},
-		{TagName: "v2.1.287"},
+		{TagName: "v2.1.289"},
+		{TagName: "v2.1.290"},
 	}}
 
 	newClaudeCodeVersionSyncService(repo, github).runOnce()
 
-	require.Equal(t, []string{"2.1.287"}, repo.syncedWrites())
+	require.Equal(t, []string{"2.1.290"}, repo.syncedWrites())
 }
 
 // 只向前推进：上游偶发返回旧数据或重新发布历史 tag 时不把已同步版本降级。
 func TestClaudeCodeVersionSyncNeverMovesBackwards(t *testing.T) {
 	repo := newClaudeCodeVersionSyncSettingRepoStub(map[string]string{
-		SettingKeyClaudeCodeClientVersionSynced: "2.1.287",
+		SettingKeyClaudeCodeClientVersionSynced: "2.1.291",
 	})
-	github := &claudeCodeVersionSyncGitHubStub{releases: []*GitHubRelease{{TagName: "v2.1.286"}}}
+	github := &claudeCodeVersionSyncGitHubStub{releases: []*GitHubRelease{{TagName: "v2.1.290"}}}
 
 	newClaudeCodeVersionSyncService(repo, github).runOnce()
 
@@ -160,7 +161,7 @@ func TestClaudeCodeVersionSyncSkippedWhenDisabled(t *testing.T) {
 	repo := newClaudeCodeVersionSyncSettingRepoStub(map[string]string{
 		SettingKeyClaudeCodeVersionAutoSyncEnabled: "false",
 	})
-	github := &claudeCodeVersionSyncGitHubStub{releases: []*GitHubRelease{{TagName: "v2.1.287"}}}
+	github := &claudeCodeVersionSyncGitHubStub{releases: []*GitHubRelease{{TagName: "v2.1.290"}}}
 
 	newClaudeCodeVersionSyncService(repo, github).runOnce()
 
@@ -188,27 +189,27 @@ func TestClaudeCodeVersionSyncEnabledByDefaultOrOnError(t *testing.T) {
 			})
 			repo.getErr = tt.getErr
 			repo.getErrKey = SettingKeyClaudeCodeVersionAutoSyncEnabled
-			github := &claudeCodeVersionSyncGitHubStub{releases: []*GitHubRelease{{TagName: "v2.1.287"}}}
+			github := &claudeCodeVersionSyncGitHubStub{releases: []*GitHubRelease{{TagName: "v2.1.290"}}}
 
 			newClaudeCodeVersionSyncService(repo, github).runOnce()
 
-			require.Equal(t, []string{"2.1.287"}, repo.syncedWrites())
+			require.Equal(t, []string{"2.1.290"}, repo.syncedWrites())
 		})
 	}
 }
 
 func TestClaudeCodeVersionSyncKeepsValueOnCurrentVersionReadError(t *testing.T) {
 	repo := newClaudeCodeVersionSyncSettingRepoStub(map[string]string{
-		SettingKeyClaudeCodeClientVersionSynced: "2.1.288",
+		SettingKeyClaudeCodeClientVersionSynced: "2.1.291",
 	})
 	repo.getErr = errors.New("读取已有版本失败")
 	repo.getErrKey = SettingKeyClaudeCodeClientVersionSynced
-	github := &claudeCodeVersionSyncGitHubStub{latest: &GitHubRelease{TagName: "v2.1.287"}}
+	github := &claudeCodeVersionSyncGitHubStub{latest: &GitHubRelease{TagName: "v2.1.290"}}
 
 	newClaudeCodeVersionSyncService(repo, github).runOnce()
 
 	require.Empty(t, repo.syncedWrites(), "无法确认已有版本时不得覆盖同步值")
-	require.Equal(t, "2.1.288", repo.values[SettingKeyClaudeCodeClientVersionSynced])
+	require.Equal(t, "2.1.291", repo.values[SettingKeyClaudeCodeClientVersionSynced])
 }
 
 // 抓取失败保持既有值，不清空、不降级。两条取数路径都失败才算真正拿不到。
@@ -235,16 +236,16 @@ func TestClaudeCodeVersionSyncKeepsValueOnFetchError(t *testing.T) {
 func TestClaudeCodeVersionSyncUsesLatestReleaseEndpoint(t *testing.T) {
 	repo := newClaudeCodeVersionSyncSettingRepoStub(nil)
 	github := &claudeCodeVersionSyncGitHubStub{
-		latest: &GitHubRelease{TagName: "v2.1.287"},
+		latest: &GitHubRelease{TagName: "v2.1.290"},
 		// 列表若被调用会给出不同答案，用于证明取值确实来自主路径。
-		releases: []*GitHubRelease{{TagName: "v2.1.286"}},
+		releases: []*GitHubRelease{{TagName: "v2.1.289"}},
 	}
 
 	newClaudeCodeVersionSyncService(repo, github).runOnce()
 
 	require.Equal(t, 1, github.latestCalls)
 	require.Zero(t, github.calls, "主路径可用时不应再拉列表页")
-	require.Equal(t, []string{"2.1.287"}, repo.syncedWrites())
+	require.Equal(t, []string{"2.1.290"}, repo.syncedWrites())
 }
 
 // 回退列表扫描：主路径拿不到可用稳定版时必须继续扫一页 release，
@@ -255,9 +256,9 @@ func TestClaudeCodeVersionSyncFallsBackToReleaseList(t *testing.T) {
 		latest    *GitHubRelease
 		latestErr error
 	}{
-		{name: "latest 前缀不符", latest: &GitHubRelease{TagName: "cli-2.1.280"}},
-		{name: "latest 是预发布", latest: &GitHubRelease{TagName: "v2.1.288-beta.1", Prerelease: true}},
-		{name: "latest 是草稿", latest: &GitHubRelease{TagName: "v2.1.288", Draft: true}},
+		{name: "latest 前缀不符", latest: &GitHubRelease{TagName: "cli-2.1.290"}},
+		{name: "latest 是预发布", latest: &GitHubRelease{TagName: "v2.1.291-beta.1", Prerelease: true}},
+		{name: "latest 是草稿", latest: &GitHubRelease{TagName: "v2.1.291", Draft: true}},
 		{name: "latest 抓取失败", latestErr: errors.New("network down")},
 		// 上游返回空对象：不得因此 panic，按拿不到处理。
 		{name: "latest 为空", latest: nil},
@@ -270,9 +271,9 @@ func TestClaudeCodeVersionSyncFallsBackToReleaseList(t *testing.T) {
 				latest:    tt.latest,
 				latestErr: tt.latestErr,
 				releases: []*GitHubRelease{
-					{TagName: "v2.1.288-beta.1", Prerelease: true},
-					{TagName: "v2.1.287"},
-					{TagName: "v2.1.286"},
+					{TagName: "v2.1.291-beta.1", Prerelease: true},
+					{TagName: "v2.1.290"},
+					{TagName: "v2.1.289"},
 				},
 			}
 
@@ -280,7 +281,7 @@ func TestClaudeCodeVersionSyncFallsBackToReleaseList(t *testing.T) {
 
 			require.Equal(t, 1, github.latestCalls)
 			require.Equal(t, 1, github.calls)
-			require.Equal(t, []string{"2.1.287"}, repo.syncedWrites())
+			require.Equal(t, []string{"2.1.290"}, repo.syncedWrites())
 		})
 	}
 }
@@ -290,15 +291,15 @@ func TestClaudeCodeVersionSyncFallsBackToReleaseList(t *testing.T) {
 func TestClaudeCodeVersionSyncLatestSharesFiltering(t *testing.T) {
 	repo := newClaudeCodeVersionSyncSettingRepoStub(nil)
 	github := &claudeCodeVersionSyncGitHubStub{
-		// 剥掉 v 前缀后不满足基线校验（2.1.9 低于内置基线 2.1.258）的 latest
+		// 剥掉 v 前缀后不满足基线校验（2.1.9 低于内置基线）的 latest
 		// 必须被拒绝而不是直接采信。
 		latest:   &GitHubRelease{TagName: "v2.1.9"},
-		releases: []*GitHubRelease{{TagName: "v2.1.287"}},
+		releases: []*GitHubRelease{{TagName: "v2.1.290"}},
 	}
 
 	newClaudeCodeVersionSyncService(repo, github).runOnce()
 
-	require.Equal(t, []string{"2.1.287"}, repo.syncedWrites())
+	require.Equal(t, []string{"2.1.290"}, repo.syncedWrites())
 }
 
 // 依赖缺失时 Start 必须直接返回，不能起一个空转的 goroutine。
@@ -314,10 +315,10 @@ func TestClaudeCodeVersionSyncStartRequiresDependencies(t *testing.T) {
 // 放大成对 GitHub 的连续请求。
 func TestClaudeCodeVersionSyncInitialSkipsWhenRecentlySynced(t *testing.T) {
 	repo := newClaudeCodeVersionSyncSettingRepoStub(map[string]string{
-		SettingKeyClaudeCodeClientVersionSynced: "2.1.287",
+		SettingKeyClaudeCodeClientVersionSynced: "2.1.290",
 	})
 	repo.updatedAt = time.Now().Add(-time.Minute)
-	github := &claudeCodeVersionSyncGitHubStub{releases: []*GitHubRelease{{TagName: "v2.1.288"}}}
+	github := &claudeCodeVersionSyncGitHubStub{releases: []*GitHubRelease{{TagName: "v2.1.291"}}}
 
 	newClaudeCodeVersionSyncService(repo, github).runInitial()
 
@@ -328,44 +329,44 @@ func TestClaudeCodeVersionSyncInitialSkipsWhenRecentlySynced(t *testing.T) {
 func TestClaudeCodeVersionSyncInitialRunsWhenStaleOrMissing(t *testing.T) {
 	t.Run("同步值已过期", func(t *testing.T) {
 		repo := newClaudeCodeVersionSyncSettingRepoStub(map[string]string{
-			SettingKeyClaudeCodeClientVersionSynced: "2.1.287",
+			SettingKeyClaudeCodeClientVersionSynced: "2.1.290",
 		})
 		repo.updatedAt = time.Now().Add(-2 * time.Hour)
-		github := &claudeCodeVersionSyncGitHubStub{releases: []*GitHubRelease{{TagName: "v2.1.288"}}}
+		github := &claudeCodeVersionSyncGitHubStub{releases: []*GitHubRelease{{TagName: "v2.1.291"}}}
 
 		newClaudeCodeVersionSyncService(repo, github).runInitial()
 
 		require.Equal(t, 1, github.calls)
-		require.Equal(t, []string{"2.1.288"}, repo.syncedWrites())
+		require.Equal(t, []string{"2.1.291"}, repo.syncedWrites())
 	})
 
 	// 首次部署尚无同步值：必须立刻同步，不能被防抖挡住。
 	t.Run("尚无同步值", func(t *testing.T) {
 		repo := newClaudeCodeVersionSyncSettingRepoStub(nil)
 		repo.updatedAt = time.Now()
-		github := &claudeCodeVersionSyncGitHubStub{releases: []*GitHubRelease{{TagName: "v2.1.287"}}}
+		github := &claudeCodeVersionSyncGitHubStub{releases: []*GitHubRelease{{TagName: "v2.1.290"}}}
 
 		newClaudeCodeVersionSyncService(repo, github).runInitial()
 
 		require.Equal(t, 1, github.calls)
-		require.Equal(t, []string{"2.1.287"}, repo.syncedWrites())
+		require.Equal(t, []string{"2.1.290"}, repo.syncedWrites())
 	})
 }
 
-// 版本比较必须按段取数字：字典序会把 2.1.9 判为大于 2.1.280，
+// 版本比较必须按段取数字：字典序会把 2.1.9 判为大于 2.1.290，
 // 从而让「取最大值」和「只向前推进」两处逻辑同时判错。
 func TestClaudeCodeVersionComparisonIsNumericNotLexical(t *testing.T) {
-	require.Greater(t, CompareVersions("2.1.287", "2.1.9"), 0)
+	require.Greater(t, CompareVersions("2.1.290", "2.1.9"), 0)
 
-	require.Equal(t, "2.1.287", latestClaudeCodeStableReleaseVersion([]*GitHubRelease{
+	require.Equal(t, "2.1.290", latestClaudeCodeStableReleaseVersion([]*GitHubRelease{
 		{TagName: "v2.1.9"},
-		{TagName: "v2.1.287"},
+		{TagName: "v2.1.290"},
 	}))
 
 	repo := newClaudeCodeVersionSyncSettingRepoStub(map[string]string{
-		SettingKeyClaudeCodeClientVersionSynced: "2.1.287",
+		SettingKeyClaudeCodeClientVersionSynced: "2.1.292",
 	})
-	github := &claudeCodeVersionSyncGitHubStub{releases: []*GitHubRelease{{TagName: "v2.1.258"}}}
+	github := &claudeCodeVersionSyncGitHubStub{releases: []*GitHubRelease{{TagName: "v2.1.291"}}}
 
 	newClaudeCodeVersionSyncService(repo, github).runOnce()
 

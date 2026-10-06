@@ -28,7 +28,7 @@ func (*wireRecorder) SetReadDeadline(time.Time) error  { return nil }
 func (*wireRecorder) SetWriteDeadline(time.Time) error { return nil }
 
 // 网关 OAuth mimic 路径构造的真实请求，经 net/http 写出、httpwire 重排后，头名
-// 顺序与真实 Claude Code 2.1.283（Bun fetch）/v1/messages 抓包一致。
+// 顺序与真实 Claude Code 2.1.290（Bun fetch）/v1/messages 抓包一致。
 func TestClaudeCodeMimicRequestWireOrderMatchesBunCapture(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	c, _ := gin.CreateTestContext(httptest.NewRecorder())
@@ -72,6 +72,7 @@ func TestClaudeCodeMimicRequestWireOrderMatchesBunCapture(t *testing.T) {
 		"anthropic-dangerous-direct-browser-access",
 		"anthropic-version",
 		"x-app",
+		"x-claude-code-request-class",
 		"x-client-request-id",
 		// Bun 补全的尾块
 		"Connection",

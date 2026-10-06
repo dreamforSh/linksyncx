@@ -210,6 +210,14 @@ func (s *GatewayService) buildUpstreamRequestIndexed(ctx context.Context, c *gin
 	// 原始会话头（未映射的原值会和本对话 messages 请求的会话对不上）。
 	if tokenType == "oauth" {
 		s.syncClaudeSessionHeader(ctx, account, req.Header, clientHeaders, view.get("metadata.user_id").String())
+		// 同步 x-claude-code-prompt-id 头：2.1.283+ 第一方默认携带，值与 billing 块
+		// cc_prompt_id 一致（2026-10-05 抓包实证）。mimic 路径的 billing 块由本网关
+		// 生成，从此镜像到头；透传路径客户端已自带（白名单放行），仅在缺失时补齐。
+		if getHeaderRaw(req.Header, "x-claude-code-prompt-id") == "" {
+			if pid := extractBillingPromptIDView(view); pid != "" {
+				setHeaderRaw(req.Header, "x-claude-code-prompt-id", pid)
+			}
+		}
 	}
 
 	// 账号级请求头覆写（仅 anthropic/openai api_key 账号启用时生效；OAuth 路径 no-op）。
@@ -930,6 +938,14 @@ func applyClaudeCodeMimicHeaders(req *http.Request, mimicUserAgent string, first
 		// Real Claude CLI 每个第一方请求都会生成一个新的 UUID 放在 x-client-request-id。
 		// 上游会以此作为会话/请求指纹的一部分，缺失或重复都可能触发第三方判定。
 		setHeaderRaw(req.Header, "x-client-request-id", uuid.NewString())
+	}
+	// 2.1.273+ 第一方直连默认每请求携带 gateway hint 头（2026-10-05 本机抓包实证；
+	// 自定义 base URL 默认关闭，故沿用 firstParty 门控）。request-class 标识请求类型
+	// （main/subagent/workflow/compaction/auxiliary），网关无法得知子代理分类，
+	// 恒以主循环形态 main 注入；count_tokens 的分类取值未经抓包验证，暂不注入。
+	isMessagesMain := strings.Contains(req.URL.Path, "/v1/messages") && !strings.HasSuffix(req.URL.Path, "/count_tokens")
+	if firstParty && isMessagesMain && getHeaderRaw(req.Header, "x-claude-code-request-class") == "" {
+		setHeaderRaw(req.Header, "x-claude-code-request-class", "main")
 	}
 }
 

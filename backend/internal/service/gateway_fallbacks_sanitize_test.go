@@ -293,3 +293,27 @@ func TestSanitizeBedrockCCFields_StripsFallbacksUnconditionally(t *testing.T) {
 	assert.False(t, gjson.GetBytes(result, "context_management").Exists())
 	assert.True(t, gjson.GetBytes(result, "messages").Exists())
 }
+
+// ============================================================================
+// safeguards — 3P 形态字段，与 dangerous-tool-use beta 配对（2.1.290 抓包实证：
+// 第一方直连 body 无 safeguards 且 beta 集不含 dangerous-tool-use；3P 形态两者同现）。
+// 第一方 mimic 重写 beta 集后不含 dangerous-tool-use → 必须剥离 safeguards，
+// 否则 header/body 不对称。
+// ============================================================================
+
+func TestSanitizeAnthropicBodyForBetaTokens_SafeguardsStrippedWithoutDangerousToolUse(t *testing.T) {
+	body := []byte(`{"model":"claude-sonnet-5-5","safeguards":[{"type":"dangerous_tool_use","classifier_context":{"v":1}}],"messages":[]}`)
+	// 第一方 mimic 的最终 beta（无 dangerous-tool-use）→ 剥离
+	out, changed := sanitizeAnthropicBodyForBetaTokens(body, claude.DefaultBetaHeader)
+	require.True(t, changed, "第一方 beta 集不含 dangerous-tool-use → safeguards 必须剥离")
+	require.False(t, gjson.GetBytes(out, "safeguards").Exists())
+}
+
+func TestSanitizeAnthropicBodyForBetaTokens_SafeguardsKeptWhenDangerousToolUsePresent(t *testing.T) {
+	body := []byte(`{"model":"claude-sonnet-5-5","safeguards":[{"type":"dangerous_tool_use","classifier_context":{"v":1}}],"messages":[]}`)
+	// 真实 3P 客户端透传：beta 集自带 dangerous-tool-use → 保留（不过度删除）
+	out, changed := sanitizeAnthropicBodyForBetaTokens(body,
+		claude.DefaultBetaHeader+","+claude.BetaDangerousToolUse)
+	require.False(t, changed)
+	require.True(t, gjson.GetBytes(out, "safeguards").Exists())
+}

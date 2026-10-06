@@ -1060,6 +1060,13 @@ func sanitizeAnthropicBodyForBetaTokensView(view *jsonBodyView, anthropicBetaHea
 	// context_management：需要 context-management beta。
 	changed := stripAnthropicBodyFieldUnlessBeta(view, "context_management", anthropicBetaHeader, anthropicBetaContextManagementToken)
 
+	// safeguards：auto 模式分类器的客户端上下文（2.1.290 抓包实证为 3P 形态字段，
+	// 与 dangerous-tool-use beta 配对；第一方直连无此字段）。缺该 beta 时剥离，
+	// 避免第一方 mimic 重写 beta 集后 header/body 不对称。
+	if stripAnthropicBodyFieldUnlessBeta(view, "safeguards", anthropicBetaHeader, claude.BetaDangerousToolUse) {
+		changed = true
+	}
+
 	// thinking.block_binding：需要 thinking-binding-controls beta。
 	if stripAnthropicBodyFieldUnlessBeta(view, "thinking.block_binding", anthropicBetaHeader, claude.BetaThinkingBindingControls) {
 		changed = true

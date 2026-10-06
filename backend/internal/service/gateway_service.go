@@ -452,6 +452,8 @@ var allowedHeaders = map[string]bool{
 	"content-type":                              true,
 	"accept-encoding":                           true,
 	"x-claude-code-session-id":                  true,
+	"x-claude-code-prompt-id":                   true,
+	"x-claude-code-request-class":               true,
 	"x-client-request-id":                       true,
 }
 
