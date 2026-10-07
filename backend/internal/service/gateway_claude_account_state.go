@@ -34,7 +34,8 @@ func claudeIdentityUnavailableFailover(account *Account, err error) error {
 // claudeUpstreamSessionID 选出 OAuth 请求的上游会话 ID，供 X-Claude-Code-Session-Id 使用：
 // 请求体 metadata.user_id 已带（已映射的）会话时用它，并记为账号最近活跃会话；
 // 否则按 IdentityService.ResolveSessionIDWithoutMetadata 选择，绝不逐请求随机。
-func (s *GatewayService) claudeUpstreamSessionID(ctx context.Context, account *Account, clientHeaders http.Header, metadataSessionID string) string {
+// identityEpoch 是账号当前身份代次，客户端会话头按同一代次映射。
+func (s *GatewayService) claudeUpstreamSessionID(ctx context.Context, account *Account, identityEpoch int64, clientHeaders http.Header, metadataSessionID string) string {
 	if metadataSessionID != "" {
 		sessionID := strings.Clone(metadataSessionID)
 		if s.identityService != nil && account != nil {
@@ -49,20 +50,20 @@ func (s *GatewayService) claudeUpstreamSessionID(ctx context.Context, account *A
 	if s.identityService == nil {
 		return uuid.NewString()
 	}
-	return s.identityService.ResolveSessionIDWithoutMetadata(ctx, account, clientSession)
+	return s.identityService.ResolveSessionIDWithoutMetadata(ctx, account, identityEpoch, clientSession)
 }
 
 // syncClaudeSessionHeader 写入 X-Claude-Code-Session-Id：真实 CLI 每个请求都带，且与
 // metadata.user_id 的 session_id 一致。先删除任意大小写的残留值（白名单透传可能写入
 // 未映射的客户端原值），再写入选出的上游会话 ID。
-func (s *GatewayService) syncClaudeSessionHeader(ctx context.Context, account *Account, header, clientHeaders http.Header, metadataUserID string) {
+func (s *GatewayService) syncClaudeSessionHeader(ctx context.Context, account *Account, identityEpoch int64, header, clientHeaders http.Header, metadataUserID string) {
 	metadataSessionID := ""
 	if metadataUserID != "" {
 		if parsed := ParseMetadataUserID(metadataUserID); parsed != nil {
 			metadataSessionID = parsed.SessionID
 		}
 	}
-	sessionID := s.claudeUpstreamSessionID(ctx, account, clientHeaders, metadataSessionID)
+	sessionID := s.claudeUpstreamSessionID(ctx, account, identityEpoch, clientHeaders, metadataSessionID)
 	deleteHeaderAllForms(header, "X-Claude-Code-Session-Id")
 	setHeaderRaw(header, "X-Claude-Code-Session-Id", sessionID)
 }

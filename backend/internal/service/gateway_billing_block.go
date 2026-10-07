@@ -89,10 +89,17 @@ func extractFirstUserTextView(view *jsonBodyView) string {
 //
 //	x-anthropic-billing-header: cc_version=2.1.290.{fp}; cc_entrypoint=cli; cch=00000; cc_prompt_id={uuid}; cc_turn_origin=cli; cc_prompt_index={n}; cc_turn_index=1;
 //
-// cch 字段：2.1.290 官方构建上为逐请求签名哈希（5 位 hex，由二进制中字符串不可见的
-// 签名模块产生）；JS 模板里的字面量 `cch=00000` 是签名不可用/vertex 的回退形态
-// （`m==="firstParty"&&ni()||m==="vertex"` 分支）。网关无签名模块，维持 00000 占位，
-// 属已知残留差异。
+// cch 字段：2.1.290 官方构建上为逐请求内容哈希（5 位 hex）。2026-10-06 实证要点：
+//   - 对最终请求体（含占位符）的确定性哈希：同一 body 三次重试 cch 完全一致；
+//     重试不重复签名；请求头（含 x-client-request-id）不参与哈希。
+//   - 已否证的形态：xxh64/xxh3/xxh32/rapidhash/fnv/murmur64a/md5/sha/blake 的
+//     零种子/默认密钥/二进制全段 8 字节常量种子/字符串派生种子/字段派生种子，
+//     在 6 组输入跨度上全部不命中——密钥被混淆/加密保护（原 2.1.37 时代为
+//     xxh64+内嵌种子，当前版本已加固）。
+//   - JS 模板里的字面量 `cch=00000` 是签名不可用/vertex 的回退形态
+//     （`m==="firstParty"&&ni()||m==="vertex"` 分支），属客户端合法形态。
+//
+// 网关无签名模块，维持 00000 占位，属已知残留差异。
 // cc_prompt_id：2.1.283+ 第一方携带，与 x-claude-code-prompt-id 头同值
 // （在 buildUpstreamRequest 中从最终 body 镜像到头，保证两者一致）。
 // cc_turn_origin：与 entrypoint 对应（cli/sdk/...），mimic 固定 cli。

@@ -57,6 +57,20 @@ func (s *stubIdentityCache) GetLastActiveSessionID(context.Context, int64) (stri
 	return "", nil
 }
 
+func (s *stubIdentityCache) ReplaceFingerprint(_ context.Context, _ int64, fp *Fingerprint) (*Fingerprint, error) {
+	clone := *fp
+	s.fingerprint = &clone
+	return fp, nil
+}
+
+func (s *stubIdentityCache) OverwriteFingerprint(_ context.Context, _ int64, fp *Fingerprint) error {
+	clone := *fp
+	s.fingerprint = &clone
+	return nil
+}
+
+func (s *stubIdentityCache) DeleteAccountSessions(context.Context, int64) error { return nil }
+
 func headersWithUA(ua string) http.Header {
 	h := http.Header{}
 	if ua != "" {

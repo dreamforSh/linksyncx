@@ -144,6 +144,13 @@ type Fingerprint struct {
 	StainlessRuntime        string
 	StainlessRuntimeVersion string
 	UpdatedAt               int64 `json:",omitempty"` // Unix timestamp，用于判断是否需要续期TTL
+
+	// IdentityEpoch 是身份代次：只在管理员重置客户端身份或账号换主人时递增，参与上游会话映射。
+	IdentityEpoch int64 `json:",omitempty"`
+	// OwnerRef 是身份所属的上游账号主人（extra.account_uuid）；空表示未知。
+	OwnerRef string `json:",omitempty"`
+	// Persisted 表示该记录已以数据库为准（缓存由库写入）；为 false 的存量 Redis 记录会被收编入库。
+	Persisted bool `json:",omitempty"`
 }
 
 // IdentityCache defines cache operations for identity service
@@ -166,6 +173,14 @@ type IdentityCache interface {
 	SetLastActiveSessionID(ctx context.Context, accountID int64, sessionID string) error
 	// GetLastActiveSessionID 读取账号最近活跃的上游会话 ID；不存在返回 ("", nil)。
 	GetLastActiveSessionID(ctx context.Context, accountID int64) (string, error)
+	// ReplaceFingerprint 写入数据库确认过的身份（含轮换后的新身份），返回写入后存储中的身份。
+	// 不因存储中是另一个 ClientID 而拒写，但存储中已是更高 IdentityEpoch 的身份时不覆盖并返回存储值，
+	// 防止慢请求把轮换前的旧身份写回缓存。
+	ReplaceFingerprint(ctx context.Context, accountID int64, fp *Fingerprint) (*Fingerprint, error)
+	// OverwriteFingerprint 无条件写入指纹，只用于缓存与数据库不一致（如数据库回滚到更低代次）时以库为准纠正缓存。
+	OverwriteFingerprint(ctx context.Context, accountID int64, fp *Fingerprint) error
+	// DeleteAccountSessions 删除账号级会话键（伪装会话、环境会话、最近活跃会话），身份轮换后调用。
+	DeleteAccountSessions(ctx context.Context, accountID int64) error
 }
 
 // ErrClientIdentityUnavailable 表示账号的客户端身份（device_id 等）既读不到也无法持久化创建。
@@ -176,6 +191,12 @@ var ErrClientIdentityUnavailable = errors.New("account client identity is unavai
 // IdentityService 管理OAuth账号的请求身份指纹
 type IdentityService struct {
 	cache IdentityCache
+	// store 是身份的真相源（数据库）；为 nil 时退回纯 Redis 语义（测试与旧装配）。
+	store ClientIdentityStore
+
+	// adoptRetryAt 记录收编存量 Redis 身份失败后的下次重试时间，数据库故障期间不逐请求打库。
+	adoptMu      sync.Mutex
+	adoptRetryAt map[int64]time.Time
 
 	// lastActiveWrites 节流「最近活跃会话」的 Redis 写入：同一账号会话不变时
 	// 每 lastActiveSessionRewriteInterval 才续期一次。
@@ -195,15 +216,39 @@ const lastActiveSessionRewriteInterval = time.Minute
 // ambientSessionBucket 是 Redis 不可用时环境会话的确定性分桶长度，与环境会话 TTL 一致。
 const ambientSessionBucket = 15 * time.Minute
 
-// NewIdentityService 创建新的IdentityService
+// NewIdentityService 创建只用 Redis 的 IdentityService（测试与旧装配）。
 func NewIdentityService(cache IdentityCache) *IdentityService {
-	return &IdentityService{cache: cache, lastActiveWrites: make(map[int64]lastActiveSessionWrite)}
+	return &IdentityService{
+		cache:            cache,
+		lastActiveWrites: make(map[int64]lastActiveSessionWrite),
+		adoptRetryAt:     make(map[int64]time.Time),
+	}
 }
 
-// GetOrCreateFingerprint 获取或创建账号的指纹
-// 如果缓存存在，检测user-agent版本，新版本则更新
-// 如果缓存不存在，生成随机ClientID并从请求头创建指纹，然后缓存
+// ProvideIdentityService 创建以数据库为身份真相源、Redis 为缓存的 IdentityService。
+func ProvideIdentityService(cache IdentityCache, store ClientIdentityStore) *IdentityService {
+	svc := NewIdentityService(cache)
+	svc.store = store
+	return svc
+}
+
+// GetOrCreateFingerprint 获取或创建账号的指纹（不知道账号主人时的入口）。
+// 生产路径用 GetOrCreateAccountFingerprint：它带上账号主人，主人变化时轮换身份。
 func (s *IdentityService) GetOrCreateFingerprint(ctx context.Context, accountID int64, headers http.Header) (*Fingerprint, error) {
+	return s.getOrCreateFingerprint(ctx, accountID, "", headers)
+}
+
+func (s *IdentityService) getOrCreateFingerprint(ctx context.Context, accountID int64, owner string, headers http.Header) (*Fingerprint, error) {
+	if s.store != nil {
+		return s.getOrCreatePersistedFingerprint(ctx, accountID, owner, headers)
+	}
+	return s.getOrCreateCachedFingerprint(ctx, accountID, headers)
+}
+
+// getOrCreateCachedFingerprint 是未配置身份库时的纯 Redis 路径：
+// 如果缓存存在，检测user-agent版本，新版本则更新；
+// 如果缓存不存在，生成随机ClientID并从请求头创建指纹，然后缓存。
+func (s *IdentityService) getOrCreateCachedFingerprint(ctx context.Context, accountID int64, headers http.Header) (*Fingerprint, error) {
 	// 入口统一校验：创建与升级两条路径共用，任一路径漏掉都会让畸形 UA 被持久化。
 	clientUA := strings.TrimSpace(headers.Get("User-Agent"))
 	uaAcceptable := isAcceptableFingerprintUserAgent(clientUA)
@@ -216,56 +261,9 @@ func (s *IdentityService) GetOrCreateFingerprint(ctx context.Context, accountID 
 		cached = nil
 	}
 	if cached != nil {
-		needWrite := false
+		needWrite := upgradeFingerprintFromHeaders(accountID, cached, headers, clientUA, uaAcceptable)
 
-		// 只在真正阻止了一次写入时记录，便于定位污染源，同时避免被毒化客户端的
-		// 高频重试刷屏（无重置头的 429 会落到 5 秒兜底冷却，重试相当密集）。
-		if !uaAcceptable && clientUA != "" && isNewerVersion(clientUA, cached.UserAgent) {
-			logger.LegacyPrintf("service.identity",
-				"Rejected fingerprint user-agent for account %d: %q (malformed or implausible version)",
-				accountID, clientUA)
-		}
-
-		if !isAcceptableFingerprintUserAgent(cached.UserAgent) {
-			// 自愈：缓存中已是畸形/哨兵 UA（本次加固之前写入的）。指纹在活跃账号上
-			// 懒续期后近乎永不过期，且系统内没有重置入口——不在读取时纠正，存量被
-			// 毒化的账号就只能靠手工删 Redis 键恢复。
-			poisoned := cached.UserAgent
-			if uaAcceptable {
-				mergeHeadersIntoFingerprint(cached, headers)
-			} else {
-				cached.UserAgent = defaultFingerprint().UserAgent
-			}
-			needWrite = true
-			logger.LegacyPrintf("service.identity",
-				"Replaced malformed cached fingerprint for account %d: %q -> %q",
-				accountID, poisoned, cached.UserAgent)
-		} else {
-			// 客户端送来更新版本时的常规升级：merge 语义 — 仅更新请求中实际携带的字段，
-			// 保留缓存值，避免缺失的头被硬编码默认值覆盖（如新 CLI 版本 + 旧 SDK 默认值的不一致）
-			if uaAcceptable && isNewerVersion(clientUA, cached.UserAgent) {
-				mergeHeadersIntoFingerprint(cached, headers)
-				needWrite = true
-				logger.LegacyPrintf("service.identity", "Updated fingerprint for account %d: %s (merge update)", accountID, clientUA)
-			}
-
-		}
-
-		// 版本下限抬升（floor）：heal 与 healthy 两条缓存命中路径共同的后置条件，与
-		// 上面的客户端常规升级相互独立、二者取更新者。客户端送来更旧版本时
-		// isNewerVersion 不触发，此处仍能把低于 CLICurrentVersion 的存量指纹就地抬到
-		// 下限并持久化，否则升 CLICurrentVersion 对所有已有账号无效，新模型的客户端
-		// 版本闸门（如 Fable 5.1 要求 >= 2.1.251）永远过不去。自愈路径同样必须经过：
-		// 畸形缓存 + 合法但过旧的客户端 UA 首次读取就要落到下限，不能先落库一个
-		// 过旧版本、等下一次读取才纠正。
-		if flooredUA, changed := floorClaudeCLIUserAgentVersion(cached.UserAgent); changed {
-			cached.UserAgent = flooredUA
-			needWrite = true
-			logger.LegacyPrintf("service.identity",
-				"Floored cached fingerprint claude-cli version for account %d: %s", accountID, flooredUA)
-		}
-
-		if !needWrite && time.Since(time.Unix(cached.UpdatedAt, 0)) > 24*time.Hour {
+		if !needWrite && time.Since(time.Unix(cached.UpdatedAt, 0)) > identityCacheRenewInterval {
 			// 距上次写入超过24小时，续期TTL
 			needWrite = true
 		}
@@ -319,6 +317,54 @@ func (s *IdentityService) GetOrCreateFingerprint(ctx context.Context, accountID 
 
 	logger.LegacyPrintf("service.identity", "Created new fingerprint for account %d with client_id: %s", accountID, fp.ClientID)
 	return stored, nil
+}
+
+// upgradeFingerprintFromHeaders 对已有身份做就地修正：畸形 UA 自愈、客户端送来更新版本时的
+// 合并升级、版本下限抬升。返回是否改动了 UA 或头。headers 为空时只做与请求无关的确定性
+// 修正（自愈用默认 UA、版本下限），供写库失败时退回使用。
+func upgradeFingerprintFromHeaders(accountID int64, fp *Fingerprint, headers http.Header, clientUA string, uaAcceptable bool) bool {
+	changed := false
+
+	// 只在真正阻止了一次写入时记录，便于定位污染源，同时避免被毒化客户端的
+	// 高频重试刷屏（无重置头的 429 会落到 5 秒兜底冷却，重试相当密集）。
+	if !uaAcceptable && clientUA != "" && isNewerVersion(clientUA, fp.UserAgent) {
+		logger.LegacyPrintf("service.identity",
+			"Rejected fingerprint user-agent for account %d: %q (malformed or implausible version)",
+			accountID, clientUA)
+	}
+
+	if !isAcceptableFingerprintUserAgent(fp.UserAgent) {
+		// 自愈：缓存中已是畸形/哨兵 UA（本次加固之前写入的）。指纹在活跃账号上
+		// 懒续期后近乎永不过期——不在读取时纠正，存量被毒化的账号就只能手工恢复。
+		poisoned := fp.UserAgent
+		if uaAcceptable {
+			mergeHeadersIntoFingerprint(fp, headers)
+		} else {
+			fp.UserAgent = defaultFingerprint().UserAgent
+		}
+		changed = true
+		logger.LegacyPrintf("service.identity",
+			"Replaced malformed cached fingerprint for account %d: %q -> %q",
+			accountID, poisoned, fp.UserAgent)
+	} else if uaAcceptable && isNewerVersion(clientUA, fp.UserAgent) {
+		// 客户端送来更新版本时的常规升级：merge 语义 — 仅更新请求中实际携带的字段，
+		// 保留缓存值，避免缺失的头被硬编码默认值覆盖（如新 CLI 版本 + 旧 SDK 默认值的不一致）
+		mergeHeadersIntoFingerprint(fp, headers)
+		changed = true
+		logger.LegacyPrintf("service.identity", "Updated fingerprint for account %d: %s (merge update)", accountID, clientUA)
+	}
+
+	// 版本下限抬升（floor）：heal 与 healthy 两条路径共同的后置条件，与上面的客户端常规
+	// 升级相互独立、二者取更新者。客户端送来更旧版本时 isNewerVersion 不触发，此处仍能把
+	// 低于 CLICurrentVersion 的存量指纹就地抬到下限并持久化，否则升 CLICurrentVersion 对所有
+	// 已有账号无效，新模型的客户端版本闸门（如 Fable 5.1 要求 >= 2.1.251）永远过不去。
+	if flooredUA, ok := floorClaudeCLIUserAgentVersion(fp.UserAgent); ok {
+		fp.UserAgent = flooredUA
+		changed = true
+		logger.LegacyPrintf("service.identity",
+			"Floored cached fingerprint claude-cli version for account %d: %s", accountID, flooredUA)
+	}
+	return changed
 }
 
 // createFingerprintFromHeaders 从请求头创建指纹
@@ -419,14 +465,17 @@ func (s *IdentityService) ApplyFingerprint(req *http.Request, fp *Fingerprint) {
 //
 // 重要：此函数使用 json.RawMessage 保留其他字段的原始字节，
 // 避免重新序列化导致 thinking 块等内容被修改。
+//
+// 会话映射按 identity_epoch = 0 计算（未轮换过身份的账号）；生产路径经
+// RewriteUserIDWithMasking / rewriteUserIDWithMaskingView 带上指纹中的代次。
 func (s *IdentityService) RewriteUserID(body []byte, accountID int64, accountUUID, cachedClientID, fingerprintUA string) ([]byte, error) {
 	view := newJSONBodyView(body, nil)
-	s.rewriteUserIDView(view, accountID, accountUUID, cachedClientID, fingerprintUA)
+	s.rewriteUserIDView(view, accountID, 0, accountUUID, cachedClientID, fingerprintUA)
 	return view.data, nil
 }
 
 // rewriteUserIDView 是 RewriteUserID 作用于 jsonBodyView 的版本（原函数从不返回错误）。
-func (s *IdentityService) rewriteUserIDView(view *jsonBodyView, accountID int64, accountUUID, cachedClientID, fingerprintUA string) {
+func (s *IdentityService) rewriteUserIDView(view *jsonBodyView, accountID, identityEpoch int64, accountUUID, cachedClientID, fingerprintUA string) {
 	if len(view.data) == 0 || accountUUID == "" || cachedClientID == "" {
 		return
 	}
@@ -454,7 +503,7 @@ func (s *IdentityService) rewriteUserIDView(view *jsonBodyView, accountID int64,
 		return
 	}
 
-	newSessionHash := upstreamSessionIDFor(accountID, parsed.SessionID)
+	newSessionHash := upstreamSessionIDFor(accountID, identityEpoch, parsed.SessionID)
 
 	// 根据客户端版本选择输出格式。新格式下原位改写：保留客户端的键序与其它字段，
 	// parent_session_id 用同一映射换成本账号作用域的值，父子会话关系不丢。
@@ -463,7 +512,7 @@ func (s *IdentityService) rewriteUserIDView(view *jsonBodyView, accountID int64,
 	if parsed.IsNewFormat && IsNewMetadataFormatVersion(version) {
 		parent := ""
 		if parsed.ParentSessionID != "" {
-			parent = upstreamSessionIDFor(accountID, parsed.ParentSessionID)
+			parent = upstreamSessionIDFor(accountID, identityEpoch, parsed.ParentSessionID)
 		}
 		if rewritten, ok := rewriteJSONMetadataUserID(userID, cachedClientID, accountUUID, newSessionHash, parent, false); ok {
 			newUserID = rewritten
@@ -479,11 +528,16 @@ func (s *IdentityService) rewriteUserIDView(view *jsonBodyView, accountID int64,
 	_ = view.setString("metadata.user_id", newUserID)
 }
 
-// upstreamSessionIDFor 把下游会话映射为账号作用域的上游会话 ID：SHA256(accountID::clientSession)
-// 取 UUID v4 形态。确定性映射：同一对话在同一账号上恒得同一会话 ID（等同真实 CLI
-// --resume 沿用会话 ID），换账号后自然变成新会话。
-func upstreamSessionIDFor(accountID int64, clientSessionID string) string {
-	return generateUUIDFromSeed(fmt.Sprintf("%d::%s", accountID, clientSessionID))
+// upstreamSessionIDFor 把下游会话映射为账号作用域的上游会话 ID，取 UUID v4 形态。确定性映射：
+// 同一对话在同一账号、同一身份代次下恒得同一会话 ID（等同真实 CLI --resume 沿用会话 ID），
+// 换账号或身份轮换（epoch + 1）后自然变成新会话。
+// 代次为 0 时沿用引入代次之前的种子 SHA256(accountID::clientSession)，上线时进行中的对话
+// 会话 ID 不变；代次大于 0 时种子带上 e{epoch}（UUID 不含 "::"，不会与旧种子撞车）。
+func upstreamSessionIDFor(accountID, identityEpoch int64, clientSessionID string) string {
+	if identityEpoch <= 0 {
+		return generateUUIDFromSeed(fmt.Sprintf("%d::%s", accountID, clientSessionID))
+	}
+	return generateUUIDFromSeed(fmt.Sprintf("%d::e%d::%s", accountID, identityEpoch, clientSessionID))
 }
 
 // RewriteUserIDWithMasking 重写body中的metadata.user_id，支持会话ID伪装
@@ -492,17 +546,21 @@ func upstreamSessionIDFor(accountID int64, clientSessionID string) string {
 //
 // 重要：此函数使用 json.RawMessage 保留其他字段的原始字节，
 // 避免重新序列化导致 thinking 块等内容被修改。
-func (s *IdentityService) RewriteUserIDWithMasking(ctx context.Context, body []byte, account *Account, accountUUID, cachedClientID, fingerprintUA string) ([]byte, error) {
+func (s *IdentityService) RewriteUserIDWithMasking(ctx context.Context, body []byte, account *Account, accountUUID string, fp *Fingerprint) ([]byte, error) {
 	view := newJSONBodyView(body, nil)
-	s.rewriteUserIDWithMaskingView(ctx, view, account, accountUUID, cachedClientID, fingerprintUA)
+	s.rewriteUserIDWithMaskingView(ctx, view, account, accountUUID, fp)
 	return view.data, nil
 }
 
 // rewriteUserIDWithMaskingView 是 RewriteUserIDWithMasking 作用于 jsonBodyView 的版本
 // （原函数从不返回错误）。
-func (s *IdentityService) rewriteUserIDWithMaskingView(ctx context.Context, view *jsonBodyView, account *Account, accountUUID, cachedClientID, fingerprintUA string) {
-	// 先执行常规的 RewriteUserID 逻辑
-	s.rewriteUserIDView(view, account.ID, accountUUID, cachedClientID, fingerprintUA)
+func (s *IdentityService) rewriteUserIDWithMaskingView(ctx context.Context, view *jsonBodyView, account *Account, accountUUID string, fp *Fingerprint) {
+	if fp == nil {
+		return
+	}
+	fingerprintUA := fp.UserAgent
+	// 先执行常规的 RewriteUserID 逻辑（会话映射带上身份代次）
+	s.rewriteUserIDView(view, account.ID, fp.IdentityEpoch, accountUUID, fp.ClientID, fingerprintUA)
 
 	// 检查是否启用会话ID伪装
 	if !account.IsSessionIDMaskingEnabled() {
@@ -579,7 +637,7 @@ func (s *IdentityService) rewriteUserIDWithMaskingView(ctx context.Context, view
 //  4. 账号空闲：环境会话。
 //
 // 存储不可用时退回按 15 分钟分桶的确定性 ID，绝不逐请求随机。
-func (s *IdentityService) ResolveSessionIDWithoutMetadata(ctx context.Context, account *Account, clientSessionID string) string {
+func (s *IdentityService) ResolveSessionIDWithoutMetadata(ctx context.Context, account *Account, identityEpoch int64, clientSessionID string) string {
 	if account == nil {
 		return generateRandomUUID()
 	}
@@ -589,7 +647,7 @@ func (s *IdentityService) ResolveSessionIDWithoutMetadata(ctx context.Context, a
 		}
 	}
 	if clientSessionID = strings.TrimSpace(clientSessionID); clientSessionID != "" && len(clientSessionID) <= 128 {
-		return upstreamSessionIDFor(account.ID, clientSessionID)
+		return upstreamSessionIDFor(account.ID, identityEpoch, clientSessionID)
 	}
 	if last, err := s.cache.GetLastActiveSessionID(ctx, account.ID); err == nil && last != "" {
 		return last

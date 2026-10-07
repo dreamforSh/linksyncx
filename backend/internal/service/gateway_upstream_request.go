@@ -62,6 +62,8 @@ func (s *GatewayService) buildUpstreamRequestIndexed(ctx context.Context, c *gin
 
 	// OAuth账号：应用统一指纹和metadata重写（受设置开关控制）
 	var fingerprint *Fingerprint
+	// identityEpoch 是账号当前身份代次，会话头与 metadata.user_id 按同一代次映射。
+	var identityEpoch int64
 	enableFP, enableMPT := true, false
 	if s.settingService != nil {
 		enableFP, enableMPT, _ = s.settingService.GetGatewayForwardingSettings(ctx)
@@ -69,10 +71,11 @@ func (s *GatewayService) buildUpstreamRequestIndexed(ctx context.Context, c *gin
 	if account.IsOAuth() && s.identityService != nil {
 		// 1. 获取或创建指纹（包含随机生成的ClientID）。拿不到身份时不能降级透传：
 		//    那会把下游客户端自己的 device_id / 会话原样发给上游，或带临时随机身份出站。
-		fp, err := s.identityService.GetOrCreateFingerprint(ctx, account.ID, clientHeaders)
+		fp, err := s.identityService.GetOrCreateAccountFingerprint(ctx, account, clientHeaders)
 		if err != nil {
 			return nil, nil, nil, claudeIdentityUnavailableFailover(account, err)
 		}
+		identityEpoch = fp.IdentityEpoch
 		if enableFP {
 			fingerprint = fp
 		}
@@ -83,7 +86,7 @@ func (s *GatewayService) buildUpstreamRequestIndexed(ctx context.Context, c *gin
 		if !enableMPT {
 			accountUUID := account.GetExtraString("account_uuid")
 			if accountUUID != "" && fp.ClientID != "" {
-				s.identityService.rewriteUserIDWithMaskingView(ctx, view, account, accountUUID, fp.ClientID, fp.UserAgent)
+				s.identityService.rewriteUserIDWithMaskingView(ctx, view, account, accountUUID, fp)
 			}
 		}
 	}
@@ -209,7 +212,7 @@ func (s *GatewayService) buildUpstreamRequestIndexed(ctx context.Context, c *gin
 	// 按 ResolveSessionIDWithoutMetadata 选账号作用域的会话，覆盖透传来的客户端
 	// 原始会话头（未映射的原值会和本对话 messages 请求的会话对不上）。
 	if tokenType == "oauth" {
-		s.syncClaudeSessionHeader(ctx, account, req.Header, clientHeaders, view.get("metadata.user_id").String())
+		s.syncClaudeSessionHeader(ctx, account, identityEpoch, req.Header, clientHeaders, view.get("metadata.user_id").String())
 		// 同步 x-claude-code-prompt-id 头：2.1.283+ 第一方默认携带，值与 billing 块
 		// cc_prompt_id 一致（2026-10-05 抓包实证）。mimic 路径的 billing 块由本网关
 		// 生成，从此镜像到头；透传路径客户端已自带（白名单放行），仅在缺失时补齐。

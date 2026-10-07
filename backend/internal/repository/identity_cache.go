@@ -132,6 +132,52 @@ func (c *identityCache) CreateFingerprint(ctx context.Context, accountID int64, 
 	return decodeFingerprint(stored)
 }
 
+// replaceFingerprintScript 写入数据库确认过的身份：存储中的合法记录 IdentityEpoch 高于 ARGV[2] 时
+// （并发轮换已先写入新身份）不覆盖并返回存储值；记录缺失、损坏或代次不高于本次写入时写入 ARGV[1]。
+var replaceFingerprintScript = redis.NewScript(storedClientIDLua + `
+local current = redis.call('GET', KEYS[1])
+if storedClientID(current) then
+    local storedEpoch = tonumber(cjson.decode(current).IdentityEpoch) or 0
+    if storedEpoch > tonumber(ARGV[2]) then return current end
+end
+redis.call('SET', KEYS[1], ARGV[1], 'PX', ARGV[3])
+return ARGV[1]
+`)
+
+// ReplaceFingerprint 写入数据库确认过的身份（含轮换后的新身份），返回写入后存储中的身份。
+// 不能像 SetFingerprint 那样因存储中是旧 ClientID 而拒写，但不让旧代次覆盖新代次。
+func (c *identityCache) ReplaceFingerprint(ctx context.Context, accountID int64, fp *service.Fingerprint) (*service.Fingerprint, error) {
+	if fp == nil || fp.ClientID == "" {
+		return nil, fmt.Errorf("account identity requires a client ID")
+	}
+	val, err := json.Marshal(fp)
+	if err != nil {
+		return nil, err
+	}
+	stored, err := replaceFingerprintScript.Run(ctx, c.rdb, []string{fingerprintKey(accountID)}, val, fp.IdentityEpoch, fingerprintTTL.Milliseconds()).Text()
+	if err != nil {
+		return nil, err
+	}
+	return decodeFingerprint(stored)
+}
+
+// OverwriteFingerprint 无条件覆盖指纹，只用于缓存与数据库不一致时以库为准纠正缓存。
+func (c *identityCache) OverwriteFingerprint(ctx context.Context, accountID int64, fp *service.Fingerprint) error {
+	if fp == nil || fp.ClientID == "" {
+		return fmt.Errorf("account identity requires a client ID")
+	}
+	val, err := json.Marshal(fp)
+	if err != nil {
+		return err
+	}
+	return c.rdb.Set(ctx, fingerprintKey(accountID), val, fingerprintTTL).Err()
+}
+
+// DeleteAccountSessions 删除账号级会话键：伪装会话、环境会话与最近活跃会话。
+func (c *identityCache) DeleteAccountSessions(ctx context.Context, accountID int64) error {
+	return c.rdb.Del(ctx, maskedSessionKey(accountID), ambientSessionKey(accountID), lastActiveSessionKey(accountID)).Err()
+}
+
 var maskedSessionScript = redis.NewScript(`
 local current = redis.call('GET', KEYS[1])
 if not current or current == '' then current = ARGV[1] end

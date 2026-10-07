@@ -372,6 +372,27 @@ export async function clearError(id: number): Promise<Account> {
   return data
 }
 
+export interface ResetClientIdentityResult {
+  /** false：账号还没有客户端身份，首次使用时会自动生成 */
+  reset: boolean
+  identity_epoch: number
+  /** 新 device_id 的前 8 位，仅供核对 */
+  device_id_prefix?: string
+}
+
+/**
+ * Reset the client identity of a Claude OAuth / setup-token account: the account
+ * becomes a new device (new device ID, identity epoch + 1) and its account-level
+ * sessions are cleared.
+ * @param id - Account ID
+ */
+export async function resetClientIdentity(id: number): Promise<ResetClientIdentityResult> {
+  const { data } = await apiClient.post<ResetClientIdentityResult>(
+    `/admin/accounts/${id}/reset-client-identity`
+  )
+  return data
+}
+
 /**
  * Get account usage information (5h/7d window)
  * @param id - Account ID
@@ -1216,6 +1237,7 @@ export const accountsAPI = {
   applyOAuthCredentials,
   getStats,
   clearError,
+  resetClientIdentity,
   getUsage,
   getBatchUsage,
   getTodayStats,

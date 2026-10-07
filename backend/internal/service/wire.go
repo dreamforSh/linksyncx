@@ -940,7 +940,7 @@ var ProviderSet = wire.NewSet(
 	ProvideUserMessageQueueService,
 	NewUsageRecordWorkerPool,
 	ProvideSchedulerSnapshotService,
-	NewIdentityService,
+	ProvideIdentityService,
 	NewCRSSyncService,
 	ProvideUpdateService,
 	ProvideTokenRefreshService,

@@ -241,7 +241,7 @@ func (s *GatewayService) Forward(ctx context.Context, c *gin.Context, account *A
 
 		normalizeOpts := claudeOAuthNormalizeOptions{}
 		if s.identityService != nil && c != nil {
-			fp, err := s.identityService.GetOrCreateFingerprint(ctx, account.ID, c.Request.Header)
+			fp, err := s.identityService.GetOrCreateAccountFingerprint(ctx, account, c.Request.Header)
 			if err != nil {
 				return nil, claudeIdentityUnavailableFailover(account, err)
 			}

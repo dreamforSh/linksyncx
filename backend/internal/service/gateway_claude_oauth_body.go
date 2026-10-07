@@ -419,7 +419,7 @@ func (s *GatewayService) applyClaudeCodeOAuthMimicryToBody(
 	normalizeOpts := claudeOAuthNormalizeOptions{}
 
 	if s.identityService != nil && c != nil && c.Request != nil {
-		fp, err := s.identityService.GetOrCreateFingerprint(ctx, account.ID, c.Request.Header)
+		fp, err := s.identityService.GetOrCreateAccountFingerprint(ctx, account, c.Request.Header)
 		if err != nil {
 			return nil, claudeIdentityUnavailableFailover(account, err)
 		}

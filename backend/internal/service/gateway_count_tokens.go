@@ -524,7 +524,7 @@ func (s *GatewayService) buildCountTokensRequest(ctx context.Context, c *gin.Con
 	}
 	var ctFingerprint *Fingerprint
 	if account.IsOAuth() && s.identityService != nil {
-		fp, err := s.identityService.GetOrCreateFingerprint(ctx, account.ID, clientHeaders)
+		fp, err := s.identityService.GetOrCreateAccountFingerprint(ctx, account, clientHeaders)
 		if err != nil {
 			// 不带临时随机身份、也不降级透传客户端身份出站。
 			return nil, nil, err
@@ -533,7 +533,7 @@ func (s *GatewayService) buildCountTokensRequest(ctx context.Context, c *gin.Con
 		if !ctEnableMPT {
 			accountUUID := account.GetExtraString("account_uuid")
 			if accountUUID != "" && fp.ClientID != "" {
-				if newBody, err := s.identityService.RewriteUserIDWithMasking(ctx, body, account, accountUUID, fp.ClientID, fp.UserAgent); err == nil && len(newBody) > 0 {
+				if newBody, err := s.identityService.RewriteUserIDWithMasking(ctx, body, account, accountUUID, fp); err == nil && len(newBody) > 0 {
 					body = newBody
 				}
 			}
@@ -651,7 +651,11 @@ func (s *GatewayService) buildCountTokensRequest(ctx context.Context, c *gin.Con
 	// 真实 CLI 的 count_tokens body 不带 metadata：用客户端会话头映射成本账号的会话，
 	// 与该对话 messages 请求一致；都没有时复用账号最近活跃会话或环境会话。
 	if tokenType == "oauth" {
-		sessionID := s.claudeUpstreamSessionID(ctx, account, clientHeaders, ctSessionID)
+		var identityEpoch int64
+		if ctFingerprint != nil {
+			identityEpoch = ctFingerprint.IdentityEpoch
+		}
+		sessionID := s.claudeUpstreamSessionID(ctx, account, identityEpoch, clientHeaders, ctSessionID)
 		deleteHeaderAllForms(req.Header, "X-Claude-Code-Session-Id")
 		setHeaderRaw(req.Header, "X-Claude-Code-Session-Id", sessionID)
 	}

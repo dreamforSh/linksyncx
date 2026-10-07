@@ -67,6 +67,7 @@ type AccountHandler struct {
 	ollamaCloudUsage        *service.OllamaCloudUsageService
 	cfg                     *config.Config
 	opencodeGoUsage         *service.OpenCodeGoUsageService
+	identityService         *service.IdentityService
 }
 
 // SetUpstreamBillingProbeService attaches the optional remote billing probe service.
@@ -80,6 +81,11 @@ func (h *AccountHandler) SetOllamaCloudUsageService(usage *service.OllamaCloudUs
 
 func (h *AccountHandler) SetOpenCodeGoUsageService(usage *service.OpenCodeGoUsageService) {
 	h.opencodeGoUsage = usage
+}
+
+// SetIdentityService attaches the client identity service used by ResetClientIdentity.
+func (h *AccountHandler) SetIdentityService(identity *service.IdentityService) {
+	h.identityService = identity
 }
 
 // NewAccountHandler creates a new admin account handler
@@ -1743,6 +1749,53 @@ func (h *AccountHandler) GetStats(c *gin.Context) {
 	}
 
 	response.Success(c, stats)
+}
+
+// ResetClientIdentityResponse 是重置客户端身份的结果。Reset 为 false 表示账号还没有身份，
+// 下次请求会直接新建。DeviceIDPrefix 只给出新 device_id 的前 8 位，供管理员核对。
+type ResetClientIdentityResponse struct {
+	Reset          bool   `json:"reset"`
+	IdentityEpoch  int64  `json:"identity_epoch"`
+	DeviceIDPrefix string `json:"device_id_prefix,omitempty"`
+}
+
+// ResetClientIdentity 把 Claude OAuth / setup-token 账号换成一台新「设备」：
+// identity_epoch + 1、新 device_id、默认 UA 与头，旧身份下的账号级会话一并清除。
+// POST /api/v1/admin/accounts/:id/reset-client-identity
+func (h *AccountHandler) ResetClientIdentity(c *gin.Context) {
+	accountID, err := strconv.ParseInt(c.Param("id"), 10, 64)
+	if err != nil {
+		response.BadRequest(c, "Invalid account ID")
+		return
+	}
+	if h.identityService == nil {
+		response.ErrorFrom(c, infraerrors.New(http.StatusServiceUnavailable, "CLIENT_IDENTITY_UNAVAILABLE", "client identity service is not configured"))
+		return
+	}
+	account, err := h.adminService.GetAccount(c.Request.Context(), accountID)
+	if err != nil {
+		response.ErrorFrom(c, err)
+		return
+	}
+	if !account.IsAnthropicOAuthOrSetupToken() {
+		response.ErrorFrom(c, infraerrors.New(http.StatusBadRequest, "CLIENT_IDENTITY_UNSUPPORTED", "client identity reset only applies to Claude OAuth and setup-token accounts"))
+		return
+	}
+
+	fp, err := h.identityService.ResetClientIdentity(c.Request.Context(), account)
+	if err != nil {
+		response.ErrorFrom(c, infraerrors.Newf(http.StatusServiceUnavailable, "CLIENT_IDENTITY_RESET_FAILED", "failed to reset client identity: %v", err).WithCause(err))
+		return
+	}
+	if fp == nil {
+		response.Success(c, ResetClientIdentityResponse{Reset: false})
+		return
+	}
+	prefix := fp.ClientID
+	if len(prefix) > 8 {
+		prefix = prefix[:8]
+	}
+	response.Success(c, ResetClientIdentityResponse{Reset: true, IdentityEpoch: fp.IdentityEpoch, DeviceIDPrefix: prefix})
 }
 
 // ClearError handles clearing account error
