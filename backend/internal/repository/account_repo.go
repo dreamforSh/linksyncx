@@ -72,6 +72,8 @@ var schedulerNeutralExtraKeys = map[string]struct{}{
 	// Claude OAuth 订阅档位与重置状态只用于展示，调度不读取。
 	"claude_subscription":   {},
 	"claude_reset_snapshot": {},
+	// Claude 限流快照不改变 bucket 归属；调度从单账号快照读取，随写入同步。
+	"claude_rate_limit": {},
 }
 
 const postgresParameterBatchSize = 50000
@@ -2064,6 +2066,8 @@ func (r *accountRepository) ListSchedulableCapacityByGroupIDs(ctx context.Contex
 				rows = append(rows, service.GroupAccountCapacityRow{
 					GroupID:             groupID,
 					AccountID:           acc.ID,
+					Platform:            acc.Platform,
+					Type:                acc.Type,
 					Concurrency:         acc.Concurrency,
 					Extra:               copyJSONMap(acc.Extra),
 					SessionWindowStart:  acc.SessionWindowStart,
@@ -2079,6 +2083,8 @@ func (r *accountRepository) ListSchedulableCapacityByGroupIDs(ctx context.Contex
 		SELECT
 			ag.group_id,
 			a.id AS account_id,
+			a.platform,
+			a.type,
 			a.concurrency,
 			COALESCE(a.extra, '{}'::jsonb)::text AS extra,
 			a.session_window_start,
@@ -2108,6 +2114,8 @@ func (r *accountRepository) ListSchedulableCapacityByGroupIDs(ctx context.Contex
 		if err := rows.Scan(
 			&row.GroupID,
 			&row.AccountID,
+			&row.Platform,
+			&row.Type,
 			&row.Concurrency,
 			&extraRaw,
 			&row.SessionWindowStart,
@@ -2661,6 +2669,79 @@ func (r *accountRepository) UpdateSessionWindow(ctx context.Context, id int64, s
 		}
 	}
 	return nil
+}
+
+// claudeRateLimitPatchSQL 合并写入 Claude 限流快照与 5h 会话窗口列（空状态、NULL 时间表示不修改）。
+// 栅栏：只有比库中快照（extra.claude_rate_limit.applied_at_ms）更晚收到的响应头才写入。
+const claudeRateLimitPatchSQL = `UPDATE accounts SET
+	extra = COALESCE(extra, '{}'::jsonb) || $1::jsonb,
+	session_window_status = CASE WHEN $2::text = '' THEN session_window_status ELSE $2::text END,
+	session_window_start = COALESCE($3::timestamptz, session_window_start),
+	session_window_end = COALESCE($4::timestamptz, session_window_end),
+	updated_at = NOW()
+WHERE id = $5 AND deleted_at IS NULL
+	AND COALESCE((extra -> 'claude_rate_limit' ->> 'applied_at_ms')::bigint, 0) < $6`
+
+func (r *accountRepository) ApplyClaudeRateLimitPatch(ctx context.Context, id int64, patch service.ClaudeRateLimitPatch) (bool, error) {
+	payload, err := json.Marshal(patch.Extra)
+	if err != nil {
+		return false, err
+	}
+	// 与 UpdateSessionWindow / UpdateExtra 一致：窗口时间变化或写入调度相关字段时入队调度 outbox。
+	durableSchedulerChange := patch.SessionWindowStart != nil || patch.SessionWindowEnd != nil ||
+		shouldEnqueueSchedulerOutboxForExtraUpdates(patch.Extra)
+
+	baseCtx := ctx
+	contextTx := dbent.TxFromContext(ctx)
+	client := clientFromContext(ctx, r.client)
+	var tx *dbent.Tx
+	if durableSchedulerChange && contextTx == nil {
+		var txErr error
+		tx, txErr = r.client.Tx(ctx)
+		if txErr != nil && !errors.Is(txErr, dbent.ErrTxStarted) {
+			return false, txErr
+		}
+		if tx != nil {
+			defer func() { _ = tx.Rollback() }()
+			ctx = dbent.NewTxContext(ctx, tx)
+			client = tx.Client()
+		}
+	}
+	result, err := client.ExecContext(ctx, claudeRateLimitPatchSQL,
+		string(payload), patch.SessionWindowStatus, nullableTimeArg(patch.SessionWindowStart), nullableTimeArg(patch.SessionWindowEnd),
+		id, patch.AppliedAtMs)
+	if err != nil {
+		return false, err
+	}
+	affected, err := result.RowsAffected()
+	if err != nil {
+		return false, err
+	}
+	if affected == 0 {
+		return false, nil // 账号已删除，或库中已是更晚收到的快照
+	}
+	if durableSchedulerChange {
+		if err := enqueueSchedulerOutbox(ctx, client, service.SchedulerOutboxEventAccountChanged, &id, nil, nil); err != nil {
+			return false, err
+		}
+		if tx != nil {
+			if err := tx.Commit(); err != nil {
+				return false, err
+			}
+		}
+	}
+	if contextTx == nil {
+		r.syncSchedulerAccountSnapshot(baseCtx, id)
+	}
+	return true, nil
+}
+
+// nullableTimeArg 把可空时间转成 SQL 参数：nil 传 NULL。
+func nullableTimeArg(t *time.Time) any {
+	if t == nil {
+		return nil
+	}
+	return *t
 }
 
 func (r *accountRepository) UpdateSessionWindowEnd(ctx context.Context, id int64, end time.Time) error {

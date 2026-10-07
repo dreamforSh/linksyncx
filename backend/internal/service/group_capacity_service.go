@@ -21,6 +21,8 @@ type GroupCapacitySummary struct {
 type GroupAccountCapacityRow struct {
 	GroupID             int64
 	AccountID           int64
+	Platform            string
+	Type                string
 	Concurrency         int
 	Extra               map[string]any
 	SessionWindowStart  *time.Time
@@ -43,6 +45,7 @@ type GroupCapacityService struct {
 	concurrencyService *ConcurrencyService
 	sessionLimitCache  SessionLimitCache
 	rpmCache           RPMCache
+	settingService     *SettingService
 }
 
 // NewGroupCapacityService creates a new GroupCapacityService.
@@ -52,6 +55,7 @@ func NewGroupCapacityService(
 	concurrencyService *ConcurrencyService,
 	sessionLimitCache SessionLimitCache,
 	rpmCache RPMCache,
+	settingService *SettingService,
 ) *GroupCapacityService {
 	return &GroupCapacityService{
 		accountRepo:        accountRepo,
@@ -59,6 +63,7 @@ func NewGroupCapacityService(
 		concurrencyService: concurrencyService,
 		sessionLimitCache:  sessionLimitCache,
 		rpmCache:           rpmCache,
+		settingService:     settingService,
 	}
 }
 
@@ -130,6 +135,7 @@ func (s *GroupCapacityService) getGroupCapacitiesBatch(ctx context.Context, grou
 		return results, nil
 	}
 
+	defaultSessionBudget := s.settingService.GetClaudeDefaultMaxSessions(ctx)
 	refs := make([]groupCapacityAccountRef, 0, len(rows))
 	seenGroupAccount := make(map[groupCapacityAccountRef]struct{}, len(rows))
 	accountIDSet := make(map[int64]struct{}, len(rows))
@@ -156,6 +162,8 @@ func (s *GroupCapacityService) getGroupCapacitiesBatch(ctx context.Context, grou
 
 		acc := Account{
 			ID:                  row.AccountID,
+			Platform:            row.Platform,
+			Type:                row.Type,
 			Concurrency:         row.Concurrency,
 			Extra:               row.Extra,
 			SessionWindowStart:  row.SessionWindowStart,
@@ -165,7 +173,7 @@ func (s *GroupCapacityService) getGroupCapacitiesBatch(ctx context.Context, grou
 
 		results[idx].ConcurrencyMax += acc.Concurrency
 
-		if maxSessions := acc.GetMaxSessions(); maxSessions > 0 {
+		if maxSessions := ClaudeSessionBudget(&acc, defaultSessionBudget); maxSessions > 0 {
 			results[idx].SessionsMax += maxSessions
 			timeout := time.Duration(acc.GetSessionIdleTimeoutMinutes()) * time.Minute
 			if timeout <= 0 {
@@ -247,13 +255,14 @@ func (s *GroupCapacityService) getGroupCapacity(ctx context.Context, groupID int
 	accountIDs := make([]int64, 0, len(accounts))
 	sessionTimeouts := make(map[int64]time.Duration)
 	var concurrencyMax, sessionsMax, rpmMax int
+	defaultSessionBudget := s.settingService.GetClaudeDefaultMaxSessions(ctx)
 
 	for i := range accounts {
 		acc := &accounts[i]
 		accountIDs = append(accountIDs, acc.ID)
 		concurrencyMax += acc.Concurrency
 
-		if ms := acc.GetMaxSessions(); ms > 0 {
+		if ms := ClaudeSessionBudget(acc, defaultSessionBudget); ms > 0 {
 			sessionsMax += ms
 			timeout := time.Duration(acc.GetSessionIdleTimeoutMinutes()) * time.Minute
 			if timeout <= 0 {

@@ -376,6 +376,9 @@ type UpdateSettingsRequest struct {
 	// 各平台账号自动停调阈值（整体替换语义：nil = 不修改，non-nil = 整体覆盖）。
 	AccountSchedulingThresholds map[string]int `json:"account_scheduling_thresholds"`
 
+	// Claude OAuth / setup-token 账号默认会话预算（nil = 不修改，0 = 不限）。
+	ClaudeDefaultMaxSessions *int `json:"claude_default_max_sessions"`
+
 	// auth-source 层 platform quota 覆盖（override 语义：nil = 不修改，non-nil = 整体覆盖该 source 的 quota 配置）。
 	AuthSourceEmailPlatformQuotas    map[string]*service.DefaultPlatformQuotaSetting `json:"auth_source_default_email_platform_quotas"`
 	AuthSourceLinuxDoPlatformQuotas  map[string]*service.DefaultPlatformQuotaSetting `json:"auth_source_default_linuxdo_platform_quotas"`
@@ -1508,11 +1511,18 @@ func (h *SettingHandler) UpdateSettings(c *gin.Context) {
 		response.BadRequest(c, "cyber_session_block_ttl_seconds must be > 0")
 		return
 	}
+	if req.ClaudeDefaultMaxSessions != nil {
+		if v := *req.ClaudeDefaultMaxSessions; v < 0 || v > service.MaxClaudeDefaultMaxSessions {
+			response.BadRequest(c, "claude_default_max_sessions must be between 0 and "+strconv.Itoa(service.MaxClaudeDefaultMaxSessions))
+			return
+		}
+	}
 
 	settings := &service.SystemSettings{
 		// 系统全局 platform quota 默认值（整体替换语义）
 		DefaultPlatformQuotas:       req.DefaultPlatformQuotas,
 		AccountSchedulingThresholds: req.AccountSchedulingThresholds,
+		ClaudeDefaultMaxSessions:    intValueOrDefault(req.ClaudeDefaultMaxSessions, previousSettings.ClaudeDefaultMaxSessions),
 
 		RegistrationEnabled:                 req.RegistrationEnabled,
 		EmailVerifyEnabled:                  req.EmailVerifyEnabled,
@@ -2431,6 +2441,7 @@ func (h *SettingHandler) UpdateSettings(c *gin.Context) {
 		CyberSessionBlockEnabled:    updatedSettings.CyberSessionBlockEnabled,
 		CyberSessionBlockTTLSeconds: updatedSettings.CyberSessionBlockTTLSeconds,
 		AccountSchedulingThresholds: updatedSettings.AccountSchedulingThresholds,
+		ClaudeDefaultMaxSessions:    updatedSettings.ClaudeDefaultMaxSessions,
 		AllowUserViewErrorRequests:  updatedSettings.AllowUserViewErrorRequests,
 	}
 	if fastPolicy, err := h.settingService.GetOpenAIFastPolicySettings(c.Request.Context()); err != nil {

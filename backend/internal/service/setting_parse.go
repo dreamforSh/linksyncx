@@ -269,6 +269,7 @@ func (s *SettingService) InitializeDefaultSettings(ctx context.Context) error {
 		SettingKeyOpenAIAdvancedSchedulerWeightSessionSticky:         "",
 
 		SettingKeyAllowUserViewErrorRequests: "false",
+		SettingKeyClaudeDefaultMaxSessions:   strconv.Itoa(DefaultClaudeMaxSessions),
 	}
 
 	return s.settingRepo.SetMultiple(ctx, defaults)
@@ -988,6 +989,7 @@ func (s *SettingService) parseSettings(settings map[string]string) *SystemSettin
 			result.AccountSchedulingThresholds = thresholds
 		}
 	}
+	result.ClaudeDefaultMaxSessions = parseClaudeDefaultMaxSessions(settings[SettingKeyClaudeDefaultMaxSessions])
 
 	result.AllowUserViewErrorRequests = settings[SettingKeyAllowUserViewErrorRequests] == "true" // default false
 

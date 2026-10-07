@@ -68,6 +68,7 @@ type AccountHandler struct {
 	cfg                     *config.Config
 	opencodeGoUsage         *service.OpenCodeGoUsageService
 	identityService         *service.IdentityService
+	settingService          *service.SettingService
 }
 
 // SetUpstreamBillingProbeService attaches the optional remote billing probe service.
@@ -86,6 +87,16 @@ func (h *AccountHandler) SetOpenCodeGoUsageService(usage *service.OpenCodeGoUsag
 // SetIdentityService attaches the client identity service used by ResetClientIdentity.
 func (h *AccountHandler) SetIdentityService(identity *service.IdentityService) {
 	h.identityService = identity
+}
+
+// SetSettingService 注入系统设置，用于计算 Claude 账号的默认会话预算。
+func (h *AccountHandler) SetSettingService(settingService *service.SettingService) {
+	h.settingService = settingService
+}
+
+// claudeSessionBudget 返回账号生效的会话预算（0 = 不限），见 service.ClaudeSessionBudget。
+func (h *AccountHandler) claudeSessionBudget(ctx context.Context, account *service.Account) int {
+	return service.ClaudeSessionBudget(account, h.settingService.GetClaudeDefaultMaxSessions(ctx))
 }
 
 // NewAccountHandler creates a new admin account handler
@@ -210,6 +221,7 @@ type AccountWithConcurrency struct {
 	// 以下字段仅对 Anthropic OAuth/SetupToken 账号有效，且仅在启用相应功能时返回
 	CurrentWindowCost *float64 `json:"current_window_cost,omitempty"` // 当前窗口费用
 	ActiveSessions    *int     `json:"active_sessions,omitempty"`     // 当前活跃会话数
+	SessionBudget     *int     `json:"session_budget,omitempty"`      // 生效的会话预算（账号配置、单会话模式或系统默认值）
 	CurrentRPM        *int     `json:"current_rpm,omitempty"`         // 当前分钟 RPM 计数
 }
 
@@ -223,6 +235,7 @@ type AccountListItemWithConcurrency struct {
 	SchedulerScores    []AccountSchedulerGroupScore `json:"scheduler_scores,omitempty"`
 	CurrentWindowCost  *float64                     `json:"current_window_cost,omitempty"`
 	ActiveSessions     *int                         `json:"active_sessions,omitempty"`
+	SessionBudget      *int                         `json:"session_budget,omitempty"`
 	CurrentRPM         *int                         `json:"current_rpm,omitempty"`
 }
 
@@ -394,12 +407,15 @@ func (h *AccountHandler) buildAccountResponseWithRuntime(ctx context.Context, ac
 			}
 		}
 
-		if h.sessionLimitCache != nil && account.GetMaxSessions() > 0 {
-			idleTimeout := time.Duration(account.GetSessionIdleTimeoutMinutes()) * time.Minute
-			idleTimeouts := map[int64]time.Duration{account.ID: idleTimeout}
-			if sessions, err := h.sessionLimitCache.GetActiveSessionCountBatch(ctx, []int64{account.ID}, idleTimeouts); err == nil {
-				if count, ok := sessions[account.ID]; ok {
-					item.ActiveSessions = &count
+		if budget := h.claudeSessionBudget(ctx, account); budget > 0 {
+			item.SessionBudget = &budget
+			if h.sessionLimitCache != nil {
+				idleTimeout := time.Duration(account.GetSessionIdleTimeoutMinutes()) * time.Minute
+				idleTimeouts := map[int64]time.Duration{account.ID: idleTimeout}
+				if sessions, err := h.sessionLimitCache.GetActiveSessionCountBatch(ctx, []int64{account.ID}, idleTimeouts); err == nil {
+					if count, ok := sessions[account.ID]; ok {
+						item.ActiveSessions = &count
+					}
 				}
 			}
 		}
@@ -741,13 +757,16 @@ func (h *AccountHandler) List(c *gin.Context) {
 	sessionLimitAccountIDs := make([]int64, 0)
 	rpmAccountIDs := make([]int64, 0)
 	sessionIdleTimeouts := make(map[int64]time.Duration) // 各账号的会话空闲超时配置
+	sessionBudgets := make(map[int64]int)                // 各账号生效的会话预算
+	defaultSessionBudget := h.settingService.GetClaudeDefaultMaxSessions(c.Request.Context())
 	for i := range accounts {
 		acc := &accounts[i]
 		if acc.IsAnthropicOAuthOrSetupToken() {
 			if acc.GetWindowCostLimit() > 0 {
 				windowCostAccountIDs = append(windowCostAccountIDs, acc.ID)
 			}
-			if acc.GetMaxSessions() > 0 {
+			if budget := service.ClaudeSessionBudget(acc, defaultSessionBudget); budget > 0 {
+				sessionBudgets[acc.ID] = budget
 				sessionLimitAccountIDs = append(sessionLimitAccountIDs, acc.ID)
 				sessionIdleTimeouts[acc.ID] = time.Duration(acc.GetSessionIdleTimeoutMinutes()) * time.Minute
 			}
@@ -827,7 +846,10 @@ func (h *AccountHandler) List(c *gin.Context) {
 			}
 		}
 
-		// 添加活跃会话数（仅当启用时）
+		// 添加会话预算与活跃会话数（仅当启用时）
+		if budget, ok := sessionBudgets[acc.ID]; ok {
+			item.SessionBudget = &budget
+		}
 		if activeSessions != nil {
 			if count, ok := activeSessions[acc.ID]; ok {
 				item.ActiveSessions = &count
@@ -857,6 +879,7 @@ func (h *AccountHandler) List(c *gin.Context) {
 				SchedulerScores:    item.SchedulerScores,
 				CurrentWindowCost:  item.CurrentWindowCost,
 				ActiveSessions:     item.ActiveSessions,
+				SessionBudget:      item.SessionBudget,
 				CurrentRPM:         item.CurrentRPM,
 			}
 		}

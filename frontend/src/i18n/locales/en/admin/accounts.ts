@@ -410,8 +410,10 @@ export default {
           normal: '5h window cost normal'
         },
         sessions: {
-          full: 'Active sessions full, new sessions must wait (idle timeout: {idle} min)',
-          normal: 'Active sessions normal (idle timeout: {idle} min)'
+          full: 'Session budget full: new conversations go to other accounts, bound conversations continue (idle timeout: {idle} min)',
+          normal: 'Active sessions normal (idle timeout: {idle} min)',
+          singleSession: 'Single-session mode, one conversation at a time',
+          systemDefault: 'Using the system default session limit'
         },
         rpm: {
           full: 'RPM limit reached',
@@ -988,7 +990,7 @@ export default {
         },
         sessionLimit: {
           label: 'Session Count Limit',
-          hint: 'Limit the number of active concurrent sessions',
+          hint: 'Set a limit on concurrently active sessions for this account. When off, the system default session limit applies; single-session mode fixes it to 1',
           maxSessions: 'Max Sessions',
           maxSessionsPlaceholder: '3',
           maxSessionsHint: 'Maximum number of active concurrent sessions',
@@ -1024,8 +1026,8 @@ export default {
           randomProfile: 'Random'
         },
         sessionIdMasking: {
-          label: 'Session ID Masking',
-          hint: 'When enabled, fixes the session ID in metadata.user_id for 15 minutes, making upstream think requests come from the same session'
+          label: 'Single-Session Mode',
+          hint: 'Conversations on this account share one session ID (15-minute sliding window) and the session limit becomes 1: one conversation at a time, other new conversations go to other accounts. Pair it with the serialize queue'
         },
         cacheTTLOverride: {
           label: 'Cache TTL Override',

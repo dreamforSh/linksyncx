@@ -453,7 +453,10 @@ export default {
         accountSchedulingThresholdsDescription: 'When an account\'s current native usage window (OpenAI Codex/Anthropic session, or Grok request/token utilization) reaches this percent, Sub2API temporarily removes it from scheduling until the window resets. Use 100 to disable.',
         accountSchedulingThresholdsGlobalHint: 'System-wide default for every account on that platform. Individual accounts can still override this in the account editor.',
         accountSchedulingThresholdsDisabledHint: '100 disables platform auto-pause. Values 1–99 pause scheduling once utilization reaches that percent.',
-        accountSchedulingThresholdsRangeHint: 'Integer 1–100 (percent). OpenAI/Anthropic/Grok only.'
+        accountSchedulingThresholdsRangeHint: 'Integer 1–100 (percent). OpenAI/Anthropic/Grok only.',
+        claudeDefaultMaxSessions: 'Claude Account Default Session Limit',
+        claudeDefaultMaxSessionsHint: 'Concurrently active upstream sessions per Claude OAuth / Setup Token account, used when the account has no Max Sessions of its own. When the limit is reached, new conversations go to other accounts; conversations already bound to the account always continue and never switch accounts because of the limit. Single-session accounts are fixed to 1.',
+        claudeDefaultMaxSessionsZeroHint: '0 means unlimited and restores the old behavior (accounts without their own limit are not limited). Integer 0–1000, default 5.'
       },
       upstreamBillingProbe: {
         title: 'Upstream Rate Auto Detection',

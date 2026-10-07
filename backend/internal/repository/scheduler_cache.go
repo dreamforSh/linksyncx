@@ -1005,6 +1005,10 @@ func filterSchedulerExtra(extra map[string]any) map[string]any {
 		"rpm_sticky_buffer",
 		"max_sessions",
 		"session_idle_timeout_minutes",
+		// 单会话模式把会话预算压到 1（ClaudeSessionBudget），选号阶段读的是本投影。
+		"session_id_masking_enabled",
+		// Claude 限流快照：选号时据预警、宽限区、低优先级通道降低新对话的优先级。
+		"claude_rate_limit",
 		"openai_oauth_responses_websockets_v2_enabled",
 		"openai_oauth_responses_websockets_v2_mode",
 		"openai_apikey_responses_websockets_v2_enabled",

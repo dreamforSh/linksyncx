@@ -121,6 +121,7 @@ var duplicateAccountDiscardedExtraKeys = map[string]struct{}{
 	"passive_usage_7d_oi_utilization":        {},
 	"passive_usage_7d_oi_reset":              {},
 	"passive_usage_sampled_at":               {},
+	"claude_rate_limit":                      {},
 	"grok_usage_snapshot":                    {},
 	"grok_billing_snapshot":                  {},
 	"openai_responses_supported":             {},
@@ -704,6 +705,8 @@ func (s *adminServiceImpl) UpdateAccount(ctx context.Context, id int64, input *U
 			OpenAIAutoResetCreditStateExtraKey,
 			OpenCodeGoUsageAutoRefreshExtraKey,
 			OpenCodeGoUsageSnapshotExtraKey,
+			// Claude 限流快照由响应头按栅栏写入，编辑弹窗回传的旧副本不能覆盖它
+			claudeRateLimitExtraKey,
 		} {
 			if v, ok := account.Extra[key]; ok {
 				normalizedExtra[key] = v

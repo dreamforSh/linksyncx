@@ -5093,6 +5093,40 @@
                 </div>
               </div>
 
+              <div class="border-t border-gray-100 pt-4 dark:border-dark-700">
+                <div
+                  class="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between"
+                >
+                  <div class="max-w-3xl">
+                    <label class="font-medium text-gray-900 dark:text-white">
+                      {{ t("admin.settings.scheduling.claudeDefaultMaxSessions") }}
+                    </label>
+                    <p class="mt-1 text-sm text-gray-500 dark:text-gray-400">
+                      {{
+                        t("admin.settings.scheduling.claudeDefaultMaxSessionsHint")
+                      }}
+                    </p>
+                    <p class="mt-0.5 text-xs text-amber-600 dark:text-amber-400">
+                      {{
+                        t(
+                          "admin.settings.scheduling.claudeDefaultMaxSessionsZeroHint",
+                        )
+                      }}
+                    </p>
+                  </div>
+                  <input
+                    v-model.number="form.claude_default_max_sessions"
+                    type="number"
+                    min="0"
+                    max="1000"
+                    step="1"
+                    class="input w-full sm:w-32"
+                    data-testid="claude-default-max-sessions"
+                    placeholder="5"
+                  />
+                </div>
+              </div>
+
               <div
                 v-if="!form.openai_advanced_scheduler_enabled"
                 class="flex items-center justify-between border-t border-gray-100 pt-5 dark:border-dark-700"
@@ -9734,6 +9768,13 @@ type SettingsForm = Omit<
 
 const schedulingThresholdPlatforms = SCHEDULING_THRESHOLD_PLATFORMS;
 
+// Claude 账号默认会话上限：0 = 不限；留空或非法时回到默认值 5，超出上限时截到 1000。
+const normalizeClaudeDefaultMaxSessions = (value: unknown): number => {
+  const parsed = typeof value === "number" ? value : Number.NaN;
+  if (!Number.isFinite(parsed) || parsed < 0) return 5;
+  return Math.min(Math.trunc(parsed), 1000);
+};
+
 const form = reactive<SettingsForm>({
   registration_enabled: true,
   email_verify_enabled: false,
@@ -9758,6 +9799,7 @@ const form = reactive<SettingsForm>({
   default_balance: 0,
   default_platform_quotas: normalizePlatformQuotasMap() as DefaultPlatformQuotasMap,
   account_scheduling_thresholds: normalizeAccountSchedulingThresholdsMap(),
+  claude_default_max_sessions: 5,
   affiliate_rebate_rate: 20,
   affiliate_rebate_freeze_hours: 0,
   affiliate_rebate_duration_days: 0,
@@ -11595,6 +11637,9 @@ async function saveSettings() {
       min_claude_code_version: form.min_claude_code_version,
       max_claude_code_version: form.max_claude_code_version,
       allow_ungrouped_key_scheduling: form.allow_ungrouped_key_scheduling,
+      claude_default_max_sessions: normalizeClaudeDefaultMaxSessions(
+        form.claude_default_max_sessions,
+      ),
       openai_ttft_mode:
         form.openai_ttft_mode === "visible" ? "visible" : "semantic",
       enable_fingerprint_unification: form.enable_fingerprint_unification,

@@ -86,6 +86,8 @@ func TestGetAllGroupCapacityBatchAggregatesRuntimeAndLimits(t *testing.T) {
 			{
 				GroupID:     10,
 				AccountID:   1,
+				Platform:    PlatformAnthropic,
+				Type:        AccountTypeOAuth,
 				Concurrency: 2,
 				Extra: map[string]any{
 					"max_sessions":                 3,
@@ -96,6 +98,8 @@ func TestGetAllGroupCapacityBatchAggregatesRuntimeAndLimits(t *testing.T) {
 			{
 				GroupID:     20,
 				AccountID:   1,
+				Platform:    PlatformAnthropic,
+				Type:        AccountTypeOAuth,
 				Concurrency: 2,
 				Extra: map[string]any{
 					"max_sessions":                 3,
@@ -106,6 +110,8 @@ func TestGetAllGroupCapacityBatchAggregatesRuntimeAndLimits(t *testing.T) {
 			{
 				GroupID:     20,
 				AccountID:   2,
+				Platform:    PlatformAnthropic,
+				Type:        AccountTypeSetupToken,
 				Concurrency: 4,
 				Extra: map[string]any{
 					"max_sessions":                 1,
@@ -125,6 +131,7 @@ func TestGetAllGroupCapacityBatchAggregatesRuntimeAndLimits(t *testing.T) {
 		NewConcurrencyService(concurrencyCache),
 		sessionCache,
 		rpmCache,
+		nil,
 	)
 
 	results, err := svc.GetAllGroupCapacity(context.Background())
@@ -167,7 +174,7 @@ func TestGetAllGroupCapacityBatchKeepsEmptyGroupRows(t *testing.T) {
 		},
 	}
 	groupRepo := &groupCapacityGroupRepoStub{groupIDs: []int64{10, 20}}
-	svc := NewGroupCapacityService(accountRepo, groupRepo, nil, nil, nil)
+	svc := NewGroupCapacityService(accountRepo, groupRepo, nil, nil, nil, nil)
 
 	results, err := svc.GetAllGroupCapacity(context.Background())
 	require.NoError(t, err)

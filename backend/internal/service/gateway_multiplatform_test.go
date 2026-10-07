@@ -211,6 +211,10 @@ func (m *mockAccountRepoForPlatform) ClearModelRateLimits(ctx context.Context, i
 func (m *mockAccountRepoForPlatform) UpdateSessionWindow(ctx context.Context, id int64, start, end *time.Time, status string) error {
 	return nil
 }
+
+func (m *mockAccountRepoForPlatform) ApplyClaudeRateLimitPatch(ctx context.Context, id int64, patch ClaudeRateLimitPatch) (bool, error) {
+	return true, nil
+}
 func (m *mockAccountRepoForPlatform) UpdateSessionWindowEnd(ctx context.Context, id int64, end time.Time) error {
 	return nil
 }

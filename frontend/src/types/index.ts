@@ -1603,6 +1603,7 @@ export interface Account {
   // 运行时状态（仅当启用对应限制时返回）
   current_window_cost?: number | null // 当前窗口费用
   active_sessions?: number | null // 当前活跃会话数
+  session_budget?: number | null // 生效的会话预算（账号配置、单会话模式或系统默认值）
   current_rpm?: number | null // 当前分钟 RPM 计数
 
   // 影子账号关系（spark 维度影子）

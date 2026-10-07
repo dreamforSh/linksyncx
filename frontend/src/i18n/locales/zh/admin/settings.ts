@@ -446,7 +446,10 @@ export default {
         accountSchedulingThresholdsDescription: '当账号当前原生用量窗口（OpenAI Codex/Anthropic 会话，或 Grok 请求/Token 利用率）达到该百分比时，Sub2API 会临时将其移出调度，直到窗口重置。填 100 表示禁用。',
         accountSchedulingThresholdsGlobalHint: '系统级默认值，作用于该平台全部账号。可在账号编辑页对单个账号覆盖。',
         accountSchedulingThresholdsDisabledHint: '100 表示禁用该平台自动停调；1–99 表示达到该利用率后暂停调度。',
-        accountSchedulingThresholdsRangeHint: '整数 1–100（百分比）。仅 OpenAI / Anthropic / Grok。'
+        accountSchedulingThresholdsRangeHint: '整数 1–100（百分比）。仅 OpenAI / Anthropic / Grok。',
+        claudeDefaultMaxSessions: 'Claude 账号默认会话上限',
+        claudeDefaultMaxSessionsHint: '每个 Claude OAuth / Setup Token 账号同时活跃的上游会话数，账号未单独设置「最大会话数」时使用。名额满时新对话调度到其它账号；已绑定的对话回来时始终放行，不会因名额换号。单会话模式的账号固定为 1。',
+        claudeDefaultMaxSessionsZeroHint: '填 0 表示不限，恢复旧行为（未单独设置的账号不限会话数）。整数 0–1000，默认 5。'
       },
       upstreamBillingProbe: {
         title: '上游倍率自动探测',

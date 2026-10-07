@@ -29,6 +29,11 @@ type SessionLimitCache interface {
 	//   error: 操作错误
 	RegisterSession(ctx context.Context, accountID int64, sessionUUID string, maxSessions int, idleTimeout time.Duration) (allowed bool, err error)
 
+	// RegisterBoundSession 登记已绑定到该账号的对话：不检查上限，会话已存在时刷新时间戳，
+	// 不存在（名额因空闲超时被回收）时重新加入，账号可因此短暂超出预算。
+	// 预算只约束新对话，已绑定对话回来时不能因名额已满被换号。
+	RegisterBoundSession(ctx context.Context, accountID int64, sessionUUID string, idleTimeout time.Duration) error
+
 	// RefreshSession 刷新现有会话的时间戳
 	// 用于活跃会话保持活动状态
 	RefreshSession(ctx context.Context, accountID int64, sessionUUID string, idleTimeout time.Duration) error

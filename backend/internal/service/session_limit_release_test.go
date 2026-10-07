@@ -55,20 +55,15 @@ func TestReleaseAccountSession_ReleasesRegisteredSlot(t *testing.T) {
 
 // TestReleaseAccountSession_NoOpForInapplicableAccounts 验证：
 // - 非 Anthropic OAuth/SetupToken 账号
-// - 未启用 max_sessions 的账号
 // - 空 sessionID
 // 以上场景均为 no-op，不得触发 UnregisterSession。
+// （未配置 max_sessions 的 OAuth 账号使用系统默认预算，见 claude_session_budget_test.go。）
 func TestReleaseAccountSession_NoOpForInapplicableAccounts(t *testing.T) {
 	apiKeyAcc := &Account{
 		ID:       43,
 		Platform: PlatformAnthropic,
 		Type:     AccountTypeAPIKey,
 		Extra:    map[string]any{"max_sessions": 1},
-	}
-	noLimitAcc := &Account{
-		ID:       44,
-		Platform: PlatformAnthropic,
-		Type:     AccountTypeOAuth,
 	}
 	enabledAcc := newSessionLimitTestAccount()
 
@@ -78,7 +73,6 @@ func TestReleaseAccountSession_NoOpForInapplicableAccounts(t *testing.T) {
 		sessionID string
 	}{
 		{"api_key_account", apiKeyAcc, "session-hash"},
-		{"max_sessions_disabled", noLimitAcc, "session-hash"},
 		{"empty_session_id", enabledAcc, ""},
 		{"nil_account", nil, "session-hash"},
 	}

@@ -396,6 +396,7 @@ func (h *SettingHandler) GetSettings(c *gin.Context) {
 		AffiliateEnabled: settings.AffiliateEnabled,
 
 		AccountSchedulingThresholds: settings.AccountSchedulingThresholds,
+		ClaudeDefaultMaxSessions:    settings.ClaudeDefaultMaxSessions,
 		AllowUserViewErrorRequests:  settings.AllowUserViewErrorRequests,
 	}
 

@@ -767,6 +767,10 @@ const SettingKeyDefaultPlatformQuotas = "default_platform_quotas"
 // 值为 map[platform]percent，1..100；100 = 禁用该平台自动停调。
 const SettingKeyAccountSchedulingThresholds = "account_scheduling_thresholds"
 
+// SettingKeyClaudeDefaultMaxSessions —— 系统全局：Anthropic OAuth / setup-token 账号未单独配置
+// max_sessions 时的并发会话预算（整数，0 = 不限，缺省为 DefaultClaudeMaxSessions）。
+const SettingKeyClaudeDefaultMaxSessions = "claude_default_max_sessions"
+
 // SettingKeyAuthSourcePlatformQuotas 返回某 auth source 的 platform quota JSON key。
 // 形如 auth_source_default_{source}_platform_quotas
 func SettingKeyAuthSourcePlatformQuotas(source string) string {

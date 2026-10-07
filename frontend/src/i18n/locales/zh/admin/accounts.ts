@@ -260,8 +260,10 @@ export default {
           normal: '5h窗口费用正常'
         },
         sessions: {
-          full: '活跃会话已满，新会话需等待（空闲超时：{idle}分钟）',
-          normal: '活跃会话正常（空闲超时：{idle}分钟）'
+          full: '会话名额已满：新对话会调度到其它账号，已绑定的对话不受影响（空闲超时：{idle}分钟）',
+          normal: '活跃会话正常（空闲超时：{idle}分钟）',
+          singleSession: '单会话模式，同一时刻只接一个对话',
+          systemDefault: '使用系统默认会话上限'
         },
         rpm: {
           full: '已达 RPM 上限',
@@ -1163,7 +1165,7 @@ export default {
         },
         sessionLimit: {
           label: '会话数量控制',
-          hint: '限制同时活跃的会话数量',
+          hint: '单独设置该账号同时活跃的会话数量；不开启时使用系统设置中的默认会话上限，单会话模式下固定为 1',
           maxSessions: '最大会话数',
           maxSessionsPlaceholder: '3',
           maxSessionsHint: '同时活跃的最大会话数量',
@@ -1199,8 +1201,8 @@ export default {
           randomProfile: '随机'
         },
         sessionIdMasking: {
-          label: '会话 ID 伪装',
-          hint: '启用后将在 15 分钟内固定 metadata.user_id 中的 session ID，使上游认为请求来自同一会话'
+          label: '单会话模式',
+          hint: '开启后该账号的对话共用一个会话 ID（15 分钟滑动），会话上限视为 1：同一时刻只接一个对话，其它新对话调度到别的账号。建议同时开启串行队列'
         },
         cacheTTLOverride: {
           label: '缓存 TTL 强制替换',

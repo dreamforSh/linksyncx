@@ -552,6 +552,10 @@ func (s *SettingService) buildSystemSettingsUpdates(ctx context.Context, setting
 		}
 		updates[SettingKeyAccountSchedulingThresholds] = string(blob)
 	}
+	if err := validateClaudeDefaultMaxSessions(settings.ClaudeDefaultMaxSessions); err != nil {
+		return nil, err
+	}
+	updates[SettingKeyClaudeDefaultMaxSessions] = strconv.Itoa(settings.ClaudeDefaultMaxSessions)
 
 	updates[SettingKeyAllowUserViewErrorRequests] = strconv.FormatBool(settings.AllowUserViewErrorRequests)
 
@@ -794,6 +798,8 @@ func (s *SettingService) refreshCachedSettings(settings *SystemSettings) {
 		// Partial/omitted payload: clear cache so the next hot-path read reloads from DB.
 		accountSchedulingThresholdsCache.Store(&cachedAccountSchedulingThresholds{})
 	}
+	s.claudeDefaultMaxSessionsSF.Forget(SettingKeyClaudeDefaultMaxSessions)
+	s.storeClaudeDefaultMaxSessions(settings.ClaudeDefaultMaxSessions, claudeDefaultMaxSessionsCacheTTL)
 	if s.cfg != nil {
 		s.cfg.SetForwardedClientIPSettings(settings.APIKeyACLTrustForwardedIP, settings.ForwardedClientIPHeaders)
 	}

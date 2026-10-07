@@ -108,6 +108,9 @@ type AccountRepository interface {
 	ClearAntigravityQuotaScopes(ctx context.Context, id int64) error
 	ClearModelRateLimits(ctx context.Context, id int64) error
 	UpdateSessionWindow(ctx context.Context, id int64, start, end *time.Time, status string) error
+	// ApplyClaudeRateLimitPatch 落库一次 Claude 限流快照，只在 patch.AppliedAtMs 大于库中快照的
+	// applied_at_ms 时写入（栅栏），返回是否写入。
+	ApplyClaudeRateLimitPatch(ctx context.Context, id int64, patch ClaudeRateLimitPatch) (bool, error)
 	// UpdateSessionWindowEnd 仅更新 5h 窗口的结束时间，不动 start / status。
 	// 用于 active poll 拿到新 ResetsAt 后回写，避免覆盖请求路径上记录的 status。
 	UpdateSessionWindowEnd(ctx context.Context, id int64, end time.Time) error

@@ -80,6 +80,27 @@ var (
 		return 0
 	`)
 
+	// registerBoundSessionScript 登记已绑定对话的会话：清理过期会话后无条件写入（不检查上限）
+	// KEYS[1] = session_limit:account:{accountID}
+	// ARGV[1] = idleTimeout（秒）
+	// ARGV[2] = sessionUUID
+	registerBoundSessionScript = redis.NewScript(`
+		-- Redis 3.2-4.x compat: opt into effects replication so redis.call('TIME')
+		-- replicates correctly. No-op on Redis 5.0+ (effects replication is default).
+		redis.replicate_commands()
+		local key = KEYS[1]
+		local idleTimeout = tonumber(ARGV[1])
+		local sessionUUID = ARGV[2]
+
+		local timeResult = redis.call('TIME')
+		local now = tonumber(timeResult[1])
+
+		redis.call('ZREMRANGEBYSCORE', key, '-inf', now - idleTimeout)
+		redis.call('ZADD', key, now, sessionUUID)
+		redis.call('EXPIRE', key, idleTimeout + 60)
+		return 1
+	`)
+
 	// refreshSessionScript 刷新会话时间戳
 	// KEYS[1] = session_limit:account:{accountID}
 	// ARGV[1] = idleTimeout（秒）
@@ -171,6 +192,7 @@ func NewSessionLimitCache(rdb *redis.Client, defaultIdleTimeoutMinutes int) serv
 	ctx := context.Background()
 	scripts := []*redis.Script{
 		registerSessionScript,
+		registerBoundSessionScript,
 		refreshSessionScript,
 		getActiveSessionCountScript,
 		isSessionActiveScript,
@@ -214,6 +236,18 @@ func (c *sessionLimitCache) RegisterSession(ctx context.Context, accountID int64
 		return true, err // 失败开放：缓存错误时允许请求通过
 	}
 	return result == 1, nil
+}
+
+// RegisterBoundSession 登记已绑定对话的会话，不检查上限
+func (c *sessionLimitCache) RegisterBoundSession(ctx context.Context, accountID int64, sessionUUID string, idleTimeout time.Duration) error {
+	if sessionUUID == "" {
+		return nil
+	}
+	idleTimeoutSeconds := int(idleTimeout.Seconds())
+	if idleTimeoutSeconds <= 0 {
+		idleTimeoutSeconds = int(c.defaultIdleTimeout.Seconds())
+	}
+	return registerBoundSessionScript.Run(ctx, c.rdb, []string{sessionLimitKey(accountID)}, idleTimeoutSeconds, sessionUUID).Err()
 }
 
 // UnregisterSession 立即移除会话注册（不等待空闲超时）

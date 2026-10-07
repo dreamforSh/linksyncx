@@ -175,6 +175,10 @@ func (m *mockAccountRepoForGemini) ClearModelRateLimits(ctx context.Context, id 
 func (m *mockAccountRepoForGemini) UpdateSessionWindow(ctx context.Context, id int64, start, end *time.Time, status string) error {
 	return nil
 }
+
+func (m *mockAccountRepoForGemini) ApplyClaudeRateLimitPatch(ctx context.Context, id int64, patch ClaudeRateLimitPatch) (bool, error) {
+	return true, nil
+}
 func (m *mockAccountRepoForGemini) UpdateSessionWindowEnd(ctx context.Context, id int64, end time.Time) error {
 	return nil
 }

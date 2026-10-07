@@ -10,39 +10,33 @@ import (
 	"github.com/Wei-Shaw/sub2api/internal/pkg/pagination"
 )
 
-// sessionWindowMockRepo is a minimal AccountRepository mock that records calls
-// made by UpdateSessionWindow. Unrelated methods panic if invoked.
+// sessionWindowMockRepo is a minimal AccountRepository mock that records the
+// rate-limit snapshots persisted by UpdateSessionWindow. Unrelated methods panic if invoked.
 type sessionWindowMockRepo struct {
 	// captured calls
-	sessionWindowCalls []swCall
-	updateExtraCalls   []ueCall
-	clearRateLimitIDs  []int64
+	patches           []patchCall
+	clearRateLimitIDs []int64
 }
 
 var _ AccountRepository = (*sessionWindowMockRepo)(nil)
 
-type swCall struct {
-	ID     int64
-	Start  *time.Time
-	End    *time.Time
-	Status string
+type patchCall struct {
+	ID    int64
+	Patch ClaudeRateLimitPatch
 }
 
-type ueCall struct {
-	ID      int64
-	Updates map[string]any
+func (m *sessionWindowMockRepo) ApplyClaudeRateLimitPatch(_ context.Context, id int64, patch ClaudeRateLimitPatch) (bool, error) {
+	m.patches = append(m.patches, patchCall{ID: id, Patch: patch})
+	return true, nil
 }
-
-func (m *sessionWindowMockRepo) UpdateSessionWindow(_ context.Context, id int64, start, end *time.Time, status string) error {
-	m.sessionWindowCalls = append(m.sessionWindowCalls, swCall{ID: id, Start: start, End: end, Status: status})
-	return nil
+func (m *sessionWindowMockRepo) UpdateSessionWindow(context.Context, int64, *time.Time, *time.Time, string) error {
+	panic("unexpected: session windows are persisted through ApplyClaudeRateLimitPatch")
 }
 func (m *sessionWindowMockRepo) UpdateSessionWindowEnd(_ context.Context, _ int64, _ time.Time) error {
 	return nil
 }
-func (m *sessionWindowMockRepo) UpdateExtra(_ context.Context, id int64, updates map[string]any) error {
-	m.updateExtraCalls = append(m.updateExtraCalls, ueCall{ID: id, Updates: updates})
-	return nil
+func (m *sessionWindowMockRepo) UpdateExtra(context.Context, int64, map[string]any) error {
+	panic("unexpected: passive usage is persisted through ApplyClaudeRateLimitPatch")
 }
 func (m *sessionWindowMockRepo) ClearRateLimit(_ context.Context, id int64) error {
 	m.clearRateLimitIDs = append(m.clearRateLimitIDs, id)
@@ -179,6 +173,15 @@ func newRateLimitServiceForTest(repo AccountRepository) *RateLimitService {
 	return &RateLimitService{accountRepo: repo}
 }
 
+// onlyPatch returns the single persisted patch, failing the test otherwise.
+func onlyPatch(t *testing.T, repo *sessionWindowMockRepo) ClaudeRateLimitPatch {
+	t.Helper()
+	if len(repo.patches) != 1 {
+		t.Fatalf("expected 1 persisted rate-limit patch, got %d", len(repo.patches))
+	}
+	return repo.patches[0].Patch
+}
+
 func TestUpdateSessionWindow_UsesResetHeader(t *testing.T) {
 	// The reset header provides the real window end as a Unix timestamp.
 	// UpdateSessionWindow should use it instead of the hour-truncated prediction.
@@ -196,22 +199,22 @@ func TestUpdateSessionWindow_UsesResetHeader(t *testing.T) {
 
 	svc.UpdateSessionWindow(context.Background(), account, headers)
 
-	if len(repo.sessionWindowCalls) != 1 {
-		t.Fatalf("expected 1 UpdateSessionWindow call, got %d", len(repo.sessionWindowCalls))
+	patch := onlyPatch(t, repo)
+	if repo.patches[0].ID != 42 {
+		t.Errorf("expected account ID 42, got %d", repo.patches[0].ID)
 	}
-
-	call := repo.sessionWindowCalls[0]
-	if call.ID != 42 {
-		t.Errorf("expected account ID 42, got %d", call.ID)
+	if patch.SessionWindowEnd == nil || !patch.SessionWindowEnd.Equal(wantEnd) {
+		t.Errorf("expected window end %v, got %v", wantEnd, patch.SessionWindowEnd)
 	}
-	if call.End == nil || !call.End.Equal(wantEnd) {
-		t.Errorf("expected window end %v, got %v", wantEnd, call.End)
+	if patch.SessionWindowStart == nil || !patch.SessionWindowStart.Equal(wantStart) {
+		t.Errorf("expected window start %v, got %v", wantStart, patch.SessionWindowStart)
 	}
-	if call.Start == nil || !call.Start.Equal(wantStart) {
-		t.Errorf("expected window start %v, got %v", wantStart, call.Start)
+	if patch.SessionWindowStatus != "allowed" {
+		t.Errorf("expected status 'allowed', got %q", patch.SessionWindowStatus)
 	}
-	if call.Status != "allowed" {
-		t.Errorf("expected status 'allowed', got %q", call.Status)
+	snap, ok := patch.Extra[claudeRateLimitExtraKey].(*ClaudeRateLimitSnapshot)
+	if !ok || snap.Windows["5h"].Status != "allowed" || snap.Windows["5h"].ResetAt != resetUnix || snap.AppliedAtMs != patch.AppliedAtMs {
+		t.Errorf("expected the rate-limit snapshot to be persisted with the patch, got %#v", patch.Extra[claudeRateLimitExtraKey])
 	}
 }
 
@@ -225,28 +228,22 @@ func TestUpdateSessionWindow_FallbackPredictionWhenNoResetHeader(t *testing.T) {
 	headers.Set("anthropic-ratelimit-unified-5h-status", "allowed_warning")
 	// No anthropic-ratelimit-unified-5h-reset header
 
-	// Capture now before the call to avoid hour-boundary races
 	now := time.Now()
 	expectedStart := time.Date(now.Year(), now.Month(), now.Day(), now.Hour(), 0, 0, 0, now.Location())
 	expectedEnd := expectedStart.Add(5 * time.Hour)
 
-	svc.UpdateSessionWindow(context.Background(), account, headers)
+	svc.updateSessionWindowAt(context.Background(), account, headers, now)
 
-	if len(repo.sessionWindowCalls) != 1 {
-		t.Fatalf("expected 1 UpdateSessionWindow call, got %d", len(repo.sessionWindowCalls))
-	}
-
-	call := repo.sessionWindowCalls[0]
-	if call.End == nil {
+	patch := onlyPatch(t, repo)
+	if patch.SessionWindowEnd == nil {
 		t.Fatal("expected window end to be set (fallback prediction)")
 	}
 	// Fallback: start = current hour truncated, end = start + 5h
-
-	if !call.End.Equal(expectedEnd) {
-		t.Errorf("expected fallback end %v, got %v", expectedEnd, *call.End)
+	if !patch.SessionWindowEnd.Equal(expectedEnd) {
+		t.Errorf("expected fallback end %v, got %v", expectedEnd, *patch.SessionWindowEnd)
 	}
-	if call.Start == nil || !call.Start.Equal(expectedStart) {
-		t.Errorf("expected fallback start %v, got %v", expectedStart, call.Start)
+	if patch.SessionWindowStart == nil || !patch.SessionWindowStart.Equal(expectedStart) {
+		t.Errorf("expected fallback start %v, got %v", expectedStart, patch.SessionWindowStart)
 	}
 }
 
@@ -270,13 +267,9 @@ func TestUpdateSessionWindow_CorrectsStalePrediction(t *testing.T) {
 
 	svc.UpdateSessionWindow(context.Background(), account, headers)
 
-	if len(repo.sessionWindowCalls) != 1 {
-		t.Fatalf("expected 1 UpdateSessionWindow call, got %d", len(repo.sessionWindowCalls))
-	}
-
-	call := repo.sessionWindowCalls[0]
-	if call.End == nil || !call.End.Equal(wantEnd) {
-		t.Errorf("expected corrected end %v, got %v", wantEnd, call.End)
+	patch := onlyPatch(t, repo)
+	if patch.SessionWindowEnd == nil || !patch.SessionWindowEnd.Equal(wantEnd) {
+		t.Errorf("expected corrected end %v, got %v", wantEnd, patch.SessionWindowEnd)
 	}
 }
 
@@ -298,23 +291,20 @@ func TestUpdateSessionWindow_NoUpdateWhenHeaderMatchesStored(t *testing.T) {
 
 	svc.UpdateSessionWindow(context.Background(), account, headers)
 
-	if len(repo.sessionWindowCalls) != 1 {
-		t.Fatalf("expected 1 UpdateSessionWindow call, got %d", len(repo.sessionWindowCalls))
-	}
-
-	call := repo.sessionWindowCalls[0]
+	patch := onlyPatch(t, repo)
 	// windowStart and windowEnd should be nil (no update needed)
-	if call.Start != nil || call.End != nil {
-		t.Errorf("expected nil start/end (no window change needed), got start=%v end=%v", call.Start, call.End)
+	if patch.SessionWindowStart != nil || patch.SessionWindowEnd != nil {
+		t.Errorf("expected nil start/end (no window change needed), got start=%v end=%v", patch.SessionWindowStart, patch.SessionWindowEnd)
 	}
 	// Status is still updated
-	if call.Status != "allowed" {
-		t.Errorf("expected status 'allowed', got %q", call.Status)
+	if patch.SessionWindowStatus != "allowed" {
+		t.Errorf("expected status 'allowed', got %q", patch.SessionWindowStatus)
 	}
 }
 
 func TestUpdateSessionWindow_ClearsUtilizationOnWindowReset(t *testing.T) {
-	// When needInitWindow=true and window is set, utilization should be cleared.
+	// When needInitWindow=true and window is set, passive usage the response did not
+	// bring back is cleared, and the new utilization is stored in the same write.
 	resetUnix := time.Now().Add(3 * time.Hour).Unix()
 
 	repo := &sessionWindowMockRepo{}
@@ -328,21 +318,15 @@ func TestUpdateSessionWindow_ClearsUtilizationOnWindowReset(t *testing.T) {
 
 	svc.UpdateSessionWindow(context.Background(), account, headers)
 
-	// Should have 2 UpdateExtra calls: one to clear utilization, one to store new utilization
-	if len(repo.updateExtraCalls) != 2 {
-		t.Fatalf("expected 2 UpdateExtra calls, got %d", len(repo.updateExtraCalls))
+	updates := onlyPatch(t, repo).Extra
+	if val, ok := updates["session_window_utilization"].(float64); !ok || val != 0.15 {
+		t.Errorf("expected utilization stored as 0.15, got %v", updates["session_window_utilization"])
 	}
-
-	// First call: clear utilization (nil value)
-	clearCall := repo.updateExtraCalls[0]
-	if clearCall.Updates["session_window_utilization"] != nil {
-		t.Errorf("expected utilization cleared to nil, got %v", clearCall.Updates["session_window_utilization"])
+	if val, present := updates["passive_usage_7d_utilization"]; !present || val != nil {
+		t.Errorf("expected stale 7d utilization cleared to nil, got present=%v val=%v", present, val)
 	}
-
-	// Second call: store new utilization
-	storeCall := repo.updateExtraCalls[1]
-	if val, ok := storeCall.Updates["session_window_utilization"].(float64); !ok || val != 0.15 {
-		t.Errorf("expected utilization stored as 0.15, got %v", storeCall.Updates["session_window_utilization"])
+	if _, ok := updates["passive_usage_sampled_at"].(string); !ok {
+		t.Errorf("expected passive_usage_sampled_at to be refreshed, got %v", updates["passive_usage_sampled_at"])
 	}
 }
 
@@ -365,13 +349,12 @@ func TestUpdateSessionWindow_NoClearUtilizationOnCorrection(t *testing.T) {
 
 	svc.UpdateSessionWindow(context.Background(), account, headers)
 
-	// Only 1 UpdateExtra call (store utilization), no clear call
-	if len(repo.updateExtraCalls) != 1 {
-		t.Fatalf("expected 1 UpdateExtra call (no clear), got %d", len(repo.updateExtraCalls))
+	updates := onlyPatch(t, repo).Extra
+	if val, ok := updates["session_window_utilization"].(float64); !ok || val != 0.30 {
+		t.Errorf("expected utilization 0.30, got %v", updates["session_window_utilization"])
 	}
-
-	if val, ok := repo.updateExtraCalls[0].Updates["session_window_utilization"].(float64); !ok || val != 0.30 {
-		t.Errorf("expected utilization 0.30, got %v", repo.updateExtraCalls[0].Updates["session_window_utilization"])
+	if _, present := updates["passive_usage_7d_utilization"]; present {
+		t.Errorf("expected passive 7d usage to be left untouched on a correction")
 	}
 }
 
@@ -391,10 +374,7 @@ func TestUpdateSessionWindow_SamplesFable7dOiHeaders(t *testing.T) {
 
 	svc.UpdateSessionWindow(context.Background(), account, headers)
 
-	if len(repo.updateExtraCalls) != 1 {
-		t.Fatalf("expected 1 UpdateExtra call, got %d", len(repo.updateExtraCalls))
-	}
-	updates := repo.updateExtraCalls[0].Updates
+	updates := onlyPatch(t, repo).Extra
 	if val, ok := updates["passive_usage_7d_oi_utilization"].(float64); !ok || val != 0.87 {
 		t.Errorf("expected passive_usage_7d_oi_utilization=0.87, got %v", updates["passive_usage_7d_oi_utilization"])
 	}
@@ -417,10 +397,7 @@ func TestUpdateSessionWindow_ClearsFable7dOiOnWindowReset(t *testing.T) {
 
 	svc.UpdateSessionWindow(context.Background(), account, headers)
 
-	if len(repo.updateExtraCalls) != 1 {
-		t.Fatalf("expected 1 UpdateExtra (clear) call, got %d", len(repo.updateExtraCalls))
-	}
-	clearUpdates := repo.updateExtraCalls[0].Updates
+	clearUpdates := onlyPatch(t, repo).Extra
 	for _, key := range []string{"passive_usage_7d_oi_utilization", "passive_usage_7d_oi_reset"} {
 		if val, present := clearUpdates[key]; !present || val != nil {
 			t.Errorf("expected %s cleared to nil on window reset, got present=%v val=%v", key, present, val)
@@ -429,7 +406,7 @@ func TestUpdateSessionWindow_ClearsFable7dOiOnWindowReset(t *testing.T) {
 }
 
 func TestUpdateSessionWindow_NoStatusHeader(t *testing.T) {
-	// Should return immediately if no status header.
+	// Should return immediately if no unified rate-limit header is present.
 	repo := &sessionWindowMockRepo{}
 	svc := newRateLimitServiceForTest(repo)
 
@@ -437,7 +414,86 @@ func TestUpdateSessionWindow_NoStatusHeader(t *testing.T) {
 
 	svc.UpdateSessionWindow(context.Background(), account, http.Header{})
 
-	if len(repo.sessionWindowCalls) != 0 {
-		t.Errorf("expected no calls when status header absent, got %d", len(repo.sessionWindowCalls))
+	if len(repo.patches) != 0 {
+		t.Errorf("expected nothing persisted when no rate-limit header is present, got %d", len(repo.patches))
+	}
+}
+
+// Without a 5h status header only the snapshot itself is persisted (no window columns, no passive usage).
+func TestUpdateSessionWindow_SnapshotOnlyWithoutFiveHourStatus(t *testing.T) {
+	repo := &sessionWindowMockRepo{}
+	svc := newRateLimitServiceForTest(repo)
+	headers := http.Header{}
+	headers.Set("anthropic-ratelimit-unified-status", "allowed")
+	headers.Set("anthropic-ratelimit-unified-7d-utilization", "0.4")
+
+	svc.UpdateSessionWindow(context.Background(), &Account{ID: 2}, headers)
+
+	patch := onlyPatch(t, repo)
+	if patch.SessionWindowStatus != "" || patch.SessionWindowStart != nil || patch.SessionWindowEnd != nil {
+		t.Errorf("expected window columns untouched, got %#v", patch)
+	}
+	if len(patch.Extra) != 1 || patch.Extra[claudeRateLimitExtraKey] == nil {
+		t.Errorf("expected only the snapshot to be persisted, got %#v", patch.Extra)
+	}
+}
+
+// Responses received earlier than the last applied one (concurrent requests finishing out of
+// order) are dropped: nothing is persisted and they cannot clear a newer rate limit.
+func TestUpdateSessionWindow_DropsStaleResponses(t *testing.T) {
+	repo := &sessionWindowMockRepo{}
+	svc := newRateLimitServiceForTest(repo)
+	resetAt := time.Now().Add(time.Hour)
+	limited := &Account{ID: 5, RateLimitResetAt: &resetAt}
+	headers := http.Header{}
+	headers.Set("anthropic-ratelimit-unified-5h-status", "allowed")
+
+	now := time.Now()
+	svc.updateSessionWindowAt(context.Background(), &Account{ID: 5}, headers, now)
+	svc.updateSessionWindowAt(context.Background(), limited, headers, now.Add(-time.Second))
+
+	if len(repo.patches) != 1 {
+		t.Fatalf("expected the stale response to be dropped, got %d patches", len(repo.patches))
+	}
+	if len(repo.clearRateLimitIDs) != 0 {
+		t.Errorf("a stale response must not clear the rate limit")
+	}
+}
+
+// Unchanged snapshots are persisted at most once per interval; material changes
+// (here a whole-percent utilization change) are persisted immediately.
+func TestUpdateSessionWindow_ThrottlesUnchangedSnapshots(t *testing.T) {
+	repo := &sessionWindowMockRepo{}
+	svc := newRateLimitServiceForTest(repo)
+	resetAt := time.Now().Add(3 * time.Hour).Unix()
+	headersAt := func(utilization string) http.Header {
+		h := http.Header{}
+		h.Set("anthropic-ratelimit-unified-5h-status", "allowed")
+		h.Set("anthropic-ratelimit-unified-5h-reset", fmt.Sprintf("%d", resetAt))
+		h.Set("anthropic-ratelimit-unified-5h-utilization", utilization)
+		return h
+	}
+	account := &Account{ID: 8}
+	t0 := time.Now()
+
+	svc.updateSessionWindowAt(context.Background(), account, headersAt("0.200"), t0)
+	svc.updateSessionWindowAt(context.Background(), account, headersAt("0.203"), t0.Add(10*time.Second))
+	if len(repo.patches) != 1 {
+		t.Fatalf("a sub-percent change within the interval is not persisted, got %d patches", len(repo.patches))
+	}
+	svc.updateSessionWindowAt(context.Background(), account, headersAt("0.210"), t0.Add(20*time.Second))
+	if len(repo.patches) != 2 {
+		t.Fatalf("a whole-percent change is persisted immediately, got %d patches", len(repo.patches))
+	}
+	svc.updateSessionWindowAt(context.Background(), account, headersAt("0.212"), t0.Add(50*time.Second))
+	if len(repo.patches) != 2 {
+		t.Fatalf("the interval restarts after a persisted change, got %d patches", len(repo.patches))
+	}
+	svc.updateSessionWindowAt(context.Background(), account, headersAt("0.212"), t0.Add(81*time.Second))
+	if len(repo.patches) != 3 {
+		t.Fatalf("an unchanged snapshot is persisted again once the interval passed, got %d patches", len(repo.patches))
+	}
+	if got := repo.patches[2].Patch.Extra["session_window_utilization"]; got != 0.212 {
+		t.Errorf("the periodic write carries the latest utilization, got %v", got)
 	}
 }
