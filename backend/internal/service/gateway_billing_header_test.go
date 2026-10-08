@@ -208,7 +208,7 @@ func reqBody(t *testing.T, req *http.Request) []byte {
 	t.Helper()
 	rc, err := req.GetBody()
 	require.NoError(t, err)
-	defer rc.Close()
+	defer func() { _ = rc.Close() }()
 	b, err := io.ReadAll(rc)
 	require.NoError(t, err)
 	return b
