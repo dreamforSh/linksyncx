@@ -379,6 +379,10 @@ type UpdateSettingsRequest struct {
 	// Claude OAuth / setup-token 账号默认会话预算（nil = 不修改，0 = 不限）。
 	ClaudeDefaultMaxSessions *int `json:"claude_default_max_sessions"`
 
+	// 已绑定 Claude 对话「额度未耗尽不换号」（nil = 不修改）与自定义规则短时停调的不换号阈值（分钟）。
+	ClaudeStickyHoldEnabled        *bool `json:"claude_sticky_hold_enabled"`
+	ClaudeStickyHoldMaxWaitMinutes *int  `json:"claude_sticky_hold_max_wait_minutes"`
+
 	// auth-source 层 platform quota 覆盖（override 语义：nil = 不修改，non-nil = 整体覆盖该 source 的 quota 配置）。
 	AuthSourceEmailPlatformQuotas    map[string]*service.DefaultPlatformQuotaSetting `json:"auth_source_default_email_platform_quotas"`
 	AuthSourceLinuxDoPlatformQuotas  map[string]*service.DefaultPlatformQuotaSetting `json:"auth_source_default_linuxdo_platform_quotas"`
@@ -1517,12 +1521,21 @@ func (h *SettingHandler) UpdateSettings(c *gin.Context) {
 			return
 		}
 	}
+	if req.ClaudeStickyHoldMaxWaitMinutes != nil {
+		if v := *req.ClaudeStickyHoldMaxWaitMinutes; v < 1 || v > service.MaxClaudeStickyHoldMaxWaitMinutes {
+			response.BadRequest(c, "claude_sticky_hold_max_wait_minutes must be between 1 and "+strconv.Itoa(service.MaxClaudeStickyHoldMaxWaitMinutes))
+			return
+		}
+	}
 
 	settings := &service.SystemSettings{
 		// 系统全局 platform quota 默认值（整体替换语义）
 		DefaultPlatformQuotas:       req.DefaultPlatformQuotas,
 		AccountSchedulingThresholds: req.AccountSchedulingThresholds,
 		ClaudeDefaultMaxSessions:    intValueOrDefault(req.ClaudeDefaultMaxSessions, previousSettings.ClaudeDefaultMaxSessions),
+		ClaudeStickyHoldEnabled:     boolValueOrDefault(req.ClaudeStickyHoldEnabled, previousSettings.ClaudeStickyHoldEnabled),
+		ClaudeStickyHoldMaxWaitMinutes: intValueOrDefault(
+			req.ClaudeStickyHoldMaxWaitMinutes, previousSettings.ClaudeStickyHoldMaxWaitMinutes),
 
 		RegistrationEnabled:                 req.RegistrationEnabled,
 		EmailVerifyEnabled:                  req.EmailVerifyEnabled,
@@ -2437,12 +2450,14 @@ func (h *SettingHandler) UpdateSettings(c *gin.Context) {
 
 		AffiliateEnabled: updatedSettings.AffiliateEnabled,
 
-		RiskControlEnabled:          updatedSettings.RiskControlEnabled,
-		CyberSessionBlockEnabled:    updatedSettings.CyberSessionBlockEnabled,
-		CyberSessionBlockTTLSeconds: updatedSettings.CyberSessionBlockTTLSeconds,
-		AccountSchedulingThresholds: updatedSettings.AccountSchedulingThresholds,
-		ClaudeDefaultMaxSessions:    updatedSettings.ClaudeDefaultMaxSessions,
-		AllowUserViewErrorRequests:  updatedSettings.AllowUserViewErrorRequests,
+		RiskControlEnabled:             updatedSettings.RiskControlEnabled,
+		CyberSessionBlockEnabled:       updatedSettings.CyberSessionBlockEnabled,
+		CyberSessionBlockTTLSeconds:    updatedSettings.CyberSessionBlockTTLSeconds,
+		AccountSchedulingThresholds:    updatedSettings.AccountSchedulingThresholds,
+		ClaudeDefaultMaxSessions:       updatedSettings.ClaudeDefaultMaxSessions,
+		ClaudeStickyHoldEnabled:        updatedSettings.ClaudeStickyHoldEnabled,
+		ClaudeStickyHoldMaxWaitMinutes: updatedSettings.ClaudeStickyHoldMaxWaitMinutes,
+		AllowUserViewErrorRequests:     updatedSettings.AllowUserViewErrorRequests,
 	}
 	if fastPolicy, err := h.settingService.GetOpenAIFastPolicySettings(c.Request.Context()); err != nil {
 		slog.Error("openai_fast_policy_settings_get_failed", "error", err)

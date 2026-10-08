@@ -556,6 +556,14 @@ func (s *SettingService) buildSystemSettingsUpdates(ctx context.Context, setting
 		return nil, err
 	}
 	updates[SettingKeyClaudeDefaultMaxSessions] = strconv.Itoa(settings.ClaudeDefaultMaxSessions)
+	if settings.ClaudeStickyHoldMaxWaitMinutes == 0 {
+		settings.ClaudeStickyHoldMaxWaitMinutes = DefaultClaudeStickyHoldMaxWaitMinutes
+	}
+	if err := validateClaudeStickyHoldMaxWaitMinutes(settings.ClaudeStickyHoldMaxWaitMinutes); err != nil {
+		return nil, err
+	}
+	updates[SettingKeyClaudeStickyHoldEnabled] = strconv.FormatBool(settings.ClaudeStickyHoldEnabled)
+	updates[SettingKeyClaudeStickyHoldMaxWaitMinutes] = strconv.Itoa(settings.ClaudeStickyHoldMaxWaitMinutes)
 
 	updates[SettingKeyAllowUserViewErrorRequests] = strconv.FormatBool(settings.AllowUserViewErrorRequests)
 
@@ -800,6 +808,11 @@ func (s *SettingService) refreshCachedSettings(settings *SystemSettings) {
 	}
 	s.claudeDefaultMaxSessionsSF.Forget(SettingKeyClaudeDefaultMaxSessions)
 	s.storeClaudeDefaultMaxSessions(settings.ClaudeDefaultMaxSessions, claudeDefaultMaxSessionsCacheTTL)
+	s.claudeStickyHoldSF.Forget(SettingKeyClaudeStickyHoldEnabled)
+	s.storeClaudeStickyHoldSettings(ClaudeStickyHoldSettings{
+		Enabled: settings.ClaudeStickyHoldEnabled,
+		MaxWait: time.Duration(settings.ClaudeStickyHoldMaxWaitMinutes) * time.Minute,
+	}, claudeStickyHoldSettingsCacheTTL)
 	if s.cfg != nil {
 		s.cfg.SetForwardedClientIPSettings(settings.APIKeyACLTrustForwardedIP, settings.ForwardedClientIPHeaders)
 	}

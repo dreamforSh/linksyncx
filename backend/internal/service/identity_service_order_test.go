@@ -4,6 +4,7 @@ import (
 	"context"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/require"
 )
@@ -41,6 +42,15 @@ func (s *identityCacheStub) OverwriteFingerprint(context.Context, int64, *Finger
 	return nil
 }
 func (s *identityCacheStub) DeleteAccountSessions(context.Context, int64) error { return nil }
+func (s *identityCacheStub) GetClaudeSessionMigration(context.Context, int64, string, time.Duration) (*ClaudeSessionMigration, error) {
+	return nil, nil
+}
+func (s *identityCacheStub) SetClaudeSessionMigration(context.Context, int64, string, ClaudeSessionMigration, time.Duration) error {
+	return nil
+}
+func (s *identityCacheStub) DeleteClaudeSessionMigration(context.Context, int64, string) error {
+	return nil
+}
 
 func TestIdentityService_RewriteUserID_PreservesTopLevelFieldOrder(t *testing.T) {
 	cache := &identityCacheStub{}

@@ -181,6 +181,20 @@ type IdentityCache interface {
 	OverwriteFingerprint(ctx context.Context, accountID int64, fp *Fingerprint) error
 	// DeleteAccountSessions 删除账号级会话键（伪装会话、环境会话、最近活跃会话），身份轮换后调用。
 	DeleteAccountSessions(ctx context.Context, accountID int64) error
+	// GetClaudeSessionMigration 读取对话换号到该账号时记录的迁移水位线并续期 ttl；不存在返回 (nil, nil)。
+	GetClaudeSessionMigration(ctx context.Context, accountID int64, sessionKey string, ttl time.Duration) (*ClaudeSessionMigration, error)
+	// SetClaudeSessionMigration 记录对话换号到该账号时的迁移水位线。
+	SetClaudeSessionMigration(ctx context.Context, accountID int64, sessionKey string, migration ClaudeSessionMigration, ttl time.Duration) error
+	// DeleteClaudeSessionMigration 删除迁移水位线（客户端改写了历史）。
+	DeleteClaudeSessionMigration(ctx context.Context, accountID int64, sessionKey string) error
+}
+
+// ClaudeSessionMigration 是对话换号时的迁移水位线：此后在新账号上，messages[0:MessageCount) 来自旧账号，
+// 其中的 thinking 签名由旧账号签发。
+type ClaudeSessionMigration struct {
+	FromAccountID int64 `json:"from_account_id"`
+	MessageCount  int   `json:"message_count"`
+	At            int64 `json:"at"`
 }
 
 // ErrClientIdentityUnavailable 表示账号的客户端身份（device_id 等）既读不到也无法持久化创建。

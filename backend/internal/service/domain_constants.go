@@ -771,6 +771,14 @@ const SettingKeyAccountSchedulingThresholds = "account_scheduling_thresholds"
 // max_sessions 时的并发会话预算（整数，0 = 不限，缺省为 DefaultClaudeMaxSessions）。
 const SettingKeyClaudeDefaultMaxSessions = "claude_default_max_sessions"
 
+// SettingKeyClaudeStickyHoldEnabled —— 系统全局：已绑定到 Claude OAuth / setup-token 账号的对话
+// 「额度未耗尽不换号」（缺省开启；关闭即恢复原有换号行为）。
+const SettingKeyClaudeStickyHoldEnabled = "claude_sticky_hold_enabled"
+
+// SettingKeyClaudeStickyHoldMaxWaitMinutes —— 自定义规则触发的临时停调，预计恢复时间不超过该分钟数时
+// 已绑定对话不换号（1–120，缺省 DefaultClaudeStickyHoldMaxWaitMinutes）。
+const SettingKeyClaudeStickyHoldMaxWaitMinutes = "claude_sticky_hold_max_wait_minutes"
+
 // SettingKeyAuthSourcePlatformQuotas 返回某 auth source 的 platform quota JSON key。
 // 形如 auth_source_default_{source}_platform_quotas
 func SettingKeyAuthSourcePlatformQuotas(source string) string {

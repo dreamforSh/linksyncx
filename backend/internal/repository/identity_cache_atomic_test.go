@@ -226,6 +226,31 @@ func TestIdentityCacheAccountSessionKeys(t *testing.T) {
 	require.Empty(t, last, "the last active session expires with its TTL")
 }
 
+// 迁移水位线：写入带 TTL，读取时续期，删除后读不到。
+func TestIdentityCacheClaudeSessionMigration(t *testing.T) {
+	server, cache := newIdentityCacheForTest(t)
+	ctx := t.Context()
+	key := claudeSessionMigrationKey(5, "conv")
+	require.Equal(t, "claude:session:5:conv:migrated", key)
+
+	got, err := cache.GetClaudeSessionMigration(ctx, 5, "conv", time.Hour)
+	require.NoError(t, err)
+	require.Nil(t, got)
+
+	migration := service.ClaudeSessionMigration{FromAccountID: 3, MessageCount: 12, At: 1_800_000_000}
+	require.NoError(t, cache.SetClaudeSessionMigration(ctx, 5, "conv", migration, time.Hour))
+	server.FastForward(30 * time.Minute)
+	got, err = cache.GetClaudeSessionMigration(ctx, 5, "conv", time.Hour)
+	require.NoError(t, err)
+	require.Equal(t, migration, *got)
+	require.Equal(t, time.Hour, server.TTL(key), "reading the watermark extends it together with the sticky binding")
+
+	require.NoError(t, cache.DeleteClaudeSessionMigration(ctx, 5, "conv"))
+	got, err = cache.GetClaudeSessionMigration(ctx, 5, "conv", time.Hour)
+	require.NoError(t, err)
+	require.Nil(t, got)
+}
+
 // ReplaceFingerprint 能替掉旧 ClientID（轮换后的新身份），但不让旧代次覆盖新代次；
 // OverwriteFingerprint 无条件覆盖；DeleteAccountSessions 清掉伪装、环境与最近活跃三个会话键。
 func TestIdentityCacheReplaceAndDeleteSessions(t *testing.T) {

@@ -133,3 +133,23 @@ func TestUpdateSettingsClaudeDefaultMaxSessions(t *testing.T) {
 	}
 	require.Equal(t, "0", repo.values[service.SettingKeyClaudeDefaultMaxSessions])
 }
+
+func TestUpdateSettingsClaudeStickyHold(t *testing.T) {
+	h, repo := newStepUpSwitchTestHandler(t, map[string]string{})
+
+	rec := doUpdateSettings(t, h, map[string]any{"claude_sticky_hold_enabled": false, "claude_sticky_hold_max_wait_minutes": 20}, nil)
+	require.Equal(t, http.StatusOK, rec.Code, rec.Body.String())
+	require.Equal(t, "false", repo.values[service.SettingKeyClaudeStickyHoldEnabled])
+	require.Equal(t, "20", repo.values[service.SettingKeyClaudeStickyHoldMaxWaitMinutes])
+	require.Contains(t, rec.Body.String(), `"claude_sticky_hold_enabled":false`)
+
+	rec = doUpdateSettings(t, h, map[string]any{"risk_control_enabled": true}, nil)
+	require.Equal(t, http.StatusOK, rec.Code, rec.Body.String())
+	require.Equal(t, "false", repo.values[service.SettingKeyClaudeStickyHoldEnabled], "an omitted value keeps the stored one")
+	require.Equal(t, "20", repo.values[service.SettingKeyClaudeStickyHoldMaxWaitMinutes])
+
+	for _, invalid := range []int{0, service.MaxClaudeStickyHoldMaxWaitMinutes + 1} {
+		rec = doUpdateSettings(t, h, map[string]any{"claude_sticky_hold_max_wait_minutes": invalid}, nil)
+		require.Equal(t, http.StatusBadRequest, rec.Code, "value %d", invalid)
+	}
+}

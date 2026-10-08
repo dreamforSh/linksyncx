@@ -456,7 +456,12 @@ export default {
         accountSchedulingThresholdsRangeHint: 'Integer 1–100 (percent). OpenAI/Anthropic/Grok only.',
         claudeDefaultMaxSessions: 'Claude Account Default Session Limit',
         claudeDefaultMaxSessionsHint: 'Concurrently active upstream sessions per Claude OAuth / Setup Token account, used when the account has no Max Sessions of its own. When the limit is reached, new conversations go to other accounts; conversations already bound to the account always continue and never switch accounts because of the limit. Single-session accounts are fixed to 1.',
-        claudeDefaultMaxSessionsZeroHint: '0 means unlimited and restores the old behavior (accounts without their own limit are not limited). Integer 0–1000, default 5.'
+        claudeDefaultMaxSessionsZeroHint: '0 means unlimited and restores the old behavior (accounts without their own limit are not limited). Integer 0–1000, default 5.',
+        claudeStickyHold: 'Keep Claude Conversations on Their Account',
+        claudeStickyHoldHint: 'A conversation bound to a Claude OAuth / Setup Token account only moves to another account when the quota is exhausted, the account is invalid, the model is unsupported, or the account is disabled. During temporary trouble (overload, short rate limits, a full queue) it stays: the gateway retries on the same account and then returns a retryable 529, and Claude Code backs off and retries. After a move, thinking signatures issued by the previous account are stripped. New conversations are scheduled as usual.',
+        claudeStickyHoldOffHint: 'When off, the old behavior returns: a conversation moves to another account as soon as its account is temporarily unavailable.',
+        claudeStickyHoldMaxWait: 'Short Pause Limit',
+        claudeStickyHoldMaxWaitHint: 'Temporary pauses triggered by custom error-code rules keep the conversation on its account when they are expected to end within this many minutes; longer pauses move it like an invalid account. Integer 1–120, default 10.'
       },
       upstreamBillingProbe: {
         title: 'Upstream Rate Auto Detection',

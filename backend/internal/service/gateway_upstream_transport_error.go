@@ -59,13 +59,15 @@ func (s *GatewayService) handleUpstreamTransportError(ctx context.Context, c *gi
 	// Transport attempt left local validation; count Ollama Cloud activity.
 	scheduleOllamaCloudUsageActivity(s.deferredService, account)
 
-	if classifyUpstreamTransportError(err).Persistent {
+	persistent := classifyUpstreamTransportError(err).Persistent
+	if persistent {
 		s.tempUnscheduleTransportError(ctx, account, safeErr)
 	}
 
 	return &UpstreamFailoverError{
-		StatusCode:   http.StatusBadGateway,
-		ResponseBody: gatewayTransportFailoverBody,
+		StatusCode:         http.StatusBadGateway,
+		ResponseBody:       gatewayTransportFailoverBody,
+		AccountUnavailable: persistent || errors.Is(err, ErrAccountProxyUnavailable),
 	}
 }
 

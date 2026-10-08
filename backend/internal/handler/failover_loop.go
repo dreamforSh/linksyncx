@@ -139,6 +139,34 @@ type FailoverState struct {
 	profitVetoedAccountIDs map[int64]struct{}
 	// profitVetoCount 本次请求累计的利润否决次数，用于 maxProfitVetoAttempts 上限。
 	profitVetoCount int
+	// stickyHoldRetries 已绑定 Claude 对话因软性上游错误在原账号上的重试次数（不换号、不计入切换）。
+	stickyHoldRetries int
+}
+
+// HandleClaudeStickyHoldFailure 处理已绑定 Claude 对话的软性上游错误（529 / 5xx / 瞬时传输错误 /
+// 非额度耗尽的 429）：不把账号加入排除列表、不计切换次数、不做临时封禁，在原账号上退避重试 maxRetries 次；
+// 用尽后返回 FailoverExhausted，由调用方向客户端返回可重试错误（D9：额度未耗尽不换号）。
+func (s *FailoverState) HandleClaudeStickyHoldFailure(ctx context.Context, accountID int64, failoverErr *service.UpstreamFailoverError, maxRetries int) FailoverAction {
+	if ctx != nil && ctx.Err() != nil {
+		return FailoverCanceled
+	}
+	s.LastFailoverErr = failoverErr
+	if s.stickyHoldRetries >= maxRetries {
+		return FailoverExhausted
+	}
+	s.stickyHoldRetries++
+	delay := sameAccountRetryDelay << (s.stickyHoldRetries - 1)
+	logger.FromContext(ctx).Warn("gateway.sticky_hold_same_account_retry",
+		zap.Int64("account_id", accountID),
+		zap.Int("upstream_status", failoverErr.StatusCode),
+		zap.Int("retry_count", s.stickyHoldRetries),
+		zap.Int("retry_max", maxRetries),
+		zap.Duration("retry_delay", delay),
+	)
+	if !sleepWithContext(ctx, delay) {
+		return FailoverCanceled
+	}
+	return FailoverContinue
 }
 
 // NewFailoverState 创建 failover 状态

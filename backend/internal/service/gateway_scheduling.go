@@ -277,6 +277,25 @@ func (s *GatewayService) SelectAccountWithLoadAwareness(ctx context.Context, gro
 		}
 	}
 
+	// ============ Layer 0.5: 已绑定 Claude 对话额度未耗尽不换号（D9） ============
+	// 只有硬性原因（额度耗尽、账号失效、模型不支持、管理员策略）才交回下面的流程换号；软性原因继续
+	// 使用原账号或返回 ClaudeStickyHoldError 让客户端稍后重试。
+	if stickyAccountID > 0 && !isExcluded(stickyAccountID) {
+		if selection, holdErr, handled := s.selectBoundClaudeAccount(ctx, stickyAccountID, accountByID[stickyAccountID], stickyHoldEnv{
+			groupID:             groupID,
+			sessionHash:         sessionHash,
+			requestedModel:      requestedModel,
+			platform:            platform,
+			useMixed:            useMixed,
+			routingAccountIDs:   routingAccountIDs,
+			isChannelRestricted: isChannelRestricted,
+			registerSession:     registerSession,
+			cfg:                 stickyHoldSchedulingConfig{maxWaiting: cfg.StickySessionMaxWaiting, waitTimeout: cfg.StickySessionWaitTimeout},
+		}); handled {
+			return selection, holdErr
+		}
+	}
+
 	// ============ Layer 1: 模型路由优先选择（优先级高于粘性会话） ============
 	if len(routingAccountIDs) > 0 && s.concurrencyService != nil {
 		// 1. 过滤出路由列表中可调度的账号

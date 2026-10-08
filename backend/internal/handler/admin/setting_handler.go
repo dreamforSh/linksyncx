@@ -395,9 +395,11 @@ func (h *SettingHandler) GetSettings(c *gin.Context) {
 
 		AffiliateEnabled: settings.AffiliateEnabled,
 
-		AccountSchedulingThresholds: settings.AccountSchedulingThresholds,
-		ClaudeDefaultMaxSessions:    settings.ClaudeDefaultMaxSessions,
-		AllowUserViewErrorRequests:  settings.AllowUserViewErrorRequests,
+		AccountSchedulingThresholds:    settings.AccountSchedulingThresholds,
+		ClaudeDefaultMaxSessions:       settings.ClaudeDefaultMaxSessions,
+		ClaudeStickyHoldEnabled:        settings.ClaudeStickyHoldEnabled,
+		ClaudeStickyHoldMaxWaitMinutes: settings.ClaudeStickyHoldMaxWaitMinutes,
+		AllowUserViewErrorRequests:     settings.AllowUserViewErrorRequests,
 	}
 
 	// OpenAI fast policy (stored under a dedicated setting key)

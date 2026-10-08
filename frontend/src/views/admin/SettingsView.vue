@@ -5127,6 +5127,49 @@
                 </div>
               </div>
 
+              <div class="border-t border-gray-100 pt-4 dark:border-dark-700">
+                <div class="flex items-start justify-between gap-4">
+                  <div class="max-w-3xl">
+                    <label class="font-medium text-gray-900 dark:text-white">
+                      {{ t("admin.settings.scheduling.claudeStickyHold") }}
+                    </label>
+                    <p class="mt-1 text-sm text-gray-500 dark:text-gray-400">
+                      {{ t("admin.settings.scheduling.claudeStickyHoldHint") }}
+                    </p>
+                    <p class="mt-0.5 text-xs text-amber-600 dark:text-amber-400">
+                      {{ t("admin.settings.scheduling.claudeStickyHoldOffHint") }}
+                    </p>
+                  </div>
+                  <Toggle
+                    v-model="form.claude_sticky_hold_enabled"
+                    data-testid="claude-sticky-hold-enabled"
+                  />
+                </div>
+                <div
+                  v-if="form.claude_sticky_hold_enabled"
+                  class="mt-3 flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between"
+                >
+                  <div class="max-w-3xl">
+                    <label class="text-sm font-medium text-gray-700 dark:text-gray-300">
+                      {{ t("admin.settings.scheduling.claudeStickyHoldMaxWait") }}
+                    </label>
+                    <p class="mt-0.5 text-xs text-gray-500 dark:text-gray-400">
+                      {{ t("admin.settings.scheduling.claudeStickyHoldMaxWaitHint") }}
+                    </p>
+                  </div>
+                  <input
+                    v-model.number="form.claude_sticky_hold_max_wait_minutes"
+                    type="number"
+                    min="1"
+                    max="120"
+                    step="1"
+                    class="input w-full sm:w-32"
+                    data-testid="claude-sticky-hold-max-wait"
+                    placeholder="10"
+                  />
+                </div>
+              </div>
+
               <div
                 v-if="!form.openai_advanced_scheduler_enabled"
                 class="flex items-center justify-between border-t border-gray-100 pt-5 dark:border-dark-700"
@@ -9768,6 +9811,13 @@ type SettingsForm = Omit<
 
 const schedulingThresholdPlatforms = SCHEDULING_THRESHOLD_PLATFORMS;
 
+// 自定义规则短时停调的不换号阈值（分钟）：留空或非法时回到默认值 10，限制在 1–120。
+const normalizeClaudeStickyHoldMaxWait = (value: unknown): number => {
+  const parsed = typeof value === "number" ? value : Number.NaN;
+  if (!Number.isFinite(parsed) || parsed < 1) return 10;
+  return Math.min(Math.trunc(parsed), 120);
+};
+
 // Claude 账号默认会话上限：0 = 不限；留空或非法时回到默认值 5，超出上限时截到 1000。
 const normalizeClaudeDefaultMaxSessions = (value: unknown): number => {
   const parsed = typeof value === "number" ? value : Number.NaN;
@@ -9800,6 +9850,8 @@ const form = reactive<SettingsForm>({
   default_platform_quotas: normalizePlatformQuotasMap() as DefaultPlatformQuotasMap,
   account_scheduling_thresholds: normalizeAccountSchedulingThresholdsMap(),
   claude_default_max_sessions: 5,
+  claude_sticky_hold_enabled: true,
+  claude_sticky_hold_max_wait_minutes: 10,
   affiliate_rebate_rate: 20,
   affiliate_rebate_freeze_hours: 0,
   affiliate_rebate_duration_days: 0,
@@ -11639,6 +11691,10 @@ async function saveSettings() {
       allow_ungrouped_key_scheduling: form.allow_ungrouped_key_scheduling,
       claude_default_max_sessions: normalizeClaudeDefaultMaxSessions(
         form.claude_default_max_sessions,
+      ),
+      claude_sticky_hold_enabled: form.claude_sticky_hold_enabled,
+      claude_sticky_hold_max_wait_minutes: normalizeClaudeStickyHoldMaxWait(
+        form.claude_sticky_hold_max_wait_minutes,
       ),
       openai_ttft_mode:
         form.openai_ttft_mode === "visible" ? "visible" : "semantic",

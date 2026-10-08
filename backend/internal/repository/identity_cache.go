@@ -178,6 +178,38 @@ func (c *identityCache) DeleteAccountSessions(ctx context.Context, accountID int
 	return c.rdb.Del(ctx, maskedSessionKey(accountID), ambientSessionKey(accountID), lastActiveSessionKey(accountID)).Err()
 }
 
+// claudeSessionMigrationKey 是对话换号到该账号时的迁移水位线：claude:session:{account}:{K}:migrated。
+func claudeSessionMigrationKey(accountID int64, sessionKey string) string {
+	return fmt.Sprintf("%s%d:%s:migrated", accountSessionKeyPrefix, accountID, sessionKey)
+}
+
+func (c *identityCache) GetClaudeSessionMigration(ctx context.Context, accountID int64, sessionKey string, ttl time.Duration) (*service.ClaudeSessionMigration, error) {
+	raw, err := c.rdb.GetEx(ctx, claudeSessionMigrationKey(accountID, sessionKey), ttl).Result()
+	if err == redis.Nil {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	var migration service.ClaudeSessionMigration
+	if err := json.Unmarshal([]byte(raw), &migration); err != nil {
+		return nil, err
+	}
+	return &migration, nil
+}
+
+func (c *identityCache) SetClaudeSessionMigration(ctx context.Context, accountID int64, sessionKey string, migration service.ClaudeSessionMigration, ttl time.Duration) error {
+	payload, err := json.Marshal(migration)
+	if err != nil {
+		return err
+	}
+	return c.rdb.Set(ctx, claudeSessionMigrationKey(accountID, sessionKey), payload, ttl).Err()
+}
+
+func (c *identityCache) DeleteClaudeSessionMigration(ctx context.Context, accountID int64, sessionKey string) error {
+	return c.rdb.Del(ctx, claudeSessionMigrationKey(accountID, sessionKey)).Err()
+}
+
 var maskedSessionScript = redis.NewScript(`
 local current = redis.call('GET', KEYS[1])
 if not current or current == '' then current = ARGV[1] end

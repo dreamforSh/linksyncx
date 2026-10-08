@@ -5,6 +5,7 @@ package service
 import (
 	"context"
 	"errors"
+	"fmt"
 	"net/http"
 	"strings"
 	"sync"
@@ -26,6 +27,7 @@ type memoryIdentityCache struct {
 	lastWrites  int
 	lastErr     error
 	replaces    int
+	migrations  map[string]ClaudeSessionMigration
 }
 
 func newMemoryIdentityCache() *memoryIdentityCache {
@@ -125,6 +127,36 @@ func (m *memoryIdentityCache) DeleteAccountSessions(_ context.Context, id int64)
 	delete(m.masked, id)
 	delete(m.ambient, id)
 	delete(m.last, id)
+	return nil
+}
+
+func memoryMigrationKey(id int64, sessionKey string) string {
+	return fmt.Sprintf("%d:%s", id, sessionKey)
+}
+
+func (m *memoryIdentityCache) GetClaudeSessionMigration(_ context.Context, id int64, sessionKey string, _ time.Duration) (*ClaudeSessionMigration, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if migration, ok := m.migrations[memoryMigrationKey(id, sessionKey)]; ok {
+		return &migration, nil
+	}
+	return nil, nil
+}
+
+func (m *memoryIdentityCache) SetClaudeSessionMigration(_ context.Context, id int64, sessionKey string, migration ClaudeSessionMigration, _ time.Duration) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.migrations == nil {
+		m.migrations = map[string]ClaudeSessionMigration{}
+	}
+	m.migrations[memoryMigrationKey(id, sessionKey)] = migration
+	return nil
+}
+
+func (m *memoryIdentityCache) DeleteClaudeSessionMigration(_ context.Context, id int64, sessionKey string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	delete(m.migrations, memoryMigrationKey(id, sessionKey))
 	return nil
 }
 

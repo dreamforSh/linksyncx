@@ -268,8 +268,10 @@ func (s *SettingService) InitializeDefaultSettings(ctx context.Context) error {
 		SettingKeyOpenAIAdvancedSchedulerWeightPreviousResponse:      "",
 		SettingKeyOpenAIAdvancedSchedulerWeightSessionSticky:         "",
 
-		SettingKeyAllowUserViewErrorRequests: "false",
-		SettingKeyClaudeDefaultMaxSessions:   strconv.Itoa(DefaultClaudeMaxSessions),
+		SettingKeyAllowUserViewErrorRequests:     "false",
+		SettingKeyClaudeDefaultMaxSessions:       strconv.Itoa(DefaultClaudeMaxSessions),
+		SettingKeyClaudeStickyHoldEnabled:        "true",
+		SettingKeyClaudeStickyHoldMaxWaitMinutes: strconv.Itoa(DefaultClaudeStickyHoldMaxWaitMinutes),
 	}
 
 	return s.settingRepo.SetMultiple(ctx, defaults)
@@ -990,6 +992,9 @@ func (s *SettingService) parseSettings(settings map[string]string) *SystemSettin
 		}
 	}
 	result.ClaudeDefaultMaxSessions = parseClaudeDefaultMaxSessions(settings[SettingKeyClaudeDefaultMaxSessions])
+	stickyHold := parseClaudeStickyHoldSettings(settings[SettingKeyClaudeStickyHoldEnabled], settings[SettingKeyClaudeStickyHoldMaxWaitMinutes])
+	result.ClaudeStickyHoldEnabled = stickyHold.Enabled
+	result.ClaudeStickyHoldMaxWaitMinutes = parseClaudeStickyHoldMaxWaitMinutes(settings[SettingKeyClaudeStickyHoldMaxWaitMinutes])
 
 	result.AllowUserViewErrorRequests = settings[SettingKeyAllowUserViewErrorRequests] == "true" // default false
 

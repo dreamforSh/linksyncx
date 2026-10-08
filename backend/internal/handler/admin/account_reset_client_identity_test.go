@@ -7,6 +7,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/Wei-Shaw/sub2api/internal/service"
 	"github.com/gin-gonic/gin"
@@ -48,6 +49,15 @@ func (c *resetIdentityCache) OverwriteFingerprint(_ context.Context, id int64, f
 	return nil
 }
 func (c *resetIdentityCache) DeleteAccountSessions(context.Context, int64) error { return nil }
+func (c *resetIdentityCache) GetClaudeSessionMigration(context.Context, int64, string, time.Duration) (*service.ClaudeSessionMigration, error) {
+	return nil, nil
+}
+func (c *resetIdentityCache) SetClaudeSessionMigration(context.Context, int64, string, service.ClaudeSessionMigration, time.Duration) error {
+	return nil
+}
+func (c *resetIdentityCache) DeleteClaudeSessionMigration(context.Context, int64, string) error {
+	return nil
+}
 
 type resetIdentityStore struct {
 	rows map[int64]service.ClientIdentityRecord

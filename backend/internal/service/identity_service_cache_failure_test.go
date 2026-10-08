@@ -7,6 +7,7 @@ import (
 	"errors"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/Wei-Shaw/sub2api/internal/pkg/claude"
 	"github.com/stretchr/testify/require"
@@ -44,6 +45,15 @@ func (c *failingIdentityCache) OverwriteFingerprint(context.Context, int64, *Fin
 	return c.err
 }
 func (c *failingIdentityCache) DeleteAccountSessions(context.Context, int64) error {
+	return c.err
+}
+func (c *failingIdentityCache) GetClaudeSessionMigration(context.Context, int64, string, time.Duration) (*ClaudeSessionMigration, error) {
+	return nil, c.err
+}
+func (c *failingIdentityCache) SetClaudeSessionMigration(context.Context, int64, string, ClaudeSessionMigration, time.Duration) error {
+	return c.err
+}
+func (c *failingIdentityCache) DeleteClaudeSessionMigration(context.Context, int64, string) error {
 	return c.err
 }
 

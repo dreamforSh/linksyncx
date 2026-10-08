@@ -449,7 +449,12 @@ export default {
         accountSchedulingThresholdsRangeHint: '整数 1–100（百分比）。仅 OpenAI / Anthropic / Grok。',
         claudeDefaultMaxSessions: 'Claude 账号默认会话上限',
         claudeDefaultMaxSessionsHint: '每个 Claude OAuth / Setup Token 账号同时活跃的上游会话数，账号未单独设置「最大会话数」时使用。名额满时新对话调度到其它账号；已绑定的对话回来时始终放行，不会因名额换号。单会话模式的账号固定为 1。',
-        claudeDefaultMaxSessionsZeroHint: '填 0 表示不限，恢复旧行为（未单独设置的账号不限会话数）。整数 0–1000，默认 5。'
+        claudeDefaultMaxSessionsZeroHint: '填 0 表示不限，恢复旧行为（未单独设置的账号不限会话数）。整数 0–1000，默认 5。',
+        claudeStickyHold: 'Claude 对话额度未耗尽不换号',
+        claudeStickyHoldHint: '已绑定到某个 Claude OAuth / Setup Token 账号的对话，只在额度耗尽、账号失效、模型不支持或管理员停用时才换号。过载、短时限流、排队已满等临时情况下留在原账号：网关先在原账号重试，仍不行就返回可重试的 529，由 Claude Code 自行退避重试。换号后会剥离旧账号签发的 thinking 签名。新对话的选号不受影响。',
+        claudeStickyHoldOffHint: '关闭后恢复原有行为：账号暂时不可用时立即把对话换到其它账号。',
+        claudeStickyHoldMaxWait: '短时停调的不换号上限',
+        claudeStickyHoldMaxWaitHint: '自定义错误码规则触发的临时停调，预计恢复时间不超过该分钟数时不换号；超过时按账号失效换号。整数 1–120，默认 10。'
       },
       upstreamBillingProbe: {
         title: '上游倍率自动探测',

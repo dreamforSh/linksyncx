@@ -71,6 +71,18 @@ func (s *stubIdentityCache) OverwriteFingerprint(_ context.Context, _ int64, fp 
 
 func (s *stubIdentityCache) DeleteAccountSessions(context.Context, int64) error { return nil }
 
+func (s *stubIdentityCache) GetClaudeSessionMigration(context.Context, int64, string, time.Duration) (*ClaudeSessionMigration, error) {
+	return nil, nil
+}
+
+func (s *stubIdentityCache) SetClaudeSessionMigration(context.Context, int64, string, ClaudeSessionMigration, time.Duration) error {
+	return nil
+}
+
+func (s *stubIdentityCache) DeleteClaudeSessionMigration(context.Context, int64, string) error {
+	return nil
+}
+
 func headersWithUA(ua string) http.Header {
 	h := http.Header{}
 	if ua != "" {

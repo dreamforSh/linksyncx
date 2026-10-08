@@ -619,6 +619,12 @@ func diffSettings(before *service.SystemSettings, after *service.SystemSettings,
 	if before.ClaudeDefaultMaxSessions != after.ClaudeDefaultMaxSessions {
 		changed = append(changed, service.SettingKeyClaudeDefaultMaxSessions)
 	}
+	if before.ClaudeStickyHoldEnabled != after.ClaudeStickyHoldEnabled {
+		changed = append(changed, service.SettingKeyClaudeStickyHoldEnabled)
+	}
+	if before.ClaudeStickyHoldMaxWaitMinutes != after.ClaudeStickyHoldMaxWaitMinutes {
+		changed = append(changed, service.SettingKeyClaudeStickyHoldMaxWaitMinutes)
+	}
 	changed = appendAuthSourceDefaultChanges(changed, beforeAuthSourceDefaults, afterAuthSourceDefaults)
 	return changed
 }
