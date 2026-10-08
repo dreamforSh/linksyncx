@@ -37,11 +37,11 @@ func NewUserMsgQueueHelper(
 	}
 }
 
-// AcquireWithWait 等待获取串行锁，流式请求期间发送 SSE ping
+// AcquireWithWait 等待获取 scope 的串行锁，流式请求期间发送 SSE ping
 // 返回的 releaseFunc 内部使用 sync.Once，确保只执行一次释放
 func (h *UserMsgQueueHelper) AcquireWithWait(
 	c *gin.Context,
-	accountID int64,
+	scope service.UserMsgQueueScope,
 	baseRPM int,
 	isStream bool,
 	streamStarted *bool,
@@ -52,35 +52,35 @@ func (h *UserMsgQueueHelper) AcquireWithWait(
 	defer cancel()
 
 	// 先尝试立即获取
-	result, err := h.queueService.TryAcquire(ctx, accountID)
+	result, err := h.queueService.TryAcquire(ctx, scope)
 	if err != nil {
 		return nil, err // fail-open 已在 service 层处理
 	}
 
 	if result.Acquired {
 		// 获取成功，执行 RPM 自适应延迟
-		if err := h.queueService.EnforceDelay(ctx, accountID, baseRPM); err != nil {
+		if err := h.queueService.EnforceDelay(ctx, scope, baseRPM); err != nil {
 			if ctx.Err() != nil {
 				// 延迟期间 context 取消，释放锁
 				bgCtx, bgCancel := context.WithTimeout(context.Background(), 5*time.Second)
-				_ = h.queueService.Release(bgCtx, accountID, result.RequestID)
+				_ = h.queueService.Release(bgCtx, scope, result.RequestID)
 				bgCancel()
 				return nil, ctx.Err()
 			}
 		}
-		reqLog.Debug("gateway.umq_lock_acquired", zap.Int64("account_id", accountID))
-		return h.makeReleaseFunc(accountID, result.RequestID, reqLog), nil
+		reqLog.Debug("gateway.umq_lock_acquired", zap.Int64("account_id", scope.AccountID), zap.String("umq_scope", scope.String()))
+		return h.makeReleaseFunc(scope, result.RequestID, reqLog), nil
 	}
 
 	// 需要等待：指数退避轮询
-	return h.waitForLockWithPing(c, ctx, accountID, baseRPM, isStream, streamStarted, reqLog)
+	return h.waitForLockWithPing(c, ctx, scope, baseRPM, isStream, streamStarted, reqLog)
 }
 
 // waitForLockWithPing 等待获取锁，流式请求期间发送 SSE ping
 func (h *UserMsgQueueHelper) waitForLockWithPing(
 	c *gin.Context,
 	ctx context.Context,
-	accountID int64,
+	scope service.UserMsgQueueScope,
 	baseRPM int,
 	isStream bool,
 	streamStarted *bool,
@@ -111,7 +111,7 @@ func (h *UserMsgQueueHelper) waitForLockWithPing(
 	for {
 		select {
 		case <-ctx.Done():
-			return nil, fmt.Errorf("umq wait timeout for account %d", accountID)
+			return nil, fmt.Errorf("umq wait timeout for scope %s", scope)
 
 		case <-pingCh:
 			if !*streamStarted {
@@ -129,22 +129,22 @@ func (h *UserMsgQueueHelper) waitForLockWithPing(
 			flusher.Flush()
 
 		case <-timer.C:
-			result, err := h.queueService.TryAcquire(ctx, accountID)
+			result, err := h.queueService.TryAcquire(ctx, scope)
 			if err != nil {
 				return nil, err
 			}
 			if result.Acquired {
 				// 获取成功，执行 RPM 自适应延迟
-				if delayErr := h.queueService.EnforceDelay(ctx, accountID, baseRPM); delayErr != nil {
+				if delayErr := h.queueService.EnforceDelay(ctx, scope, baseRPM); delayErr != nil {
 					if ctx.Err() != nil {
 						bgCtx, bgCancel := context.WithTimeout(context.Background(), 5*time.Second)
-						_ = h.queueService.Release(bgCtx, accountID, result.RequestID)
+						_ = h.queueService.Release(bgCtx, scope, result.RequestID)
 						bgCancel()
 						return nil, ctx.Err()
 					}
 				}
-				reqLog.Debug("gateway.umq_lock_acquired", zap.Int64("account_id", accountID))
-				return h.makeReleaseFunc(accountID, result.RequestID, reqLog), nil
+				reqLog.Debug("gateway.umq_lock_acquired", zap.Int64("account_id", scope.AccountID), zap.String("umq_scope", scope.String()))
+				return h.makeReleaseFunc(scope, result.RequestID, reqLog), nil
 			}
 			backoff = nextBackoff(backoff)
 			timer.Reset(backoff)
@@ -153,19 +153,20 @@ func (h *UserMsgQueueHelper) waitForLockWithPing(
 }
 
 // makeReleaseFunc 创建锁释放函数（使用 sync.Once 确保只执行一次）
-func (h *UserMsgQueueHelper) makeReleaseFunc(accountID int64, requestID string, reqLog *zap.Logger) func() {
+func (h *UserMsgQueueHelper) makeReleaseFunc(scope service.UserMsgQueueScope, requestID string, reqLog *zap.Logger) func() {
 	var once sync.Once
 	return func() {
 		once.Do(func() {
 			bgCtx, bgCancel := context.WithTimeout(context.Background(), 5*time.Second)
 			defer bgCancel()
-			if err := h.queueService.Release(bgCtx, accountID, requestID); err != nil {
+			if err := h.queueService.Release(bgCtx, scope, requestID); err != nil {
 				reqLog.Warn("gateway.umq_release_failed",
-					zap.Int64("account_id", accountID),
+					zap.Int64("account_id", scope.AccountID),
+					zap.String("umq_scope", scope.String()),
 					zap.Error(err),
 				)
 			} else {
-				reqLog.Debug("gateway.umq_lock_released", zap.Int64("account_id", accountID))
+				reqLog.Debug("gateway.umq_lock_released", zap.Int64("account_id", scope.AccountID), zap.String("umq_scope", scope.String()))
 			}
 		})
 	}

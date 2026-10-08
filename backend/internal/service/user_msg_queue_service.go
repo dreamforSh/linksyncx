@@ -3,10 +3,14 @@ package service
 import (
 	"context"
 	cryptorand "crypto/rand"
+	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
 	"math"
 	"math/rand/v2"
+	"net/http"
+	"strconv"
+	"strings"
 	"sync"
 	"time"
 
@@ -17,16 +21,77 @@ import (
 
 // UserMsgQueueCache 用户消息串行队列 Redis 缓存接口
 type UserMsgQueueCache interface {
-	// AcquireLock 尝试获取账号级串行锁
-	AcquireLock(ctx context.Context, accountID int64, requestID string, lockTtlMs int) (acquired bool, err error)
-	// ReleaseLock 释放锁并记录完成时间
-	ReleaseLock(ctx context.Context, accountID int64, requestID string) (released bool, err error)
-	// GetLastCompletedMs 获取上次完成时间（毫秒时间戳，Redis TIME 源）
-	GetLastCompletedMs(ctx context.Context, accountID int64) (int64, error)
+	// AcquireLock 尝试获取 scope 的串行锁
+	AcquireLock(ctx context.Context, scope UserMsgQueueScope, requestID string, lockTtlMs int) (acquired bool, err error)
+	// ReleaseLock 释放锁并记录 scope 的完成时间
+	ReleaseLock(ctx context.Context, scope UserMsgQueueScope, requestID string) (released bool, err error)
+	// GetLastCompletedMs 获取 scope 上次完成时间（毫秒时间戳，Redis TIME 源）
+	GetLastCompletedMs(ctx context.Context, scope UserMsgQueueScope) (int64, error)
 	// GetCurrentTimeMs 获取 Redis 服务器当前时间（毫秒），与 ReleaseLock 记录的时间源一致
 	GetCurrentTimeMs(ctx context.Context) (int64, error)
 	// ReconcileExpiredLockCandidates 处理锁索引中的到期候选，按真实 PTTL 清理或刷新索引
 	ReconcileExpiredLockCandidates(ctx context.Context, maxCount int) (cleaned int, err error)
+}
+
+// UserMsgQueueScope 串行锁的作用域（D8）。Session 为空时是账号级：单会话模式、按账号
+// 串行的配置、请求不带会话 ID 时使用；否则是账号内的一个会话，同一会话的用户消息串行，
+// 不同会话并行。上次完成时间与最小间隔按同一作用域记录。
+type UserMsgQueueScope struct {
+	AccountID int64
+	// Session 是客户端会话 ID 的摘要（小写 hex），见 ScopeFor
+	Session string
+}
+
+// String 返回日志用的作用域标识：账号级为 "123"，会话级为 "123/abcd…"
+func (s UserMsgQueueScope) String() string {
+	if s.Session == "" {
+		return strconv.FormatInt(s.AccountID, 10)
+	}
+	return strconv.FormatInt(s.AccountID, 10) + "/" + s.Session
+}
+
+// umqSessionDigestBytes 会话摘要取 SHA256 的前 12 字节（24 位 hex）。摘要只在单个账号内
+// 区分会话，撞车的后果只是两个会话多串行一次。
+const umqSessionDigestBytes = 12
+
+// ScopeFor 返回本次请求的串行作用域。会话取自客户端 metadata.user_id 的 session_id，
+// 没有时取 X-Claude-Code-Session-Id；两者在同一账号、同一身份代次下与上游会话一一对应。
+// 单会话模式（账号只有一个上游会话）、Scope = account、请求不带会话时退回账号级。
+func (s *UserMessageQueueService) ScopeFor(account *Account, parsed *ParsedRequest, clientHeaders http.Header) UserMsgQueueScope {
+	if account == nil {
+		return UserMsgQueueScope{}
+	}
+	scope := UserMsgQueueScope{AccountID: account.ID}
+	if s != nil && !s.cfg.SessionScoped() {
+		return scope
+	}
+	if account.IsSessionIDMaskingEnabled() {
+		return scope
+	}
+	session := umqClientSessionID(parsed, clientHeaders)
+	if session == "" {
+		return scope
+	}
+	sum := sha256.Sum256([]byte(session))
+	scope.Session = hex.EncodeToString(sum[:umqSessionDigestBytes])
+	return scope
+}
+
+// umqClientSessionID 取客户端会话 ID：metadata.user_id 的 session_id 优先，其次是会话头。
+func umqClientSessionID(parsed *ParsedRequest, clientHeaders http.Header) string {
+	if parsed != nil && parsed.MetadataUserID != "" {
+		if uid := ParseMetadataUserID(parsed.MetadataUserID); uid != nil && uid.SessionID != "" {
+			return uid.SessionID
+		}
+	}
+	if clientHeaders == nil {
+		return ""
+	}
+	session := strings.TrimSpace(getHeaderRaw(clientHeaders, "X-Claude-Code-Session-Id"))
+	if len(session) > 128 {
+		return ""
+	}
+	return session
 }
 
 // QueueLockResult 锁获取结果
@@ -36,7 +101,7 @@ type QueueLockResult struct {
 }
 
 // UserMessageQueueService 用户消息串行队列服务
-// 对真实用户消息实施账号级串行化 + RPM 自适应延迟
+// 对真实用户消息按会话（或账号）串行化 + RPM 自适应延迟
 type UserMessageQueueService struct {
 	cache    UserMsgQueueCache
 	rpmCache RPMCache
@@ -106,7 +171,7 @@ func IsRealUserMessage(parsed *ParsedRequest) bool {
 }
 
 // TryAcquire 尝试立即获取串行锁
-func (s *UserMessageQueueService) TryAcquire(ctx context.Context, accountID int64) (*QueueLockResult, error) {
+func (s *UserMessageQueueService) TryAcquire(ctx context.Context, scope UserMsgQueueScope) (*QueueLockResult, error) {
 	if s.cache == nil {
 		return &QueueLockResult{Acquired: true}, nil // fail-open
 	}
@@ -117,9 +182,9 @@ func (s *UserMessageQueueService) TryAcquire(ctx context.Context, accountID int6
 		lockTTL = 120000
 	}
 
-	acquired, err := s.cache.AcquireLock(ctx, accountID, requestID, lockTTL)
+	acquired, err := s.cache.AcquireLock(ctx, scope, requestID, lockTTL)
 	if err != nil {
-		logger.LegacyPrintf("service.umq", "AcquireLock failed for account %d: %v", accountID, err)
+		logger.LegacyPrintf("service.umq", "AcquireLock failed for scope %s: %v", scope, err)
 		return &QueueLockResult{Acquired: true}, nil // fail-open
 	}
 
@@ -130,39 +195,40 @@ func (s *UserMessageQueueService) TryAcquire(ctx context.Context, accountID int6
 }
 
 // Release 释放串行锁
-func (s *UserMessageQueueService) Release(ctx context.Context, accountID int64, requestID string) error {
+func (s *UserMessageQueueService) Release(ctx context.Context, scope UserMsgQueueScope, requestID string) error {
 	if s.cache == nil || requestID == "" {
 		return nil
 	}
-	released, err := s.cache.ReleaseLock(ctx, accountID, requestID)
+	released, err := s.cache.ReleaseLock(ctx, scope, requestID)
 	if err != nil {
-		logger.LegacyPrintf("service.umq", "ReleaseLock failed for account %d: %v", accountID, err)
+		logger.LegacyPrintf("service.umq", "ReleaseLock failed for scope %s: %v", scope, err)
 		return err
 	}
 	if !released {
-		logger.LegacyPrintf("service.umq", "ReleaseLock no-op for account %d (requestID mismatch or expired)", accountID)
+		logger.LegacyPrintf("service.umq", "ReleaseLock no-op for scope %s (requestID mismatch or expired)", scope)
 	}
 	return nil
 }
 
 // EnforceDelay 根据 RPM 负载执行自适应延迟
+// 间隔从 scope 上次完成算起，延迟长度按账号整体 RPM 计算。
 // 使用 Redis TIME 确保与 releaseLockScript 记录的时间源一致
-func (s *UserMessageQueueService) EnforceDelay(ctx context.Context, accountID int64, baseRPM int) error {
+func (s *UserMessageQueueService) EnforceDelay(ctx context.Context, scope UserMsgQueueScope, baseRPM int) error {
 	if s.cache == nil {
 		return nil
 	}
 
 	// 先检查历史记录：没有历史则无需延迟，避免不必要的 RPM 查询
-	lastMs, err := s.cache.GetLastCompletedMs(ctx, accountID)
+	lastMs, err := s.cache.GetLastCompletedMs(ctx, scope)
 	if err != nil {
-		logger.LegacyPrintf("service.umq", "GetLastCompletedMs failed for account %d: %v", accountID, err)
+		logger.LegacyPrintf("service.umq", "GetLastCompletedMs failed for scope %s: %v", scope, err)
 		return nil // fail-open
 	}
 	if lastMs == 0 {
 		return nil // 没有历史记录，无需延迟
 	}
 
-	delay := s.CalculateRPMAwareDelay(ctx, accountID, baseRPM)
+	delay := s.CalculateRPMAwareDelay(ctx, scope.AccountID, baseRPM)
 	if delay <= 0 {
 		return nil
 	}

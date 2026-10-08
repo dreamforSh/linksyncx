@@ -1452,6 +1452,8 @@ const shouldReplaceAutoRefreshRow = (current: Account, next: Account) => {
     current.current_window_cost !== next.current_window_cost ||
     current.active_sessions !== next.active_sessions ||
     current.session_budget !== next.session_budget ||
+    current.reauth_notice?.days_left !== next.reauth_notice?.days_left ||
+    current.reauth_notice?.expired !== next.reauth_notice?.expired ||
     current.schedulable !== next.schedulable ||
     current.status !== next.status ||
     current.rate_limit_reset_at !== next.rate_limit_reset_at ||

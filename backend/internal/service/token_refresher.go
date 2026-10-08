@@ -57,6 +57,12 @@ func (r *ClaudeTokenRefresher) NeedsRefresh(account *Account, refreshWindow time
 	return time.Until(*expiresAt) < refreshWindow
 }
 
+// NeedsBackgroundRefresh 后台刷新的判定（D7）：只处理活跃账号临近过期的 access token，
+// 以及 refresh token 最后 3 天的一次保活；请求路径仍用 NeedsRefresh。
+func (r *ClaudeTokenRefresher) NeedsBackgroundRefresh(account *Account, refreshWindow time.Duration, now time.Time) bool {
+	return claudeBackgroundRefreshKindFor(account, refreshWindow, now) != claudeBackgroundRefreshNone
+}
+
 // Refresh 执行token刷新
 // 保留原有credentials中的所有字段，只更新token相关字段
 func (r *ClaudeTokenRefresher) Refresh(ctx context.Context, account *Account) (map[string]any, error) {
@@ -67,6 +73,7 @@ func (r *ClaudeTokenRefresher) Refresh(ctx context.Context, account *Account) (m
 
 	newCredentials := BuildClaudeAccountCredentials(tokenInfo)
 	newCredentials = MergeCredentials(account.Credentials, newCredentials)
+	markClaudeRefreshTokenExtension(account, newCredentials, time.Now())
 
 	return newCredentials, nil
 }

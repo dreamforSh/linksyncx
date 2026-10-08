@@ -830,10 +830,11 @@ func (h *GatewayHandler) Messages(c *gin.Context) {
 
 			switch umqMode {
 			case config.UMQModeSerialize:
-				// 串行模式：获取锁 + RPM 延迟 + 释放（当前行为不变）
+				// 串行模式：获取锁 + RPM 延迟 + 释放。锁按会话（D8），单会话模式等同账号级
 				baseRPM := account.GetBaseRPM()
+				umqScope := h.userMsgQueueHelper.queueService.ScopeFor(account, attemptParsedReq, c.Request.Header)
 				release, qErr := h.userMsgQueueHelper.AcquireWithWait(
-					c, account.ID, baseRPM, reqStream, &streamStarted,
+					c, umqScope, baseRPM, reqStream, &streamStarted,
 					h.cfg.Gateway.UserMessageQueue.WaitTimeout(),
 					reqLog,
 				)

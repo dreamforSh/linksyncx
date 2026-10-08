@@ -25,7 +25,9 @@ func (c *CompositeTokenCacheInvalidator) InvalidateToken(ctx context.Context, ac
 	if c == nil || c.cache == nil || account == nil {
 		return nil
 	}
-	if account.Type != AccountTypeOAuth {
+	// Claude setup-token 账号带 refresh token 时也经 ClaudeTokenProvider 缓存 token
+	claudeSetupToken := account.Platform == PlatformAnthropic && account.Type == AccountTypeSetupToken
+	if account.Type != AccountTypeOAuth && !claudeSetupToken {
 		return nil
 	}
 

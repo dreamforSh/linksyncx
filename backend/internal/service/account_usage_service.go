@@ -13,6 +13,7 @@ import (
 	"sync"
 	"time"
 
+	infraerrors "github.com/Wei-Shaw/sub2api/internal/pkg/errors"
 	httppool "github.com/Wei-Shaw/sub2api/internal/pkg/httpclient"
 	openaipkg "github.com/Wei-Shaw/sub2api/internal/pkg/openai"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/pagination"
@@ -314,6 +315,16 @@ type AccountUsageService struct {
 	agentIdentityWS         agentIdentityWSConnectionInvalidator
 	// claudeSubscription 在读取 Claude OAuth 用量时按需后台补全订阅档位（可为 nil）。
 	claudeSubscription claudeSubscriptionRefresher
+	// claudeTokenProvider 主动用量查询取 access token（临近过期先刷新，可为 nil）。
+	// 后台刷新只覆盖活跃账号（D7），闲置账号库里的 token 可能已过期。
+	claudeTokenProvider claudeAccessTokenProvider
+}
+
+// SetClaudeTokenProvider 挂载 Claude OAuth 的 token provider，主动用量查询经它取 token。
+func (s *AccountUsageService) SetClaudeTokenProvider(provider *ClaudeTokenProvider) {
+	if provider != nil {
+		s.claudeTokenProvider = provider
+	}
 }
 
 // claudeSubscriptionRefresher 在后台为缺少或过期的 Claude OAuth 账号补全订阅档位，不阻塞调用方。
@@ -1612,7 +1623,7 @@ func (s *AccountUsageService) GetAccountUsageStats(ctx context.Context, accountI
 // 如果账号开启了 TLS 指纹，则使用 TLS 指纹伪装
 // 如果有缓存的 Fingerprint，则使用缓存的 User-Agent 等信息
 func (s *AccountUsageService) fetchOAuthUsageRaw(ctx context.Context, account *Account) (*ClaudeUsageResponse, error) {
-	accessToken := account.GetCredential("access_token")
+	accessToken := s.claudeUsageAccessToken(ctx, account)
 	if accessToken == "" {
 		return nil, fmt.Errorf("no access token available")
 	}
@@ -1622,6 +1633,21 @@ func (s *AccountUsageService) fetchOAuthUsageRaw(ctx context.Context, account *A
 		return nil, err
 	}
 	return s.usageFetcher.FetchUsageWithOptions(ctx, opts)
+}
+
+// claudeUsageAccessToken 取主动用量查询用的 access token：Claude OAuth 账号先经 token provider
+// （过期或临近过期时按需刷新，与真实 CLI 用到才刷新一致），失败时回退到凭据里的 token。
+func (s *AccountUsageService) claudeUsageAccessToken(ctx context.Context, account *Account) string {
+	if s.claudeTokenProvider != nil && account.Platform == PlatformAnthropic && account.Type == AccountTypeOAuth {
+		token, err := s.claudeTokenProvider.GetAccessToken(ctx, account)
+		if err == nil && strings.TrimSpace(token) != "" {
+			return token
+		}
+		if err != nil {
+			slog.Warn("claude_usage_access_token_failed", "account_id", account.ID, "error_code", infraerrors.Reason(err))
+		}
+	}
+	return account.GetCredential("access_token")
 }
 
 // claudeFetchOptions 构建调用 Claude OAuth 账号侧接口的公共选项：代理、TLS 指纹与缓存的

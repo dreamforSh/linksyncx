@@ -43,6 +43,42 @@ type tokenRefreshRegistration struct {
 	executor  OAuthRefreshExecutor
 }
 
+// backgroundRefreshDecider 由刷新器可选实现，单独决定后台刷新处理哪些账号（Claude 的 D7
+// 三类账号策略）；未实现时后台刷新沿用 NeedsRefresh。请求路径始终用 NeedsRefresh。
+type backgroundRefreshDecider interface {
+	NeedsBackgroundRefresh(account *Account, refreshWindow time.Duration, now time.Time) bool
+}
+
+// backgroundDecidingExecutor 让 OAuthRefreshAPI 在锁内二次检查时也按后台判定执行，
+// 否则保活刷新（access token 未临近过期）会在二次检查时被跳过。
+type backgroundDecidingExecutor struct {
+	OAuthRefreshExecutor
+	decider backgroundRefreshDecider
+}
+
+func (e *backgroundDecidingExecutor) NeedsRefresh(account *Account, refreshWindow time.Duration) bool {
+	return e.decider.NeedsBackgroundRefresh(account, refreshWindow, time.Now())
+}
+
+// backgroundRegistration 返回后台刷新使用的登记项：刷新器实现了 backgroundRefreshDecider 时
+// 包装执行器，使候选筛选与锁内二次检查用同一判定。
+func backgroundRegistration(registration tokenRefreshRegistration) tokenRefreshRegistration {
+	decider, ok := registration.refresher.(backgroundRefreshDecider)
+	if !ok || registration.executor == nil {
+		return registration
+	}
+	registration.executor = &backgroundDecidingExecutor{OAuthRefreshExecutor: registration.executor, decider: decider}
+	return registration
+}
+
+// needsBackgroundRefresh 后台刷新的候选判定，见 backgroundRefreshDecider。
+func needsBackgroundRefresh(refresher TokenRefresher, account *Account, refreshWindow time.Duration, now time.Time) bool {
+	if decider, ok := refresher.(backgroundRefreshDecider); ok {
+		return decider.NeedsBackgroundRefresh(account, refreshWindow, now)
+	}
+	return refresher.NeedsRefresh(account, refreshWindow)
+}
+
 // GrokOAuthRefreshMutationRepository protects background refresh failure
 // mutations with the exact credential document used by the upstream attempt.
 // This contract is intentionally Grok-only; existing provider behavior remains
@@ -509,7 +545,7 @@ func (s *TokenRefreshService) processRefreshContext(parent context.Context) {
 	pageSize := s.candidatePageSize()
 	providerStates := make(map[string]*tokenRefreshProviderState, len(s.registrations))
 	for i := range s.registrations {
-		registration := s.registrations[i]
+		registration := backgroundRegistration(s.registrations[i])
 		providerStates[registration.platform] = &tokenRefreshProviderState{
 			service:      s,
 			registration: registration,
@@ -609,6 +645,7 @@ func (s *TokenRefreshService) processCandidatePage(
 ) tokenRefreshPageStats {
 	stats := tokenRefreshPageStats{total: len(accounts)}
 	groups := make(map[string][]*Account)
+	now := time.Now()
 	for i := range accounts {
 		account := &accounts[i]
 		state := providerStates[account.Platform]
@@ -616,7 +653,7 @@ func (s *TokenRefreshService) processCandidatePage(
 			continue
 		}
 		stats.oauth++
-		if !state.registration.refresher.NeedsRefresh(account, refreshWindow) {
+		if !needsBackgroundRefresh(state.registration.refresher, account, refreshWindow, now) {
 			continue
 		}
 		stats.needsRefresh++

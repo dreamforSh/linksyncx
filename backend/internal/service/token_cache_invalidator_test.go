@@ -176,14 +176,6 @@ func TestCompositeTokenCacheInvalidator_SkipNonOAuth(t *testing.T) {
 				Type:     AccountTypeAPIKey,
 			},
 		},
-		{
-			name: "claude_setup_token",
-			account: &Account{
-				ID:       4,
-				Platform: PlatformAnthropic,
-				Type:     AccountTypeSetupToken,
-			},
-		},
 	}
 
 	for _, tt := range tests {
@@ -194,6 +186,16 @@ func TestCompositeTokenCacheInvalidator_SkipNonOAuth(t *testing.T) {
 			require.Empty(t, cache.deletedKeys)
 		})
 	}
+}
+
+// 带 refresh token 的 setup-token 账号经 ClaudeTokenProvider 缓存 token，刷新后同样要清缓存。
+func TestCompositeTokenCacheInvalidator_ClaudeSetupToken(t *testing.T) {
+	cache := &geminiTokenCacheStub{}
+	invalidator := NewCompositeTokenCacheInvalidator(cache)
+	account := &Account{ID: 4, Platform: PlatformAnthropic, Type: AccountTypeSetupToken}
+
+	require.NoError(t, invalidator.InvalidateToken(context.Background(), account))
+	require.Equal(t, []string{"claude:account:4"}, cache.deletedKeys)
 }
 
 func TestCompositeTokenCacheInvalidator_SkipUnsupportedPlatform(t *testing.T) {

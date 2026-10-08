@@ -222,4 +222,24 @@ describe('AccountStatusIndicator', () => {
     // AICredits 积分耗尽状态应显示
     expect(wrapper.text()).toContain('admin.accounts.status.creditsExhausted')
   })
+
+  it('Claude 登录凭据期限固定时显示「N 天后需重新授权」，过期时显示需重新授权', () => {
+    const mountWith = (notice: Account['reauth_notice']) =>
+      mount(AccountStatusIndicator, {
+        props: { account: makeAccount({ platform: 'anthropic', reauth_notice: notice }) },
+        global: { stubs: { Icon: true } }
+      })
+
+    const soon = mountWith({ expires_at: '2099-03-15T00:00:00Z', days_left: 2, expired: false })
+    const badge = soon.get('[data-testid="account-reauth-notice"]')
+    expect(badge.text()).toContain('admin.accounts.status.reauthInDays')
+    expect(badge.text()).toContain('admin.accounts.status.reauthInDaysTooltip')
+    expect(badge.find('span').classes()).toContain('bg-amber-100')
+
+    const expired = mountWith({ expires_at: '2026-03-15T00:00:00Z', days_left: 0, expired: true })
+    expect(expired.get('[data-testid="account-reauth-notice"]').text()).toContain('admin.accounts.status.reauthRequired')
+    expect(expired.get('[data-testid="account-reauth-notice"] span').classes()).toContain('bg-red-100')
+
+    expect(mountWith(null).find('[data-testid="account-reauth-notice"]').exists()).toBe(false)
+  })
 })

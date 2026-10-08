@@ -1286,8 +1286,9 @@ func (s *GatewayService) GetAccessToken(ctx context.Context, account *Account) (
 }
 
 func (s *GatewayService) getOAuthToken(ctx context.Context, account *Account) (string, string, error) {
-	// 对于 Anthropic OAuth 账号，使用 ClaudeTokenProvider 获取缓存的 token
-	if account.Platform == PlatformAnthropic && account.Type == AccountTypeOAuth && s.claudeTokenProvider != nil {
+	// 对于 Anthropic OAuth 账号（以及带 refresh token 的 setup-token 账号），使用 ClaudeTokenProvider
+	// 获取缓存的 token，临近过期时在请求路径上刷新
+	if account.Platform == PlatformAnthropic && (account.Type == AccountTypeOAuth || ClaudeSetupTokenRefreshable(account)) && s.claudeTokenProvider != nil {
 		accessToken, err := s.claudeTokenProvider.GetAccessToken(ctx, account)
 		if err != nil {
 			return "", "", err

@@ -70,6 +70,33 @@
       </div>
     </div>
 
+    <!-- Re-authorization Notice: Claude refresh token 已过期，或期限固定且不足 3 天 -->
+    <div v-if="reauthNotice" class="group relative" data-testid="account-reauth-notice">
+      <span
+        :class="[
+          'inline-flex items-center gap-1 whitespace-nowrap rounded px-1.5 py-0.5 text-xs font-medium',
+          reauthNotice.expired
+            ? 'bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-400'
+            : 'bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-400'
+        ]"
+      >
+        <Icon name="exclamationTriangle" size="xs" :stroke-width="2" />
+        {{ reauthNotice.expired ? t('admin.accounts.status.reauthRequired') : t('admin.accounts.status.reauthInDays', { days: reauthNotice.days_left }) }}
+      </span>
+      <div
+        class="pointer-events-none absolute bottom-full left-1/2 z-50 mb-2 w-60 -translate-x-1/2 whitespace-normal rounded bg-gray-900 px-3 py-2 text-center text-xs leading-relaxed text-white opacity-0 transition-opacity group-hover:opacity-100 dark:bg-gray-700"
+      >
+        {{
+          reauthNotice.expired
+            ? t('admin.accounts.status.reauthExpiredTooltip', { time: formatDateTimeToMinute(reauthNotice.expires_at) })
+            : t('admin.accounts.status.reauthInDaysTooltip', { time: formatDateTimeToMinute(reauthNotice.expires_at) })
+        }}
+        <div
+          class="absolute left-1/2 top-full -translate-x-1/2 border-4 border-transparent border-t-gray-900 dark:border-t-gray-700"
+        ></div>
+      </div>
+    </div>
+
     <!-- Rate Limit Indicator (429) -->
     <div v-if="isRateLimited" class="group relative">
       <span
@@ -184,6 +211,9 @@ const props = defineProps<{
 const emit = defineEmits<{
   (e: 'show-temp-unsched', account: Account): void
 }>()
+
+// Computed: Claude 登录凭据需要重新授权的提示（后端只在已过期或期限固定且不足 3 天时返回）
+const reauthNotice = computed(() => props.account.reauth_notice ?? null)
 
 // Computed: is rate limited (429)
 const isRateLimited = computed(() => {

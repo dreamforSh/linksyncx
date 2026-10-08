@@ -271,6 +271,10 @@ export default {
         creditsExhausted: 'Credits Exhausted',
         creditsExhaustedUntil: 'AI Credits exhausted, expected recovery at {time}',
         overloadedUntil: 'Overloaded until {time}',
+        reauthRequired: 'Re-auth required',
+        reauthInDays: 'Re-auth in {days}d',
+        reauthInDaysTooltip: 'The sign-in credential (refresh token) expires at {time} and cannot be renewed automatically. Re-authorize before then or the account will stop working',
+        reauthExpiredTooltip: 'The sign-in credential (refresh token) expired at {time}. Re-authorize the account to use it again',
         clashExitUnavailable: 'Exit unavailable',
         viewTempUnschedDetails: 'View temp unschedulable details',
         tempUnschedulableUntil: 'Resumes {time}'

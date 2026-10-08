@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/Wei-Shaw/sub2api/internal/service"
 	"github.com/redis/go-redis/v9"
 	"github.com/stretchr/testify/require"
 	"github.com/stretchr/testify/suite"
@@ -21,6 +22,10 @@ func TestUserMsgQueueCacheSuite(t *testing.T) {
 	suite.Run(t, new(UserMsgQueueCacheSuite))
 }
 
+func umqAccountScope(accountID int64) service.UserMsgQueueScope {
+	return service.UserMsgQueueScope{AccountID: accountID}
+}
+
 func (s *UserMsgQueueCacheSuite) SetupTest() {
 	s.IntegrationRedisSuite.SetupTest()
 	s.cache = NewUserMsgQueueCache(s.rdb).(*userMsgQueueCache)
@@ -31,7 +36,7 @@ func (s *UserMsgQueueCacheSuite) TestAcquireLockWritesIndexAndReleaseRemovesIt()
 	nowMs, err := s.cache.GetCurrentTimeMs(s.ctx)
 	require.NoError(s.T(), err)
 
-	acquired, err := s.cache.AcquireLock(s.ctx, accountID, "req-701", 10_000)
+	acquired, err := s.cache.AcquireLock(s.ctx, umqAccountScope(accountID), "req-701", 10_000)
 	require.NoError(s.T(), err)
 	require.True(s.T(), acquired)
 
@@ -39,7 +44,7 @@ func (s *UserMsgQueueCacheSuite) TestAcquireLockWritesIndexAndReleaseRemovesIt()
 	require.NoError(s.T(), err)
 	require.Greater(s.T(), int64(score), nowMs)
 
-	released, err := s.cache.ReleaseLock(s.ctx, accountID, "req-701")
+	released, err := s.cache.ReleaseLock(s.ctx, umqAccountScope(accountID), "req-701")
 	require.NoError(s.T(), err)
 	require.True(s.T(), released)
 
@@ -49,14 +54,14 @@ func (s *UserMsgQueueCacheSuite) TestAcquireLockWritesIndexAndReleaseRemovesIt()
 
 func (s *UserMsgQueueCacheSuite) TestReconcileExpiredLockCandidatesRemovesNaturallyExpiredLockIndex() {
 	accountID := int64(702)
-	acquired, err := s.cache.AcquireLock(s.ctx, accountID, "req-702", 20)
+	acquired, err := s.cache.AcquireLock(s.ctx, umqAccountScope(accountID), "req-702", 20)
 	require.NoError(s.T(), err)
 	require.True(s.T(), acquired)
 
 	_, err = s.rdb.ZScore(s.ctx, umqLockIndexKey, "702").Result()
 	require.NoError(s.T(), err)
 	require.Eventually(s.T(), func() bool {
-		_, err := s.rdb.Get(s.ctx, umqLockKey(accountID)).Result()
+		_, err := s.rdb.Get(s.ctx, umqLockKey(umqAccountScope(accountID))).Result()
 		return errors.Is(err, redis.Nil)
 	}, time.Second, 10*time.Millisecond)
 
@@ -72,7 +77,7 @@ func (s *UserMsgQueueCacheSuite) TestReconcileExpiredLockCandidatesRefreshesLive
 	accountID := int64(703)
 	nowMs, err := s.cache.GetCurrentTimeMs(s.ctx)
 	require.NoError(s.T(), err)
-	require.NoError(s.T(), s.rdb.Set(s.ctx, umqLockKey(accountID), "req-703", time.Minute).Err())
+	require.NoError(s.T(), s.rdb.Set(s.ctx, umqLockKey(umqAccountScope(accountID)), "req-703", time.Minute).Err())
 	require.NoError(s.T(), s.rdb.ZAdd(s.ctx, umqLockIndexKey, redis.Z{
 		Score:  float64(nowMs - 1),
 		Member: "703",
@@ -85,7 +90,7 @@ func (s *UserMsgQueueCacheSuite) TestReconcileExpiredLockCandidatesRefreshesLive
 	score, err := s.rdb.ZScore(s.ctx, umqLockIndexKey, "703").Result()
 	require.NoError(s.T(), err)
 	require.Greater(s.T(), int64(score), nowMs)
-	exists, err := s.rdb.Exists(s.ctx, umqLockKey(accountID)).Result()
+	exists, err := s.rdb.Exists(s.ctx, umqLockKey(umqAccountScope(accountID))).Result()
 	require.NoError(s.T(), err)
 	require.EqualValues(s.T(), 1, exists)
 }
@@ -94,7 +99,7 @@ func (s *UserMsgQueueCacheSuite) TestReconcileExpiredLockCandidatesDeletesNoTTLL
 	accountID := int64(704)
 	nowMs, err := s.cache.GetCurrentTimeMs(s.ctx)
 	require.NoError(s.T(), err)
-	require.NoError(s.T(), s.rdb.Set(s.ctx, umqLockKey(accountID), "req-704", 0).Err())
+	require.NoError(s.T(), s.rdb.Set(s.ctx, umqLockKey(umqAccountScope(accountID)), "req-704", 0).Err())
 	require.NoError(s.T(), s.rdb.ZAdd(s.ctx, umqLockIndexKey, redis.Z{
 		Score:  float64(nowMs),
 		Member: "704",
@@ -104,7 +109,7 @@ func (s *UserMsgQueueCacheSuite) TestReconcileExpiredLockCandidatesDeletesNoTTLL
 	require.NoError(s.T(), err)
 	require.Equal(s.T(), 1, cleaned)
 
-	exists, err := s.rdb.Exists(s.ctx, umqLockKey(accountID)).Result()
+	exists, err := s.rdb.Exists(s.ctx, umqLockKey(umqAccountScope(accountID))).Result()
 	require.NoError(s.T(), err)
 	require.EqualValues(s.T(), 0, exists)
 	_, err = s.rdb.ZScore(s.ctx, umqLockIndexKey, "704").Result()
@@ -133,10 +138,10 @@ func (s *UserMsgQueueCacheSuite) TestAcquireLockBusyPathReindexesUnindexedLiveLo
 	accountID := int64(705)
 	nowMs, err := s.cache.GetCurrentTimeMs(s.ctx)
 	require.NoError(s.T(), err)
-	require.NoError(s.T(), s.rdb.Set(s.ctx, umqLockKey(accountID), "holder-705", time.Minute).Err())
+	require.NoError(s.T(), s.rdb.Set(s.ctx, umqLockKey(umqAccountScope(accountID)), "holder-705", time.Minute).Err())
 
 	// 另一个请求争锁失败，应顺手把观测到的持有者锁回填进索引。
-	acquired, err := s.cache.AcquireLock(s.ctx, accountID, "contender-705", 10_000)
+	acquired, err := s.cache.AcquireLock(s.ctx, umqAccountScope(accountID), "contender-705", 10_000)
 	require.NoError(s.T(), err)
 	require.False(s.T(), acquired)
 
@@ -144,7 +149,7 @@ func (s *UserMsgQueueCacheSuite) TestAcquireLockBusyPathReindexesUnindexedLiveLo
 	require.NoError(s.T(), err, "busy acquire should re-index the observed live lock")
 	require.Greater(s.T(), int64(score), nowMs)
 	// 锁本身不应被争锁方改动。
-	val, err := s.rdb.Get(s.ctx, umqLockKey(accountID)).Result()
+	val, err := s.rdb.Get(s.ctx, umqLockKey(umqAccountScope(accountID))).Result()
 	require.NoError(s.T(), err)
 	require.Equal(s.T(), "holder-705", val)
 }
@@ -153,9 +158,9 @@ func (s *UserMsgQueueCacheSuite) TestAcquireLockBusyPathMakesNoTTLLockReconcilab
 	// PTTL == -1 的异常锁若不在索引中，永远不会被 reconcile 发现；
 	// 争锁失败路径必须以“已到期候选”的 score 回填它，形成自愈闭环。
 	accountID := int64(706)
-	require.NoError(s.T(), s.rdb.Set(s.ctx, umqLockKey(accountID), "holder-706", 0).Err())
+	require.NoError(s.T(), s.rdb.Set(s.ctx, umqLockKey(umqAccountScope(accountID)), "holder-706", 0).Err())
 
-	acquired, err := s.cache.AcquireLock(s.ctx, accountID, "contender-706", 10_000)
+	acquired, err := s.cache.AcquireLock(s.ctx, umqAccountScope(accountID), "contender-706", 10_000)
 	require.NoError(s.T(), err)
 	require.False(s.T(), acquired)
 
@@ -169,7 +174,7 @@ func (s *UserMsgQueueCacheSuite) TestAcquireLockBusyPathMakesNoTTLLockReconcilab
 	require.NoError(s.T(), err)
 	require.Equal(s.T(), 1, cleaned, "reconcile should delete the no-TTL lock")
 
-	exists, err := s.rdb.Exists(s.ctx, umqLockKey(accountID)).Result()
+	exists, err := s.rdb.Exists(s.ctx, umqLockKey(umqAccountScope(accountID))).Result()
 	require.NoError(s.T(), err)
 	require.EqualValues(s.T(), 0, exists, "queue is unblocked after reconcile")
 	_, err = s.rdb.ZScore(s.ctx, umqLockIndexKey, "706").Result()

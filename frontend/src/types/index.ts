@@ -1469,6 +1469,13 @@ export interface OpenCodeGoUsageSettings {
   debounce_minutes: number
 }
 
+/** Claude 登录凭据（refresh token）的重新授权提示 */
+export interface AccountReauthNotice {
+  expires_at: string
+  days_left: number
+  expired: boolean
+}
+
 export interface Account {
   id: number
   name: string
@@ -1605,6 +1612,8 @@ export interface Account {
   active_sessions?: number | null // 当前活跃会话数
   session_budget?: number | null // 生效的会话预算（账号配置、单会话模式或系统默认值）
   current_rpm?: number | null // 当前分钟 RPM 计数
+  // Claude 登录凭据（refresh token）已过期，或期限固定且不足 3 天时的「需重新授权」提示
+  reauth_notice?: AccountReauthNotice | null
 
   // 影子账号关系（spark 维度影子）
   parent_account_id?: number | null

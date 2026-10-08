@@ -389,8 +389,10 @@ func TestClaudeTokenProvider_WrongAccountType(t *testing.T) {
 	require.Empty(t, token)
 }
 
+// 没有 refresh token 的 setup-token 直接用凭据里的 token，不读写缓存、不刷新。
 func TestClaudeTokenProvider_SetupTokenType(t *testing.T) {
-	provider := NewClaudeTokenProvider(nil, nil, nil)
+	cache := newClaudeTokenCacheStub()
+	provider := NewClaudeTokenProvider(nil, cache, nil)
 	account := &Account{
 		ID:       106,
 		Platform: PlatformAnthropic,
@@ -399,8 +401,14 @@ func TestClaudeTokenProvider_SetupTokenType(t *testing.T) {
 
 	token, err := provider.GetAccessToken(context.Background(), account)
 	require.Error(t, err)
-	require.Contains(t, err.Error(), "not an anthropic oauth or service account")
+	require.Contains(t, err.Error(), "access_token not found")
 	require.Empty(t, token)
+
+	account.Credentials = map[string]any{"access_token": "setup-token-value"}
+	token, err = provider.GetAccessToken(context.Background(), account)
+	require.NoError(t, err)
+	require.Equal(t, "setup-token-value", token)
+	require.Empty(t, cache.tokens, "a setup-token without refresh token bypasses the cache")
 }
 
 func TestClaudeTokenProvider_NilCache(t *testing.T) {

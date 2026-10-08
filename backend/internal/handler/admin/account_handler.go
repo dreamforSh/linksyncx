@@ -223,6 +223,8 @@ type AccountWithConcurrency struct {
 	ActiveSessions    *int     `json:"active_sessions,omitempty"`     // 当前活跃会话数
 	SessionBudget     *int     `json:"session_budget,omitempty"`      // 生效的会话预算（账号配置、单会话模式或系统默认值）
 	CurrentRPM        *int     `json:"current_rpm,omitempty"`         // 当前分钟 RPM 计数
+	// ReauthNotice refresh token 已过期或期限固定且不足 3 天时的「需重新授权」提示
+	ReauthNotice *service.ClaudeReauthNotice `json:"reauth_notice,omitempty"`
 }
 
 // AccountListItemWithConcurrency is the compact account-list envelope used
@@ -237,6 +239,7 @@ type AccountListItemWithConcurrency struct {
 	ActiveSessions     *int                         `json:"active_sessions,omitempty"`
 	SessionBudget      *int                         `json:"session_budget,omitempty"`
 	CurrentRPM         *int                         `json:"current_rpm,omitempty"`
+	ReauthNotice       *service.ClaudeReauthNotice  `json:"reauth_notice,omitempty"`
 }
 
 type simpleModeGroupReference struct {
@@ -399,6 +402,7 @@ func (h *AccountHandler) buildAccountResponseWithRuntime(ctx context.Context, ac
 	}
 
 	if account.IsAnthropicOAuthOrSetupToken() {
+		item.ReauthNotice = service.ClaudeReauthNoticeFor(account, time.Now())
 		if h.accountUsageService != nil && account.GetWindowCostLimit() > 0 {
 			startTime := account.GetCurrentWindowStartTime()
 			if stats, err := h.accountUsageService.GetAccountWindowStats(ctx, account.ID, startTime); err == nil && stats != nil {
@@ -822,6 +826,7 @@ func (h *AccountHandler) List(c *gin.Context) {
 
 	// Build response with concurrency info
 	result := make([]AccountWithConcurrency, len(accounts))
+	now := time.Now()
 	for i := range accounts {
 		acc := &accounts[i]
 		accountResponse := h.accountResponseFromService(acc)
@@ -837,6 +842,7 @@ func (h *AccountHandler) List(c *gin.Context) {
 			CurrentConcurrency: concurrencyCounts[acc.ID],
 			SchedulerScore:     schedulerScores[acc.ID],
 			SchedulerScores:    schedulerGroupScores[acc.ID],
+			ReauthNotice:       service.ClaudeReauthNoticeFor(acc, now),
 		}
 
 		// 添加窗口费用（仅当启用时）
@@ -881,6 +887,7 @@ func (h *AccountHandler) List(c *gin.Context) {
 				ActiveSessions:     item.ActiveSessions,
 				SessionBudget:      item.SessionBudget,
 				CurrentRPM:         item.CurrentRPM,
+				ReauthNotice:       item.ReauthNotice,
 			}
 		}
 		etag := buildAccountsListETag(compact, total, page, pageSize, platform, accountType, status, search, true)

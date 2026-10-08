@@ -36,10 +36,15 @@ const DefaultCSPPolicy = "default-src 'self'; worker-src 'self' blob:; script-sr
 
 // UMQ（用户消息队列）模式常量
 const (
-	// UMQModeSerialize: 账号级串行锁 + RPM 自适应延迟
+	// UMQModeSerialize: 串行锁（粒度见 UMQScope*）+ RPM 自适应延迟
 	UMQModeSerialize = "serialize"
 	// UMQModeThrottle: 仅 RPM 自适应前置延迟，不阻塞并发
 	UMQModeThrottle = "throttle"
+
+	// UMQScopeSession: 串行锁按会话（默认）：同一会话的用户消息串行，不同会话并行
+	UMQScopeSession = "session"
+	// UMQScopeAccount: 串行锁按账号（旧行为）：账号上所有会话的用户消息串行
+	UMQScopeAccount = "account"
 )
 
 // 连接池隔离策略常量
@@ -1251,12 +1256,15 @@ type GatewayOpenAIProxyStreamCircuitConfig struct {
 // 用于 Anthropic OAuth/SetupToken 账号的用户消息串行化发送
 type UserMessageQueueConfig struct {
 	// Mode: 模式选择
-	// "serialize" = 账号级串行锁 + RPM 自适应延迟
+	// "serialize" = 串行锁（粒度见 Scope）+ RPM 自适应延迟
 	// "throttle" = 仅 RPM 自适应前置延迟，不阻塞并发
 	// "" = 禁用（默认）
 	Mode string `mapstructure:"mode"`
 	// Enabled: 已废弃，仅向后兼容（等同于 mode: "serialize"）
 	Enabled bool `mapstructure:"enabled"`
+	// Scope: serialize 模式的串行粒度
+	// "session" = 按会话串行（默认）；"account" = 按账号串行（旧行为）
+	Scope string `mapstructure:"scope"`
 	// LockTTLMs: 串行锁 TTL（毫秒），应大于最长请求时间
 	LockTTLMs int `mapstructure:"lock_ttl_ms"`
 	// WaitTimeoutMs: 等待获取锁的超时时间（毫秒）
@@ -1287,6 +1295,11 @@ func (c *UserMessageQueueConfig) GetEffectiveMode() string {
 		return UMQModeSerialize // 向后兼容
 	}
 	return ""
+}
+
+// SessionScoped 报告 serialize 模式是否按会话加锁（Scope 未设置时默认按会话）
+func (c *UserMessageQueueConfig) SessionScoped() bool {
+	return c == nil || c.Scope != UMQScopeAccount
 }
 
 // DefaultOpenAIWSClientFirstMessageTimeoutSeconds preserves the legacy ingress deadline.
@@ -1996,6 +2009,12 @@ func load(allowMissingJWTSecret bool) (*Config, error) {
 			"valid_modes", []string{UMQModeSerialize, UMQModeThrottle})
 		cfg.Gateway.UserMessageQueue.Mode = ""
 	}
+	if sc := cfg.Gateway.UserMessageQueue.Scope; sc != "" && sc != UMQScopeSession && sc != UMQScopeAccount {
+		slog.Warn("invalid user_message_queue scope, using session",
+			"scope", sc,
+			"valid_scopes", []string{UMQScopeSession, UMQScopeAccount})
+		cfg.Gateway.UserMessageQueue.Scope = UMQScopeSession
+	}
 
 	// Auto-generate TOTP encryption key if not set (32 bytes = 64 hex chars for AES-256)
 	cfg.Totp.EncryptionKey = strings.TrimSpace(cfg.Totp.EncryptionKey)
@@ -2678,6 +2697,7 @@ func setEnvReachableDefaults() {
 	viper.SetDefault("gateway.forced_codex_instructions_template_file", "")
 	viper.SetDefault("gateway.session_idle_timeout_minutes", 0)
 	viper.SetDefault("gateway.user_message_queue.mode", "")
+	viper.SetDefault("gateway.user_message_queue.scope", "")
 	viper.SetDefault("update.proxy_url", "")
 
 	// sticky_escape_enabled is the one exception to the zero-value rule: its

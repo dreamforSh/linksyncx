@@ -194,7 +194,7 @@ func initializeApplication(buildInfo handler.BuildInfo) (*Application, error) {
 	openAIReferralClient := repository.NewOpenAIReferralClient(privacyClientFactory)
 	openAIQuotaService := service.ProvideOpenAIQuotaService(accountRepository, proxyRepository, openAITokenProvider, privacyClientFactory, openAIReferralClient, openAIGatewayService)
 	usageCache := service.NewUsageCache()
-	accountUsageService := service.ProvideAccountUsageService(accountRepository, usageLogRepository, claudeUsageFetcher, geminiQuotaService, antigravityQuotaFetcher, grokQuotaFetcher, grokQuotaService, openAIQuotaService, usageCache, identityCache, tlsFingerprintProfileService, openAIGatewayService)
+	accountUsageService := service.ProvideAccountUsageService(accountRepository, usageLogRepository, claudeUsageFetcher, geminiQuotaService, antigravityQuotaFetcher, grokQuotaFetcher, grokQuotaService, openAIQuotaService, usageCache, identityCache, tlsFingerprintProfileService, openAIGatewayService, claudeTokenProvider)
 	claudeOAuthAPIClient := repository.NewClaudeOAuthAPIClient(httpUpstream)
 	claudeQuotaService := service.NewClaudeQuotaService(accountRepository, accountUsageService, claudeOAuthAPIClient, claudeTokenProvider)
 	groupManagementService := service.ProvideGroupManagementService(groupManagementRepository, groupUserRepository, userRepository, client, apiKeyAuthCacheInvalidator, billingCacheService, settingService, accountRepository, accountUsageService, openAIQuotaService, claudeQuotaService, rateLimitService)

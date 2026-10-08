@@ -476,6 +476,10 @@ export default {
         creditsExhausted: '积分已用尽',
         creditsExhaustedUntil: 'AI Credits 已用尽，预计 {time} 恢复',
         overloadedUntil: '负载过重，重置时间：{time}',
+        reauthRequired: '需重新授权',
+        reauthInDays: '{days} 天后需重新授权',
+        reauthInDaysTooltip: '登录凭据（refresh token）将于 {time} 到期，且已确认无法自动续期。到期前请重新授权，否则账号将无法使用',
+        reauthExpiredTooltip: '登录凭据（refresh token）已于 {time} 过期，请重新授权后再使用',
         viewTempUnschedDetails: '查看临时不可调度详情',
         tempUnschedulableUntil: '预计 {time} 恢复',
         clashExitUnavailable: '出口不可用'
