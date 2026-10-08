@@ -261,12 +261,16 @@ const planBadgeClass = computed(() => {
     return 'bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-300'
   }
   if (props.platform === 'anthropic') {
-    // Max 20x → orange, Max 5x / Max → amber; Pro / Team / Free fall through to the shared colors.
+    // Max 20x → orange, Max 5x / Max / Team Premium（同为 5x 档）→ amber, Team Standard → Team indigo;
+    // Pro / Team / Free fall through to the shared colors.
     if (normalizedPlanType.value === 'max20x') {
       return 'bg-orange-100 text-orange-700 dark:bg-orange-900/30 dark:text-orange-300'
     }
-    if (normalizedPlanType.value.startsWith('max')) {
+    if (normalizedPlanType.value.startsWith('max') || normalizedPlanType.value === 'teampremium') {
       return 'bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-300'
+    }
+    if (normalizedPlanType.value === 'teamstandard') {
+      return 'bg-indigo-100 text-indigo-700 dark:bg-indigo-900/30 dark:text-indigo-300'
     }
     if (normalizedPlanType.value === 'enterprise') {
       return 'bg-slate-100 text-slate-700 dark:bg-slate-800 dark:text-slate-300'

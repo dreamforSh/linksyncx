@@ -78,7 +78,11 @@ func TestParseClaudeOAuthProfile_PlanTypes(t *testing.T) {
 		{"max 5x", `{"organization":{"organization_type":"claude_max","rate_limit_tier":"default_claude_max_5x"}}`, ClaudePlanMax5x},
 		{"max unknown tier", `{"organization":{"organization_type":"claude_max"}}`, ClaudePlanMax},
 		{"pro", `{"organization":{"organization_type":"claude_pro","rate_limit_tier":"default_claude_ai"}}`, ClaudePlanPro},
-		{"team", `{"organization":{"organization_type":"claude_team","seat_tier":"premium"}}`, ClaudePlanTeam},
+		{"team premium", `{"organization":{"organization_type":"claude_team","rate_limit_tier":"default_claude_max_5x"}}`, ClaudePlanTeamPremium},
+		{"team standard", `{"organization":{"organization_type":"claude_team","rate_limit_tier":"default_claude_ai"}}`, ClaudePlanTeamStandard},
+		// 席位只看 rate_limit_tier：seat_tier 写着 premium 也不算高级席
+		{"team seat_tier ignored", `{"organization":{"organization_type":"claude_team","rate_limit_tier":"default_claude_ai","seat_tier":"premium"}}`, ClaudePlanTeamStandard},
+		{"team unknown seat", `{"organization":{"organization_type":"claude_team"}}`, ClaudePlanTeam},
 		{"enterprise", `{"organization":{"organization_type":"claude_enterprise"}}`, ClaudePlanEnterprise},
 		{"account flags", `{"account":{"has_claude_max":true},"organization":{"rate_limit_tier":"default_claude_max_20x"}}`, ClaudePlanMax20x},
 		{"pro flag", `{"account":{"has_claude_max":false,"has_claude_pro":true},"organization":{}}`, ClaudePlanPro},
@@ -134,6 +138,28 @@ func TestClaudeSubscriptionExtraRoundTrip(t *testing.T) {
 	untouched := &UsageInfo{}
 	applyClaudeSubscriptionToUsage(untouched, map[string]any{})
 	require.Empty(t, untouched.SubscriptionTier)
+
+	teamPremium := &UsageInfo{}
+	applyClaudeSubscriptionToUsage(teamPremium, map[string]any{claudeSubscriptionExtraKey: map[string]any{
+		"plan_type": ClaudePlanTeamPremium, "rate_limit_tier": "default_claude_max_5x", "updated_at": now.Format(time.RFC3339),
+	}})
+	require.Equal(t, "Team Premium", teamPremium.SubscriptionTier)
+	require.Equal(t, "Team Standard", claudePlanDisplayName(ClaudePlanTeamStandard))
+}
+
+func TestClaudeSubscriptionIsStale_LegacyTeamSnapshot(t *testing.T) {
+	now := time.Date(2026, 10, 7, 12, 0, 0, 0, time.UTC)
+	snapshot := func(plan, orgType, tier string) map[string]any {
+		return map[string]any{claudeSubscriptionExtraKey: map[string]any{
+			"plan_type": plan, "organization_type": orgType, "rate_limit_tier": tier, "updated_at": now.Format(time.RFC3339),
+		}}
+	}
+	// 区分席位前写入的 Team 快照带着 tier：立即重拉
+	require.True(t, claudeSubscriptionIsStale(snapshot(ClaudePlanTeam, "claude_team", "default_claude_max_5x"), now))
+	// 上游本就没给 tier：重拉也分不出席位，按正常周期
+	require.False(t, claudeSubscriptionIsStale(snapshot(ClaudePlanTeam, "claude_team", ""), now))
+	require.False(t, claudeSubscriptionIsStale(snapshot(ClaudePlanTeamPremium, "claude_team", "default_claude_max_5x"), now))
+	require.False(t, claudeSubscriptionIsStale(snapshot(ClaudePlanTeamStandard, "claude_team", "default_claude_ai"), now))
 }
 
 func TestParseClaudeCedarEmberStatus(t *testing.T) {

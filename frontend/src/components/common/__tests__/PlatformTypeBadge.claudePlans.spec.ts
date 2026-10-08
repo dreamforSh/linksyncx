@@ -54,6 +54,20 @@ describe('PlatformTypeBadge Claude plan tiers', () => {
     expect(enterprise.html()).toContain('bg-slate-100')
   })
 
+  it('distinguishes Team Premium and Team Standard seats', () => {
+    const premium = mountPlan('anthropic', 'team_premium')
+    expect(premium.text()).toContain('Team Premium')
+    expect(premium.html()).toContain('bg-amber-100')
+
+    const standard = mountPlan('anthropic', 'team_standard')
+    expect(standard.text()).toContain('Team Standard')
+    expect(standard.html()).toContain('bg-indigo-100')
+
+    expect(claudePlanTypeLabel('TEAM-PREMIUM')).toBe('Team Premium')
+    // ChatGPT 侧不认 Claude 的席位档位，原样展示
+    expect(mountPlan('openai', 'team_premium').text()).not.toContain('Team Premium')
+  })
+
   it('shows unknown plans verbatim and leaves other platforms alone', () => {
     expect(mountPlan('anthropic', 'student').text()).toContain('student')
     // ChatGPT 的 pro 仍是 Pro 20x，Claude 的档位名不会串到 OpenAI

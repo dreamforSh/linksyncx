@@ -10,6 +10,8 @@ import (
 // Claude OAuth 订阅档位来自 GET /api/oauth/profile 的 organization.organization_type 与
 // rate_limit_tier，映射与 Claude Code 一致：claude_max→max、claude_pro→pro、claude_team→team、
 // claude_enterprise→enterprise；rate_limit_tier=default_claude_max_20x 即 Max 20x。
+// Team 席位同样按 Claude Code 的 isTeamPremiumSubscriber 判定：rate_limit_tier=default_claude_max_5x
+// 为高级席，其余已知 tier 为标准席；seat_tier 不参与判定。
 // 归一化后写入 extra.claude_subscription，账号列表据此显示档位徽章。
 
 const (
@@ -19,14 +21,19 @@ const (
 )
 
 const (
-	ClaudePlanFree       = "free"
-	ClaudePlanPro        = "pro"
-	ClaudePlanMax        = "max"
-	ClaudePlanMax5x      = "max_5x"
-	ClaudePlanMax20x     = "max_20x"
-	ClaudePlanTeam       = "team"
-	ClaudePlanEnterprise = "enterprise"
+	ClaudePlanFree         = "free"
+	ClaudePlanPro          = "pro"
+	ClaudePlanMax          = "max"
+	ClaudePlanMax5x        = "max_5x"
+	ClaudePlanMax20x       = "max_20x"
+	ClaudePlanTeam         = "team" // rate_limit_tier 缺失，无法区分席位
+	ClaudePlanTeamStandard = "team_standard"
+	ClaudePlanTeamPremium  = "team_premium"
+	ClaudePlanEnterprise   = "enterprise"
 )
+
+// claudeTeamPremiumRateLimitTier 是 Team 高级席的 rate_limit_tier（与 Max 5x 同档）。
+const claudeTeamPremiumRateLimitTier = "default_claude_max_5x"
 
 // ClaudeSubscriptionInfo 是账号订阅档位的归一化快照（extra.claude_subscription）。
 type ClaudeSubscriptionInfo struct {
@@ -92,7 +99,7 @@ func claudePlanTypeFromProfile(orgType, rateLimitTier string, hasMax, hasPro boo
 	case "claude_pro":
 		return ClaudePlanPro
 	case "claude_team":
-		return ClaudePlanTeam
+		return claudeTeamPlanType(rateLimitTier)
 	case "claude_enterprise":
 		return ClaudePlanEnterprise
 	}
@@ -121,6 +128,18 @@ func claudeMaxPlanType(rateLimitTier string) string {
 	}
 }
 
+func claudeTeamPlanType(rateLimitTier string) string {
+	tier := strings.TrimSpace(rateLimitTier)
+	switch {
+	case strings.EqualFold(tier, claudeTeamPremiumRateLimitTier):
+		return ClaudePlanTeamPremium
+	case tier != "":
+		return ClaudePlanTeamStandard
+	default:
+		return ClaudePlanTeam
+	}
+}
+
 // claudePlanDisplayName 是档位的展示名，用于 UsageInfo.SubscriptionTier（配额监控的套餐等级）。
 func claudePlanDisplayName(plan string) string {
 	switch plan {
@@ -136,6 +155,10 @@ func claudePlanDisplayName(plan string) string {
 		return "Max 20x"
 	case ClaudePlanTeam:
 		return "Team"
+	case ClaudePlanTeamStandard:
+		return "Team Standard"
+	case ClaudePlanTeamPremium:
+		return "Team Premium"
 	case ClaudePlanEnterprise:
 		return "Enterprise"
 	default:
@@ -162,9 +185,13 @@ func readClaudeSubscription(extra map[string]any) *ClaudeSubscriptionInfo {
 }
 
 // claudeSubscriptionIsStale 档位缺失、时间无法解析或超过一天时需要重新拉取。
+// 区分 Team 席位之前写入的快照（plan_type=team 但带 rate_limit_tier）也立即重拉。
 func claudeSubscriptionIsStale(extra map[string]any, now time.Time) bool {
 	info := readClaudeSubscription(extra)
 	if info == nil {
+		return true
+	}
+	if info.PlanType == ClaudePlanTeam && info.OrganizationType == "claude_team" && strings.TrimSpace(info.RateLimitTier) != "" {
 		return true
 	}
 	updatedAt, err := time.Parse(time.RFC3339, info.UpdatedAt)

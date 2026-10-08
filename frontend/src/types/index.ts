@@ -1753,7 +1753,7 @@ export interface AccountUsageInfo {
 
 /** Claude 订阅档位（GET /api/oauth/profile 归一化后写入 extra.claude_subscription）。 */
 export interface ClaudeSubscriptionInfo {
-  /** free / pro / max / max_5x / max_20x / team / enterprise，未知组织类型保留原值 */
+  /** free / pro / max / max_5x / max_20x / team / team_standard / team_premium / enterprise，未知组织类型保留原值 */
   plan_type: string
   organization_type?: string
   rate_limit_tier?: string

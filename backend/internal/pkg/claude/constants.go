@@ -144,7 +144,7 @@ const DefaultCacheControlTTL = "5m"
 //
 // ⚠️ 读取实际生效的版本号请用 CLIVersion()，它会叠加 SUB2API_CLAUDE_CLI_VERSION 覆盖。
 // 直接引用本常量只在"表达内置基线"时才正确（例如覆盖值的下限校验）。
-const CLICurrentVersion = "2.1.290"
+const CLICurrentVersion = "2.1.293"
 
 // ClaudeCodeMimicryBetas 按真实 Claude Code 2.1.290 的 beta 规则计算 OAuth mimic
 // 请求的 anthropic-beta 集合（不再是固定列表）。

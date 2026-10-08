@@ -44,7 +44,9 @@ export function openAIPlanTypeLabel(value?: string | null): string {
 
 /**
  * Claude 订阅档位 → 展示标签（后端 extra.claude_subscription.plan_type）；未知档位返回空串。
- * Max 的倍率来自 rate_limit_tier（default_claude_max_5x / default_claude_max_20x）。
+ * Max 的倍率来自 rate_limit_tier（default_claude_max_5x / default_claude_max_20x）；
+ * Team 席位同样由 rate_limit_tier 决定：`team_premium` 高级席、`team_standard` 标准席，
+ * 无 tier 时只有 `team`。
  */
 export function claudePlanTypeLabel(value?: string | null): string {
   switch (normalizePlanType(value)) {
@@ -56,6 +58,10 @@ export function claudePlanTypeLabel(value?: string | null): string {
       return 'Max'
     case 'pro':
       return 'Pro'
+    case 'teampremium':
+      return 'Team Premium'
+    case 'teamstandard':
+      return 'Team Standard'
     case 'team':
       return 'Team'
     case 'enterprise':
