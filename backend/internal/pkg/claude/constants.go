@@ -119,19 +119,28 @@ const MessageBetaHeaderWithTools = DefaultBetaHeader
 // count_tokens 均为辅助请求，固定值影响可忽略）。
 const CountTokensBetaHeader = BetaClaudeCode + "," + BetaOAuth + "," + BetaInterleavedThinking + "," + BetaContextManagement + "," + BetaTokenCounting
 
-// HaikuBetaHeader Haiku 模型在 OAuth 真实客户端透传路径上的默认 anthropic-beta header。
+// HaikuBetaHeader Haiku 4.x 模型在 OAuth 真实客户端透传路径上的默认 anthropic-beta header。
 // 2.1.290 第一方直连抓包实证：haiku 不剔除 claude-code，而是挪到基础位末尾；
 // oauth 居首；SDK 能力位（advanced-tool-use/thinking-binding-controls/
 // extended-cache-ttl/cache-diagnosis）殿后。
+// haiku-5-5 起改用 Haiku5BetaHeader。
 // OAuth mimic 路径统一使用 ClaudeCodeMimicryBetas。
 const HaikuBetaHeader = BetaOAuth + "," + BetaInterleavedThinking + "," + BetaThinkingTokenCount + "," + BetaContextManagement + "," + BetaPromptCachingScope + "," + BetaClaudeCode + "," + BetaAdvancedToolUse + "," + BetaThinkingBindingControls + "," + BetaExtendedCacheTTL + "," + BetaCacheDiagnosis
+
+// Haiku5BetaHeader Haiku 5.5+（2.1.293 起默认 Haiku，能力集对齐非 haiku）在 OAuth
+// 透传路径的默认 anthropic-beta header。2.1.293 第一方抓包实证序。
+const Haiku5BetaHeader = BetaOAuth + "," + BetaInterleavedThinking + "," + BetaThinkingTokenCount + "," + BetaContextManagement + "," + BetaPromptCachingScope + "," + BetaMidConversationSystem + "," + BetaClaudeCode + "," + BetaPerTurnControl + "," + BetaMidConversationToolChanges + "," + BetaAdvancedToolUse + "," + BetaMidConversationSystemClearAt + "," + BetaEffort + "," + BetaThinkingBindingControls + "," + BetaExtendedCacheTTL + "," + BetaCacheDiagnosis
 
 // APIKeyBetaHeader API-key 账号建议使用的 anthropic-beta header（不包含 oauth）
 const APIKeyBetaHeader = BetaClaudeCode + "," + BetaInterleavedThinking + "," + BetaThinkingTokenCount + "," + BetaContextManagement + "," + BetaPromptCachingScope + "," + BetaMidConversationSystem + "," + BetaMidConversationToolChanges + "," + BetaAdvancedToolUse + "," + BetaMidConversationSystemClearAt + "," + BetaEffort + "," + BetaThinkingBindingControls + "," + BetaExtendedCacheTTL + "," + BetaCacheDiagnosis
 
-// APIKeyHaikuBetaHeader Haiku 模型在 API-key 账号下使用的 anthropic-beta header
+// APIKeyHaikuBetaHeader Haiku 4.x 模型在 API-key 账号下使用的 anthropic-beta header
 // （不包含 oauth；序与 2.1.290 第一方 haiku 抓包一致）
 const APIKeyHaikuBetaHeader = BetaInterleavedThinking + "," + BetaThinkingTokenCount + "," + BetaContextManagement + "," + BetaPromptCachingScope + "," + BetaClaudeCode + "," + BetaAdvancedToolUse + "," + BetaThinkingBindingControls + "," + BetaExtendedCacheTTL + "," + BetaCacheDiagnosis
+
+// APIKeyHaiku5BetaHeader Haiku 5.5+ 在 API-key 账号下使用的 anthropic-beta header
+// （不包含 oauth；序与 2.1.293 第一方 haiku-5-5 抓包一致）
+const APIKeyHaiku5BetaHeader = BetaInterleavedThinking + "," + BetaThinkingTokenCount + "," + BetaContextManagement + "," + BetaPromptCachingScope + "," + BetaMidConversationSystem + "," + BetaClaudeCode + "," + BetaPerTurnControl + "," + BetaMidConversationToolChanges + "," + BetaAdvancedToolUse + "," + BetaMidConversationSystemClearAt + "," + BetaEffort + "," + BetaThinkingBindingControls + "," + BetaExtendedCacheTTL + "," + BetaCacheDiagnosis
 
 // DefaultCacheControlTTL 是网关代理为自己生成的 cache_control 块默认使用的 ttl。
 // 真实 Claude Code CLI 当前使用 "1h"，但本仓策略是"客户端透传 ttl 优先；
@@ -172,8 +181,9 @@ const CLICurrentVersion = "2.1.293"
 //
 //   - 非 haiku：advanced-tool-use、mid-conversation-system-clear-at、
 //     effort（thinking）、thinking-binding-controls、extended-cache-ttl、cache-diagnosis
-//   - haiku：advanced-tool-use、thinking-binding-controls、extended-cache-ttl、
-//     cache-diagnosis（无 clear-at/effort，2026-10-05 第一方抓包实证）
+//   - haiku-4-x：advanced-tool-use、thinking-binding-controls、extended-cache-ttl、
+//     cache-diagnosis（无 clear-at/effort，2026-10-05 第一方抓包实证）；
+//     haiku-5-5 起能力集对齐非 haiku（含 clear-at/effort，2026-10-07 抓包实证）
 //   - fallback-credit(2026-06-01) 自 2.1.290 起不再携带（2.1.280 携带）；
 //     dangerous-tool-use / afk-mode 为 3P 形态位（与 body.safeguards 配对，
 //     第一方直连无此 body 字段），第一方不携带。
@@ -193,6 +203,12 @@ const CLICurrentVersion = "2.1.293"
 func ClaudeCodeMimicryBetas(modelID string, thinkingEnabled bool) []string {
 	lower := strings.ToLower(modelID)
 	isHaiku := strings.Contains(lower, "haiku")
+	// haiku-5-5 起（2.1.293 第一方抓包实证）：能力集与非 haiku 对齐（adaptive
+	// thinking、effort、mid-conversation-system、per-turn-control、完整 SDK 位），
+	// 仅 claude-code/oauth 排序规则不变。haiku-4-x 维持旧形态（budget thinking、
+	// 精简能力集）。
+	newGenHaiku := strings.Contains(lower, "haiku-5")
+	fullCaps := !isHaiku || newGenHaiku
 	out := make([]string, 0, 20)
 	if !isHaiku {
 		out = append(out, BetaClaudeCode)
@@ -207,13 +223,22 @@ func ClaudeCodeMimicryBetas(modelID string, thinkingEnabled bool) []string {
 		out = append(out, BetaThinkingTokenCount)
 	}
 	out = append(out, BetaContextManagement, BetaPromptCachingScope)
-	if !isHaiku {
+	if fullCaps {
 		out = append(out, BetaMidConversationSystem)
-		// per-turn-control：2.1.287 抓包实证 sonnet-5-5 携带（另有 opus-5-5/fable-5-1）
-		if strings.Contains(lower, "sonnet-5-5") || strings.Contains(lower, "opus-5-5") || strings.Contains(lower, "fable-5-1") {
+	}
+	if isHaiku {
+		// haiku 的 claude-code 从头部剔除，在基础位末尾补回（agentic 规则；
+		// 抓包实证：haiku-4-5 位于 prompt-caching-scope 之后，haiku-5-5 位于
+		// mid-conversation-system 之后）
+		out = append(out, BetaClaudeCode)
+	}
+	if fullCaps {
+		// per-turn-control：2.1.287 抓包实证 sonnet-5-5 携带（另有 opus-5-5/fable-5-1）;
+		// 2.1.293 抓包实证 haiku-5-5 同样携带
+		if strings.Contains(lower, "sonnet-5-5") || strings.Contains(lower, "opus-5-5") || strings.Contains(lower, "fable-5-1") || newGenHaiku {
 			out = append(out, BetaPerTurnControl)
 		}
-		// sonnet-5 不带 mid-conversation-tool-changes；sonnet-5-5 恢复携带（2.1.287 实证）
+		// sonnet-5 不带 mid-conversation-tool-changes；sonnet-5-5 起恢复携带（2.1.287 实证）
 		isSonnet5Legacy := strings.Contains(lower, "sonnet-5") && !strings.Contains(lower, "sonnet-5-5")
 		if !isSonnet5Legacy {
 			out = append(out, BetaMidConversationToolChanges)
@@ -225,17 +250,16 @@ func ClaudeCodeMimicryBetas(modelID string, thinkingEnabled bool) []string {
 		}
 		out = append(out, BetaThinkingBindingControls, BetaExtendedCacheTTL, BetaCacheDiagnosis)
 	}
-	if isHaiku {
-		out = append(out, BetaClaudeCode)
-		// 2.1.290 haiku 第一方抓包实证：SDK 位为 advanced-tool-use /
-		// thinking-binding-controls / extended-cache-ttl / cache-diagnosis
+	if isHaiku && !newGenHaiku {
+		// haiku-4-x 第一方抓包实证 SDK 位：advanced-tool-use / thinking-binding-controls /
+		// extended-cache-ttl / cache-diagnosis（无 clear-at/effort）
 		out = append(out, BetaAdvancedToolUse, BetaThinkingBindingControls, BetaExtendedCacheTTL, BetaCacheDiagnosis)
 	}
 	return out
 }
 
-// SDKTSVersion 是真实 CLI 2.1.290 内置的 @anthropic-ai/sdk 版本
-// （win32-x64 二进制实证：var Rk="0.128.0"，0.127.0 字符串已不存在）。
+// SDKTSVersion 是真实 CLI 2.1.293 内置的 @anthropic-ai/sdk 版本
+// （win32-x64 二进制实证：2.1.290 与 2.1.293 均为 0.128.0）。
 // SDK 版本与 CLI 版本绑定发布，更新 CLICurrentVersion 时必须成对更新。
 const SDKTSVersion = "0.128.0"
 
@@ -372,6 +396,12 @@ var DefaultModels = []Model{
 		Type:        "model",
 		DisplayName: "Claude Haiku 4.5",
 		CreatedAt:   "2025-10-01T00:00:00Z",
+	},
+	{
+		ID:          "claude-haiku-5-5",
+		Type:        "model",
+		DisplayName: "Claude Haiku 5.5",
+		CreatedAt:   "2026-10-06T00:00:00Z",
 	},
 }
 

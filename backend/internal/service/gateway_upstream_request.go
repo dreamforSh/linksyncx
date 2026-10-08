@@ -414,7 +414,11 @@ func (s *GatewayService) getBetaHeader(modelID string, clientBetaHeader string) 
 
 	// OAuth 真实客户端透传且客户端没传 beta 时，根据模型生成默认值。
 	// Haiku 的透传默认值不补 claude-code beta；mimic 路径不会调用本分支。
-	if strings.Contains(strings.ToLower(modelID), "haiku") {
+	// haiku-5-5 起能力集对齐非 haiku（2.1.293 抓包实证），用 Haiku5BetaHeader。
+	if lower := strings.ToLower(modelID); strings.Contains(lower, "haiku") {
+		if strings.Contains(lower, "haiku-5") {
+			return claude.Haiku5BetaHeader
+		}
 		return claude.HaikuBetaHeader
 	}
 
@@ -443,7 +447,11 @@ func defaultAPIKeyBetaHeader(body []byte) string {
 
 func defaultAPIKeyBetaHeaderView(view *jsonBodyView) string {
 	modelID := view.get("model").String()
-	if strings.Contains(strings.ToLower(modelID), "haiku") {
+	if lower := strings.ToLower(modelID); strings.Contains(lower, "haiku") {
+		// haiku-5-5 起能力集对齐非 haiku（2.1.293 抓包实证）
+		if strings.Contains(lower, "haiku-5") {
+			return claude.APIKeyHaiku5BetaHeader
+		}
 		return claude.APIKeyHaikuBetaHeader
 	}
 	return claude.APIKeyBetaHeader

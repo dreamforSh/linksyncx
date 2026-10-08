@@ -195,6 +195,19 @@ func TestClaudeCodeMimicryBetas_ExactOrder(t *testing.T) {
 		"claude-code-20250219", "advanced-tool-use-2025-11-20", "thinking-binding-controls-2026-08-01",
 		"extended-cache-ttl-2025-04-11", "cache-diagnosis-2026-04-07",
 	}, claude.ClaudeCodeMimicryBetas("claude-haiku-4-5-20251001", true))
+
+	// haiku-5-5 + thinking（2026-10-07 第一方抓包实证序）：新一代 haiku 能力集对齐
+	// 非 haiku（adaptive thinking、effort、mid-conversation-system、per-turn-control、
+	// 完整 SDK 位），claude-code 位于 mid-conversation-system 之后。
+	require.Equal(t, []string{
+		"oauth-2025-04-20", "interleaved-thinking-2025-05-14", "thinking-token-count-2026-05-13",
+		"context-management-2025-06-27", "prompt-caching-scope-2026-01-05",
+		"mid-conversation-system-2026-04-07", "claude-code-20250219",
+		"per-turn-control-2026-07-01", "mid-conversation-tool-changes-2026-07-01",
+		"advanced-tool-use-2025-11-20", "mid-conversation-system-clear-at-2026-08-21",
+		"effort-2025-11-24", "thinking-binding-controls-2026-08-01",
+		"extended-cache-ttl-2025-04-11", "cache-diagnosis-2026-04-07",
+	}, claude.ClaudeCodeMimicryBetas("claude-haiku-5-5", true))
 }
 
 func TestClaudeCodeMimicryBetas_HaikuMovesClaudeCodeToEnd(t *testing.T) {
