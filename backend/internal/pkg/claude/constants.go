@@ -153,7 +153,7 @@ const DefaultCacheControlTTL = "5m"
 //
 // ⚠️ 读取实际生效的版本号请用 CLIVersion()，它会叠加 SUB2API_CLAUDE_CLI_VERSION 覆盖。
 // 直接引用本常量只在"表达内置基线"时才正确（例如覆盖值的下限校验）。
-const CLICurrentVersion = "2.1.293"
+const CLICurrentVersion = "2.1.296"
 
 // ClaudeCodeMimicryBetas 按真实 Claude Code 2.1.290 的 beta 规则计算 OAuth mimic
 // 请求的 anthropic-beta 集合（不再是固定列表）。
@@ -258,8 +258,8 @@ func ClaudeCodeMimicryBetas(modelID string, thinkingEnabled bool) []string {
 	return out
 }
 
-// SDKTSVersion 是真实 CLI 2.1.293 内置的 @anthropic-ai/sdk 版本
-// （win32-x64 二进制实证：2.1.290 与 2.1.293 均为 0.128.0）。
+// SDKTSVersion 是真实 CLI 2.1.296 内置的 @anthropic-ai/sdk 版本
+// （win32-x64 二进制实证：2.1.290/2.1.293/2.1.296 均为 0.128.0）。
 // SDK 版本与 CLI 版本绑定发布，更新 CLICurrentVersion 时必须成对更新。
 const SDKTSVersion = "0.128.0"
 
