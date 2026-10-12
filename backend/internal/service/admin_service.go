@@ -106,6 +106,8 @@ type AdminService interface {
 	ForceAntigravityPrivacy(ctx context.Context, account *Account) string
 	SetAccountSchedulable(ctx context.Context, id int64, schedulable bool) (*Account, error)
 	BulkUpdateAccounts(ctx context.Context, input *BulkUpdateAccountsInput) (*BulkUpdateAccountsResult, error)
+	// BatchUpdateDeviceProfiles 为一批账号随机分配各不相同的设备画像，或清除画像。
+	BatchUpdateDeviceProfiles(ctx context.Context, input *DeviceProfileBatchInput) (*DeviceProfileBatchResult, error)
 	CheckMixedChannelRisk(ctx context.Context, currentAccountID int64, currentAccountPlatform string, groupIDs []int64) error
 	// RevertAccountProxyFallback 将账号的 proxy_id 切回 proxy_fallback_origin_id，并清空 origin 字段。
 	// 若账号不存在返回 ErrAccountNotFound；若账号存在但不在 fallback 状态，返回 ErrAccountNotInFallback。

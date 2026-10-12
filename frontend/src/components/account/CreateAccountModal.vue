@@ -2891,6 +2891,18 @@
           </div>
         </div>
 
+        <!-- 设备指纹 -->
+        <div
+          class="rounded-lg border border-gray-200 p-4 dark:border-dark-600"
+          data-testid="create-claude-device-profile"
+        >
+          <DeviceProfileCreateField
+            v-model:mode="deviceProfileMode"
+            v-model="deviceProfile"
+            platform="anthropic"
+          />
+        </div>
+
         <!-- TLS Fingerprint -->
         <div class="rounded-lg border border-gray-200 p-4 dark:border-dark-600">
           <div class="flex items-center justify-between">
@@ -3350,6 +3362,19 @@
             <Select v-model="codexFingerprintMode" data-testid="create-codex-fingerprint-mode-select" :options="codexFingerprintModeOptions" />
           </div>
         </div>
+      </div>
+
+      <!-- Codex 设备指纹（仅 OpenAI OAuth） -->
+      <div
+        v-if="form.platform === 'openai' && accountCategory === 'oauth-based'"
+        class="border-t border-gray-200 pt-4 dark:border-dark-600"
+        data-testid="create-codex-device-profile"
+      >
+        <DeviceProfileCreateField
+          v-model:mode="deviceProfileMode"
+          v-model="deviceProfile"
+          platform="openai"
+        />
       </div>
 
       <!-- OpenAI Compact 能力配置 -->
@@ -3993,9 +4018,11 @@ import GrokBaseUrlPresets from '@/components/account/GrokBaseUrlPresets.vue'
 import CnBaseUrlPresets from '@/components/account/CnBaseUrlPresets.vue'
 import OpenCodeGoProtocolRulesEditor from '@/components/account/OpenCodeGoProtocolRulesEditor.vue'
 import HeaderOverrideEditor from '@/components/account/HeaderOverrideEditor.vue'
+import DeviceProfileCreateField from '@/components/account/DeviceProfileCreateField.vue'
 import { allSelectedGroupsEnableLongContextPricing } from '@/components/account/longContextBilling'
 import {
   applyAntigravityProjectID,
+  applyDeviceProfile,
   applyHeaderOverride,
   applyInterceptWarmup,
   applyOpenCodeGoProtocolRules,
@@ -4004,6 +4031,7 @@ import {
   defaultCNAdaptiveBaseUrls,
   defaultCNBaseUrl,
   defaultOpenCodeProtocolRules,
+  emptyDeviceProfile,
   isCNProviderPlatform,
   isHeaderOverrideCapable,
   validateHeaderOverrideRows,
@@ -4011,6 +4039,9 @@ import {
   type CnApiProtocol,
   type CnNativeApiProtocol,
   type CnProviderPlatform,
+  CLAUDE_DEVICE_USER_AGENT_PATTERN,
+  type DeviceProfileCreateMode,
+  type DeviceProfileValue,
   type HeaderOverrideRow,
   type OpenCodeAccountMode,
   type OpenCodeGoProtocolRule
@@ -4518,6 +4549,14 @@ const codexFingerprintModeOptions = computed(() => [
   { value: 'session' as CodexFingerprintMode, label: t('admin.accounts.openai.codexFingerprintSession') },
   { value: 'full' as CodexFingerprintMode, label: t('admin.accounts.openai.codexFingerprintFull') },
 ])
+// 账号级设备指纹（Claude / Codex 的 OAuth 与 Setup Token）。默认沿用默认指纹。
+const deviceProfileMode = ref<DeviceProfileCreateMode>('default')
+const deviceProfile = ref<DeviceProfileValue>(emptyDeviceProfile())
+const deviceProfilePlatform = computed<'anthropic' | 'openai' | null>(() =>
+  accountCategory.value === 'oauth-based' && (form.platform === 'anthropic' || form.platform === 'openai')
+    ? form.platform
+    : null
+)
 type AnthropicAPIKeyAuthScheme = 'x_api_key' | 'authorization_bearer'
 const anthropicPassthroughEnabled = ref(false)
 const anthropicAPIKeyAuthScheme = ref<AnthropicAPIKeyAuthScheme>('x_api_key')
@@ -4966,6 +5005,8 @@ watch(
     allowedModels.value = []
     upstreamModelsPreviewed.value = false
     modelMappings.value = []
+    // Claude（OS / 架构）与 Codex（完整 UA）的画像形态不同，换平台时清空手填值。
+    deviceProfile.value = emptyDeviceProfile()
     // Antigravity: 默认使用映射模式并填充默认映射
     if (newPlatform === 'antigravity') {
       antigravityModelRestrictionMode.value = 'mapping'
@@ -5498,6 +5539,8 @@ const resetForm = () => {
   codexCLIOnlyEnabled.value = false
   codexCLIOnlyAppServerEnabled.value = false
   codexFingerprintMode.value = 'off'
+  deviceProfileMode.value = 'default'
+  deviceProfile.value = emptyDeviceProfile()
   anthropicPassthroughEnabled.value = false
   anthropicAPIKeyAuthScheme.value = 'x_api_key'
   webSearchEmulationMode.value = 'default'
@@ -5770,6 +5813,9 @@ const handleSubmit = async () => {
   if (isOAuthFlow.value) {
     if (!isGrokSSOInputMethod.value && !form.name.trim()) {
       appStore.showError(t('admin.accounts.pleaseEnterAccountName'))
+      return
+    }
+    if (!validateDeviceProfileInput()) {
       return
     }
     const canContinue = await ensureAntigravityMixedChannelConfirmed(async () => {
@@ -6071,6 +6117,57 @@ const formatDateTimeLocal = formatDateTimeLocalInput
 const parseDateTimeLocal = parseDateTimeLocalInput
 
 // Create account and handle success/failure
+// 手动指定的 Claude UA 模板形态固定，进入授权步骤前先拦下，避免授权后才被后端拒绝。
+const validateDeviceProfileInput = () => {
+  const ua = deviceProfile.value.user_agent.trim()
+  if (
+    deviceProfilePlatform.value === 'anthropic' &&
+    deviceProfileMode.value === 'manual' &&
+    ua !== '' &&
+    !CLAUDE_DEVICE_USER_AGENT_PATTERN.test(ua)
+  ) {
+    appStore.showError(t('admin.accounts.deviceProfile.claudeUserAgentInvalid'))
+    return false
+  }
+  return true
+}
+
+// 单次请求的随机画像数上限，与后端 MaxDeviceProfileBatchAccounts 保持一致。
+const DEVICE_PROFILE_SET_MAX = 1000
+
+// 为本次要创建的 count 个账号逐个准备设备画像：random 取 count 份互不重复的随机画像，
+// manual 各账号共用表单值，default（或平台不支持）不写入，沿用默认指纹。
+const resolveCreateDeviceProfiles = async (count: number): Promise<Array<DeviceProfileValue | null>> => {
+  const platform = deviceProfilePlatform.value
+  if (!platform || deviceProfileMode.value === 'default') {
+    return Array.from({ length: count }, () => null)
+  }
+  if (deviceProfileMode.value === 'manual') {
+    return Array.from({ length: count }, () => ({ ...deviceProfile.value }))
+  }
+  const profiles: DeviceProfileValue[] = []
+  while (profiles.length < count) {
+    const batch = await adminAPI.accounts.randomDeviceProfiles(
+      platform,
+      Math.min(count - profiles.length, DEVICE_PROFILE_SET_MAX)
+    )
+    if (batch.length === 0) {
+      throw new Error(t('admin.accounts.deviceProfile.randomizeFailed'))
+    }
+    profiles.push(...batch.map((profile) => ({
+      user_agent: profile.user_agent || '',
+      device_os: profile.device_os || '',
+      device_arch: profile.device_arch || ''
+    })))
+  }
+  return profiles
+}
+
+const withDeviceProfile = (credentials: Record<string, unknown>, profile: DeviceProfileValue | null) => {
+  const platform = deviceProfilePlatform.value
+  return profile && platform ? applyDeviceProfile(credentials, profile, platform) : credentials
+}
+
 const createAccountAndFinish = async (
   platform: AccountPlatform,
   type: AccountType,
@@ -6449,6 +6546,8 @@ const handleOpenAIExchange = async (authCode: string) => {
       return
     }
 
+    // 先准备设备画像，避免授权码兑换后才因生成失败而作废。
+    const [accountDeviceProfile] = await resolveCreateDeviceProfiles(1)
     const tokenInfo = await oauthClient.exchangeAuthCode(
       authCode.trim(),
       oauthClient.sessionId.value,
@@ -6475,6 +6574,8 @@ const handleOpenAIExchange = async (authCode: string) => {
         credentials.compact_model_mapping = compactModelMapping
       }
     }
+
+    withDeviceProfile(credentials, accountDeviceProfile)
 
     // 应用临时不可调度配置
     if (!applyTempUnschedConfig(credentials)) {
@@ -6590,6 +6691,11 @@ const handleOpenAIImportCodexSession = async (content: string) => {
   oauthClient.error.value = ''
 
   try {
+    // 导入条数由后端解析决定：随机设备交给后端逐个分配，手动指定的设备随 credential_extras 下发。
+    const randomizeDeviceProfile = deviceProfilePlatform.value === 'openai' && deviceProfileMode.value === 'random'
+    if (deviceProfileMode.value === 'manual') {
+      withDeviceProfile(credentialExtras, { ...deviceProfile.value })
+    }
     const extra = buildOpenAICodexImportExtra()
     const result = await adminAPI.accounts.importCodexSession({
       content: trimmed,
@@ -6605,7 +6711,8 @@ const handleOpenAIImportCodexSession = async (content: string) => {
       auto_pause_on_expired: autoPauseOnExpired.value,
       credential_extras: Object.keys(credentialExtras).length > 0 ? credentialExtras : undefined,
       extra: withUpstreamRequestIdHeader(extra),
-      update_existing: true
+      update_existing: true,
+      randomize_device_profile: randomizeDeviceProfile || undefined
     })
 
     const successCount = result.created + result.updated
@@ -6669,6 +6776,8 @@ const handleOpenAIImportCodexPAT = async (accessToken: string) => {
   oauthClient.error.value = ''
 
   try {
+    const [accountDeviceProfile] = await resolveCreateDeviceProfiles(1)
+    withDeviceProfile(credentialExtras, accountDeviceProfile)
     const extra = buildOpenAICodexImportExtra()
     await adminAPI.accounts.createOpenAICodexPAT({
       access_token: trimmed,
@@ -6718,6 +6827,15 @@ const handleOpenAIBatchRT = async (refreshTokenInput: string, clientId?: string)
   }
   if (blockClashBatchCreate(refreshTokens.length, (message) => (oauthClient.error.value = message))) return
 
+  let deviceProfiles: Array<DeviceProfileValue | null>
+  try {
+    deviceProfiles = await resolveCreateDeviceProfiles(refreshTokens.length)
+  } catch (error) {
+    oauthClient.error.value = extractApiErrorMessage(error, t('admin.accounts.deviceProfile.randomizeFailed'))
+    appStore.showError(oauthClient.error.value)
+    return
+  }
+
   oauthClient.loading.value = true
   oauthClient.error.value = ''
 
@@ -6745,6 +6863,7 @@ const handleOpenAIBatchRT = async (refreshTokenInput: string, clientId?: string)
         if (clientId) {
           credentials.client_id = clientId
         }
+        withDeviceProfile(credentials, deviceProfiles[i])
         const oauthExtra = oauthClient.buildExtraInfo(tokenInfo) as Record<string, unknown> | undefined
         const extra = buildOpenAIExtra(oauthExtra)
 
@@ -7044,6 +7163,8 @@ const handleAnthropicExchange = async (authCode: string) => {
   oauth.error.value = ''
 
   try {
+    // 先准备设备画像，避免授权码兑换后才因生成失败而作废。
+    const [accountDeviceProfile] = await resolveCreateDeviceProfiles(1)
     const proxyConfig = form.proxy_id ? { proxy_id: form.proxy_id } : {}
     const endpoint =
       addMethod.value === 'oauth'
@@ -7121,6 +7242,7 @@ const handleAnthropicExchange = async (authCode: string) => {
       credentials.model_mapping = modelMapping
     }
     applyInterceptWarmup(credentials, interceptWarmupRequests.value, 'create')
+    withDeviceProfile(credentials, accountDeviceProfile)
     await createAccountAndFinish(form.platform, addMethod.value as AccountType, credentials, extra)
   } catch (error: any) {
     oauth.error.value = extractApiErrorMessage(error, t('admin.accounts.oauth.authFailed'))
@@ -7161,6 +7283,7 @@ const handleCookieAuth = async (sessionKey: string) => {
       return
     }
     if (blockClashBatchCreate(keys.length, (message) => (oauth.error.value = message))) return
+    const deviceProfiles = await resolveCreateDeviceProfiles(keys.length)
 
     const tempUnschedPayload = tempUnschedEnabled.value
       ? buildTempUnschedRules(tempUnschedRules.value)
@@ -7254,6 +7377,7 @@ const handleCookieAuth = async (sessionKey: string) => {
           credentials.model_mapping = modelMapping
         }
         applyInterceptWarmup(credentials, interceptWarmupRequests.value, 'create')
+        withDeviceProfile(credentials, deviceProfiles[i])
         if (tempUnschedEnabled.value) {
           credentials.temp_unschedulable_enabled = true
           credentials.temp_unschedulable_rules = tempUnschedPayload

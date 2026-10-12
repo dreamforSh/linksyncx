@@ -38,6 +38,9 @@ type CodexSessionImportRequest struct {
 	Extra                   map[string]any `json:"extra"`
 	UpdateExisting          *bool          `json:"update_existing"`
 	ConfirmMixedChannelRisk *bool          `json:"confirm_mixed_channel_risk"`
+	// RandomizeDeviceProfile 为每个导入账号随机分配不同的 Codex 设备（User-Agent）；
+	// credential_extras 已指定 UA、或已有账号已固定 UA 时不覆盖。
+	RandomizeDeviceProfile *bool `json:"randomize_device_profile"`
 }
 
 type CodexSessionImportResult struct {
@@ -182,6 +185,10 @@ func (h *AccountHandler) importCodexSessions(ctx context.Context, req CodexSessi
 	}
 	credentialExtras := sanitizeCodexImportCredentialExtras(req.CredentialExtras)
 	skipMixedChannelCheck := req.ConfirmMixedChannelRisk != nil && *req.ConfirmMixedChannelRisk
+	var nextDeviceProfile func() (service.DeviceProfile, error)
+	if req.RandomizeDeviceProfile != nil && *req.RandomizeDeviceProfile {
+		nextDeviceProfile = service.NewDistinctDeviceProfileGenerator(service.PlatformOpenAI)
+	}
 
 	seenIdentity := map[string]codexSeenIdentity{}
 	for _, entry := range entries {
@@ -270,6 +277,9 @@ func (h *AccountHandler) importCodexSessions(ctx context.Context, req CodexSessi
 				autoPauseOnExpired = nil
 			}
 			mergedCredentials := mergeCodexImportCredentials(existing.Credentials, credentials, item)
+			if err := assignCodexImportDeviceProfile(mergedCredentials, nextDeviceProfile); err != nil {
+				return result, err
+			}
 			mergedExtra := mergeCodexImportMap(existing.Extra, extra)
 			updateInput := &service.UpdateAccountInput{
 				Credentials:        mergedCredentials,
@@ -323,6 +333,9 @@ func (h *AccountHandler) importCodexSessions(ctx context.Context, req CodexSessi
 			continue
 		}
 
+		if err := assignCodexImportDeviceProfile(credentials, nextDeviceProfile); err != nil {
+			return result, err
+		}
 		account, createErr := h.adminService.CreateAccount(ctx, &service.CreateAccountInput{
 			Name:                  accountName,
 			Notes:                 req.Notes,
@@ -875,6 +888,20 @@ func sanitizeCodexImportCredentialExtras(input map[string]any) map[string]any {
 		return nil
 	}
 	return out
+}
+
+// assignCodexImportDeviceProfile 在开启随机设备时，为尚未固定 User-Agent 的导入账号
+// 分配一份新画像；已有 UA（手动指定或已有账号已固定）保持不变，避免重复导入时换设备。
+func assignCodexImportDeviceProfile(credentials map[string]any, next func() (service.DeviceProfile, error)) error {
+	if next == nil || codexCredentialString(credentials, "user_agent") != "" {
+		return nil
+	}
+	profile, err := next()
+	if err != nil {
+		return err
+	}
+	credentials["user_agent"] = profile.UserAgent
+	return nil
 }
 
 // buildCodexImportIdentityKeys 生成导入条目的匹配键。refresh_token 缺失时

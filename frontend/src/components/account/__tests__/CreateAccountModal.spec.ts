@@ -11,6 +11,8 @@ const {
   createOpenAICodexPATMock,
   generateAuthUrlMock,
   exchangeCodeMock,
+  randomDeviceProfilesMock,
+  refreshOpenAITokenMock,
   authIsSimpleMode,
   showErrorMock,
 } = vi.hoisted(() => ({
@@ -22,6 +24,8 @@ const {
   createOpenAICodexPATMock: vi.fn(),
   generateAuthUrlMock: vi.fn(),
   exchangeCodeMock: vi.fn(),
+  randomDeviceProfilesMock: vi.fn(),
+  refreshOpenAITokenMock: vi.fn(),
   authIsSimpleMode: { value: true },
   showErrorMock: vi.fn(),
 }))
@@ -53,6 +57,8 @@ vi.mock('@/api/admin', () => ({
       createOpenAICodexPAT: createOpenAICodexPATMock,
       generateAuthUrl: generateAuthUrlMock,
       exchangeCode: exchangeCodeMock,
+      randomDeviceProfiles: randomDeviceProfilesMock,
+      refreshOpenAIToken: refreshOpenAITokenMock,
     },
     settings: {
       getWebSearchEmulationConfig: vi.fn().mockResolvedValue({ enabled: false, providers: [] }),
@@ -95,7 +101,7 @@ const OAuthAuthorizationFlowStub = defineComponent({
     initialInputMethod: String,
   },
   data: () => ({ inputMethod: 'manual', authCode: '' }),
-  emits: ['import-codex-session', 'import-codex-pat', 'generate-url', 'cookie-auth'],
+  emits: ['import-codex-session', 'import-codex-pat', 'generate-url', 'cookie-auth', 'validate-mobile-refresh-token'],
   template: `
     <div>
       <button data-testid="import-codex-session" @click="$emit('import-codex-session', 'session-json')">session</button>
@@ -954,5 +960,206 @@ describe('CreateAccountModal Claude OAuth model restriction', () => {
     expect(createAccountMock).toHaveBeenCalledTimes(1)
     expect(createAccountMock.mock.calls[0]?.[0]?.type).toBe('oauth')
     expect(createAccountMock.mock.calls[0]?.[0]?.credentials).not.toHaveProperty('model_mapping')
+  })
+})
+
+describe('CreateAccountModal device profile', () => {
+  const claudeProfiles = [
+    { user_agent: '', device_os: 'MacOS', device_arch: 'arm64' },
+    { user_agent: '', device_os: 'Linux', device_arch: 'x64' },
+  ]
+  const codexProfiles = [
+    { user_agent: 'codex-tui/0.147.0 (Mac OS 15.7.1; arm64) iTerm.app/3.6.5', device_os: '', device_arch: '' },
+    { user_agent: 'codex-tui/0.147.0 (Ubuntu 24.4.0; x86_64) xterm-256color', device_os: '', device_arch: '' },
+  ]
+
+  beforeEach(() => {
+    authIsSimpleMode.value = true
+    createAccountMock.mockReset().mockResolvedValue({ id: 61, platform: 'anthropic', type: 'oauth' })
+    syncUpstreamModelsMock.mockReset().mockResolvedValue({ models: [], metadata: {} })
+    exchangeCodeMock.mockReset().mockResolvedValue({ access_token: 'claude-access-token', expires_at: 1893456000 })
+    importCodexSessionMock.mockReset().mockResolvedValue({
+      created: 2, updated: 0, skipped: 0, failed: 0, errors: [], warnings: [],
+    })
+    createOpenAICodexPATMock.mockReset().mockResolvedValue({})
+    refreshOpenAITokenMock.mockReset().mockImplementation(async (rt: string) => ({
+      access_token: `access-${rt}`,
+      refresh_token: rt,
+      expires_at: 1893456000,
+    }))
+    randomDeviceProfilesMock.mockReset().mockImplementation(async (platform: string, count: number) =>
+      (platform === 'anthropic' ? claudeProfiles : codexProfiles).slice(0, count)
+    )
+    showErrorMock.mockReset()
+  })
+
+  const pickMode = async (wrapper: ReturnType<typeof mountModal>, section: string, mode: string) => {
+    await wrapper.get(`[data-testid="${section}"] [data-testid="device-profile-mode-${mode}"]`).trigger('click')
+  }
+
+  const submitStepOne = async (wrapper: ReturnType<typeof mountModal>, name: string) => {
+    await wrapper.get('form#create-account-form input[type="text"]').setValue(name)
+    await wrapper.get('form#create-account-form').trigger('submit.prevent')
+    await flushPromises()
+  }
+
+  it('keeps the default fingerprint unless a mode is chosen', async () => {
+    const wrapper = mountModal()
+    expect(wrapper.find('[data-testid="create-claude-device-profile"]').exists()).toBe(true)
+    await submitStepOne(wrapper, 'Claude cookie')
+
+    wrapper.getComponent(OAuthAuthorizationFlowStub).vm.$emit('cookie-auth', 'session-key-a')
+    await flushPromises()
+
+    expect(randomDeviceProfilesMock).not.toHaveBeenCalled()
+    const credentials = createAccountMock.mock.calls[0]?.[0]?.credentials
+    expect(credentials).not.toHaveProperty('device_os')
+    expect(credentials).not.toHaveProperty('device_arch')
+    expect(credentials).not.toHaveProperty('user_agent')
+  })
+
+  it('gives every Claude cookie-auth account its own random device', async () => {
+    const wrapper = mountModal()
+    await pickMode(wrapper, 'create-claude-device-profile', 'random')
+    await submitStepOne(wrapper, 'Claude cookie')
+
+    wrapper.getComponent(OAuthAuthorizationFlowStub).vm.$emit('cookie-auth', 'session-key-a\nsession-key-b')
+    await flushPromises()
+
+    expect(randomDeviceProfilesMock).toHaveBeenCalledTimes(1)
+    expect(randomDeviceProfilesMock).toHaveBeenCalledWith('anthropic', 2)
+    expect(createAccountMock).toHaveBeenCalledTimes(2)
+    expect(createAccountMock.mock.calls.map(([payload]) => payload.credentials)).toEqual([
+      expect.objectContaining({ device_os: 'MacOS', device_arch: 'arm64' }),
+      expect.objectContaining({ device_os: 'Linux', device_arch: 'x64' }),
+    ])
+    for (const [payload] of createAccountMock.mock.calls) {
+      expect(payload.credentials).not.toHaveProperty('user_agent')
+    }
+  })
+
+  it('aborts cookie auth before exchanging keys when random devices cannot be generated', async () => {
+    randomDeviceProfilesMock.mockRejectedValue(new Error('boom'))
+    const wrapper = mountModal()
+    await pickMode(wrapper, 'create-claude-device-profile', 'random')
+    await submitStepOne(wrapper, 'Claude cookie')
+
+    wrapper.getComponent(OAuthAuthorizationFlowStub).vm.$emit('cookie-auth', 'session-key-a')
+    await flushPromises()
+
+    expect(exchangeCodeMock).not.toHaveBeenCalled()
+    expect(createAccountMock).not.toHaveBeenCalled()
+  })
+
+  it('shares a manual Claude device and rejects an invalid UA template before authorizing', async () => {
+    const wrapper = mountModal()
+    await pickMode(wrapper, 'create-claude-device-profile', 'manual')
+    const section = '[data-testid="create-claude-device-profile"]'
+    await wrapper.get(`${section} [data-testid="device-profile-os"]`).setValue('Windows')
+    await wrapper.get(`${section} [data-testid="device-profile-arch"]`).setValue('x64')
+    await wrapper.get(`${section} [data-testid="device-profile-user-agent"]`).setValue('curl/8.0')
+    await submitStepOne(wrapper, 'Claude cookie')
+
+    expect(showErrorMock).toHaveBeenCalledWith('admin.accounts.deviceProfile.claudeUserAgentInvalid')
+    expect(wrapper.findComponent(OAuthAuthorizationFlowStub).exists()).toBe(false)
+
+    await wrapper
+      .get(`${section} [data-testid="device-profile-user-agent"]`)
+      .setValue('claude-cli/2.1.296 (external, cli)')
+    await wrapper.get('form#create-account-form').trigger('submit.prevent')
+    await flushPromises()
+    wrapper.getComponent(OAuthAuthorizationFlowStub).vm.$emit('cookie-auth', 'session-key-a\nsession-key-b')
+    await flushPromises()
+
+    expect(randomDeviceProfilesMock).not.toHaveBeenCalled()
+    expect(createAccountMock).toHaveBeenCalledTimes(2)
+    for (const [payload] of createAccountMock.mock.calls) {
+      expect(payload.credentials).toMatchObject({
+        device_os: 'Windows',
+        device_arch: 'x64',
+        user_agent: 'claude-cli/2.1.296 (external, cli)',
+      })
+    }
+  })
+
+  it('asks the backend to randomize devices for Codex session imports', async () => {
+    const wrapper = mountModal()
+    await selectButtonByText(wrapper, 'OpenAI')
+    await pickMode(wrapper, 'create-codex-device-profile', 'random')
+    await submitStepOne(wrapper, 'Codex import')
+
+    await wrapper.get('[data-testid="import-codex-session"]').trigger('click')
+    await flushPromises()
+
+    expect(randomDeviceProfilesMock).not.toHaveBeenCalled()
+    const payload = importCodexSessionMock.mock.calls[0]?.[0]
+    expect(payload?.randomize_device_profile).toBe(true)
+    expect(payload?.credential_extras?.user_agent).toBeUndefined()
+  })
+
+  it('sends a manual Codex device through credential_extras for session imports', async () => {
+    const wrapper = mountModal()
+    await selectButtonByText(wrapper, 'OpenAI')
+    await pickMode(wrapper, 'create-codex-device-profile', 'manual')
+    await wrapper
+      .get('[data-testid="create-codex-device-profile"] [data-testid="device-profile-user-agent"]')
+      .setValue(codexProfiles[1].user_agent)
+    await submitStepOne(wrapper, 'Codex import')
+
+    await wrapper.get('[data-testid="import-codex-session"]').trigger('click')
+    await flushPromises()
+
+    const payload = importCodexSessionMock.mock.calls[0]?.[0]
+    expect(payload?.randomize_device_profile).toBeUndefined()
+    expect(payload?.credential_extras).toMatchObject({ user_agent: codexProfiles[1].user_agent })
+    expect(payload?.credential_extras).not.toHaveProperty('device_os')
+  })
+
+  it('pins a random Codex device on PAT imports', async () => {
+    const wrapper = mountModal()
+    await selectButtonByText(wrapper, 'OpenAI')
+    await pickMode(wrapper, 'create-codex-device-profile', 'random')
+    await submitStepOne(wrapper, 'Codex PAT')
+
+    await wrapper.get('[data-testid="import-codex-pat"]').trigger('click')
+    await flushPromises()
+
+    expect(randomDeviceProfilesMock).toHaveBeenCalledWith('openai', 1)
+    expect(createOpenAICodexPATMock.mock.calls[0]?.[0]?.credential_extras).toMatchObject({
+      user_agent: codexProfiles[0].user_agent,
+    })
+  })
+
+  it('gives every Codex refresh-token account its own random device', async () => {
+    createAccountMock.mockResolvedValue({ id: 62, platform: 'openai', type: 'oauth' })
+    const wrapper = mountModal()
+    await selectButtonByText(wrapper, 'OpenAI')
+    await pickMode(wrapper, 'create-codex-device-profile', 'random')
+    await submitStepOne(wrapper, 'Codex RT')
+
+    wrapper.getComponent(OAuthAuthorizationFlowStub).vm.$emit('validate-mobile-refresh-token', 'rt-a\nrt-b')
+    await flushPromises()
+
+    expect(randomDeviceProfilesMock).toHaveBeenCalledWith('openai', 2)
+    expect(createAccountMock).toHaveBeenCalledTimes(2)
+    expect(createAccountMock.mock.calls.map(([payload]) => payload.credentials.user_agent)).toEqual(
+      codexProfiles.map((profile) => profile.user_agent)
+    )
+    for (const [payload] of createAccountMock.mock.calls) {
+      expect(payload.credentials).not.toHaveProperty('device_os')
+    }
+  })
+
+  it('resets the device profile choice when the modal is reopened', async () => {
+    const wrapper = mountModal()
+    await pickMode(wrapper, 'create-claude-device-profile', 'random')
+    expect(wrapper.get('[data-testid="device-profile-mode-hint"]').text())
+      .toBe('admin.accounts.deviceProfile.create.randomHint')
+
+    await wrapper.setProps({ show: false })
+    await wrapper.setProps({ show: true })
+    await flushPromises()
+    expect(wrapper.get('[data-testid="device-profile-mode-hint"]').text())
+      .toBe('admin.accounts.deviceProfile.create.defaultHint')
   })
 })

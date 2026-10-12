@@ -89,7 +89,8 @@ func extractFirstUserTextView(view *jsonBodyView) string {
 //
 //	x-anthropic-billing-header: cc_version=2.1.290.{fp}; cc_entrypoint=cli; cch=00000; cc_prompt_id={uuid}; cc_turn_origin=cli; cc_prompt_index={n}; cc_turn_index=1;
 //
-// cch 字段：2.1.290 官方构建上为逐请求内容哈希（5 位 hex）。2026-10-06 实证要点：
+// cch 字段：2.1.281 起官方构建为逐请求内容哈希（5 位 hex；2.1.281/283/285/287/289/290
+// 逐版本抓包实证均已签名，2.1.280 为最后一批 00000 占位形态）。2026-10-06 实证要点：
 //   - 对最终请求体（含占位符）的确定性哈希：同一 body 三次重试 cch 完全一致；
 //     重试不重复签名；请求头（含 x-client-request-id）不参与哈希。
 //   - 已否证的形态：xxh64/xxh3/xxh32/rapidhash/fnv/murmur64a/md5/sha/blake 的

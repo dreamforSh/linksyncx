@@ -184,6 +184,7 @@
           @reset-status="handleBulkResetStatus"
           @refresh-token="handleBulkRefreshToken"
           @probe-upstream-billing="handleBulkProbeUpstreamBilling"
+          @device-profile="showDeviceProfileBatch = true"
           @edit-selected="openBulkEditSelected"
           @edit-filtered="openBulkEditFiltered"
           @clear="clearSelection"
@@ -494,6 +495,7 @@
     <AccountActionMenu :show="menu.show" :account="menu.acc" :anchor-rect="menu.anchorRect" @close="menu.show = false" @test="handleTest" @stats="handleViewStats" @schedule="handleSchedule" @duplicate="handleDuplicateAccount" @reauth="handleReAuth" @refresh-token="handleRefresh" @reset-client-identity="handleResetClientIdentity" @recover-state="handleRecoverState" @reset-quota="handleResetQuota" @set-privacy="handleSetPrivacy" @create-spark-shadow="handleCreateSparkShadow" />
     <SyncFromCrsModal :show="showSync" :groups="groups" @close="showSync = false" @synced="reload" />
     <ImportDataModal :show="showImportData" :groups="groups" @close="showImportData = false" @imported="handleDataImported" />
+    <DeviceProfileBatchDialog :show="showDeviceProfileBatch" :account-ids="selIds" @close="showDeviceProfileBatch = false" />
     <BulkEditAccountModal
       :show="showBulkEdit"
       :account-ids="selIds"
@@ -544,6 +546,7 @@ import { CreateAccountModal, EditAccountModal, BulkEditAccountModal, SyncFromCrs
 import AccountTableActions from '@/components/admin/account/AccountTableActions.vue'
 import AccountTableFilters from '@/components/admin/account/AccountTableFilters.vue'
 import AccountBulkActionsBar from '@/components/admin/account/AccountBulkActionsBar.vue'
+import DeviceProfileBatchDialog from '@/components/admin/account/DeviceProfileBatchDialog.vue'
 import AccountActionMenu from '@/components/admin/account/AccountActionMenu.vue'
 import ImportDataModal from '@/components/admin/account/ImportDataModal.vue'
 import TargetGroupPickerDialog from '@/components/admin/account/TargetGroupPickerDialog.vue'
@@ -654,6 +657,7 @@ const showImportData = ref(false)
 const showExportDataDialog = ref(false)
 const includeProxyOnExport = ref(true)
 const showBulkEdit = ref(false)
+const showDeviceProfileBatch = ref(false)
 const bulkEditTarget = ref<AccountBulkEditTarget | null>(null)
 const showTempUnsched = ref(false)
 const showDeleteDialog = ref(false)

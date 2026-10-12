@@ -191,6 +191,12 @@ func (s *GatewayService) buildUpstreamRequestIndexed(ctx context.Context, c *gin
 		}
 	}
 
+	// 账号级设备画像（固定 OS / 架构 / UA 模板）：在指纹与 mimic 头之后覆盖，
+	// UA 版本号沿用上面已写入的出站 UA，与 billing 块 cc_version 保持同源。
+	if tokenType == "oauth" {
+		applyClaudeDeviceProfileHeaders(req.Header, account)
+	}
+
 	// Accept-Encoding：真实客户端（Bun/Node fetch）恒发 "gzip, deflate, br, zstd"。
 	// 显式设置后 Go Transport 不再自动解压，由 repository 层 decompressResponseBody
 	// 统一处理（该函数本来就在每个响应上执行）。

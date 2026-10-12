@@ -42,6 +42,8 @@ type stubAdminService struct {
 	lastUpdateAccountInput              *service.UpdateAccountInput
 	bulkUpdateAccountErr                error
 	lastBulkUpdateAccountInput          *service.BulkUpdateAccountsInput
+	lastDeviceProfileBatchInput         *service.DeviceProfileBatchInput
+	deviceProfileBatchResult            *service.DeviceProfileBatchResult
 	getAccountResult                    *service.Account
 	updateAccountCalls                  int
 	updateAccountExtraCalls             int
@@ -578,6 +580,14 @@ func (s *stubAdminService) BulkUpdateAccounts(ctx context.Context, input *servic
 		return nil, s.bulkUpdateAccountErr
 	}
 	return &service.BulkUpdateAccountsResult{Success: len(input.AccountIDs), Failed: 0, SuccessIDs: input.AccountIDs}, nil
+}
+
+func (s *stubAdminService) BatchUpdateDeviceProfiles(ctx context.Context, input *service.DeviceProfileBatchInput) (*service.DeviceProfileBatchResult, error) {
+	s.lastDeviceProfileBatchInput = input
+	if s.deviceProfileBatchResult != nil {
+		return s.deviceProfileBatchResult, nil
+	}
+	return &service.DeviceProfileBatchResult{Results: []service.DeviceProfileBatchItem{}}, nil
 }
 
 func (s *stubAdminService) CheckMixedChannelRisk(ctx context.Context, currentAccountID int64, currentAccountPlatform string, groupIDs []int64) error {

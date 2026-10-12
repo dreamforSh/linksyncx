@@ -2,9 +2,17 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { defineComponent } from 'vue'
 import { flushPromises, mount } from '@vue/test-utils'
 
-const { updateAccountMock, checkMixedChannelRiskMock, authIsSimpleMode } = vi.hoisted(() => ({
+const {
+  updateAccountMock,
+  checkMixedChannelRiskMock,
+  resetClientIdentityMock,
+  randomDeviceProfileMock,
+  authIsSimpleMode
+} = vi.hoisted(() => ({
   updateAccountMock: vi.fn(),
   checkMixedChannelRiskMock: vi.fn(),
+  resetClientIdentityMock: vi.fn(),
+  randomDeviceProfileMock: vi.fn(),
   authIsSimpleMode: { value: true }
 }))
 
@@ -28,7 +36,9 @@ vi.mock('@/api/admin', () => ({
   adminAPI: {
     accounts: {
       update: updateAccountMock,
-      checkMixedChannelRisk: checkMixedChannelRiskMock
+      checkMixedChannelRisk: checkMixedChannelRiskMock,
+      resetClientIdentity: resetClientIdentityMock,
+      randomDeviceProfile: randomDeviceProfileMock
     },
     settings: {
       getWebSearchEmulationConfig: vi.fn().mockResolvedValue({ enabled: false, providers: [] }),
@@ -1201,6 +1211,111 @@ describe('EditAccountModal', () => {
         'gpt-5.3-codex-spark': 'gpt-5.3-codex-spark-compact'
       }
     })
+  })
+
+  it('loads, edits and saves the Claude device profile and resets the client identity', async () => {
+    const account = buildAnthropicOAuthAccount('oauth')
+    account.credentials = { ...account.credentials, device_os: 'Linux', device_arch: 'x64' }
+    updateAccountMock.mockReset().mockResolvedValue(account)
+    checkMixedChannelRiskMock.mockReset().mockResolvedValue({ has_risk: false })
+    resetClientIdentityMock.mockReset().mockResolvedValue({ reset: true })
+
+    const wrapper = mountModal(account)
+    const section = wrapper.get('[data-testid="edit-claude-device-profile"]')
+    expect((section.get('[data-testid="device-profile-os"]').element as HTMLSelectElement).value).toBe('Linux')
+    expect((section.get('[data-testid="device-profile-arch"]').element as HTMLSelectElement).value).toBe('x64')
+    expect(wrapper.find('[data-testid="device-profile-reset-identity"]').exists()).toBe(false)
+
+    await section.get('[data-testid="device-profile-os"]').setValue('MacOS')
+    await section.get('[data-testid="device-profile-arch"]').setValue('arm64')
+    expect((wrapper.get('[data-testid="device-profile-reset-identity"]').element as HTMLInputElement).checked).toBe(true)
+
+    await wrapper.get('form#edit-account-form').trigger('submit.prevent')
+    await flushPromises()
+
+    const credentials = updateAccountMock.mock.calls[0]?.[1]?.credentials
+    expect(credentials).toMatchObject({
+      access_token: 'claude-access-token',
+      device_os: 'MacOS',
+      device_arch: 'arm64'
+    })
+    expect(credentials).not.toHaveProperty('user_agent')
+    expect(resetClientIdentityMock).toHaveBeenCalledWith(8)
+  })
+
+  it('clears the Claude device profile without resetting the identity when unchecked', async () => {
+    const account = buildAnthropicOAuthAccount('setup-token')
+    account.credentials = {
+      ...account.credentials,
+      user_agent: 'claude-cli/2.1.0 (external, cli)',
+      device_os: 'Windows',
+      device_arch: 'x64'
+    }
+    updateAccountMock.mockReset().mockResolvedValue(account)
+    checkMixedChannelRiskMock.mockReset().mockResolvedValue({ has_risk: false })
+    resetClientIdentityMock.mockReset().mockResolvedValue({ reset: true })
+
+    const wrapper = mountModal(account)
+    await wrapper.get('[data-testid="device-profile-clear"]').trigger('click')
+    await wrapper.get('[data-testid="device-profile-reset-identity"]').setValue(false)
+    await wrapper.get('form#edit-account-form').trigger('submit.prevent')
+    await flushPromises()
+
+    const credentials = updateAccountMock.mock.calls[0]?.[1]?.credentials
+    expect(credentials).not.toHaveProperty('user_agent')
+    expect(credentials).not.toHaveProperty('device_os')
+    expect(credentials).not.toHaveProperty('device_arch')
+    expect(resetClientIdentityMock).not.toHaveBeenCalled()
+  })
+
+  it('does not reset the Claude identity when the device profile is unchanged', async () => {
+    const account = buildAnthropicOAuthAccount('oauth')
+    account.credentials = { ...account.credentials, device_os: 'Linux', device_arch: 'x64' }
+    updateAccountMock.mockReset().mockResolvedValue(account)
+    checkMixedChannelRiskMock.mockReset().mockResolvedValue({ has_risk: false })
+    resetClientIdentityMock.mockReset()
+
+    const wrapper = mountModal(account)
+    await wrapper.get('form#edit-account-form').trigger('submit.prevent')
+    await flushPromises()
+
+    expect(updateAccountMock.mock.calls[0]?.[1]?.credentials).toMatchObject({ device_os: 'Linux', device_arch: 'x64' })
+    expect(resetClientIdentityMock).not.toHaveBeenCalled()
+  })
+
+  it('fills the Codex user agent from the randomizer and saves it', async () => {
+    const account = buildOpenAIOAuthParentAccount()
+    updateAccountMock.mockReset().mockResolvedValue(account)
+    checkMixedChannelRiskMock.mockReset().mockResolvedValue({ has_risk: false })
+    resetClientIdentityMock.mockReset()
+    randomDeviceProfileMock.mockReset().mockResolvedValue({
+      user_agent: 'codex-tui/0.147.0 (Mac OS 15.7.1; arm64) iTerm.app/3.6.5',
+      device_os: '',
+      device_arch: ''
+    })
+
+    const wrapper = mountModal(account)
+    const section = wrapper.get('[data-testid="edit-codex-device-profile"]')
+    expect(section.find('[data-testid="device-profile-os"]').exists()).toBe(false)
+
+    await section.get('[data-testid="device-profile-randomize"]').trigger('click')
+    await flushPromises()
+    expect(randomDeviceProfileMock).toHaveBeenCalledWith('openai')
+    expect((section.get('[data-testid="device-profile-user-agent"]').element as HTMLInputElement).value)
+      .toBe('codex-tui/0.147.0 (Mac OS 15.7.1; arm64) iTerm.app/3.6.5')
+
+    await wrapper.get('form#edit-account-form').trigger('submit.prevent')
+    await flushPromises()
+
+    const credentials = updateAccountMock.mock.calls[0]?.[1]?.credentials
+    expect(credentials?.user_agent).toBe('codex-tui/0.147.0 (Mac OS 15.7.1; arm64) iTerm.app/3.6.5')
+    expect(credentials).not.toHaveProperty('device_os')
+    expect(resetClientIdentityMock).not.toHaveBeenCalled()
+  })
+
+  it('hides the device profile editor for Spark shadow and API-key accounts', () => {
+    expect(mountModal(buildOpenAISparkShadowAccount()).find('[data-testid="device-profile-editor"]').exists()).toBe(false)
+    expect(mountModal(buildAccount()).find('[data-testid="device-profile-editor"]').exists()).toBe(false)
   })
 
   it('submits OpenAI APIKey Responses support override mode', async () => {

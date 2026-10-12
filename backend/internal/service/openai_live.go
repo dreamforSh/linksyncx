@@ -302,7 +302,7 @@ func (s *OpenAIGatewayService) createUpstreamLiveCall(
 	upstreamReq.Header.Set("Content-Type", "application/json")
 	upstreamReq.Header.Set("Accept", "application/sdp")
 	upstreamReq.Header.Set(liveAttestationHeader, attestation)
-	applyLiveUpstreamIdentityHeaders(upstreamReq.Header)
+	applyLiveUpstreamIdentityHeaders(upstreamReq.Header, s.codexIdentityOverrideUAForAccount(ctx, account))
 
 	proxyURL, proxyErr := resolveAccountProxyURL(account)
 	if proxyErr != nil {
@@ -404,10 +404,11 @@ func liveCallIDFromLocation(location string) (string, error) {
 	return callID, nil
 }
 
-func applyLiveUpstreamIdentityHeaders(headers http.Header) {
+// overrideUA 是账号级 User-Agent（设备画像），语义同 enforceCodexIdentityHeadersWithUA。
+func applyLiveUpstreamIdentityHeaders(headers http.Header, overrideUA string) {
 	headers.Set("OpenAI-Alpha", "quicksilver=v2")
 	ensureCodexIdentityHeaders(headers)
-	enforceCodexIdentityHeaders(headers)
+	enforceCodexIdentityHeadersWithUA(headers, overrideUA)
 	if strings.TrimSpace(headers.Get("session-id")) == "" {
 		headers.Set("session-id", uuid.NewString())
 	}
@@ -439,7 +440,7 @@ func (s *OpenAIGatewayService) liveSidebandHeaders(
 		return nil, err
 	}
 	headers.Set(liveAttestationHeader, attestation)
-	applyLiveUpstreamIdentityHeaders(headers)
+	applyLiveUpstreamIdentityHeaders(headers, s.codexIdentityOverrideUAForAccount(ctx, account))
 	return headers, nil
 }
 

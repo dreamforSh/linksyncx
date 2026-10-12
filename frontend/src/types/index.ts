@@ -2038,6 +2038,8 @@ export interface CodexSessionImportRequest {
   extra?: Record<string, unknown>
   update_existing?: boolean
   confirm_mixed_channel_risk?: boolean
+  /** Give every imported account its own random Codex device (User-Agent) */
+  randomize_device_profile?: boolean
 }
 
 export interface OpenAICodexPATCreateRequest {

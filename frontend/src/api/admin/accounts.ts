@@ -393,6 +393,80 @@ export async function resetClientIdentity(id: number): Promise<ResetClientIdenti
   return data
 }
 
+/** 账号设备画像：Claude 用 OS/架构（UA 可选），Codex 用完整 UA。 */
+export interface DeviceProfile {
+  user_agent: string
+  device_os: string
+  device_arch: string
+}
+
+export type DeviceProfilePlatform = 'anthropic' | 'openai'
+export type DeviceProfileBatchAction = 'randomize' | 'clear'
+
+export interface DeviceProfileBatchItem {
+  account_id: number
+  name?: string
+  platform?: string
+  status: 'updated' | 'skipped' | 'failed'
+  /** skipped: not_found / shadow / unsupported；failed: 错误信息 */
+  reason?: string
+  profile?: DeviceProfile
+  identity_reset?: boolean
+}
+
+export interface DeviceProfileBatchResult {
+  updated: number
+  skipped: number
+  failed: number
+  results: DeviceProfileBatchItem[]
+}
+
+/**
+ * Generate a random device profile for the platform (not persisted).
+ * @param platform - anthropic | openai
+ */
+export async function randomDeviceProfile(platform: DeviceProfilePlatform): Promise<DeviceProfile> {
+  const { data } = await apiClient.get<DeviceProfile>('/admin/accounts/device-profile/random', {
+    params: { platform }
+  })
+  return data
+}
+
+/**
+ * Generate `count` random device profiles that do not repeat within the set (not persisted).
+ * Used to give every account of a batch creation its own device.
+ * @param platform - anthropic | openai
+ * @param count - Number of profiles (1-1000)
+ */
+export async function randomDeviceProfiles(platform: DeviceProfilePlatform, count: number): Promise<DeviceProfile[]> {
+  const { data } = await apiClient.get<{ profiles: DeviceProfile[] }>('/admin/accounts/device-profile/random-set', {
+    params: { platform, count }
+  })
+  return data.profiles
+}
+
+/**
+ * Assign a distinct random device profile to each account, or clear the profiles.
+ * @param accountIds - Account IDs
+ * @param action - randomize | clear
+ * @param resetClientIdentity - Also reset the client identity of Claude accounts
+ */
+export async function batchDeviceProfile(
+  accountIds: number[],
+  action: DeviceProfileBatchAction,
+  resetClientIdentity: boolean
+): Promise<DeviceProfileBatchResult> {
+  const { data } = await apiClient.post<DeviceProfileBatchResult>(
+    '/admin/accounts/device-profile/batch',
+    {
+      account_ids: accountIds,
+      action,
+      reset_client_identity: resetClientIdentity
+    }
+  )
+  return data
+}
+
 /**
  * Get account usage information (5h/7d window)
  * @param id - Account ID
@@ -1238,6 +1312,9 @@ export const accountsAPI = {
   getStats,
   clearError,
   resetClientIdentity,
+  randomDeviceProfile,
+  randomDeviceProfiles,
+  batchDeviceProfile,
   getUsage,
   getBatchUsage,
   getTodayStats,

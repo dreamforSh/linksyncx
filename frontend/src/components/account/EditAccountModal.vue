@@ -2361,6 +2361,19 @@
         </div>
       </div>
 
+      <!-- 设备指纹（Codex OAuth / setup-token 非影子账号：账号级 User-Agent） -->
+      <div
+        v-if="account?.platform === 'openai' && deviceProfileEditable"
+        class="border-t border-gray-200 pt-4 dark:border-dark-600"
+        data-testid="edit-codex-device-profile"
+      >
+        <label class="input-label mb-0">{{ t('admin.accounts.deviceProfile.title') }}</label>
+        <p class="mb-3 mt-1 text-xs text-gray-500 dark:text-gray-400">
+          {{ t('admin.accounts.deviceProfile.codexHint') }}
+        </p>
+        <DeviceProfileEditor v-model="deviceProfile" platform="openai" />
+      </div>
+
       <!-- OpenAI 订阅档位手动覆盖（Plus/Pro/Free），仅 OAuth 非影子账号 -->
       <div
         v-if="account?.platform === 'openai' && account?.type === 'oauth' && !isSparkShadow"
@@ -2845,6 +2858,36 @@
           </div>
         </div>
 
+        <!-- 设备指纹（Claude：X-Stainless-OS / Arch，可选 UA 模板） -->
+        <div
+          v-if="deviceProfileEditable"
+          class="rounded-lg border border-gray-200 p-4 dark:border-dark-600"
+          data-testid="edit-claude-device-profile"
+        >
+          <label class="input-label mb-0">{{ t('admin.accounts.deviceProfile.title') }}</label>
+          <p class="mb-3 mt-1 text-xs text-gray-500 dark:text-gray-400">
+            {{ t('admin.accounts.deviceProfile.claudeHint') }}
+          </p>
+          <DeviceProfileEditor v-model="deviceProfile" platform="anthropic" />
+          <label
+            v-if="deviceProfileChanged"
+            class="mt-3 flex items-start gap-2 text-sm text-gray-700 dark:text-gray-300"
+          >
+            <input
+              v-model="deviceProfileResetIdentity"
+              type="checkbox"
+              class="mt-0.5 rounded border-gray-300 text-primary-600 focus:ring-primary-500 dark:border-dark-500"
+              data-testid="device-profile-reset-identity"
+            />
+            <span>
+              {{ t('admin.accounts.deviceProfile.resetIdentityAfterSave') }}
+              <span class="block text-xs text-gray-500 dark:text-gray-400">
+                {{ t('admin.accounts.deviceProfile.resetIdentityAfterSaveHint') }}
+              </span>
+            </span>
+          </label>
+        </div>
+
         <!-- TLS Fingerprint -->
         <div class="rounded-lg border border-gray-200 p-4 dark:border-dark-600">
           <div class="flex items-center justify-between">
@@ -3151,9 +3194,11 @@ import GrokBaseUrlPresets from '@/components/account/GrokBaseUrlPresets.vue'
 import CnBaseUrlPresets from '@/components/account/CnBaseUrlPresets.vue'
 import OpenCodeGoProtocolRulesEditor from '@/components/account/OpenCodeGoProtocolRulesEditor.vue'
 import HeaderOverrideEditor from '@/components/account/HeaderOverrideEditor.vue'
+import DeviceProfileEditor from '@/components/account/DeviceProfileEditor.vue'
 import OllamaCloudUsageSettings from '@/components/account/OllamaCloudUsageSettings.vue'
 import {
   applyAntigravityProjectID,
+  applyDeviceProfile,
   applyHeaderOverride,
   applyInterceptWarmup,
   applyOpenCodeGoProtocolRules,
@@ -3161,6 +3206,10 @@ import {
   buildPlanTypeOptions,
   cloneOpenCodeGoProtocolRules,
   defaultOpenCodeProtocolRules,
+  deviceProfilesEqual,
+  emptyDeviceProfile,
+  isDeviceProfileCapable,
+  readDeviceProfile,
   parseOpenCodeGoProtocolRules,
   readPlanType,
   resolveOpenCodeAccountMode,
@@ -3178,6 +3227,7 @@ import {
   type CnApiProtocol,
   type CnNativeApiProtocol,
   type CnProviderPlatform,
+  type DeviceProfileValue,
   type HeaderOverrideRow,
   type OpenCodeAccountMode,
   type OpenCodeGoProtocolRule
@@ -3569,6 +3619,11 @@ const selectedErrorCodes = ref<number[]>([])
 const customErrorCodeInput = ref<number | null>(null)
 const headerOverrideEnabled = ref(false)
 const headerOverrideRows = ref<HeaderOverrideRow[]>([])
+// 账号设备画像（Claude: OS / 架构 / UA 模板；Codex: UA）。initial 用于判断是否改动，
+// Claude 账号换设备后默认一并重置客户端身份（新 device_id）。
+const deviceProfile = ref<DeviceProfileValue>(emptyDeviceProfile())
+const initialDeviceProfile = ref<DeviceProfileValue>(emptyDeviceProfile())
+const deviceProfileResetIdentity = ref(true)
 
 const headerOverrideCapable = computed(
   () => !!props.account && isHeaderOverrideCapable(props.account.platform, props.account.type)
@@ -3940,6 +3995,12 @@ const isOpenAIModelRestrictionDisabled = computed(() =>
 const isAnthropicOAuthOrSetupToken = computed(() =>
   props.account?.platform === 'anthropic' &&
   (props.account?.type === 'oauth' || props.account?.type === 'setup-token')
+)
+const deviceProfileEditable = computed(() =>
+  !!props.account && isDeviceProfileCapable(props.account.platform, props.account.type, isSparkShadow.value)
+)
+const deviceProfileChanged = computed(() =>
+  deviceProfileEditable.value && !deviceProfilesEqual(deviceProfile.value, initialDeviceProfile.value)
 )
 const openAIResponsesStatusKey = computed(() => {
   if (openAIResponsesMode.value === 'force_responses') {
@@ -4357,6 +4418,17 @@ const syncFormFromAccount = (newAccount: Account | null) => {
       overrideCreds[HEADER_OVERRIDES_CREDENTIAL_KEY]
     )
   }
+
+  // Load device profile (Claude / Codex OAuth & setup-token, non-shadow)
+  deviceProfileResetIdentity.value = true
+  initialDeviceProfile.value = isDeviceProfileCapable(
+    newAccount.platform,
+    newAccount.type,
+    newAccount.parent_account_id != null
+  )
+    ? readDeviceProfile(newAccount.credentials as Record<string, unknown> | undefined, newAccount.platform)
+    : emptyDeviceProfile()
+  deviceProfile.value = { ...initialDeviceProfile.value }
 
   // Load Grok OAuth custom upstream URL state（存储的官方地址视同未定制）
   grokOAuthCustomBaseUrlEnabled.value = false
@@ -5116,12 +5188,26 @@ const persistGrokMediaEligibility = async (accountID: number, updatedAccount: Ac
   return updatedAccount
 }
 
+// Claude 账号换了设备画像：按勾选一并重置客户端身份（新 device_id），旧设备的会话不再沿用。
+// 账号已保存成功，重置失败只提示，不回滚保存。
+const resetIdentityAfterDeviceChange = async (accountID: number) => {
+  if (!isAnthropicOAuthOrSetupToken.value || !deviceProfileChanged.value || !deviceProfileResetIdentity.value) {
+    return
+  }
+  try {
+    await adminAPI.accounts.resetClientIdentity(accountID)
+  } catch (error) {
+    appStore.showError(extractApiErrorMessage(error, t('admin.accounts.deviceProfile.resetIdentityFailed')))
+  }
+}
+
 const submitUpdateAccount = async (accountID: number, updatePayload: Record<string, unknown>) => {
   submitting.value = true
   try {
     let updatedAccount = await adminAPI.accounts.update(accountID, withAntigravityConfirmFlag(updatePayload))
     updatedAccount = await persistGrokMediaEligibility(accountID, updatedAccount)
     appStore.showSuccess(t('admin.accounts.accountUpdated'))
+    await resetIdentityAfterDeviceChange(accountID)
     emit('updated', updatedAccount)
     handleClose()
   } catch (error: any) {
@@ -5541,6 +5627,13 @@ const handleSubmit = async () => {
       const currentCredentials = (updatePayload.credentials as Record<string, unknown>) ||
         ((props.account.credentials as Record<string, unknown>) || {})
       updatePayload.credentials = applyPlanType({ ...currentCredentials }, editPlanType.value)
+    }
+
+    // 设备画像：Claude / Codex 的 OAuth 与 setup-token 非影子账号（空值删除键，恢复默认指纹）
+    if (deviceProfileEditable.value) {
+      const currentCredentials = (updatePayload.credentials as Record<string, unknown>) ||
+        ((props.account.credentials as Record<string, unknown>) || {})
+      updatePayload.credentials = applyDeviceProfile({ ...currentCredentials }, deviceProfile.value, props.account.platform)
     }
 
     // Antigravity: persist model mapping to credentials (applies to all antigravity types)

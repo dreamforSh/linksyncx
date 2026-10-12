@@ -565,3 +565,93 @@ export function applyPlanType(
   }
   return credentials
 }
+
+// ---------------------------------------------------------------------------
+// 账号设备画像（device profile）：每个账号固定一台“设备”。
+// Claude OAuth/SetupToken：device_os / device_arch（X-Stainless-OS / Arch），user_agent 可选；
+// OpenAI OAuth/SetupToken：user_agent（Codex UA 的客户端名 / OS / 架构 / 终端段）。
+// 版本号由网关按生效版本重建，填写的版本不生效。
+// ---------------------------------------------------------------------------
+
+export const DEVICE_PROFILE_USER_AGENT_KEY = 'user_agent'
+export const DEVICE_PROFILE_OS_KEY = 'device_os'
+export const DEVICE_PROFILE_ARCH_KEY = 'device_arch'
+
+export const CLAUDE_DEVICE_OS_OPTIONS = ['MacOS', 'Linux', 'Windows'] as const
+export const CLAUDE_DEVICE_ARCH_OPTIONS = ['arm64', 'x64'] as const
+
+/** 与后端 claudeDeviceUserAgentPattern 保持一致 */
+export const CLAUDE_DEVICE_USER_AGENT_PATTERN = /^claude-cli\/\d+\.\d+\.\d+ \(external, [^()]+\)$/
+
+export interface DeviceProfileValue {
+  user_agent: string
+  device_os: string
+  device_arch: string
+}
+
+/**
+ * 添加账号时的设备指纹策略：default 沿用默认指纹；random 为每个新账号分配不同的随机设备；
+ * manual 固定为表单填写的设备（同批次账号共用）。
+ */
+export type DeviceProfileCreateMode = 'default' | 'random' | 'manual'
+
+export function isDeviceProfileCapable(platform: string, type: string, isShadow = false): boolean {
+  if (isShadow) return false
+  if (type !== 'oauth' && type !== 'setup-token') return false
+  return platform === 'anthropic' || platform === 'openai'
+}
+
+export function emptyDeviceProfile(): DeviceProfileValue {
+  return { user_agent: '', device_os: '', device_arch: '' }
+}
+
+function credentialString(credentials: Record<string, unknown> | undefined | null, key: string): string {
+  const value = credentials?.[key]
+  return typeof value === 'string' ? value.trim() : ''
+}
+
+export function readDeviceProfile(
+  credentials: Record<string, unknown> | undefined | null,
+  platform: string
+): DeviceProfileValue {
+  const profile = emptyDeviceProfile()
+  profile.user_agent = credentialString(credentials, DEVICE_PROFILE_USER_AGENT_KEY)
+  if (platform === 'anthropic') {
+    profile.device_os = credentialString(credentials, DEVICE_PROFILE_OS_KEY)
+    profile.device_arch = credentialString(credentials, DEVICE_PROFILE_ARCH_KEY)
+  }
+  return profile
+}
+
+export function deviceProfilesEqual(a: DeviceProfileValue, b: DeviceProfileValue): boolean {
+  return (
+    a.user_agent.trim() === b.user_agent.trim() &&
+    a.device_os.trim() === b.device_os.trim() &&
+    a.device_arch.trim() === b.device_arch.trim()
+  )
+}
+
+/**
+ * 把设备画像写入凭据：非空则设置，空则删除该键（恢复默认）。
+ * Codex 账号只写 user_agent。直接修改传入对象并返回。
+ */
+export function applyDeviceProfile(
+  credentials: Record<string, unknown>,
+  profile: DeviceProfileValue,
+  platform: string
+): Record<string, unknown> {
+  const setOrDelete = (key: string, value: string) => {
+    const trimmed = value.trim()
+    if (trimmed) {
+      credentials[key] = trimmed
+    } else {
+      delete credentials[key]
+    }
+  }
+  setOrDelete(DEVICE_PROFILE_USER_AGENT_KEY, profile.user_agent)
+  if (platform === 'anthropic') {
+    setOrDelete(DEVICE_PROFILE_OS_KEY, profile.device_os)
+    setOrDelete(DEVICE_PROFILE_ARCH_KEY, profile.device_arch)
+  }
+  return credentials
+}

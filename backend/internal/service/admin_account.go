@@ -515,6 +515,9 @@ func (s *adminServiceImpl) CreateAccount(ctx context.Context, input *CreateAccou
 	if err := NormalizeOpenCodeGoProtocolRulesCredentials(input.Credentials); err != nil {
 		return nil, err
 	}
+	if err := NormalizeDeviceProfileCredentials(input.Platform, input.Type, nil, input.Credentials); err != nil {
+		return nil, err
+	}
 	// Never persist ephemeral SSO/password secrets after OAuth conversion.
 	input.Credentials = SanitizeStoredCredentials(input.Platform, input.Credentials)
 
@@ -653,7 +656,12 @@ func (s *adminServiceImpl) UpdateAccount(ctx context.Context, id int64, input *U
 	} else if len(input.Credentials) > 0 {
 		// 敏感子键采用"incoming 没提供就保留"的合并语义：前端响应已脱敏，
 		// 全对象 PUT 编辑时不会再带回 token，避免覆盖时清空已有凭证。
+		previousCredentials := account.Credentials
 		account.Credentials = MergePreservingSensitiveCreds(account.Credentials, input.Credentials)
+		// 设备画像只校验本次改动的字段，存量值不阻断其它字段的保存
+		if err := NormalizeDeviceProfileCredentials(account.Platform, account.Type, previousCredentials, account.Credentials); err != nil {
+			return nil, err
+		}
 		// 校验并规范化请求头覆写配置（header 名小写化、格式检查）
 		if err := NormalizeHeaderOverrideCredentials(account.Credentials); err != nil {
 			return nil, err
@@ -1154,6 +1162,10 @@ func (s *adminServiceImpl) BulkUpdateAccounts(ctx context.Context, input *BulkUp
 		return nil, err
 	}
 	if err := NormalizeOpenCodeGoProtocolRulesCredentials(input.Credentials); err != nil {
+		return nil, err
+	}
+	// 批量可能混合平台：只做平台无关的设备画像校验
+	if err := NormalizeDeviceProfileCredentials("", "", nil, input.Credentials); err != nil {
 		return nil, err
 	}
 	// Bulk may mix platforms; always drop ephemeral SSO/password keys (cookie

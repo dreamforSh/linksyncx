@@ -1828,6 +1828,85 @@ func (h *AccountHandler) ResetClientIdentity(c *gin.Context) {
 	response.Success(c, ResetClientIdentityResponse{Reset: true, IdentityEpoch: fp.IdentityEpoch, DeviceIDPrefix: prefix})
 }
 
+// RandomDeviceProfile 为指定平台随机生成一份设备画像（不落库，供编辑表单填充）。
+// GET /api/v1/admin/accounts/device-profile/random?platform=anthropic|openai
+func (h *AccountHandler) RandomDeviceProfile(c *gin.Context) {
+	profile, err := service.GenerateDeviceProfile(strings.TrimSpace(c.Query("platform")))
+	if err != nil {
+		response.ErrorFrom(c, err)
+		return
+	}
+	response.Success(c, profile)
+}
+
+// RandomDeviceProfilesResponse 一组随机设备画像。
+type RandomDeviceProfilesResponse struct {
+	Profiles []service.DeviceProfile `json:"profiles"`
+}
+
+// RandomDeviceProfiles 一次生成 count 份尽量互不重复的设备画像（不落库），
+// 供「添加账号」批量创建时为每个账号分配不同设备。
+// GET /api/v1/admin/accounts/device-profile/random-set?platform=anthropic|openai&count=N
+func (h *AccountHandler) RandomDeviceProfiles(c *gin.Context) {
+	count, err := strconv.Atoi(strings.TrimSpace(c.DefaultQuery("count", "1")))
+	if err != nil {
+		response.BadRequest(c, "Invalid count")
+		return
+	}
+	profiles, err := service.GenerateDistinctDeviceProfiles(strings.TrimSpace(c.Query("platform")), count)
+	if err != nil {
+		response.ErrorFrom(c, err)
+		return
+	}
+	response.Success(c, RandomDeviceProfilesResponse{Profiles: profiles})
+}
+
+// BatchDeviceProfileRequest 批量设备画像请求。
+type BatchDeviceProfileRequest struct {
+	AccountIDs []int64 `json:"account_ids" binding:"required,min=1"`
+	Action     string  `json:"action" binding:"required,oneof=randomize clear"`
+	// ResetClientIdentity 同时重置 Claude 账号的客户端身份：换设备即换 device_id。
+	ResetClientIdentity bool `json:"reset_client_identity"`
+}
+
+// BatchDeviceProfile 为一批账号随机分配各不相同的设备画像，或清除画像。
+// POST /api/v1/admin/accounts/device-profile/batch
+func (h *AccountHandler) BatchDeviceProfile(c *gin.Context) {
+	var req BatchDeviceProfileRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		response.BadRequest(c, "Invalid request: "+err.Error())
+		return
+	}
+	ctx := c.Request.Context()
+	result, err := h.adminService.BatchUpdateDeviceProfiles(ctx, &service.DeviceProfileBatchInput{
+		AccountIDs: req.AccountIDs,
+		Action:     req.Action,
+	})
+	if err != nil {
+		response.ErrorFrom(c, err)
+		return
+	}
+	if req.ResetClientIdentity && h.identityService != nil {
+		for i := range result.Results {
+			item := &result.Results[i]
+			if item.Status != service.DeviceProfileBatchStatusUpdated || item.Platform != service.PlatformAnthropic {
+				continue
+			}
+			account, getErr := h.adminService.GetAccount(ctx, item.AccountID)
+			if getErr != nil || account == nil || !account.IsAnthropicOAuthOrSetupToken() {
+				continue
+			}
+			fp, resetErr := h.identityService.ResetClientIdentity(ctx, account)
+			if resetErr != nil {
+				slog.Warn("device_profile_batch_identity_reset_failed", "account_id", item.AccountID, "error", resetErr)
+				continue
+			}
+			item.IdentityReset = fp != nil
+		}
+	}
+	response.Success(c, result)
+}
+
 // ClearError handles clearing account error
 // POST /api/v1/admin/accounts/:id/clear-error
 func (h *AccountHandler) ClearError(c *gin.Context) {

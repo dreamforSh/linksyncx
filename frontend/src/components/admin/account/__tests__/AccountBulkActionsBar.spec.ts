@@ -47,4 +47,18 @@ describe('AccountBulkActionsBar', () => {
     await button!.trigger('click')
     expect(wrapper.emitted('probe-upstream-billing')).toHaveLength(1)
   })
+
+  it('opens the bulk device profile dialog', async () => {
+    const wrapper = mount(AccountBulkActionsBar, {
+      props: {
+        selectedIds: [1, 2],
+        totalResults: 45,
+        selectingAll: false,
+        allResultsSelected: false
+      }
+    })
+
+    await wrapper.get('[data-testid="bulk-device-profile"]').trigger('click')
+    expect(wrapper.emitted('device-profile')).toHaveLength(1)
+  })
 })

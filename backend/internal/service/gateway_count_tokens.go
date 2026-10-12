@@ -636,6 +636,11 @@ func (s *GatewayService) buildCountTokensRequest(ctx context.Context, c *gin.Con
 		deleteHeaderAllForms(req.Header, "x-stainless-timeout")
 	}
 
+	// 账号级设备画像：同 messages 路径，在指纹与 mimic 头之后覆盖。
+	if tokenType == "oauth" {
+		applyClaudeDeviceProfileHeaders(req.Header, account)
+	}
+
 	// Accept-Encoding：同 messages 路径，对齐真实客户端的恒定默认值。
 	if getHeaderRaw(req.Header, "Accept-Encoding") == "" {
 		setHeaderRaw(req.Header, "Accept-Encoding", "gzip, deflate, br, zstd")

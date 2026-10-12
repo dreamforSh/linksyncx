@@ -962,6 +962,8 @@ func (s *AccountTestService) buildAnthropicUpstreamModelsRequest(ctx context.Con
 		// extra/default 行为。
 		setAnthropicAPIKeyAuthHeader(req.Header, account, apiKeyAuthToken, normalizedBaseURL)
 	}
+	// 账号级设备画像（仅 OAuth / setup-token 生效）：与真实转发呈现同一台设备
+	applyClaudeDeviceProfileHeaders(req.Header, account)
 	// 账号级请求头覆写：模型列表探测与真实转发保持一致的最终头
 	account.ApplyHeaderOverrides(req.Header)
 	return req, nil

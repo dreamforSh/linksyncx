@@ -5,6 +5,7 @@ import {
   HEADER_OVERRIDES_CREDENTIAL_KEY,
   OPENCODE_GO_PROTOCOL_RULES_KEY,
   applyAntigravityProjectID,
+  applyDeviceProfile,
   applyHeaderOverride,
   applyInterceptWarmup,
   applyOpenCodeGoProtocolRules,
@@ -15,7 +16,11 @@ import {
   cnQuotaCellVisible,
   defaultCNBaseUrl,
   defaultOpenCodeProtocolRules,
+  deviceProfilesEqual,
+  emptyDeviceProfile,
   isCustomGrokBaseUrl,
+  isDeviceProfileCapable,
+  readDeviceProfile,
   resolveOpenCodeAccountMode,
   isHeaderOverrideCapable,
   GROK_BASE_URL_PRESETS,
@@ -572,5 +577,44 @@ describe('plan_type helpers', () => {
       expect(out).toEqual({ email: 'a@b.c' })
       expect('plan_type' in out).toBe(false)
     })
+  })
+})
+
+describe('device profile credentials', () => {
+  it('limits the editor to Claude / Codex OAuth and setup-token accounts that are not shadows', () => {
+    expect(isDeviceProfileCapable('anthropic', 'oauth')).toBe(true)
+    expect(isDeviceProfileCapable('anthropic', 'setup-token')).toBe(true)
+    expect(isDeviceProfileCapable('openai', 'oauth')).toBe(true)
+    expect(isDeviceProfileCapable('openai', 'oauth', true)).toBe(false)
+    expect(isDeviceProfileCapable('anthropic', 'apikey')).toBe(false)
+    expect(isDeviceProfileCapable('grok', 'oauth')).toBe(false)
+  })
+
+  it('reads OS / arch only for Claude and ignores non-string values', () => {
+    const credentials = { user_agent: ' codex-tui/1.0.0 (Mac OS 15.7.1; arm64) iTerm.app/3.6.5 ', device_os: 'Linux', device_arch: 7 }
+    expect(readDeviceProfile(credentials, 'anthropic')).toEqual({
+      user_agent: 'codex-tui/1.0.0 (Mac OS 15.7.1; arm64) iTerm.app/3.6.5',
+      device_os: 'Linux',
+      device_arch: ''
+    })
+    expect(readDeviceProfile(credentials, 'openai').device_os).toBe('')
+    expect(readDeviceProfile(undefined, 'openai')).toEqual(emptyDeviceProfile())
+  })
+
+  it('sets non-empty values and deletes cleared keys', () => {
+    const credentials: Record<string, unknown> = { access_token: 't', user_agent: 'old', device_os: 'Windows', device_arch: 'x64' }
+    applyDeviceProfile(credentials, { user_agent: '', device_os: ' MacOS ', device_arch: '' }, 'anthropic')
+    expect(credentials).toEqual({ access_token: 't', device_os: 'MacOS' })
+  })
+
+  it('only writes the user agent for Codex accounts', () => {
+    const credentials: Record<string, unknown> = { device_os: 'Linux' }
+    applyDeviceProfile(credentials, { user_agent: 'codex-tui/1.0.0 (Ubuntu 24.4.0; x86_64) xterm-256color', device_os: 'MacOS', device_arch: 'arm64' }, 'openai')
+    expect(credentials).toEqual({ device_os: 'Linux', user_agent: 'codex-tui/1.0.0 (Ubuntu 24.4.0; x86_64) xterm-256color' })
+  })
+
+  it('compares profiles ignoring surrounding whitespace', () => {
+    expect(deviceProfilesEqual({ user_agent: ' a ', device_os: 'Linux', device_arch: '' }, { user_agent: 'a', device_os: 'Linux ', device_arch: '' })).toBe(true)
+    expect(deviceProfilesEqual(emptyDeviceProfile(), { ...emptyDeviceProfile(), device_arch: 'x64' })).toBe(false)
   })
 })

@@ -580,6 +580,8 @@ func (s *AccountTestService) testClaudeAccountConnection(c *gin.Context, account
 	if account.IsOAuth() {
 		req.Header.Set("anthropic-beta", claude.DefaultBetaHeader)
 		req.Header.Set("Authorization", "Bearer "+authToken)
+		// 账号级设备画像：测试请求与真实转发呈现同一台设备
+		applyClaudeDeviceProfileHeaders(req.Header, account)
 	} else {
 		req.Header.Set("anthropic-beta", claude.APIKeyBetaHeader)
 		// Ollama Cloud Anthropic 兼容端点按实际 base_url 强制 Bearer，

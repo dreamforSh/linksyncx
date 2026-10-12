@@ -155,7 +155,7 @@ func (s *OpenAIGatewayService) ResolvePluginOutboundIdentity(ctx context.Context
 		return nil, err
 	}
 	ensureCodexIdentityHeaders(headers)
-	enforceCodexIdentityHeaders(headers)
+	enforceCodexIdentityHeadersWithUA(headers, s.codexIdentityOverrideUAForAccount(ctx, account))
 	proxyURL, err := resolveAccountProxyURL(account)
 	if err != nil {
 		return nil, err
