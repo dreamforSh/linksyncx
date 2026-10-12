@@ -45,6 +45,7 @@ export const buildOpenAIUsageRefreshKey = (account: Pick<Account, 'id' | 'platfo
     extra.codex_5h_reset_at,
     extra.codex_5h_reset_after_seconds,
     extra.codex_5h_window_minutes,
+    extra.codex_5h_window_absent,
     extra.codex_7d_used_percent,
     extra.codex_7d_reset_at,
     extra.codex_7d_reset_after_seconds,

@@ -219,6 +219,32 @@ func (s *OpenAICodexUsageSnapshot) Normalize() *NormalizedCodexLimits {
 	return result
 }
 
+// hasPrimarySlot / hasSecondarySlot 报告快照里是否出现了对应限额槽位的任意字段。
+func (s *OpenAICodexUsageSnapshot) hasPrimarySlot() bool {
+	return s.PrimaryUsedPercent != nil || s.PrimaryResetAfterSeconds != nil || s.PrimaryWindowMinutes != nil
+}
+
+func (s *OpenAICodexUsageSnapshot) hasSecondarySlot() bool {
+	return s.SecondaryUsedPercent != nil || s.SecondaryResetAfterSeconds != nil || s.SecondaryWindowMinutes != nil
+}
+
+// LacksFiveHourWindow 报告快照是否明确表明账号没有 5h 窗口：只有一个限额槽位，且它的窗口长于 6h。
+// Pro 及部分 Plus 账号上游只给周窗口。缺 window_minutes 的旧格式无法判断，返回 false。
+func (s *OpenAICodexUsageSnapshot) LacksFiveHourWindow() bool {
+	if s == nil {
+		return false
+	}
+	hasPrimary, hasSecondary := s.hasPrimarySlot(), s.hasSecondarySlot()
+	switch {
+	case hasPrimary && !hasSecondary:
+		return s.PrimaryWindowMinutes != nil && *s.PrimaryWindowMinutes > 360
+	case hasSecondary && !hasPrimary:
+		return s.SecondaryWindowMinutes != nil && *s.SecondaryWindowMinutes > 360
+	default:
+		return false
+	}
+}
+
 // OpenAIUsage represents OpenAI API response usage
 type OpenAIUsage struct {
 	InputTokens              int `json:"input_tokens"`

@@ -970,6 +970,8 @@ export default {
       fiveHour: '5 hours',
       sevenDay: '7 days',
       noData: 'No data',
+      noLimit: 'No limit',
+      noFiveHourLimitHint: 'This account has no 5-hour limit (Pro and some Plus plans); only the 7-day quota applies',
       unavailable: 'Limit data for this account is not available yet.',
       resetsIn: 'Resets in {time}',
       rateLimited: 'Rate limited',

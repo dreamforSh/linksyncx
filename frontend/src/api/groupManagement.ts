@@ -141,6 +141,8 @@ export interface GroupAccountUsage {
   rate_limited: boolean
   rate_limit_reset_at?: string
   five_hour?: GroupAccountWindow
+  /** 上游没有 5 小时窗口（Pro 及部分 Plus 账号） */
+  five_hour_absent?: boolean
   seven_day?: GroupAccountWindow
   usage_updated_at?: string
   usage_unavailable: boolean

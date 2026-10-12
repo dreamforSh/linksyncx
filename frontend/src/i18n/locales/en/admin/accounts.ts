@@ -1017,6 +1017,7 @@ export default {
       autoPauseOnExpired: 'Auto Pause On Expired',
       autoPauseOnExpiredDesc: 'When enabled, the account will auto pause scheduling after it expires',
 	  autoPause5hThreshold: '5h Usage Threshold (%)',
+	  autoPause5hWindowAbsent: 'Upstream reports no 5-hour window for this account (Pro and some Plus plans), so the 5h auto-pause settings currently have no effect.',
 	  autoPause7dThreshold: '7d Usage Threshold (%)',
 	  autoPauseThresholdHint: 'Leave empty or set 0 to use the global default threshold (configured in Ops settings); set a value to override the global default. Reaching the threshold only skips the account during scheduling and does not modify schedulable.',
 	  autoPause5hDisabled: 'Disable 5h auto-pause',
@@ -1676,6 +1677,8 @@ export default {
       usageWindow: {
         statsTitle: '5-Hour Window Usage Statistics',
         statsTitleDaily: 'Daily Usage Statistics',
+        noFiveHourLimit: 'No limit',
+        noFiveHourLimitTooltip: 'Upstream reports no 5-hour window (Pro and some Plus plans have no 5-hour limit); only the 7-day quota applies',
         geminiProDaily: 'Pro',
         geminiFlashDaily: 'Flash',
         gemini3Pro: 'G3P',

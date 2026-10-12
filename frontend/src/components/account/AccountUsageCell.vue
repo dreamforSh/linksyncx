@@ -166,8 +166,22 @@
     <!-- OpenAI OAuth accounts: single source from /usage API -->
     <template v-else-if="account.platform === 'openai' && account.type === 'oauth'">
       <div v-if="hasOpenAIUsageFallback" class="space-y-1">
+        <!-- Pro 及部分 Plus 账号上游没有 5h 窗口：明确标注，而不是显示一条恒为 0% 的进度条 -->
+        <div
+          v-if="usageInfo?.five_hour_window_absent"
+          class="flex items-center gap-1"
+          data-testid="openai-5h-absent"
+          :title="t('admin.accounts.usageWindow.noFiveHourLimitTooltip')"
+        >
+          <span class="w-[32px] shrink-0 rounded bg-gray-100 px-1 text-center text-[10px] font-medium text-gray-500 dark:bg-gray-800 dark:text-gray-400">
+            5h
+          </span>
+          <span class="text-[10px] text-gray-500 dark:text-gray-400">
+            {{ t('admin.accounts.usageWindow.noFiveHourLimit') }}
+          </span>
+        </div>
         <UsageProgressBar
-          v-if="usageInfo?.five_hour"
+          v-else-if="usageInfo?.five_hour"
           label="5h"
           :utilization="usageInfo.five_hour.utilization"
           :resets-at="usageInfo.five_hour.resets_at"

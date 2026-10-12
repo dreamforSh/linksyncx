@@ -89,6 +89,7 @@ type GroupAccountUsage struct {
 	RateLimited      bool                      `json:"rate_limited"`
 	RateLimitResetAt *time.Time                `json:"rate_limit_reset_at,omitempty"`
 	FiveHour         *GroupAccountWindow       `json:"five_hour,omitempty"`
+	FiveHourAbsent   bool                      `json:"five_hour_absent,omitempty"` // 上游没有 5h 窗口（Pro 及部分 Plus）
 	SevenDay         *GroupAccountWindow       `json:"seven_day,omitempty"`
 	UsageUpdatedAt   *time.Time                `json:"usage_updated_at,omitempty"`
 	UsageUnavailable bool                      `json:"usage_unavailable"`
@@ -241,6 +242,7 @@ func groupAccountUsageView(account *Account, usage *UsageInfo, assignedUsers int
 		item.UsageUnavailable = true
 	} else {
 		item.FiveHour = groupAccountWindowFrom(usage.FiveHour, now)
+		item.FiveHourAbsent = usage.FiveHourWindowAbsent
 		item.SevenDay = groupAccountWindowFrom(usage.SevenDay, now)
 		item.UsageUpdatedAt = usage.UpdatedAt
 		if item.FiveHour == nil && item.SevenDay == nil {

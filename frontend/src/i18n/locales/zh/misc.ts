@@ -994,6 +994,8 @@ export default {
       fiveHour: '5 小时',
       sevenDay: '7 天',
       noData: '暂无数据',
+      noLimit: '无限额',
+      noFiveHourLimitHint: '该账号没有 5 小时限额（Pro 及部分 Plus 账号），只受 7 天额度限制',
       unavailable: '暂时获取不到该账号的限额数据。',
       resetsIn: '{time} 后重置',
       rateLimited: '限流中',

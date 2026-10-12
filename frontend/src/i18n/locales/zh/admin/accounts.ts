@@ -537,6 +537,8 @@ export default {
       usageWindow: {
         statsTitle: '5小时窗口用量统计',
         statsTitleDaily: '每日用量统计',
+        noFiveHourLimit: '无限额',
+        noFiveHourLimitTooltip: '上游没有返回 5 小时窗口（Pro 及部分 Plus 账号没有 5 小时限额），只受 7 天额度限制',
         geminiProDaily: 'Pro',
         geminiFlashDaily: 'Flash',
         gemini3Pro: 'G3P',
@@ -1192,6 +1194,7 @@ export default {
       autoPauseOnExpired: '过期自动暂停调度',
       autoPauseOnExpiredDesc: '启用后，账号过期将自动暂停调度',
 	  autoPause5hThreshold: '5h 用量阈值(%)',
+	  autoPause5hWindowAbsent: '该账号上游没有 5 小时窗口（Pro 及部分 Plus 账号），5h 自动暂停设置目前不会生效。',
 	  autoPause7dThreshold: '7d 用量阈值(%)',
 	  autoPauseThresholdHint: '留空或填 0 表示使用全局默认阈值（在运维设置中配置）；填具体值则覆盖全局默认。达到阈值后仅在调度时跳过账号，不修改 schedulable。',
 	  autoPause5hDisabled: '禁用 5h 自动暂停',

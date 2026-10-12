@@ -1110,8 +1110,54 @@ func buildCodexUsageExtraUpdates(snapshot *OpenAICodexUsageSnapshot, fallbackNow
 			updates["codex_7d_reset_at"] = *reset7dAt
 		}
 	}
+	applyCodexFiveHourWindowPresence(updates, snapshot)
+	if snapshot.LacksFiveHourWindow() {
+		// 缺席槽位的旧原始字段也要清掉：调度在规范字段缺失时会回退到原始字段重新归一化。
+		absentSlot := "codex_secondary_"
+		if !snapshot.hasPrimarySlot() {
+			absentSlot = "codex_primary_"
+		}
+		for _, suffix := range []string{"used_percent", "reset_after_seconds", "window_minutes"} {
+			updates[absentSlot+suffix] = nil
+		}
+		updates["codex_primary_over_secondary_percent"] = nil
+	}
 
 	return updates
+}
+
+// codexFiveHourWindowAbsentKey 标记最近一次快照明确没有 5h 窗口（Pro 及部分 Plus 账号只有周限额）。
+const codexFiveHourWindowAbsentKey = "codex_5h_window_absent"
+
+var codexFiveHourExtraKeys = []string{
+	"codex_5h_used_percent",
+	"codex_5h_reset_after_seconds",
+	"codex_5h_window_minutes",
+	"codex_5h_reset_at",
+}
+
+// applyCodexFiveHourWindowPresence 记录快照里 5h 窗口的有无。明确没有时把旧的 5h 字段置空，
+// 免得账号换档前留下的 5h 数据继续显示或参与调度；旧格式无法判断时不改标记。
+func applyCodexFiveHourWindowPresence(updates map[string]any, snapshot *OpenAICodexUsageSnapshot) {
+	if updates == nil || snapshot == nil {
+		return
+	}
+	if snapshot.LacksFiveHourWindow() {
+		for _, key := range codexFiveHourExtraKeys {
+			updates[key] = nil
+		}
+		updates[codexFiveHourWindowAbsentKey] = true
+		return
+	}
+	if _, ok := updates["codex_5h_used_percent"]; ok {
+		updates[codexFiveHourWindowAbsentKey] = false
+	}
+}
+
+// codexFiveHourWindowAbsent 读取账号最近一次快照是否明确没有 5h 窗口。
+func codexFiveHourWindowAbsent(extra map[string]any) bool {
+	absent, _ := extra[codexFiveHourWindowAbsentKey].(bool)
+	return absent
 }
 
 // updateCodexUsageSnapshot saves the Codex usage snapshot to account's Extra field

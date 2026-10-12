@@ -1060,6 +1060,50 @@ describe('AccountUsageCell', () => {
   expect(wrapper.text()).toContain('7d|100|106540000')
   })
 
+  it('OpenAI OAuth 上游没有 5h 窗口时显示「无限额」而不是 0% 进度条', async () => {
+    getUsage.mockResolvedValue({
+      five_hour: null,
+      five_hour_window_absent: true,
+      seven_day: {
+        utilization: 42,
+        resets_at: '2099-03-13T12:00:00Z',
+        remaining_seconds: 3600
+      }
+    })
+
+    const wrapper = mount(AccountUsageCell, {
+      props: {
+        account: makeAccount({
+          id: 2005,
+          platform: 'openai',
+          type: 'oauth',
+          extra: {
+            codex_5h_window_absent: true,
+            codex_7d_used_percent: 42
+          }
+        })
+      },
+      global: {
+        stubs: {
+          UsageProgressBar: {
+            props: ['label', 'utilization'],
+            template: '<div class="usage-bar">{{ label }}|{{ utilization }}</div>'
+          },
+          OpenAIQuotaResetCell: true
+        }
+      }
+    })
+
+    await flushPromises()
+
+    const absent = wrapper.get('[data-testid="openai-5h-absent"]')
+    expect(absent.text()).toContain('5h')
+    expect(absent.text()).toContain('admin.accounts.usageWindow.noFiveHourLimit')
+    expect(absent.attributes('title')).toBe('admin.accounts.usageWindow.noFiveHourLimitTooltip')
+    const bars = wrapper.findAll('.usage-bar').map((bar) => bar.text())
+    expect(bars).toEqual(['7d|42'])
+  })
+
   it('Key 账号会展示 today stats 徽章并带 A/U 提示', async () => {
 		const wrapper = mount(AccountUsageCell, {
 		  props: {

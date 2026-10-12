@@ -3,6 +3,7 @@
     <div class="flex items-baseline justify-between gap-2 text-xs">
       <span class="font-medium text-gray-600 dark:text-dark-300">{{ label }}</span>
       <span v-if="window" class="font-semibold tabular-nums" :class="toneText">{{ percentLabel }}</span>
+      <span v-else-if="absent" class="text-gray-500 dark:text-dark-400" :title="absentHint">{{ t('groupManagement.accountUsage.noLimit') }}</span>
       <span v-else class="text-gray-400 dark:text-dark-500">{{ t('groupManagement.accountUsage.noData') }}</span>
     </div>
     <div
@@ -12,7 +13,7 @@
       aria-valuemin="0"
       aria-valuemax="100"
       :aria-valuenow="window ? Math.min(Math.round(window.utilization), 100) : undefined"
-      :aria-valuetext="window ? percentLabel : t('groupManagement.accountUsage.noData')"
+      :aria-valuetext="window ? percentLabel : emptyLabel"
     >
       <div
         v-if="window"
@@ -35,10 +36,14 @@ import { quotaTone } from './helpers'
 const props = defineProps<{
   label: string
   window?: GroupAccountWindow | null
+  /** 上游没有该窗口（如 Pro 账号没有 5 小时限额），区别于「暂无数据」 */
+  absent?: boolean
+  absentHint?: string
 }>()
 
 const { t } = useI18n()
 
+const emptyLabel = computed(() => t(props.absent ? 'groupManagement.accountUsage.noLimit' : 'groupManagement.accountUsage.noData'))
 const utilization = computed(() => Math.max(props.window?.utilization ?? 0, 0))
 const percentLabel = computed(() => `${Math.round(utilization.value)}%`)
 const barWidth = computed(() => utilization.value > 0 ? Math.min(Math.max(utilization.value, 2), 100) : 0)

@@ -711,6 +711,7 @@ func buildCodexSparkWindowExtraUpdates(usage *OpenAIQuotaUsage, now time.Time) m
 	if r := codexResetAtRFC3339(now, normalized.Reset7dSeconds); r != nil {
 		updates["codex_7d_reset_at"] = *r
 	}
+	applyCodexFiveHourWindowPresence(updates, snap)
 	if len(updates) == 0 {
 		return nil
 	}

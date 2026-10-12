@@ -2482,6 +2482,13 @@
         v-if="account?.platform === 'openai'"
         class="border-t border-gray-200 pt-4 dark:border-dark-600 space-y-4"
       >
+        <p
+          v-if="account?.extra?.codex_5h_window_absent === true"
+          class="text-xs text-amber-600 dark:text-amber-400"
+          data-testid="auto-pause-5h-window-absent"
+        >
+          {{ t('admin.accounts.autoPause5hWindowAbsent') }}
+        </p>
         <div class="space-y-2">
           <div class="flex items-center justify-between">
             <label class="input-label mb-0">{{ t('admin.accounts.autoPause5hDisabled') }}</label>

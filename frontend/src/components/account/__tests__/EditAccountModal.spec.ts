@@ -1530,6 +1530,16 @@ describe('EditAccountModal', () => {
 	  expect(updateAccountMock.mock.calls[0]?.[1]?.extra?.auto_pause_7d_threshold).toBe(0.96)
 	})
 
+	it('warns that 5h auto-pause has no effect when upstream has no 5h window', async () => {
+	  const plain = mountModal(buildAccount())
+	  expect(plain.find('[data-testid="auto-pause-5h-window-absent"]').exists()).toBe(false)
+
+	  const account = buildAccount()
+	  account.extra = { codex_5h_window_absent: true }
+	  const wrapper = mountModal(account)
+	  expect(wrapper.get('[data-testid="auto-pause-5h-window-absent"]').text()).toBe('admin.accounts.autoPause5hWindowAbsent')
+	})
+
 	it('submits OpenAI quota auto-pause disable flag in extra', async () => {
 	  // Toggling the per-account disable flag must persist as auto_pause_5h_disabled
 	  // so an admin can exempt one account from auto-pause even when a global default

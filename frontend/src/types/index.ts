@@ -1711,6 +1711,8 @@ export interface AccountUsageInfo {
   source?: 'passive' | 'active'
   updated_at: string | null
   five_hour: UsageProgress | null
+  /** Codex 上游明确没有 5h 窗口（Pro 及部分 Plus 账号只有周限额），此时 five_hour 为 null */
+  five_hour_window_absent?: boolean
   seven_day: UsageProgress | null
   seven_day_sonnet: UsageProgress | null
   seven_day_fable?: UsageProgress | null
@@ -1846,6 +1848,7 @@ export interface CodexUsageSnapshot {
   codex_7d_reset_after_seconds?: number // Seconds until 7d window reset
   codex_7d_reset_at?: string // 7-day window absolute reset time (RFC3339)
   codex_7d_window_minutes?: number // 7d window in minutes (should be ~10080)
+  codex_5h_window_absent?: boolean // Latest snapshot has no 5h window (Pro / some Plus plans)
 
   codex_usage_updated_at?: string // Last update timestamp
 }

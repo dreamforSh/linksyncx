@@ -19,7 +19,12 @@
     </header>
 
     <div class="mt-4 grid gap-3 sm:grid-cols-2">
-      <UtilizationBar :label="t('groupManagement.accountUsage.fiveHour')" :window="usage.five_hour" />
+      <UtilizationBar
+        :label="t('groupManagement.accountUsage.fiveHour')"
+        :window="usage.five_hour"
+        :absent="usage.five_hour_absent"
+        :absent-hint="t('groupManagement.accountUsage.noFiveHourLimitHint')"
+      />
       <UtilizationBar :label="t('groupManagement.accountUsage.sevenDay')" :window="usage.seven_day" />
     </div>
     <p v-if="usage.usage_unavailable" class="mt-2 text-xs text-gray-500 dark:text-dark-400">
