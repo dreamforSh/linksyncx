@@ -730,6 +730,17 @@ describe('CreateAccountModal OpenAI long-context billing', () => {
       base_url: 'https://relay.example',
       api_key: 'sk-upstream',
     })
+    const vm = wrapper.vm as unknown as { form: { proxy_id: number | null } }
+    vm.form.proxy_id = 15
+    await button.trigger('click')
+    await flushPromises()
+    expect(syncUpstreamModelsPreviewMock).toHaveBeenLastCalledWith({
+      platform: 'antigravity',
+      type: 'apikey',
+      base_url: 'https://relay.example',
+      api_key: 'sk-upstream',
+      proxy_id: 15,
+    })
     const values = (placeholder: string) =>
       wrapper
         .findAll('input')

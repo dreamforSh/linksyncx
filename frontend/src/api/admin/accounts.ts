@@ -744,6 +744,7 @@ export interface SyncUpstreamPreviewParams {
   base_url?: string
   api_key: string
   model_mapping?: Record<string, string>
+  proxy_id?: number
 }
 
 /**

@@ -13,6 +13,12 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+func resetAntigravityModelsCache() {
+	antigravityModelsCache.mu.Lock()
+	antigravityModelsCache.items = map[string]antigravityModelsCacheEntry{}
+	antigravityModelsCache.mu.Unlock()
+}
+
 func TestFetchAntigravityAccountModels_ProjectsAliasesAndSkipsUnmapped(t *testing.T) {
 	resetAntigravityModelsCache()
 	t.Cleanup(resetAntigravityModelsCache)
@@ -47,7 +53,8 @@ func TestFetchAntigravityAccountModels_ProjectsAliasesAndSkipsUnmapped(t *testin
 	require.NotContains(t, byID, "unmapped-model")
 	require.NotContains(t, byID, "claude-*")
 	require.Equal(t, "public-opus", byID["public-opus"].DisplayName)
-	require.Equal(t, "Gemini 3 Flash", byID["gemini-3-flash"].DisplayName)
+	require.NotContains(t, byID, "gemini-3-flash")
+	require.Equal(t, "Opus 4.8", byID["claude-opus-4-8"].DisplayName)
 }
 
 func TestFetchAntigravityAccountModels_ErrorFallsBackAndIsNotCached(t *testing.T) {
@@ -71,13 +78,11 @@ func TestFetchAntigravityAccountModels_ErrorFallsBackAndIsNotCached(t *testing.T
 	second, err := svc.FetchAntigravityAccountModels(context.Background(), account)
 	require.NoError(t, err)
 	require.Equal(t, 2, int(calls.Load()))
-	require.NotEmpty(t, second)
-	require.Less(t, len(second), len(first))
-	for _, model := range second {
-		target, matched := account.ResolveMappedModel(model.ID)
-		require.True(t, matched)
-		require.Equal(t, "claude-sonnet-4-6", target)
-	}
+	require.Equal(t, []antigravity.ClaudeModel{{
+		ID:          "claude-sonnet-4-6",
+		Type:        "model",
+		DisplayName: "Sonnet",
+	}}, second)
 }
 
 func TestFetchAntigravityAccountModels_EmptyProjectionStaysEmptyAndIsCached(t *testing.T) {

@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/Wei-Shaw/sub2api/internal/config"
+	"github.com/Wei-Shaw/sub2api/internal/pkg/tlsfingerprint"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/xai"
 	"github.com/stretchr/testify/require"
 )
@@ -1185,4 +1186,98 @@ func TestMatchModelsDevProviderOfficialHostsWithoutAPI(t *testing.T) {
 		Reasoning: new(bool), InputModalities: []string{"text"}, ContextWindow: 1050000,
 	}}
 	require.False(t, upstreamCatalogNeedsRegistry(capabilitySyncModelIDs([]string{"gpt-6-astra", "gpt-image-2"}), metadata))
+}
+
+type recordingAntigravityModelsUpstream struct {
+	req      *http.Request
+	proxyURL string
+	calls    int
+}
+
+func (u *recordingAntigravityModelsUpstream) Do(req *http.Request, proxyURL string, accountID int64, accountConcurrency int) (*http.Response, error) {
+	u.calls++
+	u.req = req
+	u.proxyURL = proxyURL
+	return &http.Response{
+		StatusCode: http.StatusOK,
+		Body:       io.NopCloser(strings.NewReader(`{"data":[{"id":"claude-opus-4-8","display_name":"Opus"}]}`)),
+		Header:     make(http.Header),
+	}, nil
+}
+
+func (u *recordingAntigravityModelsUpstream) DoWithTLS(req *http.Request, proxyURL string, accountID int64, accountConcurrency int, profile *tlsfingerprint.Profile) (*http.Response, error) {
+	return u.Do(req, proxyURL, accountID, accountConcurrency)
+}
+
+func TestBuildAntigravityRelayModelsRequestUsesForwardBase(t *testing.T) {
+	t.Parallel()
+
+	svc := &AccountTestService{cfg: upstreamModelSyncTestConfig()}
+	root, err := svc.buildAntigravityAPIKeyModelsRequest(context.Background(), &Account{
+		Platform: PlatformAntigravity,
+		Type:     AccountTypeAPIKey,
+		Credentials: map[string]any{
+			"api_key":  "antigravity-key",
+			"base_url": "https://relay.example",
+		},
+	})
+	require.NoError(t, err)
+	require.Equal(t, "https://relay.example/antigravity/v1/models", root.URL.String())
+	require.Equal(t, "antigravity-key", root.Header.Get("x-api-key"))
+	require.Empty(t, root.Header.Get("Authorization"))
+
+	upstreamReq, err := svc.buildAntigravityAPIKeyModelsRequest(context.Background(), &Account{
+		Platform: PlatformAntigravity,
+		Type:     AccountTypeUpstream,
+		Credentials: map[string]any{
+			"api_key":  "relay-secret",
+			"base_url": "https://relay.example",
+		},
+	})
+	require.NoError(t, err)
+	require.Equal(t, "https://relay.example/v1/models", upstreamReq.URL.String())
+	require.Equal(t, "relay-secret", upstreamReq.Header.Get("x-api-key"))
+	require.Equal(t, "Bearer relay-secret", upstreamReq.Header.Get("Authorization"))
+	require.NotContains(t, upstreamReq.URL.Host, "googleapis.com")
+}
+
+func TestLoadAntigravityUpstreamModels_UpstreamAccountStaysOnRelay(t *testing.T) {
+	t.Parallel()
+
+	upstream := &recordingAntigravityModelsUpstream{}
+	svc := &AccountTestService{
+		httpUpstream: upstream,
+		cfg:          upstreamModelSyncTestConfig(),
+	}
+	account := &Account{
+		ID:       77,
+		Platform: PlatformAntigravity,
+		Type:     AccountTypeUpstream,
+		Credentials: map[string]any{
+			"base_url": "https://relay.example",
+			"api_key":  "relay-secret",
+		},
+	}
+	models, err := svc.loadAntigravityUpstreamModels(context.Background(), account)
+	require.NoError(t, err)
+	require.Equal(t, "claude-opus-4-8", models[0].ID)
+	require.Equal(t, "relay.example", upstream.req.URL.Host)
+	require.Equal(t, "/v1/models", upstream.req.URL.Path)
+	require.Equal(t, "relay-secret", upstream.req.Header.Get("x-api-key"))
+	require.Equal(t, "Bearer relay-secret", upstream.req.Header.Get("Authorization"))
+	require.Empty(t, upstream.proxyURL)
+
+	proxyID := int64(9)
+	proxied := *account
+	proxied.ProxyID = &proxyID
+	proxied.Proxy = &Proxy{ID: proxyID, Protocol: "socks5", Host: "127.0.0.1", Port: 7891, Status: StatusActive}
+	_, err = svc.loadAntigravityUpstreamModels(context.Background(), &proxied)
+	require.NoError(t, err)
+	require.Equal(t, "socks5://127.0.0.1:7891", upstream.proxyURL)
+
+	missing := *account
+	missing.ProxyID = &proxyID
+	_, err = svc.loadAntigravityUpstreamModels(context.Background(), &missing)
+	require.ErrorIs(t, err, ErrAccountProxyUnavailable)
+	require.Equal(t, 2, upstream.calls)
 }

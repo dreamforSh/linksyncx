@@ -3230,6 +3230,7 @@ func (h *AccountHandler) SyncUpstreamModelsPreview(c *gin.Context) {
 		BaseURL      string            `json:"base_url"`
 		APIKey       string            `json:"api_key" binding:"required"`
 		ModelMapping map[string]string `json:"model_mapping"`
+		ProxyID      *int64            `json:"proxy_id"`
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
 		response.BadRequest(c, "Invalid request: "+err.Error())
@@ -3248,6 +3249,20 @@ func (h *AccountHandler) SyncUpstreamModelsPreview(c *gin.Context) {
 			"base_url":      req.BaseURL,
 			"model_mapping": modelMapping,
 		},
+	}
+
+	if req.ProxyID != nil && *req.ProxyID > 0 {
+		if h.adminService == nil {
+			response.InternalError(c, "Admin service is not configured")
+			return
+		}
+		proxy, proxyErr := h.adminService.GetProxy(c.Request.Context(), *req.ProxyID)
+		if proxyErr != nil || proxy == nil {
+			response.BadRequest(c, "Selected proxy is unavailable")
+			return
+		}
+		tempAccount.ProxyID = req.ProxyID
+		tempAccount.Proxy = proxy
 	}
 
 	if h.accountTestService == nil {

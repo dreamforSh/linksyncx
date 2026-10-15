@@ -3984,7 +3984,6 @@ import {
   getModelsByPlatform,
   commonErrorCodes,
   buildModelMappingObject,
-  fetchAntigravityDefaultMappings,
   isValidWildcardPattern
 } from '@/composables/useModelWhitelist'
 import { adminAPI } from '@/api/admin'
@@ -4961,12 +4960,10 @@ watch(
         .catch(() => { tlsFingerprintProfiles.value = [] })
       // Modal opened - fill related models
       allowedModels.value = [...getModelsByPlatform(form.platform)]
-      // Antigravity: 默认使用映射模式并填充默认映射
+      // Antigravity 映射留空，由「同步上游」填入，不预置默认目录。
       if (form.platform === 'antigravity') {
         antigravityModelRestrictionMode.value = 'mapping'
-        fetchAntigravityDefaultMappings().then(mappings => {
-          antigravityModelMappings.value = [...mappings]
-        })
+        antigravityModelMappings.value = []
         antigravityWhitelistModels.value = []
       } else {
         antigravityWhitelistModels.value = []
@@ -5028,12 +5025,10 @@ watch(
     modelMappings.value = []
     // Claude（OS / 架构）与 Codex（完整 UA）的画像形态不同，换平台时清空手填值。
     deviceProfile.value = emptyDeviceProfile()
-    // Antigravity: 默认使用映射模式并填充默认映射
+    // Antigravity 映射留空，由「同步上游」填入，不预置默认目录。
     if (newPlatform === 'antigravity') {
       antigravityModelRestrictionMode.value = 'mapping'
-      fetchAntigravityDefaultMappings().then(mappings => {
-        antigravityModelMappings.value = [...mappings]
-      })
+      antigravityModelMappings.value = []
       antigravityWhitelistModels.value = []
       accountCategory.value = 'oauth-based'
       antigravityAccountType.value = 'oauth'
@@ -5231,7 +5226,8 @@ const syncAntigravityUpstreamModels = async () => {
       platform: 'antigravity',
       type: 'apikey',
       base_url: upstreamBaseUrl.value.trim(),
-      api_key: upstreamApiKey.value.trim()
+      api_key: upstreamApiKey.value.trim(),
+      ...(form.proxy_id != null ? { proxy_id: form.proxy_id } : {})
     })
     const upstreamModels = result.models.map((model) => model.trim()).filter(Boolean)
     if (upstreamModels.length === 0) {
@@ -5571,9 +5567,7 @@ const resetForm = () => {
 
   antigravityModelRestrictionMode.value = 'mapping'
   antigravityWhitelistModels.value = []
-  fetchAntigravityDefaultMappings().then(mappings => {
-    antigravityModelMappings.value = [...mappings]
-  })
+  antigravityModelMappings.value = []
   poolModeEnabled.value = false
   poolModeRetryCount.value = DEFAULT_POOL_MODE_RETRY_COUNT
   poolModeRetryStatusCodesInput.value = ''

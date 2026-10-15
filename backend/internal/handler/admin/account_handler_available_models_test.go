@@ -3,6 +3,7 @@ package admin
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -42,9 +43,13 @@ type syncUpstreamHTTPUpstream struct {
 	resp      *http.Response
 	responses []*http.Response
 	err       error
+	requests  []*http.Request
+	proxyURLs []string
 }
 
 func (u *syncUpstreamHTTPUpstream) Do(req *http.Request, proxyURL string, accountID int64, accountConcurrency int) (*http.Response, error) {
+	u.requests = append(u.requests, req)
+	u.proxyURLs = append(u.proxyURLs, proxyURL)
 	if u.err != nil {
 		return nil, u.err
 	}
@@ -660,8 +665,10 @@ func TestAccountHandlerGetAvailableModels_AntigravityProjectsUpstreamAliases(t *
 		byID[model.ID] = model.DisplayName
 	}
 	require.NotContains(t, byID, "unmapped-model")
+	require.NotContains(t, byID, "gemini-3-flash")
+	require.NotContains(t, byID, "claude-opus-4-8")
 	require.Equal(t, "public-opus", byID["public-opus"])
-	require.Equal(t, "Gemini 3 Flash", byID["gemini-3-flash"])
+	require.Len(t, byID, 1)
 }
 
 func TestAccountHandlerGetAvailableModels_AntigravityUpstreamFailureUsesStaticCatalog(t *testing.T) {
@@ -720,4 +727,81 @@ func TestAccountHandlerGetAvailableModels_AntigravityNilServiceUsesStaticCatalog
 	router.ServeHTTP(rec, req)
 	require.Equal(t, http.StatusOK, rec.Code)
 	require.Contains(t, rec.Body.String(), "claude-sonnet-4-6")
+}
+
+type previewProxyAdminService struct {
+	*stubAdminService
+	proxy *service.Proxy
+	err   error
+}
+
+func (s *previewProxyAdminService) GetProxy(context.Context, int64) (*service.Proxy, error) {
+	if s.err != nil {
+		return nil, s.err
+	}
+	return s.proxy, nil
+}
+
+func TestAccountHandlerSyncUpstreamModelsPreview_AntigravityUsesSelectedProxy(t *testing.T) {
+	proxyID := int64(9)
+	upstream := &syncUpstreamHTTPUpstream{resp: &http.Response{
+		StatusCode: http.StatusOK,
+		Header:     make(http.Header),
+		Body:       io.NopCloser(strings.NewReader(`{"data":[{"id":"claude-opus-4-8"}]}`)),
+	}}
+	adminSvc := &previewProxyAdminService{
+		stubAdminService: newStubAdminService(),
+		proxy: &service.Proxy{
+			ID:       proxyID,
+			Protocol: "socks5",
+			Host:     "127.0.0.1",
+			Port:     7891,
+			Status:   service.StatusActive,
+		},
+	}
+	router := setupSyncUpstreamModelsRouter(adminSvc, upstream)
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(
+		http.MethodPost,
+		"/api/v1/admin/accounts/models/sync-upstream-preview",
+		strings.NewReader(`{"platform":"antigravity","type":"apikey","base_url":"https://relay.example","api_key":"relay-secret","proxy_id":9}`),
+	)
+	req.Header.Set("Content-Type", "application/json")
+	router.ServeHTTP(rec, req)
+
+	require.Equal(t, http.StatusOK, rec.Code)
+	require.NotEmpty(t, upstream.proxyURLs)
+	for _, proxyURL := range upstream.proxyURLs {
+		require.Equal(t, "socks5://127.0.0.1:7891", proxyURL)
+	}
+	require.Equal(t, "https://relay.example/antigravity/v1/models", upstream.requests[0].URL.String())
+	require.Equal(t, "relay-secret", upstream.requests[0].Header.Get("x-api-key"))
+	require.NotContains(t, upstream.requests[0].URL.Host, "googleapis.com")
+}
+
+func TestAccountHandlerSyncUpstreamModelsPreview_MissingProxyDoesNotGoDirect(t *testing.T) {
+	upstream := &syncUpstreamHTTPUpstream{resp: &http.Response{
+		StatusCode: http.StatusOK,
+		Header:     make(http.Header),
+		Body:       io.NopCloser(strings.NewReader(`{"data":[{"id":"claude-opus-4-8"}]}`)),
+	}}
+	adminSvc := &previewProxyAdminService{
+		stubAdminService: newStubAdminService(),
+		err:              errors.New("proxy not found"),
+	}
+	router := setupSyncUpstreamModelsRouter(adminSvc, upstream)
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(
+		http.MethodPost,
+		"/api/v1/admin/accounts/models/sync-upstream-preview",
+		strings.NewReader(`{"platform":"antigravity","type":"apikey","base_url":"https://relay.example","api_key":"relay-secret","proxy_id":9}`),
+	)
+	req.Header.Set("Content-Type", "application/json")
+	router.ServeHTTP(rec, req)
+
+	require.Equal(t, http.StatusBadRequest, rec.Code)
+	require.Empty(t, upstream.requests)
+	require.NotContains(t, rec.Body.String(), "relay-secret")
 }

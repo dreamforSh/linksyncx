@@ -40,12 +40,6 @@ var antigravityModelsCache = &antigravityModelsCacheStore{
 	items: map[string]antigravityModelsCacheEntry{},
 }
 
-func resetAntigravityModelsCache() {
-	antigravityModelsCache.mu.Lock()
-	antigravityModelsCache.items = map[string]antigravityModelsCacheEntry{}
-	antigravityModelsCache.mu.Unlock()
-}
-
 func (c *antigravityModelsCacheStore) get(key string, now time.Time) ([]antigravity.ClaudeModel, bool) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -86,7 +80,9 @@ func antigravityModelsCacheKey(account *Account) string {
 	)
 	sum := sha256.Sum256([]byte(account.GetCredential("api_key")))
 	_, _ = h.Write(sum[:])
-	mapping := account.GetModelMapping()
+	// Fingerprint the stored mapping only. GetModelMapping injects the
+	// default catalog, which would make an empty mapping look custom.
+	mapping := rawAntigravityModelMapping(account)
 	keys := make([]string, 0, len(mapping))
 	for alias, target := range mapping {
 		keys = append(keys, alias+"\x00"+target)
@@ -144,7 +140,9 @@ func (s *AccountTestService) loadAntigravityUpstreamModels(ctx context.Context, 
 	if account == nil {
 		return nil, errors.New("account is required")
 	}
-	if account.Type == AccountTypeAPIKey {
+	// type=upstream keeps a third-party API key. It must use that key against
+	// the account's own base URL. Treating it as OAuth sends the key to Google.
+	if antigravityUsesRelayModelList(account) {
 		return s.loadAntigravityAPIKeyModels(ctx, account)
 	}
 	return s.loadAntigravityOAuthModels(ctx, account)
@@ -285,55 +283,74 @@ func claudeModelsFromAvailable(resp *antigravity.FetchAvailableModelsResponse) [
 	return out
 }
 
-// projectAntigravityAccountModels keeps a public alias only when its mapped
-// target is in this account's upstream catalog. Wildcard keys are skipped.
+// projectAntigravityAccountModels publishes names the same way the GPT model
+// list does. An empty stored mapping returns this account's upstream IDs
+// unchanged. A custom mapping keeps a public name only when the raw mapping
+// resolves it onto a model this account actually returned. Wildcard keys are
+// not names, but upstream IDs they match stay candidates. Default aliases are
+// not injected here; request routing still applies those on an empty mapping.
 func projectAntigravityAccountModels(upstream []antigravity.ClaudeModel, account *Account) []antigravity.ClaudeModel {
 	if account == nil {
 		return []antigravity.ClaudeModel{}
 	}
 	byID := make(map[string]antigravity.ClaudeModel, len(upstream))
+	upstreamIDs := make([]string, 0, len(upstream))
 	for _, model := range upstream {
 		id := strings.TrimSpace(model.ID)
 		if id == "" || strings.Contains(id, "*") {
 			continue
 		}
-		if _, ok := byID[id]; !ok {
-			byID[id] = model
+		if _, ok := byID[id]; ok {
+			continue
 		}
+		model.ID = id
+		byID[id] = model
+		upstreamIDs = append(upstreamIDs, id)
 	}
-	mapping := account.GetModelMapping()
-	aliases := make([]string, 0, len(mapping))
-	for alias := range mapping {
+	sort.Strings(upstreamIDs)
+	raw := rawAntigravityModelMapping(account)
+	if len(raw) == 0 {
+		out := make([]antigravity.ClaudeModel, 0, len(upstreamIDs))
+		for _, id := range upstreamIDs {
+			out = append(out, byID[id])
+		}
+		return out
+	}
+	aliases := make([]string, 0, len(raw))
+	for alias := range raw {
 		aliases = append(aliases, alias)
 	}
 	sort.Strings(aliases)
-	out := make([]antigravity.ClaudeModel, 0, len(aliases))
-	seen := make(map[string]struct{}, len(aliases))
-	for _, alias := range aliases {
-		alias = strings.TrimSpace(alias)
-		if alias == "" || strings.Contains(alias, "*") {
+	candidates := make([]string, 0, len(upstreamIDs)+len(aliases))
+	candidates = append(candidates, upstreamIDs...)
+	candidates = append(candidates, aliases...)
+	out := make([]antigravity.ClaudeModel, 0, len(candidates))
+	seen := make(map[string]struct{}, len(candidates))
+	for _, id := range candidates {
+		id = strings.TrimSpace(id)
+		if id == "" || strings.Contains(id, "*") {
 			continue
 		}
-		if _, ok := seen[alias]; ok {
+		if _, ok := seen[id]; ok {
 			continue
 		}
-		target, matched := account.ResolveMappedModel(alias)
+		target, matched := resolveRequestedModelInMapping(raw, id)
 		target = strings.TrimSpace(target)
 		src, available := byID[target]
 		if !matched || !available {
 			continue
 		}
-		seen[alias] = struct{}{}
+		seen[id] = struct{}{}
 		display := strings.TrimSpace(src.DisplayName)
-		if alias != target || display == "" {
-			display = alias
+		if id != target || display == "" {
+			display = id
 		}
 		modelType := src.Type
 		if modelType == "" {
 			modelType = "model"
 		}
 		out = append(out, antigravity.ClaudeModel{
-			ID:          alias,
+			ID:          id,
 			Type:        modelType,
 			DisplayName: display,
 			CreatedAt:   src.CreatedAt,
@@ -341,4 +358,11 @@ func projectAntigravityAccountModels(upstream []antigravity.ClaudeModel, account
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].ID < out[j].ID })
 	return out
+}
+
+func rawAntigravityModelMapping(account *Account) map[string]string {
+	if account == nil || account.Credentials == nil {
+		return nil
+	}
+	return stringMappingFromRaw(account.Credentials["model_mapping"])
 }

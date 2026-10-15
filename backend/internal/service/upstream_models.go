@@ -736,7 +736,7 @@ func (s *AccountTestService) fetchUpstreamModelList(ctx context.Context, account
 		return nil, nil, newUpstreamModelSyncConfigError("Account is required", nil)
 	}
 
-	if account.Platform == PlatformAntigravity && account.Type != AccountTypeAPIKey {
+	if account.Platform == PlatformAntigravity && !antigravityUsesRelayModelList(account) {
 		return s.fetchAntigravityOAuthUpstreamModels(ctx, account)
 	}
 
@@ -969,9 +969,13 @@ func (s *AccountTestService) buildAnthropicUpstreamModelsRequest(ctx context.Con
 }
 
 func (s *AccountTestService) buildAntigravityAPIKeyModelsRequest(ctx context.Context, account *Account) (*http.Request, error) {
-	if account.Type != AccountTypeAPIKey {
+	if account == nil || !antigravityUsesRelayModelList(account) {
+		accountType := ""
+		if account != nil {
+			accountType = account.Type
+		}
 		return nil, newUpstreamModelSyncUnsupportedError(
-			fmt.Sprintf("Unsupported Antigravity account type for upstream model sync: %s", account.Type), nil,
+			fmt.Sprintf("Unsupported Antigravity account type for upstream model sync: %s", accountType), nil,
 		)
 	}
 	apiKey := strings.TrimSpace(account.GetCredential("api_key"))
@@ -979,15 +983,9 @@ func (s *AccountTestService) buildAntigravityAPIKeyModelsRequest(ctx context.Con
 		return nil, newUpstreamModelSyncConfigError("No Antigravity API key is available", nil)
 	}
 
-	baseURL := strings.TrimRight(strings.TrimSpace(account.GetCredential("base_url")), "/")
-	if baseURL == "" {
-		return nil, newUpstreamModelSyncConfigError("Antigravity API-key base URL is required for upstream model sync", nil)
-	}
-	if !strings.HasSuffix(strings.ToLower(baseURL), "/antigravity") {
-		return nil, newUpstreamModelSyncUnsupportedError(
-			"Antigravity API-key upstream model sync requires a compatible gateway base URL ending in /antigravity; use Antigravity OAuth for official Cloud Code upstreams",
-			nil,
-		)
+	baseURL, err := antigravityRelayModelsBaseURL(account)
+	if err != nil {
+		return nil, err
 	}
 	normalizedBaseURL, err := s.validateUpstreamBaseURL(baseURL)
 	if err != nil {
@@ -1005,7 +1003,60 @@ func (s *AccountTestService) buildAntigravityAPIKeyModelsRequest(ctx context.Con
 	req.Header.Set("anthropic-version", "2023-06-01")
 	req.Header.Set("anthropic-beta", claude.APIKeyBetaHeader)
 	req.Header.Set("x-api-key", apiKey)
+	if account.Type == AccountTypeUpstream {
+		req.Header.Set("Authorization", "Bearer "+apiKey)
+	}
 	return req, nil
+}
+
+// antigravityUsesRelayModelList reports account types whose model list is a
+// third-party relay, not Google OAuth. type=upstream carries an API key.
+func antigravityUsesRelayModelList(account *Account) bool {
+	return account != nil && (account.Type == AccountTypeAPIKey || account.Type == AccountTypeUpstream)
+}
+
+// antigravityRelayModelsBaseURL is the base shared with forwarding.
+// API-key accounts append /antigravity once: a root URL matches GetBaseURL, and a
+// base that already ends with the suffix is not doubled. Upstream accounts keep
+// the raw base, matching ForwardUpstream. Official Cloud Code hosts are refused
+// so a relay key is never sent to Google from model discovery.
+func antigravityRelayModelsBaseURL(account *Account) (string, error) {
+	raw := strings.TrimRight(strings.TrimSpace(account.GetCredential("base_url")), "/")
+	if raw == "" {
+		return "", newUpstreamModelSyncConfigError("Antigravity API-key base URL is required for upstream model sync", nil)
+	}
+	if antigravityOfficialCloudCodeHost(raw) {
+		return "", newUpstreamModelSyncUnsupportedError(
+			"Antigravity API-key upstream model sync requires a compatible gateway base URL; use Antigravity OAuth for official Cloud Code upstreams",
+			nil,
+		)
+	}
+	switch account.Type {
+	case AccountTypeAPIKey:
+		if !strings.HasSuffix(strings.ToLower(raw), "/antigravity") {
+			raw += "/antigravity"
+		}
+		return raw, nil
+	case AccountTypeUpstream:
+		return raw, nil
+	default:
+		return "", newUpstreamModelSyncUnsupportedError(
+			fmt.Sprintf("Unsupported Antigravity account type for upstream model sync: %s", account.Type), nil,
+		)
+	}
+}
+
+func antigravityOfficialCloudCodeHost(raw string) bool {
+	parsed, err := url.Parse(strings.TrimSpace(raw))
+	if err != nil {
+		return false
+	}
+	switch strings.ToLower(parsed.Hostname()) {
+	case "cloudcode-pa.googleapis.com", "daily-cloudcode-pa.googleapis.com":
+		return true
+	default:
+		return false
+	}
 }
 
 func (s *AccountTestService) buildOpenAIUpstreamModelsRequest(ctx context.Context, account *Account) (*http.Request, error) {
