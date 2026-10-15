@@ -74,10 +74,10 @@ func TestResolveGeminiThinkingVariant(t *testing.T) {
 		{"agy low (1000) -> -low", catalog, "gemini-3.8-flash", budget("1000"), "gemini-3.8-flash-low", true},
 		{"models/ prefix stripped", catalog, "models/gemini-3.8-flash", budget("1000"), "gemini-3.8-flash-low", true},
 		{"no thinkingConfig -> -high", catalog, "gemini-3.8-flash", []byte(`{"contents":[]}`), "gemini-3.8-flash-high", true},
-		// gemini-3.6/3.7/3.8-flash 的四个变体会被 resolveModelMapping 自动补齐，所以降级用一个不在默认表里的型号
+		// 3.5/3.6/3.7/3.8-flash 的变体会被 resolveModelMapping 自动补齐，所以降级用一个不在默认透传表里的型号
 		{"only -high exists: low request degrades to high", map[string]string{
-			"gemini-3.5-flash-high": "gemini-3.5-flash-high",
-		}, "gemini-3.5-flash", budget("1000"), "gemini-3.5-flash-high", true},
+			"gemini-3.4-flash-high": "gemini-3.4-flash-high",
+		}, "gemini-3.4-flash", budget("1000"), "gemini-3.4-flash-high", true},
 		{"injected default variants are usable", catalog, "gemini-3.6-flash", budget("1000"), "gemini-3.6-flash-low", true},
 		{"already suffixed: untouched", catalog, "gemini-3.8-flash-low", budget("-1"), "", false},
 		{"bare name explicitly mapped: untouched", catalog, "gemini-2.5-flash", budget("-1"), "", false},
