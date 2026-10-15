@@ -415,8 +415,8 @@ describe('AccountUsageCell', () => {
       global: {
         stubs: {
           UsageProgressBar: {
-            props: ['label', 'utilization', 'resetsAt', 'color'],
-            template: '<div class="usage-bar">{{ label }}|{{ utilization }}|{{ resetsAt }}</div>'
+            props: ['label', 'utilization', 'resetsAt', 'color', 'labelWidth'],
+            template: '<div class="usage-bar">{{ label }}|{{ labelWidth }}|{{ utilization }}|{{ resetsAt }}</div>'
           },
           AccountQuotaInfo: true
         }
@@ -425,7 +425,7 @@ describe('AccountUsageCell', () => {
 
     await flushPromises()
 
-    expect(wrapper.text()).toContain('Opus|75|2026-10-14T12:00:00Z')
+    expect(wrapper.text()).toContain('Opus|auto|75|2026-10-14T12:00:00Z')
     expect(wrapper.text()).not.toContain('admin.accounts.usageWindow.gemini3Image')
   })
 

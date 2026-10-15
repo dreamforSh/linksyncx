@@ -360,6 +360,7 @@
           :window-stats="group.window_stats"
           :estimated-total-cost="quotaGroupEstimatedCost(group)"
           :color="quotaGroupColor(index)"
+          label-width="auto"
         />
 
         <div v-if="aiCreditsDisplay" class="mt-1 text-[10px] text-gray-500 dark:text-gray-400">
