@@ -465,6 +465,10 @@ func (s *AntigravityGatewayService) handleSingleAccountRetryInPlace(
 
 // antigravityRetryLoop 执行带 URL fallback 的重试循环
 func (s *AntigravityGatewayService) antigravityRetryLoop(p antigravityRetryLoopParams) (*antigravityRetryLoopResult, error) {
+	// 真实 Antigravity 客户端（Electron/Node、Go LS 的默认 HTTP 栈）均协商 HTTP/2，
+	// 转发路径显式走 long_stream_h2，避免 HTTP/1.1 成为可指纹差异。
+	p.ctx = WithHTTPUpstreamProfile(p.ctx, HTTPUpstreamProfileLongStream)
+
 	// 预检查：模型限流 + overages 启用 + 积分未耗尽 → 直接注入 AI Credits
 	overagesInjected := false
 	if p.requestedModel != "" && p.account.Platform == PlatformAntigravity &&

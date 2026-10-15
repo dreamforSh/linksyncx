@@ -163,6 +163,51 @@ func TestAntigravityRetryLoop_NoURLFallback_UsesConfiguredBaseURL(t *testing.T) 
 	require.Equal(t, base1, available[0])
 }
 
+// profileCaptureUpstream 记录转发请求 context 中携带的 HTTPUpstreamProfile。
+type profileCaptureUpstream struct {
+	profile HTTPUpstreamProfile
+}
+
+func (p *profileCaptureUpstream) Do(req *http.Request, _ string, _ int64, _ int) (*http.Response, error) {
+	p.profile = HTTPUpstreamProfileFromContext(req.Context())
+	return &http.Response{
+		StatusCode: http.StatusOK,
+		Header:     http.Header{},
+		Body:       io.NopCloser(strings.NewReader("ok")),
+	}, nil
+}
+
+func (p *profileCaptureUpstream) DoWithTLS(req *http.Request, proxyURL string, accountID int64, accountConcurrency int, profile *tlsfingerprint.Profile) (*http.Response, error) {
+	return p.Do(req, proxyURL, accountID, accountConcurrency)
+}
+
+// 真实 Antigravity 客户端走 HTTP/2，转发路径必须注入 long_stream_h2 画像。
+func TestAntigravityRetryLoop_InjectsHTTP2UpstreamProfile(t *testing.T) {
+	t.Setenv(antigravityForwardBaseURLEnv, "")
+
+	upstream := &profileCaptureUpstream{}
+	svc := &AntigravityGatewayService{}
+	result, err := svc.antigravityRetryLoop(antigravityRetryLoopParams{
+		prefix:       "[test]",
+		ctx:          context.Background(),
+		account:      &Account{ID: 1, Name: "acc-1", Platform: PlatformAntigravity, Schedulable: true, Status: StatusActive, Concurrency: 1},
+		accessToken:  "token",
+		action:       "streamGenerateContent",
+		body:         []byte(`{"input":"test"}`),
+		httpUpstream: upstream,
+		handleError: func(ctx context.Context, prefix string, account *Account, statusCode int, headers http.Header, body []byte, requestedModel string, groupID int64, sessionHash string, isStickySession bool) *handleModelRateLimitResult {
+			return nil
+		},
+	})
+
+	require.NoError(t, err)
+	require.NotNil(t, result)
+	if result.resp != nil {
+		defer func() { _ = result.resp.Body.Close() }()
+	}
+	require.Equal(t, HTTPUpstreamProfileLongStream, upstream.profile)
+}
+
 // TestHandleUpstreamError_429_ModelRateLimit 测试 429 模型限流场景
 func TestHandleUpstreamError_429_ModelRateLimit(t *testing.T) {
 	repo := &stubAntigravityAccountRepo{}

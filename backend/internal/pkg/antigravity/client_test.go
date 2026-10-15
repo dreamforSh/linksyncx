@@ -54,6 +54,15 @@ func TestNewAPIRequestWithURL_普通请求(t *testing.T) {
 	if ua := req.Header.Get("User-Agent"); ua != GetUserAgent() {
 		t.Errorf("User-Agent 不匹配: got %s, want %s", ua, GetUserAgent())
 	}
+	if apiClient := req.Header.Get("X-Goog-Api-Client"); apiClient != GoogleCloudSDKAPIClient {
+		t.Errorf("X-Goog-Api-Client 不匹配: got %s, want %s", apiClient, GoogleCloudSDKAPIClient)
+	}
+	if cm := req.Header.Get("Client-Metadata"); cm != ClientMetadataForContext(ctx) {
+		t.Errorf("Client-Metadata 不匹配: got %s, want %s", cm, ClientMetadataForContext(ctx))
+	}
+	if accept := req.Header.Get("Accept"); accept != "" {
+		t.Errorf("非流式请求不应携带 Accept: got %s", accept)
+	}
 }
 
 func TestNewAPIRequestWithURL_流式请求(t *testing.T) {
@@ -71,6 +80,28 @@ func TestNewAPIRequestWithURL_流式请求(t *testing.T) {
 	expectedURL := "https://example.com/v1internal:streamGenerateContent?alt=sse"
 	if req.URL.String() != expectedURL {
 		t.Errorf("URL 不匹配: got %s, want %s", req.URL.String(), expectedURL)
+	}
+	if accept := req.Header.Get("Accept"); accept != "text/event-stream" {
+		t.Errorf("Accept 不匹配: got %s, want text/event-stream", accept)
+	}
+}
+
+func TestClientMetadataForContext(t *testing.T) {
+	defaultMeta := `{"ideType":"ANTIGRAVITY","platform":"WINDOWS","pluginType":"GEMINI"}`
+	if got := ClientMetadataForContext(context.Background()); got != defaultMeta {
+		t.Errorf("默认 Client-Metadata 不匹配: got %s, want %s", got, defaultMeta)
+	}
+
+	darwinCtx := WithDeviceIdentity(context.Background(), "darwin", "arm64", "DARWIN_ARM64")
+	macMeta := `{"ideType":"ANTIGRAVITY","platform":"MACOS","pluginType":"GEMINI"}`
+	if got := ClientMetadataForContext(darwinCtx); got != macMeta {
+		t.Errorf("darwin Client-Metadata 不匹配: got %s, want %s", got, macMeta)
+	}
+
+	linuxCtx := WithDeviceIdentity(context.Background(), "linux", "amd64", "LINUX_AMD64")
+	linuxMeta := `{"ideType":"ANTIGRAVITY","platform":"LINUX","pluginType":"GEMINI"}`
+	if got := ClientMetadataForContext(linuxCtx); got != linuxMeta {
+		t.Errorf("linux Client-Metadata 不匹配: got %s, want %s", got, linuxMeta)
 	}
 }
 
@@ -1151,6 +1182,9 @@ func TestClient_GetUserInfo_Success_RealCall(t *testing.T) {
 		auth := r.Header.Get("Authorization")
 		if auth != "Bearer user-access-token" {
 			t.Errorf("Authorization 不匹配: got %s", auth)
+		}
+		if ua := r.Header.Get("User-Agent"); ua != GetUserAgent() {
+			t.Errorf("User-Agent 不匹配: got %s, want %s", ua, GetUserAgent())
 		}
 
 		w.Header().Set("Content-Type", "application/json")

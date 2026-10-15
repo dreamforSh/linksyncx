@@ -179,6 +179,26 @@ func DevicePlatformFromContext(ctx context.Context) string {
 	return id.platform
 }
 
+// GoogleCloudSDKAPIClient 是官方 Antigravity 客户端在 v1internal 请求中携带的
+// X-Goog-Api-Client 值。
+const GoogleCloudSDKAPIClient = "google-cloud-sdk vscode_cloudshelleditor/0.1"
+
+// ClientMetadataForContext 返回官方客户端在每个 v1internal 请求中携带的
+// Client-Metadata 头（JSON 格式）。platform 取与 UA 设备一致的显示名，
+// 未钉设备时与 UA 默认设备（windows/amd64）一致，返回 WINDOWS。
+func ClientMetadataForContext(ctx context.Context) string {
+	platform := "WINDOWS"
+	if id, ok := deviceIdentityFromContext(ctx); ok {
+		switch id.goos {
+		case "darwin":
+			platform = "MACOS"
+		case "linux":
+			platform = "LINUX"
+		}
+	}
+	return fmt.Sprintf(`{"ideType":"ANTIGRAVITY","platform":%q,"pluginType":"GEMINI"}`, platform)
+}
+
 func deviceIdentityFromContext(ctx context.Context) (antigravityDevice, bool) {
 	if ctx == nil {
 		return antigravityDevice{}, false
