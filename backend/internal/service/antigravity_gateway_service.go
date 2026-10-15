@@ -8,7 +8,9 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"math"
 	"net/http"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -93,11 +95,36 @@ type AntigravityAccountSwitchError struct {
 	OriginalAccountID int64
 	RateLimitedModel  string
 	IsStickySession   bool // 是否为粘性会话切换（决定是否缓存计费）
+	// SoftHold：粘性保持生效时的软性切换信号——限流在可等待窗口内，粘性绑定保留，
+	// 由上层换成可重试错误（429 + retry-after）交回客户端退避，而不是真的换号。
+	SoftHold   bool
+	RetryAfter time.Duration
 }
 
 func (e *AntigravityAccountSwitchError) Error() string {
 	return fmt.Sprintf("account %d model %s rate limited, need switch",
 		e.OriginalAccountID, e.RateLimitedModel)
+}
+
+// toFailoverError 把切换信号转成上层 failover 错误。SoftHold 转为 429 + retry-after +
+// StickyHoldSoft 标记（软性，配合粘性保持不换号），其余维持 503 硬切换。
+func (e *AntigravityAccountSwitchError) toFailoverError() *UpstreamFailoverError {
+	if e.SoftHold {
+		headers := http.Header{}
+		if e.RetryAfter > 0 {
+			headers.Set("retry-after", strconv.Itoa(int(math.Ceil(e.RetryAfter.Seconds()))))
+		}
+		return &UpstreamFailoverError{
+			StatusCode:        http.StatusTooManyRequests,
+			ForceCacheBilling: e.IsStickySession,
+			ResponseHeaders:   headers,
+			StickyHoldSoft:    true,
+		}
+	}
+	return &UpstreamFailoverError{
+		StatusCode:        http.StatusServiceUnavailable,
+		ForceCacheBilling: e.IsStickySession,
+	}
 }
 
 // IsAntigravityAccountSwitchError 检查错误是否为账号切换信号

@@ -2422,6 +2422,12 @@ func (a *Account) IsAnthropicOAuthOrSetupToken() bool {
 	return a.Platform == PlatformAnthropic && (a.Type == AccountTypeOAuth || a.Type == AccountTypeSetupToken)
 }
 
+// IsAntigravityOAuthOrSetupToken 判断是否为 Antigravity OAuth 或 SetupToken 类型账号。
+// API Key / 上游中转账号没有额度窗口可言，不参与粘性保持。
+func (a *Account) IsAntigravityOAuthOrSetupToken() bool {
+	return a.Platform == PlatformAntigravity && (a.Type == AccountTypeOAuth || a.Type == AccountTypeSetupToken)
+}
+
 // IsTLSFingerprintEnabled 检查是否启用 TLS 指纹伪装
 // 仅适用于 Anthropic OAuth/SetupToken 类型账号
 // 启用后将模拟 Claude Code 2.1.280（Bun）客户端的 TLS 握手特征

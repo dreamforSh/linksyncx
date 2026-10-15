@@ -371,10 +371,7 @@ func antigravityCompatProxyURL(account *Account) (string, error) {
 
 func (s *AntigravityGatewayService) handleAntigravityCompatTransportError(c *gin.Context, err error) error {
 	if switchErr, ok := IsAntigravityAccountSwitchError(err); ok {
-		return &UpstreamFailoverError{
-			StatusCode:        http.StatusServiceUnavailable,
-			ForceCacheBilling: switchErr.IsStickySession,
-		}
+		return switchErr.toFailoverError()
 	}
 	if c.Request.Context().Err() != nil {
 		return s.writeAntigravityCompatError(c, http.StatusBadGateway, "client_disconnected", "Client disconnected before upstream response")

@@ -1056,7 +1056,12 @@ func (h *GatewayHandler) Messages(c *gin.Context) {
 						return
 					}
 					// 已绑定对话的软性上游错误：不换号，在原账号上退避重试，用尽后交给客户端重试（D9）。
-					if sessionBoundAccountID == account.ID && service.IsClaudeStickySoftFailure(failoverErr) &&
+					softFailure := service.IsClaudeStickySoftFailure(failoverErr)
+					if account.Platform == service.PlatformAntigravity {
+						// Antigravity 的 429 没有 Anthropic 限流头，按响应体分类 + SoftHold 信号判定。
+						softFailure = service.IsAntigravityStickySoftFailure(failoverErr)
+					}
+					if sessionBoundAccountID == account.ID && softFailure &&
 						h.gatewayService.ClaudeStickyHoldApplies(c.Request.Context(), account) {
 						switch fs.HandleClaudeStickyHoldFailure(c.Request.Context(), account.ID, failoverErr, service.ClaudeStickySameAccountRetries()) {
 						case FailoverContinue:
@@ -1071,7 +1076,7 @@ func (h *GatewayHandler) Messages(c *gin.Context) {
 							h.writeClaudeStickyHoldError(c, &service.ClaudeStickyHoldError{
 								AccountID:  account.ID,
 								Reason:     "upstream_" + strconv.Itoa(failoverErr.StatusCode),
-								RetryAfter: service.ClaudeStickyUpstreamRetryAfter(failoverErr),
+								RetryAfter: service.StickyUpstreamRetryAfter(account, failoverErr),
 							}, streamStarted)
 							return
 						}

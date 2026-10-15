@@ -14,9 +14,11 @@ import (
 	"github.com/tidwall/gjson"
 )
 
-// 额度未耗尽不换号（D9）：已绑定到 Claude OAuth / setup-token 账号的对话，只因硬性原因换号
+// 额度未耗尽不换号（D9）：已绑定到 Claude 或 Antigravity OAuth / setup-token 账号的对话，
+// 只因硬性原因换号
 // （额度耗尽、账号失效、模型不支持、管理员策略）；软性原因（过载、短时限流、自定义规则的短时停调、
 // RPM、并发排队）不再驱逐对话，而是继续使用原账号，或把可重试错误交给客户端，由客户端自行退避。
+// 对 Antigravity 账号的意义是保住上游隐式缓存的前缀（同一账号、同一会话内容）。
 
 const (
 	// DefaultClaudeStickyHoldMaxWaitMinutes：自定义规则触发的临时停调，预计恢复时间不超过该值时不换号。
@@ -156,9 +158,16 @@ func claudeStickyHoldRequested(ctx context.Context) bool {
 	return enabled
 }
 
+// stickyHoldEligibleAccount 报告账号是否参与「额度未耗尽不换号」：Claude 与 Antigravity 的
+// OAuth / setup-token 账号。两者的上游都按「同一账号 + 同一前缀」做缓存（Anthropic 显式缓存、
+// Gemini 隐式缓存），对话换号即丢缓存。
+func stickyHoldEligibleAccount(account *Account) bool {
+	return account != nil && (account.IsAnthropicOAuthOrSetupToken() || account.IsAntigravityOAuthOrSetupToken())
+}
+
 // ClaudeStickyHoldApplies 报告本次请求里，绑定在该账号上的对话是否按「额度未耗尽不换号」处理。
 func (s *GatewayService) ClaudeStickyHoldApplies(ctx context.Context, account *Account) bool {
-	if s == nil || account == nil || !account.IsAnthropicOAuthOrSetupToken() || !claudeStickyHoldRequested(ctx) {
+	if s == nil || !stickyHoldEligibleAccount(account) || !claudeStickyHoldRequested(ctx) {
 		return false
 	}
 	return s.settingService.GetClaudeStickyHoldSettings(ctx).Enabled
@@ -193,6 +202,43 @@ func ClaudeStickyUpstreamRetryAfter(err *UpstreamFailoverError) time.Duration {
 		}
 	}
 	return claudeStickyHoldUpstreamRetryAfter
+}
+
+// IsAntigravityStickySoftFailure 判定 Antigravity 账号的一次失败对已绑定对话是否只是软性原因：
+// 粘性保持的软切换信号（SoftHold）、非配额耗尽的 429、529 与 5xx。
+// 与 Claude 的差异：Antigravity 的 429 没有 Anthropic 限流头，改用响应体分类——
+// 明确配额耗尽（quota_exhausted）才是硬性原因。
+func IsAntigravityStickySoftFailure(err *UpstreamFailoverError) bool {
+	if err == nil || err.IsCredentialFailure() || err.AccountUnavailable {
+		return false
+	}
+	if err.StickyHoldSoft {
+		return true
+	}
+	switch {
+	case err.StatusCode == http.StatusTooManyRequests:
+		return classifyAntigravity429(err.ResponseBody) != antigravity429QuotaExhausted
+	case err.StatusCode == 529, err.StatusCode >= 500:
+		return true
+	default:
+		return false
+	}
+}
+
+// StickyUpstreamRetryAfter 按平台选择软性失败建议的客户端重试间隔。
+func StickyUpstreamRetryAfter(account *Account, err *UpstreamFailoverError) time.Duration {
+	if account != nil && account.Platform == PlatformAntigravity {
+		if d := ClaudeStickyUpstreamRetryAfter(err); d != claudeStickyHoldUpstreamRetryAfter {
+			return d
+		}
+		if err != nil {
+			if info := parseAntigravitySmartRetryInfo(err.ResponseBody); info != nil && info.RetryDelay > 0 {
+				return info.RetryDelay
+			}
+		}
+		return claudeStickyHoldUpstreamRetryAfter
+	}
+	return ClaudeStickyUpstreamRetryAfter(err)
 }
 
 // claudeRateLimitHeadersExhausted 报告响应头是否表明额度耗尽：总状态 rejected，或 5h / 7d / 7d_oi
@@ -313,7 +359,7 @@ func (s *GatewayService) selectBoundClaudeAccount(ctx context.Context, stickyAcc
 	if account == nil {
 		account = s.loadBoundAccount(ctx, stickyAccountID, env.groupID)
 	}
-	if account == nil || !account.IsAnthropicOAuthOrSetupToken() {
+	if account == nil || !stickyHoldEligibleAccount(account) {
 		return nil, nil, false
 	}
 	settings := s.settingService.GetClaudeStickyHoldSettings(ctx)
@@ -339,10 +385,19 @@ func (s *GatewayService) selectBoundClaudeAccount(ctx context.Context, stickyAcc
 		return nil, nil, false
 	}
 	if account.RateLimitResetAt != nil && now.Before(*account.RateLimitResetAt) {
+		left := account.RateLimitResetAt.Sub(now)
+		if account.Platform == PlatformAntigravity {
+			// Antigravity 的账号级限流是 429 无法解析出模型时的兜底冷却，没有额度快照可判耗尽：
+			// 剩余时间不超过 MaxWait 视为软性，超过则换号。
+			if left > settings.MaxWait {
+				return nil, nil, false
+			}
+			return hold("rate_limited", left)
+		}
 		if claudeRateLimitExhausted(account, now) {
 			return nil, nil, false
 		}
-		return hold("rate_limited", account.RateLimitResetAt.Sub(now))
+		return hold("rate_limited", left)
 	}
 	if account.TempUnschedulableUntil != nil && now.Before(*account.TempUnschedulableUntil) {
 		left := account.TempUnschedulableUntil.Sub(now)
@@ -352,6 +407,14 @@ func (s *GatewayService) selectBoundClaudeAccount(ctx context.Context, stickyAcc
 		return hold("temp_unschedulable", left)
 	}
 	if left, customRule, limited := claudeModelRateLimitHold(ctx, account, env.requestedModel, now); limited {
+		if account.Platform == PlatformAntigravity {
+			// Antigravity 的模型限流来自上游 429 的 RetryInfo，本身就是短时冷却：
+			// 剩余不超过 MaxWait 时原地等待以保住缓存前缀，超过才换号。
+			if left > settings.MaxWait {
+				return nil, nil, false
+			}
+			return hold("model_rate_limited", left)
+		}
 		if !customRule || left > settings.MaxWait {
 			return nil, nil, false
 		}

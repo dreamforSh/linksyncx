@@ -148,6 +148,22 @@ func (s *AntigravityGatewayService) handleSmartRetry(p antigravityRetryLoopParam
 		if rateLimitDuration <= 0 {
 			rateLimitDuration = antigravityDefaultRateLimitDuration
 		}
+
+		// 粘性保持：绑定会话 + 限流窗口不超过 MaxWait → 仍记录模型限流（让调度层与其他会话
+		// 看到冷却），但不清除粘性绑定、不切换账号，由上层换成可重试错误交回客户端。
+		if soft, ok := s.stickyHoldSoftSwitch(p, modelName, rateLimitDuration); ok {
+			logger.LegacyPrintf("service.antigravity_gateway", "%s status=%d oauth_long_delay model=%s account=%d upstream_retry_delay=%v (sticky hold, keep session)",
+				p.prefix, resp.StatusCode, modelName, p.account.ID, rateLimitDuration)
+			resetAt := time.Now().Add(rateLimitDuration)
+			if !s.setAntigravityModelRateLimits(p.ctx, p.accountRepo, p.account, modelName, p.prefix, resp.StatusCode, resetAt, false) {
+				p.handleError(p.ctx, p.prefix, p.account, resp.StatusCode, resp.Header, respBody, p.requestedModel, p.groupID, p.sessionHash, p.isStickySession)
+			}
+			return &smartRetryResult{
+				action:      smartRetryActionBreakWithResp,
+				switchError: soft,
+			}
+		}
+
 		logger.LegacyPrintf("service.antigravity_gateway", "%s status=%d oauth_long_delay model=%s account=%d upstream_retry_delay=%v body=%s (model rate limit, switch account)",
 			p.prefix, resp.StatusCode, modelName, p.account.ID, rateLimitDuration, truncateForLog(respBody, 200))
 
@@ -496,6 +512,11 @@ func (s *AntigravityGatewayService) antigravityRetryLoop(p antigravityRetryLoopP
 				// 会在 Service 层原地等待+重试，不需要在预检查这里等。
 				logger.LegacyPrintf("service.antigravity_gateway", "%s pre_check: single_account_retry skipping rate_limit remaining=%v model=%s account=%d (will retry in-place if 503)",
 					p.prefix, remaining.Truncate(time.Millisecond), p.requestedModel, p.account.ID)
+			} else if soft, ok := s.stickyHoldSoftSwitch(p, p.requestedModel, remaining); ok {
+				// 粘性保持：限流窗口在可等待范围内，不清除粘性绑定，交回客户端退避。
+				logger.LegacyPrintf("service.antigravity_gateway", "%s pre_check: rate_limit_soft_hold remaining=%v model=%s account=%d",
+					p.prefix, remaining.Truncate(time.Millisecond), p.requestedModel, p.account.ID)
+				return nil, soft
 			} else {
 				logger.LegacyPrintf("service.antigravity_gateway", "%s pre_check: rate_limit_switch remaining=%v model=%s account=%d",
 					p.prefix, remaining.Truncate(time.Millisecond), p.requestedModel, p.account.ID)
@@ -913,6 +934,33 @@ func (s *AntigravityGatewayService) clearStickySession(ctx context.Context, grou
 	}
 }
 
+// stickyHoldSoftSwitch 在粘性保持（额度未耗尽不换号）生效、且限流等待不超过 MaxWait 时，
+// 把「切换账号」降级为软性保持信号：保留粘性绑定，由上层换成可重试错误（429 + retry-after）
+// 交回客户端退避。返回 ok=false 表示按现行硬切换处理。
+func (s *AntigravityGatewayService) stickyHoldSoftSwitch(p antigravityRetryLoopParams, model string, remaining time.Duration) (*AntigravityAccountSwitchError, bool) {
+	return s.stickyHoldSoftSwitchFor(p.ctx, p.account, p.isStickySession, p.settingService, model, remaining)
+}
+
+func (s *AntigravityGatewayService) stickyHoldSoftSwitchFor(ctx context.Context, account *Account, isStickySession bool, settingService *SettingService, model string, remaining time.Duration) (*AntigravityAccountSwitchError, bool) {
+	if !isStickySession || account == nil || !account.IsAntigravityOAuthOrSetupToken() || !claudeStickyHoldRequested(ctx) {
+		return nil, false
+	}
+	if settingService == nil {
+		return nil, false
+	}
+	settings := settingService.GetClaudeStickyHoldSettings(ctx)
+	if !settings.Enabled || remaining > settings.MaxWait {
+		return nil, false
+	}
+	return &AntigravityAccountSwitchError{
+		OriginalAccountID: account.ID,
+		RateLimitedModel:  model,
+		IsStickySession:   isStickySession,
+		SoftHold:          true,
+		RetryAfter:        remaining,
+	}, true
+}
+
 func antigravityFallbackCooldownSeconds() (time.Duration, bool) {
 	raw := strings.TrimSpace(os.Getenv(antigravityFallbackSecondsEnv))
 	if raw == "" {
@@ -1147,6 +1195,17 @@ func (s *AntigravityGatewayService) handleModelRateLimit(p *handleModelRateLimit
 	}
 
 	// RATE_LIMIT_EXCEEDED: >= antigravityRateLimitThreshold: 设置限流 + 清除粘性会话 + 切换账号
+	// 粘性保持生效且等待窗口不超过 MaxWait 时：仍记录限流，但保留粘性绑定并发出软性保持信号。
+	if soft, ok := s.stickyHoldSoftSwitchFor(p.ctx, p.account, p.isStickySession, s.settingService, info.ModelName, info.RetryDelay); ok {
+		resetAt := time.Now().Add(info.RetryDelay)
+		logger.LegacyPrintf("service.antigravity_gateway", "%s status=%d model_rate_limited model=%s account=%d reset_in=%v (sticky hold, keep session)",
+			p.prefix, p.statusCode, info.ModelName, p.account.ID, info.RetryDelay)
+		s.setAntigravityModelRateLimits(p.ctx, s.accountRepo, p.account, info.ModelName, p.prefix, p.statusCode, resetAt, false)
+		return &handleModelRateLimitResult{
+			Handled:     true,
+			SwitchError: soft,
+		}
+	}
 	s.setModelRateLimitAndClearSession(p, info)
 
 	return &handleModelRateLimitResult{
