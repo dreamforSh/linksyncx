@@ -77,6 +77,10 @@ func (f *AntigravityQuotaFetcher) FetchQuota(ctx context.Context, account *Accou
 				},
 			}, nil
 		}
+		// 双跑：旧模型接口失败时，摘要里仍可能有带剩余比例的分组。
+		if info := f.usageInfoFromQuotaSummary(ctx, client, accessToken, projectID); info != nil {
+			return &QuotaResult{UsageInfo: info}, nil
+		}
 		return nil, err
 	}
 
@@ -96,6 +100,39 @@ func (f *AntigravityQuotaFetcher) FetchQuota(ctx context.Context, account *Accou
 		UsageInfo: usageInfo,
 		Raw:       modelsRaw,
 	}, nil
+}
+
+// usageInfoFromQuotaSummary 在 fetchAvailableModels 失败时，用摘要里带剩余比例的桶组装额度。
+// 摘要没有可用桶时返回 nil，调用方保持原来的错误。
+func (f *AntigravityQuotaFetcher) usageInfoFromQuotaSummary(ctx context.Context, client *antigravity.Client, accessToken, projectID string) *UsageInfo {
+	summary, err := client.RetrieveUserQuotaSummary(ctx, accessToken, projectID, resolveModelsListReadLimit(f.cfg))
+	if err != nil {
+		slog.Warn("antigravity quota summary unavailable", "error", err)
+		return nil
+	}
+	now := time.Now()
+	info := &UsageInfo{
+		UpdatedAt:               &now,
+		AntigravityQuota:        make(map[string]*AntigravityModelQuota),
+		AntigravityQuotaDetails: make(map[string]*AntigravityModelDetail),
+	}
+	applyAntigravityQuotaSummary(info, summary)
+	if len(info.AntigravityQuotaGroups) == 0 {
+		return nil
+	}
+	tierRaw, tierNormalized, loadResp := f.fetchSubscriptionTier(ctx, client, accessToken)
+	info.SubscriptionTier = tierNormalized
+	info.SubscriptionTierRaw = tierRaw
+	if loadResp != nil {
+		for _, credit := range loadResp.GetAvailableCredits() {
+			info.AICredits = append(info.AICredits, AICredit{
+				CreditType:     credit.CreditType,
+				Amount:         credit.GetAmount(),
+				MinimumBalance: credit.GetMinimumAmount(),
+			})
+		}
+	}
+	return info
 }
 
 // fetchSubscriptionTier 获取账号订阅等级，失败返回空字符串。

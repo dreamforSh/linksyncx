@@ -7,6 +7,7 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
@@ -623,8 +624,9 @@ func TestApplyAntigravityQuotaSummary_MissingFractionDoesNotCountAsZero(t *testi
 		Buckets: []antigravity.QuotaSummaryBucket{{BucketID: "pool", DisplayName: "Pool"}},
 	})
 	require.Len(t, info.AntigravityQuotaGroups, 1)
-	require.InDelta(t, 1.0, info.AntigravityQuotaGroups[0].RemainingFraction, 0.0001)
-	require.InDelta(t, 0.0, info.FiveHour.Utilization, 0.01)
+	require.Equal(t, "gemini-3-flash", info.AntigravityQuotaGroups[0].Label)
+	require.InDelta(t, 0.4, info.AntigravityQuotaGroups[0].RemainingFraction, 0.0001)
+	require.InDelta(t, 60.0, info.FiveHour.Utilization, 0.01)
 }
 
 func TestApplyAntigravityQuotaSummary_DisabledOnlyKeepsDerivedGroups(t *testing.T) {
@@ -641,4 +643,130 @@ func TestApplyAntigravityQuotaSummary_DisabledOnlyKeepsDerivedGroups(t *testing.
 	require.Len(t, info.AntigravityQuotaGroups, 1)
 	require.Equal(t, "Flash", info.AntigravityQuotaGroups[0].Label)
 	require.InDelta(t, 60.0, info.FiveHour.Utilization, 0.01)
+}
+func TestApplyAntigravityQuotaSummary_SkipsBucketsWithoutFraction(t *testing.T) {
+	fetcher := &AntigravityQuotaFetcher{}
+	info := fetcher.buildUsageInfo(&antigravity.FetchAvailableModelsResponse{
+		Models: map[string]antigravity.ModelInfo{
+			"gemini-3-flash": {DisplayName: "Flash", QuotaInfo: &antigravity.ModelQuotaInfo{RemainingFraction: 0.4}},
+		},
+	}, "", "", nil)
+	known := 0.2
+	zero := 0.0
+	applyAntigravityQuotaSummary(info, &antigravity.RetrieveUserQuotaSummaryResponse{
+		Buckets: []antigravity.QuotaSummaryBucket{
+			{BucketID: "pool", DisplayName: "Pool", RemainingAmount: &zero},
+			{BucketID: "opus", DisplayName: "Opus", RemainingFraction: &known, ResetTime: "2026-10-14T12:00:00Z"},
+			{BucketID: "empty", DisplayName: "Empty", RemainingFraction: &zero},
+		},
+	})
+	require.Len(t, info.AntigravityQuotaGroups, 2)
+	byLabel := map[string]AntigravityQuotaGroup{}
+	for _, group := range info.AntigravityQuotaGroups {
+		byLabel[group.Label] = group
+	}
+	require.NotContains(t, byLabel, "Pool")
+	require.NotContains(t, byLabel, "Flash")
+	require.InDelta(t, 0.2, byLabel["Opus"].RemainingFraction, 0.0001)
+	require.InDelta(t, 0.0, byLabel["Empty"].RemainingFraction, 0.0001)
+	require.InDelta(t, 100.0, info.FiveHour.Utilization, 0.01)
+}
+
+func useAntigravityQuotaTestServer(t *testing.T, handler http.HandlerFunc) *AntigravityQuotaFetcher {
+	t.Helper()
+	server := httptest.NewServer(handler)
+	t.Cleanup(server.Close)
+	oldBaseURLs := append([]string(nil), antigravity.BaseURLs...)
+	oldAvailability := antigravity.DefaultURLAvailability
+	t.Cleanup(func() {
+		antigravity.BaseURLs = oldBaseURLs
+		antigravity.DefaultURLAvailability = oldAvailability
+	})
+	antigravity.BaseURLs = []string{server.URL}
+	antigravity.DefaultURLAvailability = antigravity.NewURLAvailability(time.Minute)
+	return NewAntigravityQuotaFetcher(nil, &config.Config{})
+}
+
+func TestFetchQuota_ModelsFailureUsesSummaryGroups(t *testing.T) {
+	summaryHits := 0
+	fetcher := useAntigravityQuotaTestServer(t, func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch {
+		case strings.Contains(r.URL.Path, "fetchAvailableModels"):
+			w.WriteHeader(http.StatusInternalServerError)
+			_, _ = w.Write([]byte(`{"error":"down"}`))
+		case strings.Contains(r.URL.Path, "retrieveUserQuotaSummary"):
+			summaryHits++
+			_, _ = w.Write([]byte(`{"groups":[{"displayName":"Claude","buckets":[{"bucketId":"claude-opus-4-8","displayName":"Opus","remainingFraction":0.25,"resetTime":"2026-10-14T12:00:00Z"}]}]}`))
+		default:
+			w.WriteHeader(http.StatusNotFound)
+		}
+	})
+	result, err := fetcher.FetchQuota(context.Background(), &Account{
+		Platform: PlatformAntigravity,
+		Type:     AccountTypeOAuth,
+		Credentials: map[string]any{
+			"access_token": "token",
+			"project_id":   "project",
+		},
+	}, "")
+	require.NoError(t, err)
+	require.Equal(t, 1, summaryHits)
+	require.Len(t, result.UsageInfo.AntigravityQuotaGroups, 1)
+	require.Equal(t, "Opus", result.UsageInfo.AntigravityQuotaGroups[0].Label)
+	require.InDelta(t, 0.25, result.UsageInfo.AntigravityQuotaGroups[0].RemainingFraction, 0.0001)
+	require.InDelta(t, 75.0, result.UsageInfo.FiveHour.Utilization, 0.01)
+}
+
+func TestFetchQuota_SummaryWithoutFractionKeepsModelsError(t *testing.T) {
+	fetcher := useAntigravityQuotaTestServer(t, func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch {
+		case strings.Contains(r.URL.Path, "fetchAvailableModels"):
+			w.WriteHeader(http.StatusBadGateway)
+			_, _ = w.Write([]byte(`{"error":"down"}`))
+		case strings.Contains(r.URL.Path, "retrieveUserQuotaSummary"):
+			_, _ = w.Write([]byte(`{"buckets":[{"bucketId":"pool","displayName":"Pool","remainingAmount":12}]}`))
+		default:
+			w.WriteHeader(http.StatusNotFound)
+		}
+	})
+	_, err := fetcher.FetchQuota(context.Background(), &Account{
+		Platform: PlatformAntigravity,
+		Type:     AccountTypeOAuth,
+		Credentials: map[string]any{
+			"access_token": "token",
+			"project_id":   "project",
+		},
+	}, "")
+	require.ErrorContains(t, err, "fetchAvailableModels")
+}
+
+func TestFetchQuota_ForbiddenDoesNotUseSummary(t *testing.T) {
+	summaryHits := 0
+	fetcher := useAntigravityQuotaTestServer(t, func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch {
+		case strings.Contains(r.URL.Path, "fetchAvailableModels"):
+			w.WriteHeader(http.StatusForbidden)
+			_, _ = w.Write([]byte(`{"error":{"message":"VALIDATION_REQUIRED","details":[{"metadata":{"validation_url":"https://accounts.google.com/verify"}}]}}`))
+		case strings.Contains(r.URL.Path, "retrieveUserQuotaSummary"):
+			summaryHits++
+			_, _ = w.Write([]byte(`{"buckets":[{"displayName":"Opus","remainingFraction":0.25}]}`))
+		default:
+			w.WriteHeader(http.StatusNotFound)
+		}
+	})
+	result, err := fetcher.FetchQuota(context.Background(), &Account{
+		Platform: PlatformAntigravity,
+		Type:     AccountTypeOAuth,
+		Credentials: map[string]any{
+			"access_token": "token",
+			"project_id":   "project",
+		},
+	}, "")
+	require.NoError(t, err)
+	require.Equal(t, 0, summaryHits)
+	require.True(t, result.UsageInfo.IsForbidden)
+	require.Empty(t, result.UsageInfo.AntigravityQuotaGroups)
 }

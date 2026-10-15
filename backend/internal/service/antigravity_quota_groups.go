@@ -119,13 +119,11 @@ func quotaGroupsFromSummary(summary *antigravity.RetrieveUserQuotaSummaryRespons
 		if label == "" {
 			label = strings.TrimSpace(bucket.BucketID)
 		}
-		if label == "" {
+		if label == "" || bucket.RemainingFraction == nil {
+			// 没给剩余比例不能当成满额，否则会盖掉模型接口已经拿到的真实用量。
 			continue
 		}
-		remaining := 1.0
-		if bucket.RemainingFraction != nil {
-			remaining = *bucket.RemainingFraction
-		}
+		remaining := *bucket.RemainingFraction
 		models := append([]string(nil), bucket.Models...)
 		if len(models) == 0 && strings.TrimSpace(bucket.BucketID) != "" {
 			models = []string{strings.TrimSpace(bucket.BucketID)}
