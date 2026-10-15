@@ -162,6 +162,7 @@ var claudeModels = []modelDef{
 	{ID: "claude-opus-4-6-thinking", DisplayName: "Claude Opus 4.6 Thinking", CreatedAt: "2026-02-05T00:00:00Z"},
 	{ID: "claude-opus-4-7", DisplayName: "Claude Opus 4.7", CreatedAt: "2026-04-17T00:00:00Z"},
 	{ID: "claude-opus-4-8", DisplayName: "Claude Opus 4.8", CreatedAt: "2026-05-29T00:00:00Z"},
+	{ID: "claude-opus-5-5", DisplayName: "Claude Opus 5.5", CreatedAt: "2026-10-01T00:00:00Z"},
 	{ID: "claude-sonnet-4-6", DisplayName: "Claude Sonnet 4.6", CreatedAt: "2026-02-17T00:00:00Z"},
 }
 
@@ -194,8 +195,23 @@ var geminiModels = []modelDef{
 	{ID: "gemini-3.8-flash-low", DisplayName: "Gemini 3.8 Flash Low", CreatedAt: "2026-09-02T00:00:00Z", IsReasoning: true},
 	{ID: "gemini-3.8-flash-medium", DisplayName: "Gemini 3.8 Flash Medium", CreatedAt: "2026-09-02T00:00:00Z", IsReasoning: true},
 	{ID: "gemini-3.8-flash-tiered", DisplayName: "Gemini 3.8 Flash", CreatedAt: "2026-09-02T00:00:00Z", IsReasoning: true},
+	{ID: "gemini-3.1-ultra", DisplayName: "Gemini 3.1 Ultra", CreatedAt: "2026-10-01T00:00:00Z"},
+	{ID: "gemini-3.1-flash-lite", DisplayName: "Gemini 3.1 Flash Lite", CreatedAt: "2026-10-01T00:00:00Z"},
+	{ID: "gemini-3.5-flash", DisplayName: "Gemini 3.5 Flash", CreatedAt: "2026-10-01T00:00:00Z"},
+	{ID: "gemini-3.5-flash-low", DisplayName: "Gemini 3.5 Flash Low", CreatedAt: "2026-10-01T00:00:00Z", IsReasoning: true},
+	{ID: "gemini-3.5-flash-lite", DisplayName: "Gemini 3.5 Flash Lite", CreatedAt: "2026-10-01T00:00:00Z"},
+	{ID: "gemini-3.5-flash-extra-low", DisplayName: "Gemini 3.5 Flash Extra Low", CreatedAt: "2026-10-01T00:00:00Z", IsReasoning: true},
+	{ID: "gemini-4-argon", DisplayName: "Gemini 4 Argon", CreatedAt: "2026-10-01T00:00:00Z"},
+	{ID: "gemini-4-argon-high", DisplayName: "Gemini 4 Argon High", CreatedAt: "2026-10-01T00:00:00Z", IsReasoning: true},
+	{ID: "gemini-4-argon-low", DisplayName: "Gemini 4 Argon Low", CreatedAt: "2026-10-01T00:00:00Z", IsReasoning: true},
+	{ID: "gemini-4-argon-medium", DisplayName: "Gemini 4 Argon Medium", CreatedAt: "2026-10-01T00:00:00Z", IsReasoning: true},
 	{ID: "gemini-3-pro-preview", DisplayName: "Gemini 3 Pro Preview", CreatedAt: "2025-06-01T00:00:00Z", IsReasoning: true},
 	{ID: "gemini-3-pro-image", DisplayName: "Gemini 3 Pro Image", CreatedAt: "2025-06-01T00:00:00Z"},
+}
+
+var otherModels = []modelDef{
+	{ID: "gpt-oss-120b-maas", DisplayName: "GPT-OSS 120B", CreatedAt: "2026-10-01T00:00:00Z"},
+	{ID: "gpt-oss-20b-maas", DisplayName: "GPT-OSS 20B", CreatedAt: "2026-10-01T00:00:00Z"},
 }
 
 // ========== Claude API 格式 (/v1/models) ==========
@@ -210,7 +226,10 @@ type ClaudeModel struct {
 
 // DefaultModels 返回 Claude API 格式的模型列表（Claude + Gemini）
 func DefaultModels() []ClaudeModel {
-	all := append(claudeModels, geminiModels...)
+	all := make([]modelDef, 0, len(claudeModels)+len(geminiModels)+len(otherModels))
+	all = append(all, claudeModels...)
+	all = append(all, geminiModels...)
+	all = append(all, otherModels...)
 	result := make([]ClaudeModel, len(all))
 	for i, m := range all {
 		result[i] = ClaudeModel{ID: m.ID, Type: "model", DisplayName: m.DisplayName, CreatedAt: m.CreatedAt}

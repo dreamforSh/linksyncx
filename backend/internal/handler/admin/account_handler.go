@@ -3070,9 +3070,16 @@ func (h *AccountHandler) GetAvailableModels(c *gin.Context) {
 		return
 	}
 
-	// Handle Antigravity accounts: return Claude + Gemini models
+	// Handle Antigravity accounts: live discovery projected through model_mapping,
+	// with the static catalog when discovery is unavailable.
 	if account.Platform == service.PlatformAntigravity {
-		// 直接复用 antigravity.DefaultModels()，与 /v1/models 端点保持同步
+		if h.accountTestService != nil {
+			models, err := h.accountTestService.FetchAntigravityAccountModels(c.Request.Context(), account)
+			if err == nil && models != nil {
+				response.Success(c, models)
+				return
+			}
+		}
 		response.Success(c, antigravity.DefaultModels())
 		return
 	}

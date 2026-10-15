@@ -737,8 +737,7 @@ func (s *AccountTestService) fetchUpstreamModelList(ctx context.Context, account
 	}
 
 	if account.Platform == PlatformAntigravity && account.Type != AccountTypeAPIKey {
-		models, err := s.fetchAntigravityOAuthUpstreamModels(ctx, account)
-		return models, nil, err
+		return s.fetchAntigravityOAuthUpstreamModels(ctx, account)
 	}
 
 	if s.httpUpstream == nil {
@@ -1161,27 +1160,27 @@ func (s *AccountTestService) buildGeminiUpstreamModelsRequest(ctx context.Contex
 	return req, nil
 }
 
-func (s *AccountTestService) fetchAntigravityOAuthUpstreamModels(ctx context.Context, account *Account) ([]string, error) {
+func (s *AccountTestService) fetchAntigravityOAuthUpstreamModels(ctx context.Context, account *Account) ([]string, []byte, error) {
 	if s.antigravityGatewayService == nil || s.antigravityGatewayService.GetTokenProvider() == nil {
-		return nil, newUpstreamModelSyncConfigError("Antigravity token provider is not configured", nil)
+		return nil, nil, newUpstreamModelSyncConfigError("Antigravity token provider is not configured", nil)
 	}
 
 	accessToken, err := s.antigravityGatewayService.GetTokenProvider().GetAccessToken(ctx, account)
 	if err != nil {
-		return nil, newUpstreamModelSyncUpstreamError("Failed to get Antigravity access token", err)
+		return nil, nil, newUpstreamModelSyncUpstreamError("Failed to get Antigravity access token", err)
 	}
 	accessToken = strings.TrimSpace(accessToken)
 	if accessToken == "" {
-		return nil, newUpstreamModelSyncConfigError("No Antigravity access token is available", nil)
+		return nil, nil, newUpstreamModelSyncConfigError("No Antigravity access token is available", nil)
 	}
 
 	proxyURL, err := upstreamModelsProxyURL(account)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	client, err := antigravity.NewClient(proxyURL)
 	if err != nil {
-		return nil, newUpstreamModelSyncConfigError("Failed to configure Antigravity client", err)
+		return nil, nil, newUpstreamModelSyncConfigError("Failed to configure Antigravity client", err)
 	}
 	modelsResp, _, err := client.FetchAvailableModels(
 		ctx,
@@ -1190,17 +1189,65 @@ func (s *AccountTestService) fetchAntigravityOAuthUpstreamModels(ctx context.Con
 		resolveModelsListReadLimit(s.cfg),
 	)
 	if err != nil {
-		return nil, newUpstreamModelSyncUpstreamError("Failed to fetch Antigravity available models", err)
+		return nil, nil, newUpstreamModelSyncUpstreamError("Failed to fetch Antigravity available models", err)
 	}
 	if modelsResp == nil || len(modelsResp.Models) == 0 {
-		return nil, newUpstreamModelSyncUpstreamError("Upstream returned no supported models", nil)
+		return nil, nil, newUpstreamModelSyncUpstreamError("Upstream returned no supported models", nil)
 	}
 
 	models := make([]string, 0, len(modelsResp.Models))
 	for modelID := range modelsResp.Models {
 		models = append(models, strings.TrimSpace(modelID))
 	}
-	return dedupeAndSortModelIDs(models), nil
+	body, err := synthesizeAntigravityCatalogBody(modelsResp)
+	if err != nil {
+		return nil, nil, newUpstreamModelSyncUpstreamError("Failed to encode Antigravity model catalog", err)
+	}
+	return dedupeAndSortModelIDs(models), body, nil
+}
+
+func synthesizeAntigravityCatalogBody(resp *antigravity.FetchAvailableModelsResponse) ([]byte, error) {
+	if resp == nil || len(resp.Models) == 0 {
+		return nil, errors.New("no antigravity models")
+	}
+	ids := make([]string, 0, len(resp.Models))
+	for id := range resp.Models {
+		if strings.TrimSpace(id) == "" {
+			continue
+		}
+		ids = append(ids, id)
+	}
+	sort.Strings(ids)
+	type catalogEntry struct {
+		ID              string   `json:"id"`
+		DisplayName     string   `json:"display_name,omitempty"`
+		Reasoning       *bool    `json:"reasoning,omitempty"`
+		ContextWindow   int      `json:"context_window,omitempty"`
+		MaxOutputTokens int      `json:"max_output_tokens,omitempty"`
+		InputModalities []string `json:"input_modalities,omitempty"`
+	}
+	data := make([]catalogEntry, 0, len(ids))
+	for _, id := range ids {
+		info := resp.Models[id]
+		item := catalogEntry{ID: strings.TrimSpace(id), DisplayName: strings.TrimSpace(info.DisplayName)}
+		if info.SupportsThinking != nil {
+			thinking := *info.SupportsThinking
+			item.Reasoning = &thinking
+		}
+		if info.MaxTokens != nil && *info.MaxTokens > 0 {
+			item.ContextWindow = *info.MaxTokens
+		}
+		if info.MaxOutputTokens != nil && *info.MaxOutputTokens > 0 {
+			item.MaxOutputTokens = *info.MaxOutputTokens
+		}
+		if info.SupportsImages != nil && *info.SupportsImages {
+			item.InputModalities = []string{"text", "image"}
+		} else {
+			item.InputModalities = []string{"text"}
+		}
+		data = append(data, item)
+	}
+	return json.Marshal(map[string]any{"data": data})
 }
 
 func (s *AccountTestService) doUpstreamModelsRequest(req *http.Request, proxyURL string, account *Account) (*http.Response, error) {

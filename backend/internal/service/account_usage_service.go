@@ -162,6 +162,14 @@ type AntigravityModelQuota struct {
 	ResetTime   string `json:"reset_time"`  // 重置时间 ISO8601
 }
 
+// AntigravityQuotaGroup 是一组共享剩余比例和重置时间的模型，或上游 summary 的一个桶。
+type AntigravityQuotaGroup struct {
+	Label             string   `json:"label"`
+	Models            []string `json:"models,omitempty"`
+	RemainingFraction float64  `json:"remaining_fraction"`
+	ResetTime         string   `json:"reset_time,omitempty"`
+}
+
 // AntigravityModelDetail Antigravity 单个模型的详细能力信息
 type AntigravityModelDetail struct {
 	DisplayName        string          `json:"display_name,omitempty"`
@@ -201,6 +209,9 @@ type UsageInfo struct {
 
 	// Antigravity 多模型配额
 	AntigravityQuota map[string]*AntigravityModelQuota `json:"antigravity_quota,omitempty"`
+
+	// Antigravity 动态配额分组。缺省时前端继续用旧的固定分组渲染。
+	AntigravityQuotaGroups []AntigravityQuotaGroup `json:"antigravity_quota_groups,omitempty"`
 
 	// Grok / xAI 被动额度快照
 	GrokRequestQuota       *xai.QuotaWindow `json:"grok_request_quota,omitempty"`

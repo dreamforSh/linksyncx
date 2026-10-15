@@ -124,12 +124,13 @@ const AntigravityGemini31ProAgentModel = "gemini-pro-agent"
 
 // DefaultAntigravityModelMapping 是 Antigravity 平台的默认模型映射
 // 当账号未配置 model_mapping 时使用此默认值
-// 与前端 useModelWhitelist.ts 中的 antigravityDefaultMappings 保持一致
+// 前端通过 getAntigravityDefaultModelMapping 读取这份映射
 var DefaultAntigravityModelMapping = map[string]string{
 	// Claude 白名单
-	"claude-fable-5-1":           "claude-fable-5-1",         // 官方模型
-	"claude-fable-5":             "claude-fable-5",           // 官方模型
-	"claude-opus-4-8":            "claude-opus-4-8",          // 官方模型
+	"claude-fable-5-1":           "claude-fable-5-1", // 官方模型
+	"claude-fable-5":             "claude-fable-5",   // 官方模型
+	"claude-opus-4-8":            "claude-opus-4-8",  // 官方模型
+	"claude-opus-5-5":            "claude-opus-5-5",
 	"claude-opus-4-7":            "claude-opus-4-7",          // 官方模型
 	"claude-opus-4-6-thinking":   "claude-opus-4-6-thinking", // 官方模型
 	"claude-opus-4-6":            "claude-opus-4-6-thinking", // 简称映射
@@ -168,6 +169,14 @@ var DefaultAntigravityModelMapping = map[string]string{
 	"gemini-3.1-flash-image": "gemini-3.1-flash-image",
 	// Gemini 3.1 image preview 映射
 	"gemini-3.1-flash-image-preview": "gemini-3.1-flash-image",
+	"gemini-3.1-flash-lite":          "gemini-3.1-flash-lite",
+	"gemini-3.1-flash-lite-preview":  "gemini-3.1-flash-lite",
+	"gemini-3.1-ultra":               "gemini-3.1-ultra",
+	// Gemini 3.5 Flash
+	"gemini-3.5-flash":           "gemini-3.5-flash",
+	"gemini-3.5-flash-low":       "gemini-3.5-flash-low",
+	"gemini-3.5-flash-lite":      "gemini-3.5-flash-lite",
+	"gemini-3.5-flash-extra-low": "gemini-3.5-flash-extra-low",
 	// Gemini 3.6 Flash tiered models
 	"gemini-3.6-flash":        "gemini-3.6-flash",
 	"gemini-3.6-flash-high":   "gemini-3.6-flash-high",
@@ -186,11 +195,17 @@ var DefaultAntigravityModelMapping = map[string]string{
 	"gemini-3.8-flash-low":    "gemini-3.8-flash-low",
 	"gemini-3.8-flash-medium": "gemini-3.8-flash-medium",
 	"gemini-3.8-flash-tiered": "gemini-3.8-flash-tiered",
+	"gemini-4-argon":          "gemini-4-argon",
+	"gemini-4-argon-high":     "gemini-4-argon-high",
+	"gemini-4-argon-low":      "gemini-4-argon-low",
+	"gemini-4-argon-medium":   "gemini-4-argon-medium",
 	// Gemini 3 image 兼容映射（向 3.1 image 迁移）
 	"gemini-3-pro-image":         "gemini-3.1-flash-image",
 	"gemini-3-pro-image-preview": "gemini-3.1-flash-image",
 	// 其他官方模型
-	"gpt-oss-120b-medium":    "gpt-oss-120b-medium",
+	"gpt-oss-120b-medium":    "gpt-oss-120b-maas",
+	"gpt-oss-120b-maas":      "gpt-oss-120b-maas",
+	"gpt-oss-20b-maas":       "gpt-oss-20b-maas",
 	"tab_flash_lite_preview": "tab_flash_lite_preview",
 }
 

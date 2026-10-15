@@ -1282,6 +1282,21 @@
             </p>
           </div>
 
+          <div class="mb-3 flex flex-wrap items-center gap-2">
+            <button
+              type="button"
+              data-testid="antigravity-sync-upstream"
+              @click="syncAntigravityUpstreamModels"
+              :disabled="!canSyncAntigravityUpstream || isSyncingAntigravityUpstream"
+              class="rounded-lg border border-emerald-200 px-3 py-1.5 text-sm text-emerald-600 hover:bg-emerald-50 disabled:cursor-not-allowed disabled:opacity-60 dark:border-emerald-800 dark:text-emerald-400 dark:hover:bg-emerald-900/30"
+            >
+              {{ isSyncingAntigravityUpstream ? t('admin.accounts.syncUpstreamModelsLoading') : t('admin.accounts.syncUpstreamModels') }}
+            </button>
+            <p v-if="antigravityAccountType !== 'upstream'" class="text-xs text-gray-500 dark:text-gray-400">
+              {{ t('admin.accounts.syncUpstreamModelsOAuthHint') }}
+            </p>
+          </div>
+
           <div v-if="antigravityModelMappings.length > 0" class="mb-3 space-y-2">
             <div
               v-for="(mapping, index) in antigravityModelMappings"
@@ -4586,6 +4601,12 @@ const antigravityAccountType = ref<'oauth' | 'upstream'>('oauth') // For antigra
 const antigravityProjectId = ref('')
 const upstreamBaseUrl = ref('') // For upstream type: base URL
 const upstreamApiKey = ref('') // For upstream type: API key
+const isSyncingAntigravityUpstream = ref(false)
+const canSyncAntigravityUpstream = computed(() =>
+  antigravityAccountType.value === 'upstream' &&
+  upstreamBaseUrl.value.trim() !== '' &&
+  upstreamApiKey.value.trim() !== ''
+)
 const antigravityModelRestrictionMode = ref<'whitelist' | 'mapping'>('whitelist')
 const antigravityWhitelistModels = ref<string[]>([])
 const antigravityModelMappings = ref<ModelMapping[]>([])
@@ -5199,6 +5220,45 @@ const addAntigravityPresetMapping = (from: string, to: string) => {
     return
   }
   antigravityModelMappings.value.push({ from, to })
+}
+
+const syncAntigravityUpstreamModels = async () => {
+  if (!canSyncAntigravityUpstream.value || isSyncingAntigravityUpstream.value) return
+
+  isSyncingAntigravityUpstream.value = true
+  try {
+    const result = await adminAPI.accounts.syncUpstreamModelsPreview({
+      platform: 'antigravity',
+      type: 'apikey',
+      base_url: upstreamBaseUrl.value.trim(),
+      api_key: upstreamApiKey.value.trim()
+    })
+    const upstreamModels = result.models.map((model) => model.trim()).filter(Boolean)
+    if (upstreamModels.length === 0) {
+      appStore.showInfo(t('admin.accounts.syncUpstreamModelsEmpty'))
+      return
+    }
+
+    let addedCount = 0
+    for (const model of upstreamModels) {
+      const exists = antigravityModelMappings.value.some((mapping) => mapping.from === model)
+      if (!exists) {
+        antigravityModelMappings.value.push({ from: model, to: model })
+        addedCount += 1
+      }
+    }
+
+    if (addedCount > 0) {
+      appStore.showSuccess(t('admin.accounts.syncUpstreamModelsSuccess', { count: addedCount, total: upstreamModels.length }))
+    } else {
+      appStore.showInfo(t('admin.accounts.syncUpstreamModelsNoChanges', { count: upstreamModels.length }))
+    }
+  } catch (error) {
+    const message = error instanceof Error ? error.message : t('admin.accounts.syncUpstreamModelsFailed')
+    appStore.showError(t('admin.accounts.syncUpstreamModelsError', { message }))
+  } finally {
+    isSyncingAntigravityUpstream.value = false
+  }
 }
 
 // Error code toggle helper

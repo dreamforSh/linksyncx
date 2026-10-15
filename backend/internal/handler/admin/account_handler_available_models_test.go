@@ -604,3 +604,120 @@ func TestAccountHandlerSyncUpstreamModels_MetadataEnrichmentFailureReturnsWarnin
 	require.Len(t, resp.Data.Warnings, 1)
 	require.Equal(t, "upstream_model_metadata_incomplete", resp.Data.Warnings[0].Code)
 }
+
+func setupAntigravityAvailableModelsRouter(adminSvc service.AdminService, upstream service.HTTPUpstream) *gin.Engine {
+	gin.SetMode(gin.TestMode)
+	router := gin.New()
+	accountTestSvc := service.NewAccountTestService(
+		nil, nil, nil, nil, nil, upstream,
+		&config.Config{Security: config.SecurityConfig{URLAllowlist: config.URLAllowlistConfig{Enabled: false}}},
+		nil,
+	)
+	handler := NewAccountHandler(adminSvc, nil, nil, nil, nil, nil, nil, nil, accountTestSvc, nil, nil, nil, nil, nil)
+	router.GET("/api/v1/admin/accounts/:id/models", handler.GetAvailableModels)
+	return router
+}
+
+func TestAccountHandlerGetAvailableModels_AntigravityProjectsUpstreamAliases(t *testing.T) {
+	svc := &availableModelsAdminService{
+		stubAdminService: newStubAdminService(),
+		account: service.Account{
+			ID:       8801,
+			Platform: service.PlatformAntigravity,
+			Type:     service.AccountTypeAPIKey,
+			Status:   service.StatusActive,
+			Credentials: map[string]any{
+				"base_url": "https://models.example/antigravity",
+				"api_key":  "test-key",
+				"model_mapping": map[string]any{
+					"public-opus": "claude-opus-4-8",
+				},
+			},
+		},
+	}
+	body := `{"data":[{"id":"claude-opus-4-8","display_name":"Opus 4.8"},{"id":"unmapped-model","display_name":"Hidden"},{"id":"gemini-3-flash","display_name":"Gemini 3 Flash"}]}`
+	upstream := &syncUpstreamHTTPUpstream{resp: &http.Response{
+		StatusCode: http.StatusOK,
+		Body:       io.NopCloser(strings.NewReader(body)),
+		Header:     make(http.Header),
+	}}
+	router := setupAntigravityAvailableModelsRouter(svc, upstream)
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/admin/accounts/8801/models", nil)
+	router.ServeHTTP(rec, req)
+
+	require.Equal(t, http.StatusOK, rec.Code)
+	var resp struct {
+		Data []struct {
+			ID          string `json:"id"`
+			DisplayName string `json:"display_name"`
+		} `json:"data"`
+	}
+	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &resp))
+	byID := map[string]string{}
+	for _, model := range resp.Data {
+		byID[model.ID] = model.DisplayName
+	}
+	require.NotContains(t, byID, "unmapped-model")
+	require.Equal(t, "public-opus", byID["public-opus"])
+	require.Equal(t, "Gemini 3 Flash", byID["gemini-3-flash"])
+}
+
+func TestAccountHandlerGetAvailableModels_AntigravityUpstreamFailureUsesStaticCatalog(t *testing.T) {
+	svc := &availableModelsAdminService{
+		stubAdminService: newStubAdminService(),
+		account: service.Account{
+			ID:       8802,
+			Platform: service.PlatformAntigravity,
+			Type:     service.AccountTypeAPIKey,
+			Status:   service.StatusActive,
+			Credentials: map[string]any{
+				"base_url": "https://models.example/antigravity",
+				"api_key":  "test-key",
+			},
+		},
+	}
+	upstream := &syncUpstreamHTTPUpstream{resp: &http.Response{
+		StatusCode: http.StatusInternalServerError,
+		Body:       io.NopCloser(strings.NewReader(`{"error":"nope"}`)),
+		Header:     make(http.Header),
+	}}
+	router := setupAntigravityAvailableModelsRouter(svc, upstream)
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/admin/accounts/8802/models", nil)
+	router.ServeHTTP(rec, req)
+
+	require.Equal(t, http.StatusOK, rec.Code)
+	var resp struct {
+		Data []struct {
+			ID string `json:"id"`
+		} `json:"data"`
+	}
+	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &resp))
+	ids := map[string]bool{}
+	for _, model := range resp.Data {
+		ids[model.ID] = true
+	}
+	require.True(t, ids["claude-sonnet-4-6"])
+	require.True(t, ids["claude-opus-5-5"])
+}
+
+func TestAccountHandlerGetAvailableModels_AntigravityNilServiceUsesStaticCatalog(t *testing.T) {
+	svc := &availableModelsAdminService{
+		stubAdminService: newStubAdminService(),
+		account: service.Account{
+			ID:       8803,
+			Platform: service.PlatformAntigravity,
+			Type:     service.AccountTypeOAuth,
+			Status:   service.StatusActive,
+		},
+	}
+	router := setupAvailableModelsRouter(svc)
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/admin/accounts/8803/models", nil)
+	router.ServeHTTP(rec, req)
+	require.Equal(t, http.StatusOK, rec.Code)
+	require.Contains(t, rec.Body.String(), "claude-sonnet-4-6")
+}

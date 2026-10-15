@@ -54,6 +54,12 @@ func TestApplyThinkingModelSuffix(t *testing.T) {
 			thinkingEnabled: true,
 			expected:        "gemini-3-flash",
 		},
+		{
+			name:            "thinking enabled - claude-opus-4-6 becomes thinking version",
+			mappedModel:     "claude-opus-4-6",
+			thinkingEnabled: true,
+			expected:        "claude-opus-4-6-thinking",
+		},
 	}
 
 	for _, tt := range tests {

@@ -737,6 +737,101 @@ func (c *Client) FetchAvailableModels(ctx context.Context, accessToken, projectI
 	return nil, nil, lastErr
 }
 
+// QuotaSummaryBucket 是 retrieveUserQuotaSummary 的单个配额桶。
+// remainingFraction 用指针区分“上游没给”和“剩余为 0”。
+type QuotaSummaryBucket struct {
+	BucketID          string   `json:"bucketId,omitempty"`
+	DisplayName       string   `json:"displayName,omitempty"`
+	Description       string   `json:"description,omitempty"`
+	Window            string   `json:"window,omitempty"`
+	RemainingFraction *float64 `json:"remainingFraction,omitempty"`
+	RemainingAmount   *float64 `json:"remainingAmount,omitempty"`
+	Disabled          bool     `json:"disabled,omitempty"`
+	ResetTime         string   `json:"resetTime,omitempty"`
+	Models            []string `json:"models,omitempty"`
+}
+
+// QuotaSummaryGroup 是 retrieveUserQuotaSummary 的配额分组。
+type QuotaSummaryGroup struct {
+	DisplayName string               `json:"displayName,omitempty"`
+	Description string               `json:"description,omitempty"`
+	Buckets     []QuotaSummaryBucket `json:"buckets,omitempty"`
+}
+
+// RetrieveUserQuotaSummaryResponse 是 v1internal:retrieveUserQuotaSummary 的响应。
+type RetrieveUserQuotaSummaryResponse struct {
+	Buckets     []QuotaSummaryBucket `json:"buckets,omitempty"`
+	Groups      []QuotaSummaryGroup  `json:"groups,omitempty"`
+	Description string               `json:"description,omitempty"`
+}
+
+// RetrieveUserQuotaSummary 拉取账号级配额分组。
+// 非 200（含 403）是普通错误，调用方据此回落到 fetchAvailableModels，不把它当成账号封禁。
+func (c *Client) RetrieveUserQuotaSummary(ctx context.Context, accessToken, projectID string, bodyLimit int64) (*RetrieveUserQuotaSummaryResponse, error) {
+	if c == nil || c.httpClient == nil {
+		return nil, errors.New("antigravity client is not configured")
+	}
+	if bodyLimit <= 0 {
+		return nil, errors.New("retrieveUserQuotaSummary body limit must be positive")
+	}
+
+	bodyBytes, err := json.Marshal(FetchAvailableModelsRequest{Project: projectID})
+	if err != nil {
+		return nil, fmt.Errorf("序列化请求失败: %w", err)
+	}
+
+	availableURLs := BaseURLs
+	fetchClient := c.fetchAvailableModelsHTTPClient()
+	var lastErr error
+	for urlIdx, baseURL := range availableURLs {
+		apiURL := baseURL + "/v1internal:retrieveUserQuotaSummary"
+		req, err := http.NewRequestWithContext(ctx, http.MethodPost, apiURL, strings.NewReader(string(bodyBytes)))
+		if err != nil {
+			lastErr = fmt.Errorf("创建请求失败: %w", err)
+			continue
+		}
+		req.Header.Set("Authorization", "Bearer "+accessToken)
+		req.Header.Set("Content-Type", "application/json")
+		req.Header.Set("User-Agent", GetUserAgentForContext(ctx))
+
+		resp, err := servertiming.Do(fetchClient, req)
+		if err != nil {
+			lastErr = fmt.Errorf("retrieveUserQuotaSummary 请求失败: %w", err)
+			if shouldFallbackToNextURL(err, 0) && urlIdx < len(availableURLs)-1 {
+				log.Printf("[antigravity] retrieveUserQuotaSummary URL fallback: %s -> %s", baseURL, availableURLs[urlIdx+1])
+				continue
+			}
+			return nil, lastErr
+		}
+
+		respBodyBytes, err := io.ReadAll(io.LimitReader(resp.Body, bodyLimit+1))
+		_ = resp.Body.Close()
+		if err != nil {
+			return nil, fmt.Errorf("读取响应失败: %w", err)
+		}
+		if int64(len(respBodyBytes)) > bodyLimit {
+			return nil, fmt.Errorf("响应超过 %d 字节", bodyLimit)
+		}
+
+		if shouldFallbackToNextURL(nil, resp.StatusCode) && urlIdx < len(availableURLs)-1 {
+			log.Printf("[antigravity] retrieveUserQuotaSummary URL fallback (HTTP %d): %s -> %s", resp.StatusCode, baseURL, availableURLs[urlIdx+1])
+			continue
+		}
+		if resp.StatusCode != http.StatusOK {
+			return nil, fmt.Errorf("retrieveUserQuotaSummary 失败 (HTTP %d): %s", resp.StatusCode, string(respBodyBytes))
+		}
+
+		var summary RetrieveUserQuotaSummaryResponse
+		if err := json.Unmarshal(respBodyBytes, &summary); err != nil {
+			return nil, fmt.Errorf("响应解析失败: %w", err)
+		}
+		DefaultURLAvailability.MarkSuccess(baseURL)
+		return &summary, nil
+	}
+
+	return nil, lastErr
+}
+
 func (c *Client) fetchAvailableModelsHTTPClient() *http.Client {
 	fetchClient := *c.httpClient
 	fetchClient.CheckRedirect = checkFetchAvailableModelsRedirect

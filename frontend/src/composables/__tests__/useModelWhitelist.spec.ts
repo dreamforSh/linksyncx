@@ -39,23 +39,15 @@ describe('useModelWhitelist', () => {
     expect(models).not.toContain('gpt-5.2-codex')
   })
 
-  it('antigravity 模型列表包含图片模型兼容项', () => {
-    const models = getModelsByPlatform('antigravity')
-
-    expect(models).toContain('gemini-2.5-flash-image')
-    expect(models).toContain('gemini-3.1-flash-image')
-    expect(models).toContain('gemini-3-pro-image')
+  it('antigravity 模型列表在拉取默认映射前为空', () => {
+    expect(getModelsByPlatform('antigravity')).toEqual([])
   })
 
   it('Claude 模型列表包含新发布的 Claude 模型', () => {
     expect(getModelsByPlatform('claude')).toContain('claude-fable-5-1')
-    expect(getModelsByPlatform('antigravity')).toContain('claude-fable-5-1')
     expect(getModelsByPlatform('claude')).toContain('claude-fable-5')
-    expect(getModelsByPlatform('antigravity')).toContain('claude-fable-5')
     expect(getModelsByPlatform('claude')).toContain('claude-opus-5-5')
-    expect(getModelsByPlatform('antigravity')).not.toContain('claude-opus-5-5')
     expect(getModelsByPlatform('claude')).toContain('claude-opus-4-8')
-    expect(getModelsByPlatform('antigravity')).toContain('claude-opus-4-8')
   })
 
   it('xAI 模型列表包含 Grok 4.5 官方模型和别名', () => {
@@ -104,19 +96,6 @@ describe('useModelWhitelist', () => {
     expect(models).toContain('gemini-3.1-flash-image')
     expect(models.indexOf('gemini-3.1-flash-image')).toBeLessThan(models.indexOf('gemini-2.0-flash'))
     expect(models.indexOf('gemini-2.5-flash-image')).toBeLessThan(models.indexOf('gemini-2.5-flash'))
-  })
-
-  it('antigravity 模型列表会把新的 Gemini 图片模型排在前面', () => {
-    const models = getModelsByPlatform('antigravity')
-
-    expect(models.indexOf('gemini-3.1-flash-image')).toBeLessThan(models.indexOf('gemini-2.5-flash'))
-    expect(models.indexOf('gemini-2.5-flash-image')).toBeLessThan(models.indexOf('gemini-2.5-flash-lite'))
-  })
-
-  it('antigravity 模型列表包含 Gemini 3.1 Pro 通用别名', () => {
-    const models = getModelsByPlatform('antigravity')
-
-    expect(models).toContain('gemini-3.1-pro')
   })
 
   it('whitelist 模式会忽略通配符条目', () => {

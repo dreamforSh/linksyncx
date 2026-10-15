@@ -676,6 +676,19 @@ func (a *Account) resolveModelMapping(rawMapping map[string]any) map[string]stri
 				"gemini-3.8-flash-low",
 				"gemini-3.8-flash-medium",
 				"gemini-3.8-flash-tiered",
+				"claude-opus-5-5",
+				"gemini-3.1-ultra",
+				"gemini-3.1-flash-lite",
+				"gemini-3.5-flash",
+				"gemini-3.5-flash-low",
+				"gemini-3.5-flash-lite",
+				"gemini-3.5-flash-extra-low",
+				"gemini-4-argon",
+				"gemini-4-argon-high",
+				"gemini-4-argon-low",
+				"gemini-4-argon-medium",
+				"gpt-oss-120b-maas",
+				"gpt-oss-20b-maas",
 			})
 			applyAntigravityGemini31ProAliases(result)
 		}

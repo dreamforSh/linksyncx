@@ -350,6 +350,20 @@
       </div>
 
       <!-- Usage data from API -->
+      <div v-else-if="hasAntigravityQuotaGroups" class="space-y-1">
+        <UsageProgressBar
+          v-for="(group, index) in antigravityQuotaGroups"
+          :key="`${group.label}-${index}`"
+          :label="group.label"
+          :utilization="quotaGroupUtilization(group.remaining_fraction)"
+          :resets-at="group.reset_time || null"
+          :color="quotaGroupColor(index)"
+        />
+
+        <div v-if="aiCreditsDisplay" class="mt-1 text-[10px] text-gray-500 dark:text-gray-400">
+          💳 {{ t('admin.accounts.aiCreditsBalance') }}: {{ aiCreditsDisplay }}
+        </div>
+      </div>
       <div v-else-if="hasAntigravityQuotaFromAPI" class="space-y-1">
         <!-- Gemini 3 Pro -->
         <UsageProgressBar
@@ -914,6 +928,19 @@ interface AntigravityUsageResult {
 }
 
 // ===== Antigravity quota from API (usageInfo.antigravity_quota) =====
+
+const quotaGroupColors = ['indigo', 'emerald', 'purple', 'amber'] as const
+
+const quotaGroupColor = (index: number) => quotaGroupColors[index % quotaGroupColors.length]
+
+const quotaGroupUtilization = (remainingFraction: number) => {
+  if (typeof remainingFraction !== 'number' || Number.isNaN(remainingFraction)) return 0
+  return Math.round((1 - remainingFraction) * 100)
+}
+
+const antigravityQuotaGroups = computed(() => usageInfo.value?.antigravity_quota_groups ?? [])
+
+const hasAntigravityQuotaGroups = computed(() => antigravityQuotaGroups.value.length > 0)
 
 // 检查是否有从 API 获取的配额数据
 const hasAntigravityQuotaFromAPI = computed(() => {

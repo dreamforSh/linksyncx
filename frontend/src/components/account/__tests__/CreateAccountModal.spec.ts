@@ -6,6 +6,7 @@ const {
   createAccountMock,
   probeUpstreamBillingMock,
   syncUpstreamModelsMock,
+  syncUpstreamModelsPreviewMock,
   showWarningMock,
   importCodexSessionMock,
   createOpenAICodexPATMock,
@@ -19,6 +20,7 @@ const {
   createAccountMock: vi.fn(),
   probeUpstreamBillingMock: vi.fn(),
   syncUpstreamModelsMock: vi.fn(),
+  syncUpstreamModelsPreviewMock: vi.fn(),
   showWarningMock: vi.fn(),
   importCodexSessionMock: vi.fn(),
   createOpenAICodexPATMock: vi.fn(),
@@ -34,6 +36,7 @@ vi.mock('@/stores/app', () => ({
   useAppStore: () => ({
     showError: showErrorMock,
     showSuccess: vi.fn(),
+    showInfo: vi.fn(),
     showWarning: showWarningMock,
   }),
 }))
@@ -52,6 +55,7 @@ vi.mock('@/api/admin', () => ({
       create: createAccountMock,
       probeUpstreamBilling: probeUpstreamBillingMock,
       syncUpstreamModels: syncUpstreamModelsMock,
+      syncUpstreamModelsPreview: syncUpstreamModelsPreviewMock,
       checkMixedChannelRisk: vi.fn().mockResolvedValue({ has_risk: false }),
       importCodexSession: importCodexSessionMock,
       createOpenAICodexPAT: createOpenAICodexPATMock,
@@ -218,6 +222,7 @@ describe('CreateAccountModal OpenAI long-context billing', () => {
     createAccountMock.mockReset().mockResolvedValue({ id: 42, platform: 'openai', type: 'apikey' })
     probeUpstreamBillingMock.mockReset().mockResolvedValue({})
     syncUpstreamModelsMock.mockReset().mockResolvedValue({ models: [], metadata: {} })
+    syncUpstreamModelsPreviewMock.mockReset().mockResolvedValue({ models: [] })
     showWarningMock.mockReset()
     showErrorMock.mockReset()
     importCodexSessionMock.mockReset().mockResolvedValue({
@@ -679,6 +684,59 @@ describe('CreateAccountModal OpenAI long-context billing', () => {
     expect(payload?.upstream_billing_probe_enabled).toBe(true)
     // 创建成功后前端立即发起一次首探（与其他 apikey 平台一致）。
     expect(probeUpstreamBillingMock).toHaveBeenCalledWith(42)
+  })
+
+  it('antigravity OAuth 创建时同步按钮禁用并提示去编辑窗口', async () => {
+    const wrapper = mountModal()
+    await selectButtonByText(wrapper, 'Antigravity')
+    await flushPromises()
+
+    const button = wrapper.get('[data-testid="antigravity-sync-upstream"]')
+    expect(button.attributes('disabled')).toBeDefined()
+    expect(wrapper.text()).toContain('admin.accounts.syncUpstreamModelsOAuthHint')
+
+    await button.trigger('click')
+    await flushPromises()
+
+    expect(syncUpstreamModelsPreviewMock).not.toHaveBeenCalled()
+  })
+
+  it('antigravity upstream 同步预览把上游模型填成 from=to 映射', async () => {
+    syncUpstreamModelsPreviewMock.mockResolvedValue({
+      models: ['claude-opus-4-8', 'gemini-3.5-flash'],
+    })
+    const wrapper = mountModal()
+    await selectButtonByText(wrapper, 'Antigravity')
+    await selectButtonByText(wrapper, 'admin.accounts.types.antigravityApikey')
+    await flushPromises()
+
+    const button = wrapper.get('[data-testid="antigravity-sync-upstream"]')
+    expect(button.attributes('disabled')).toBeDefined()
+
+    const baseInput = wrapper
+      .findAll('input')
+      .find((candidate) => candidate.attributes('placeholder') === 'https://cloudcode-pa.googleapis.com')
+    expect(baseInput).toBeDefined()
+    await baseInput?.setValue('https://relay.example')
+    await wrapper.get('form#create-account-form input[type="password"]').setValue('sk-upstream')
+    expect(button.attributes('disabled')).toBeUndefined()
+
+    await button.trigger('click')
+    await flushPromises()
+
+    expect(syncUpstreamModelsPreviewMock).toHaveBeenCalledWith({
+      platform: 'antigravity',
+      type: 'apikey',
+      base_url: 'https://relay.example',
+      api_key: 'sk-upstream',
+    })
+    const values = (placeholder: string) =>
+      wrapper
+        .findAll('input')
+        .filter((candidate) => candidate.attributes('placeholder') === placeholder)
+        .map((candidate) => (candidate.element as HTMLInputElement).value)
+    expect(values('admin.accounts.requestModel')).toEqual(['claude-opus-4-8', 'gemini-3.5-flash'])
+    expect(values('admin.accounts.actualModel')).toEqual(['claude-opus-4-8', 'gemini-3.5-flash'])
   })
 
   it('leaves Codex session import billing ownership to the backend', async () => {

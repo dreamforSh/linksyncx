@@ -68,6 +68,9 @@
           label-key="display_name"
           :placeholder="loadingModels ? t('common.loading') + '...' : t('admin.accounts.selectTestModel')"
         />
+        <p v-if="modelsLoadError" class="text-xs text-amber-600 dark:text-amber-400">
+          {{ t('admin.accounts.selectTestModelLoadFailed') }}
+        </p>
       </div>
 
       <div v-if="isOpenAIAccount" class="space-y-1.5">
@@ -408,6 +411,7 @@ const availableModels = ref<ClaudeModel[]>([])
 const selectedModelId = ref('')
 const testPrompt = ref('')
 const loadingModels = ref(false)
+const modelsLoadError = ref(false)
 let abortController: AbortController | null = null
 const generatedImages = ref<PreviewMedia[]>([])
 const generatedAudios = ref<PreviewMedia[]>([])
@@ -764,6 +768,7 @@ const loadAvailableModels = async () => {
   if (!props.account) return
 
   loadingModels.value = true
+  modelsLoadError.value = false
   selectedModelId.value = '' // Reset selection before loading
   try {
     const models = await adminAPI.accounts.getAvailableModels(props.account.id)
@@ -782,6 +787,7 @@ const loadAvailableModels = async () => {
     }
   } catch (error) {
     console.error('Failed to load available models:', error)
+    modelsLoadError.value = true
     // Fallback to empty list
     availableModels.value = []
     selectedModelId.value = ''

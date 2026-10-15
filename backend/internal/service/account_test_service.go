@@ -157,6 +157,9 @@ type AccountTestService struct {
 	// grokWSDialer is optional; realtime account tests use the default OpenAI-style
 	// WS dialer when nil (supports proxy + coder/websocket handshake).
 	grokWSDialer openAIWSClientDialer
+	// antigravityModelsLoad replaces live Antigravity model discovery when set.
+	// Production leaves it nil.
+	antigravityModelsLoad antigravityModelsLoader
 }
 
 func (s *AccountTestService) SetSettingService(settingService *SettingService) {

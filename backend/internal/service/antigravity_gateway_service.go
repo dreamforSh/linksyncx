@@ -13,6 +13,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/Wei-Shaw/sub2api/internal/domain"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/antigravity"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/logger"
 	"github.com/google/uuid"
@@ -325,14 +326,19 @@ func resolveAntigravityProjectID(account *Account) (string, error) {
 	return "", errAntigravityProjectIDRequired
 }
 
-// applyThinkingModelSuffix 根据 thinking 配置调整模型名
-// 当映射结果是 claude-sonnet-4-5 且请求开启了 thinking 时，改为 claude-sonnet-4-5-thinking
+// applyThinkingModelSuffix 在请求开启 thinking、且默认映射里存在「模型名-thinking」时补上后缀。
 func applyThinkingModelSuffix(mappedModel string, thinkingEnabled bool) string {
-	if !thinkingEnabled {
+	if !thinkingEnabled || mappedModel == "" || strings.HasSuffix(mappedModel, "-thinking") {
 		return mappedModel
 	}
-	if mappedModel == "claude-sonnet-4-5" {
-		return "claude-sonnet-4-5-thinking"
+	candidate := mappedModel + "-thinking"
+	if _, ok := domain.DefaultAntigravityModelMapping[candidate]; ok {
+		return candidate
+	}
+	for _, target := range domain.DefaultAntigravityModelMapping {
+		if target == candidate {
+			return candidate
+		}
 	}
 	return mappedModel
 }

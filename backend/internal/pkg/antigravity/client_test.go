@@ -1857,3 +1857,82 @@ func TestExtractProjectIDFromOnboardResponse(t *testing.T) {
 		})
 	}
 }
+
+func TestClient_RetrieveUserQuotaSummary_Success(t *testing.T) {
+	var gotProject string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			t.Errorf("method %s", r.Method)
+		}
+		if !strings.HasSuffix(r.URL.Path, "/v1internal:retrieveUserQuotaSummary") {
+			t.Errorf("path %s", r.URL.Path)
+		}
+		if r.Header.Get("Authorization") != "Bearer tok" {
+			t.Errorf("auth %s", r.Header.Get("Authorization"))
+		}
+		var body map[string]string
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			t.Errorf("decode body: %v", err)
+		}
+		gotProject = body["project"]
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"groups":[{"displayName":"Claude","buckets":[{"bucketId":"claude-opus-4-8","displayName":"Opus","remainingFraction":0.4,"resetTime":"2026-10-14T00:00:00Z"}]}]}`))
+	}))
+	defer server.Close()
+	withMockBaseURLs(t, []string{server.URL})
+
+	client := mustNewClient(t, "")
+	summary, err := client.RetrieveUserQuotaSummary(context.Background(), "tok", "proj", defaultFetchAvailableModelsBodyLimit)
+	if err != nil {
+		t.Fatalf("RetrieveUserQuotaSummary: %v", err)
+	}
+	if gotProject != "proj" {
+		t.Fatalf("project = %q", gotProject)
+	}
+	if summary == nil || len(summary.Groups) != 1 || len(summary.Groups[0].Buckets) != 1 {
+		t.Fatalf("summary = %#v", summary)
+	}
+	bucket := summary.Groups[0].Buckets[0]
+	if bucket.DisplayName != "Opus" || bucket.RemainingFraction == nil || *bucket.RemainingFraction != 0.4 {
+		t.Fatalf("bucket = %#v", bucket)
+	}
+}
+
+func TestClient_RetrieveUserQuotaSummary_ForbiddenIsPlainError(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Error(w, "forbidden", http.StatusForbidden)
+	}))
+	defer server.Close()
+	withMockBaseURLs(t, []string{server.URL})
+
+	client := mustNewClient(t, "")
+	_, err := client.RetrieveUserQuotaSummary(context.Background(), "tok", "proj", defaultFetchAvailableModelsBodyLimit)
+	if err == nil {
+		t.Fatal("expected error")
+	}
+	if _, ok := err.(*ForbiddenError); ok {
+		t.Fatal("403 from quota summary must not be a ForbiddenError")
+	}
+}
+
+func TestClient_RetrieveUserQuotaSummary_FallsBackOn500(t *testing.T) {
+	server1 := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Error(w, "busy", http.StatusInternalServerError)
+	}))
+	defer server1.Close()
+	server2 := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"buckets":[{"bucketId":"pool","displayName":"Pool","remainingFraction":0.5}]}`))
+	}))
+	defer server2.Close()
+	withMockBaseURLs(t, []string{server1.URL, server2.URL})
+
+	client := mustNewClient(t, "")
+	summary, err := client.RetrieveUserQuotaSummary(context.Background(), "tok", "proj", defaultFetchAvailableModelsBodyLimit)
+	if err != nil {
+		t.Fatalf("RetrieveUserQuotaSummary: %v", err)
+	}
+	if summary == nil || len(summary.Buckets) != 1 || summary.Buckets[0].BucketID != "pool" {
+		t.Fatalf("summary = %#v", summary)
+	}
+}

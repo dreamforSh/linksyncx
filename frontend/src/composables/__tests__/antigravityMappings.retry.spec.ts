@@ -13,9 +13,12 @@ afterEach(() => vi.restoreAllMocks())
 describe('Antigravity default mapping cache', () => {
   it('retries after a failed fetch rather than caching the empty fallback', async () => {
     getMapping.mockRejectedValueOnce(new Error('offline')).mockResolvedValueOnce({ alias: 'upstream-model' })
-    const { fetchAntigravityDefaultMappings: fetch } = await import('../useModelWhitelist')
+    const { fetchAntigravityDefaultMappings: fetch, getModelsByPlatform } = await import('../useModelWhitelist')
+    expect(getModelsByPlatform('antigravity')).toEqual([])
     expect(await fetch()).toEqual([])
+    expect(getModelsByPlatform('antigravity')).toEqual([])
     expect(await fetch()).toEqual([{ from: 'alias', to: 'upstream-model' }])
+    expect(getModelsByPlatform('antigravity')).toEqual(['alias'])
     expect(getMapping).toHaveBeenCalledTimes(2)
   })
 

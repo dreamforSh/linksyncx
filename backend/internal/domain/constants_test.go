@@ -123,3 +123,30 @@ func TestDefaultBedrockModelMapping_ContainsNewClaudeModels(t *testing.T) {
 		}
 	}
 }
+
+func TestDefaultAntigravityModelMapping_CalibratesToAntigravity2231(t *testing.T) {
+	t.Parallel()
+
+	cases := map[string]string{
+		"claude-opus-5-5":               "claude-opus-5-5",
+		"gemini-3.1-ultra":              "gemini-3.1-ultra",
+		"gemini-3.1-flash-lite":         "gemini-3.1-flash-lite",
+		"gemini-3.1-flash-lite-preview": "gemini-3.1-flash-lite",
+		"gemini-3.5-flash":              "gemini-3.5-flash",
+		"gemini-3.5-flash-low":          "gemini-3.5-flash-low",
+		"gemini-4-argon":                "gemini-4-argon",
+		"gemini-4-argon-high":           "gemini-4-argon-high",
+		"gpt-oss-120b-medium":           "gpt-oss-120b-maas",
+		"gpt-oss-120b-maas":             "gpt-oss-120b-maas",
+		"gpt-oss-20b-maas":              "gpt-oss-20b-maas",
+	}
+	for from, want := range cases {
+		got, ok := DefaultAntigravityModelMapping[from]
+		if !ok {
+			t.Fatalf("expected mapping for %q to exist", from)
+		}
+		if got != want {
+			t.Fatalf("unexpected mapping for %q: got %q want %q", from, got, want)
+		}
+	}
+}

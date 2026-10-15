@@ -7,12 +7,14 @@ const {
   checkMixedChannelRiskMock,
   resetClientIdentityMock,
   randomDeviceProfileMock,
+  syncUpstreamModelsMock,
   authIsSimpleMode
 } = vi.hoisted(() => ({
   updateAccountMock: vi.fn(),
   checkMixedChannelRiskMock: vi.fn(),
   resetClientIdentityMock: vi.fn(),
   randomDeviceProfileMock: vi.fn(),
+  syncUpstreamModelsMock: vi.fn(),
   authIsSimpleMode: { value: true }
 }))
 
@@ -38,7 +40,8 @@ vi.mock('@/api/admin', () => ({
       update: updateAccountMock,
       checkMixedChannelRisk: checkMixedChannelRiskMock,
       resetClientIdentity: resetClientIdentityMock,
-      randomDeviceProfile: randomDeviceProfileMock
+      randomDeviceProfile: randomDeviceProfileMock,
+      syncUpstreamModels: syncUpstreamModelsMock
     },
     settings: {
       getWebSearchEmulationConfig: vi.fn().mockResolvedValue({ enabled: false, providers: [] }),
@@ -1900,6 +1903,32 @@ describe('EditAccountModal', () => {
     expect(updateAccountMock.mock.calls[0]?.[1]?.credentials).not.toHaveProperty(
       'antigravity_project_id'
     )
+  })
+
+  it('antigravity 编辑态同步上游模型，已有映射保留并追加 from=to', async () => {
+    syncUpstreamModelsMock.mockReset().mockResolvedValue({
+      models: ['gemini-2.5-flash', 'claude-opus-4-8']
+    })
+    const wrapper = mountModal(buildAntigravityAccount())
+    await flushPromises()
+
+    const button = wrapper
+      .findAll('button')
+      .find((candidate) => candidate.text() === 'admin.accounts.syncUpstreamModels')
+    expect(button).toBeDefined()
+    expect(button?.attributes('disabled')).toBeUndefined()
+
+    await button?.trigger('click')
+    await flushPromises()
+
+    expect(syncUpstreamModelsMock).toHaveBeenCalledWith(3)
+    const values = (placeholder: string) =>
+      wrapper
+        .findAll('input')
+        .filter((candidate) => candidate.attributes('placeholder') === placeholder)
+        .map((candidate) => (candidate.element as HTMLInputElement).value)
+    expect(values('admin.accounts.requestModel')).toEqual(['gemini-2.5-flash', 'claude-opus-4-8'])
+    expect(values('admin.accounts.actualModel')).toEqual(['gemini-2.5-flash', 'claude-opus-4-8'])
   })
 })
 

@@ -229,9 +229,9 @@ func TestBuildUsageInfo_FiveHourPriorityOrder(t *testing.T) {
 
 	info := fetcher.buildUsageInfo(modelsResp, "", "", nil)
 
-	require.NotNil(t, info.FiveHour, "FiveHour should be set when a priority model exists")
-	// claude-sonnet-4-20250514 is first in priority list, so it should be used
-	expectedUtilization := (1.0 - 0.80) * 100 // 20
+	require.NotNil(t, info.FiveHour, "FiveHour should be set from the most-consumed quota group")
+	// gemini-2.5-pro has the lower remaining fraction
+	expectedUtilization := (1.0 - 0.40) * 100 // 60
 	require.InDelta(t, expectedUtilization, info.FiveHour.Utilization, 0.01)
 	require.NotNil(t, info.FiveHour.ResetsAt, "ResetsAt should be parsed from ResetTime")
 }
@@ -259,7 +259,7 @@ func TestBuildUsageInfo_FiveHourFallbackToClaude4(t *testing.T) {
 	info := fetcher.buildUsageInfo(modelsResp, "", "", nil)
 
 	require.NotNil(t, info.FiveHour)
-	expectedUtilization := (1.0 - 0.60) * 100 // 40
+	expectedUtilization := (1.0 - 0.30) * 100 // 70, gemini-2.5-pro is more consumed
 	require.InDelta(t, expectedUtilization, info.FiveHour.Utilization, 0.01)
 }
 
@@ -305,7 +305,8 @@ func TestBuildUsageInfo_FiveHourNoPriorityModel(t *testing.T) {
 
 	info := fetcher.buildUsageInfo(modelsResp, "", "", nil)
 
-	require.Nil(t, info.FiveHour, "FiveHour should be nil when no priority model exists")
+	require.NotNil(t, info.FiveHour, "any model with quota fills FiveHour")
+	require.InDelta(t, 50.0, info.FiveHour.Utilization, 0.01)
 }
 
 func TestBuildUsageInfo_FiveHourWithEmptyResetTime(t *testing.T) {
@@ -554,4 +555,90 @@ func TestExtractValidationURL(t *testing.T) {
 			require.Equal(t, tt.expected, got)
 		})
 	}
+}
+
+func TestBuildUsageInfo_GroupsModelsSharingQuota(t *testing.T) {
+	fetcher := &AntigravityQuotaFetcher{}
+	modelsResp := &antigravity.FetchAvailableModelsResponse{
+		Models: map[string]antigravity.ModelInfo{
+			"gemini-3-flash": {
+				DisplayName: "Flash",
+				QuotaInfo:   &antigravity.ModelQuotaInfo{RemainingFraction: 0.50, ResetTime: "2026-10-14T00:00:00Z"},
+			},
+			"gemini-3.1-ultra": {
+				DisplayName: "Ultra",
+				QuotaInfo:   &antigravity.ModelQuotaInfo{RemainingFraction: 0.50, ResetTime: "2026-10-14T00:00:00Z"},
+			},
+			"claude-opus-4-8": {
+				DisplayName: "Opus",
+				QuotaInfo:   &antigravity.ModelQuotaInfo{RemainingFraction: 0.20, ResetTime: "2026-10-15T00:00:00Z"},
+			},
+		},
+	}
+	info := fetcher.buildUsageInfo(modelsResp, "", "", nil)
+	require.Len(t, info.AntigravityQuotaGroups, 2)
+	byLabel := map[string]AntigravityQuotaGroup{}
+	for _, group := range info.AntigravityQuotaGroups {
+		byLabel[group.Label] = group
+	}
+	shared, ok := byLabel["Flash / Ultra"]
+	require.True(t, ok, "labels: %v", byLabel)
+	require.Equal(t, []string{"gemini-3-flash", "gemini-3.1-ultra"}, shared.Models)
+	require.InDelta(t, 0.50, shared.RemainingFraction, 0.0001)
+	require.InDelta(t, 80.0, info.FiveHour.Utilization, 0.01)
+}
+
+func TestApplyAntigravityQuotaSummary_ReplacesDerivedGroups(t *testing.T) {
+	fetcher := &AntigravityQuotaFetcher{}
+	info := fetcher.buildUsageInfo(&antigravity.FetchAvailableModelsResponse{
+		Models: map[string]antigravity.ModelInfo{
+			"gemini-3-flash": {QuotaInfo: &antigravity.ModelQuotaInfo{RemainingFraction: 0.9}},
+		},
+	}, "", "", nil)
+	remaining := 0.25
+	applyAntigravityQuotaSummary(info, &antigravity.RetrieveUserQuotaSummaryResponse{
+		Groups: []antigravity.QuotaSummaryGroup{{
+			DisplayName: "Claude",
+			Buckets: []antigravity.QuotaSummaryBucket{
+				{BucketID: "claude-opus-4-8", DisplayName: "Opus", RemainingFraction: &remaining, ResetTime: "2026-10-14T12:00:00Z"},
+				{BucketID: "off", DisplayName: "Off", Disabled: true, RemainingFraction: &remaining},
+			},
+		}},
+	})
+	require.Len(t, info.AntigravityQuotaGroups, 1)
+	require.Equal(t, "Opus", info.AntigravityQuotaGroups[0].Label)
+	require.Equal(t, []string{"claude-opus-4-8"}, info.AntigravityQuotaGroups[0].Models)
+	require.InDelta(t, 75.0, info.FiveHour.Utilization, 0.01)
+	require.NotNil(t, info.FiveHour.ResetsAt)
+}
+
+func TestApplyAntigravityQuotaSummary_MissingFractionDoesNotCountAsZero(t *testing.T) {
+	fetcher := &AntigravityQuotaFetcher{}
+	info := fetcher.buildUsageInfo(&antigravity.FetchAvailableModelsResponse{
+		Models: map[string]antigravity.ModelInfo{
+			"gemini-3-flash": {QuotaInfo: &antigravity.ModelQuotaInfo{RemainingFraction: 0.4}},
+		},
+	}, "", "", nil)
+	applyAntigravityQuotaSummary(info, &antigravity.RetrieveUserQuotaSummaryResponse{
+		Buckets: []antigravity.QuotaSummaryBucket{{BucketID: "pool", DisplayName: "Pool"}},
+	})
+	require.Len(t, info.AntigravityQuotaGroups, 1)
+	require.InDelta(t, 1.0, info.AntigravityQuotaGroups[0].RemainingFraction, 0.0001)
+	require.InDelta(t, 0.0, info.FiveHour.Utilization, 0.01)
+}
+
+func TestApplyAntigravityQuotaSummary_DisabledOnlyKeepsDerivedGroups(t *testing.T) {
+	fetcher := &AntigravityQuotaFetcher{}
+	info := fetcher.buildUsageInfo(&antigravity.FetchAvailableModelsResponse{
+		Models: map[string]antigravity.ModelInfo{
+			"gemini-3-flash": {DisplayName: "Flash", QuotaInfo: &antigravity.ModelQuotaInfo{RemainingFraction: 0.4}},
+		},
+	}, "", "", nil)
+	zero := 0.0
+	applyAntigravityQuotaSummary(info, &antigravity.RetrieveUserQuotaSummaryResponse{
+		Buckets: []antigravity.QuotaSummaryBucket{{BucketID: "off", DisplayName: "Off", Disabled: true, RemainingFraction: &zero}},
+	})
+	require.Len(t, info.AntigravityQuotaGroups, 1)
+	require.Equal(t, "Flash", info.AntigravityQuotaGroups[0].Label)
+	require.InDelta(t, 60.0, info.FiveHour.Utilization, 0.01)
 }

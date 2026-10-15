@@ -1664,6 +1664,14 @@ export interface AntigravityModelQuota {
   reset_time: string  // 重置时间 ISO8601
 }
 
+// Antigravity 动态配额分组。缺省时前端继续用旧的固定分组。
+export interface AntigravityQuotaGroup {
+  label: string
+  models?: string[]
+  remaining_fraction: number
+  reset_time?: string
+}
+
 export interface GrokQuotaWindow {
   limit?: number | null
   remaining?: number | null
@@ -1724,6 +1732,7 @@ export interface AccountUsageInfo {
   gemini_pro_minute?: UsageProgress | null
   gemini_flash_minute?: UsageProgress | null
   antigravity_quota?: Record<string, AntigravityModelQuota> | null
+  antigravity_quota_groups?: AntigravityQuotaGroup[] | null
   grok_request_quota?: GrokQuotaWindow | null
   grok_token_quota?: GrokQuotaWindow | null
   grok_retry_after_seconds?: number | null

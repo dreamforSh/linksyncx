@@ -385,6 +385,50 @@ describe('AccountUsageCell', () => {
     expect(wrapper.text()).toContain('admin.accounts.usageWindow.gemini3Image|70|2026-03-01T09:00:00Z')
   })
 
+  it('Antigravity 有 quota_groups 时按分组渲染，不再用固定缩写', async () => {
+    getUsage.mockResolvedValue({
+      antigravity_quota: {
+        'gemini-3-pro-image': {
+          utilization: 70,
+          reset_time: '2026-03-01T09:00:00Z'
+        }
+      },
+      antigravity_quota_groups: [
+        {
+          label: 'Opus',
+          models: ['claude-opus-4-8'],
+          remaining_fraction: 0.25,
+          reset_time: '2026-10-14T12:00:00Z'
+        }
+      ]
+    })
+
+    const wrapper = mount(AccountUsageCell, {
+      props: {
+        account: makeAccount({
+          id: 1002,
+          platform: 'antigravity',
+          type: 'oauth',
+          extra: {}
+        })
+      },
+      global: {
+        stubs: {
+          UsageProgressBar: {
+            props: ['label', 'utilization', 'resetsAt', 'color'],
+            template: '<div class="usage-bar">{{ label }}|{{ utilization }}|{{ resetsAt }}</div>'
+          },
+          AccountQuotaInfo: true
+        }
+      }
+    })
+
+    await flushPromises()
+
+    expect(wrapper.text()).toContain('Opus|75|2026-10-14T12:00:00Z')
+    expect(wrapper.text()).not.toContain('admin.accounts.usageWindow.gemini3Image')
+  })
+
   it('Antigravity 会显示 AI Credits 余额信息', async () => {
     getUsage.mockResolvedValue({
       ai_credits: [

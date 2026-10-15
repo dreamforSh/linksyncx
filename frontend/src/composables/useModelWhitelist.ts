@@ -56,40 +56,8 @@ const geminiModels = [
   'gemini-3-pro-preview'
 ]
 
-// Antigravity 官方支持的模型（精确匹配）
-// 基于官方 API 返回的模型列表，只支持 Claude 4.5+ 和 Gemini 2.5+
-const antigravityModels = [
-  // Claude 4.5+ 系列
-  'claude-fable-5-1',
-  'claude-fable-5',
-  'claude-opus-4-6',
-  'claude-opus-4-6-thinking',
-  'claude-opus-4-7',
-  'claude-opus-4-8',
-  'claude-opus-4-5-thinking',
-  'claude-sonnet-4-6',
-  'claude-sonnet-4-5',
-  'claude-sonnet-4-5-thinking',
-  // Gemini 2.5 系列
-  'gemini-3.1-flash-image',
-  'gemini-2.5-flash-image',
-  'gemini-2.5-flash',
-  'gemini-2.5-flash-lite',
-  'gemini-2.5-flash-thinking',
-  'gemini-2.5-pro',
-  // Gemini 3 系列
-  'gemini-3-flash',
-  'gemini-3-pro-high',
-  'gemini-3-pro-low',
-  // Gemini 3.1 系列
-  'gemini-3.1-pro',
-  'gemini-3.1-pro-high',
-  'gemini-3.1-pro-low',
-  'gemini-3-pro-image',
-  // 其他
-  'gpt-oss-120b-medium',
-  'tab_flash_lite_preview'
-]
+// Antigravity 模型 ID 只来自默认映射接口，失败时保持为空，不缓存失败结果。
+let antigravityModelIDs: string[] = []
 
 // 智谱 GLM
 const zhipuModels = [
@@ -351,12 +319,12 @@ const grokPresetMappings = [
 // Antigravity 预设映射（支持通配符）
 const antigravityPresetMappings = [
   // Claude 通配符映射
-  { label: 'Claude→Sonnet', from: 'claude-*', to: 'claude-sonnet-4-5', color: 'bg-blue-100 text-blue-700 hover:bg-blue-200 dark:bg-blue-900/30 dark:text-blue-400' },
+  { label: 'Claude→Sonnet', from: 'claude-*', to: 'claude-sonnet-4-6', color: 'bg-blue-100 text-blue-700 hover:bg-blue-200 dark:bg-blue-900/30 dark:text-blue-400' },
   { label: 'Fable 5.1', from: 'claude-fable-5-1', to: 'claude-fable-5-1', color: 'bg-rose-100 text-rose-700 hover:bg-rose-200 dark:bg-rose-900/30 dark:text-rose-400' },
   { label: 'Fable 5', from: 'claude-fable-5', to: 'claude-fable-5', color: 'bg-rose-100 text-rose-700 hover:bg-rose-200 dark:bg-rose-900/30 dark:text-rose-400' },
-  { label: 'Sonnet→Sonnet', from: 'claude-sonnet-*', to: 'claude-sonnet-4-5', color: 'bg-indigo-100 text-indigo-700 hover:bg-indigo-200 dark:bg-indigo-900/30 dark:text-indigo-400' },
-  { label: 'Opus→Opus', from: 'claude-opus-*', to: 'claude-opus-4-6-thinking', color: 'bg-purple-100 text-purple-700 hover:bg-purple-200 dark:bg-purple-900/30 dark:text-purple-400' },
-  { label: 'Haiku→Sonnet', from: 'claude-haiku-*', to: 'claude-sonnet-4-5', color: 'bg-emerald-100 text-emerald-700 hover:bg-emerald-200 dark:bg-emerald-900/30 dark:text-emerald-400' },
+  { label: 'Sonnet→Sonnet', from: 'claude-sonnet-*', to: 'claude-sonnet-4-6', color: 'bg-indigo-100 text-indigo-700 hover:bg-indigo-200 dark:bg-indigo-900/30 dark:text-indigo-400' },
+  { label: 'Opus→Opus', from: 'claude-opus-*', to: 'claude-opus-4-8', color: 'bg-purple-100 text-purple-700 hover:bg-purple-200 dark:bg-purple-900/30 dark:text-purple-400' },
+  { label: 'Haiku→Sonnet', from: 'claude-haiku-*', to: 'claude-sonnet-4-6', color: 'bg-emerald-100 text-emerald-700 hover:bg-emerald-200 dark:bg-emerald-900/30 dark:text-emerald-400' },
   { label: 'Sonnet4→4.6', from: 'claude-sonnet-4-20250514', to: 'claude-sonnet-4-6', color: 'bg-sky-100 text-sky-700 hover:bg-sky-200 dark:bg-sky-900/30 dark:text-sky-400' },
   { label: 'Sonnet4.5→4.6', from: 'claude-sonnet-4-5-20250929', to: 'claude-sonnet-4-6', color: 'bg-cyan-100 text-cyan-700 hover:bg-cyan-200 dark:bg-cyan-900/30 dark:text-cyan-400' },
   { label: 'Sonnet3.5→4.6', from: 'claude-3-5-sonnet-20241022', to: 'claude-sonnet-4-6', color: 'bg-teal-100 text-teal-700 hover:bg-teal-200 dark:bg-teal-900/30 dark:text-teal-400' },
@@ -415,6 +383,7 @@ export async function fetchAntigravityDefaultMappings(): Promise<{ from: string;
   try {
     const mapping = await getAntigravityDefaultModelMapping()
     _antigravityDefaultMappingsCache = Object.entries(mapping).map(([from, to]) => ({ from, to }))
+    antigravityModelIDs = Object.keys(mapping)
   } catch (e) {
     console.warn('[fetchAntigravityDefaultMappings] API failed, using empty fallback', e)
     return []
@@ -447,7 +416,7 @@ export function getModelsByPlatform(platform: string): string[] {
     case 'anthropic':
     case 'claude': return claudeModels
     case 'gemini': return geminiModels
-    case 'antigravity': return antigravityModels
+    case 'antigravity': return antigravityModelIDs
     case 'zhipu': return zhipuModels
     case 'qwen': return qwenModels
     case 'deepseek': return deepseekModels

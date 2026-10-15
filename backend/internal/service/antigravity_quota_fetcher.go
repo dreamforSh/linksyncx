@@ -85,6 +85,12 @@ func (f *AntigravityQuotaFetcher) FetchQuota(ctx context.Context, account *Accou
 
 	// 转换为 UsageInfo
 	usageInfo := f.buildUsageInfo(modelsResp, tierRaw, tierNormalized, loadResp)
+	summary, summaryErr := client.RetrieveUserQuotaSummary(ctx, accessToken, projectID, resolveModelsListReadLimit(f.cfg))
+	if summaryErr != nil {
+		slog.Warn("antigravity quota summary unavailable", "error", summaryErr)
+	} else {
+		applyAntigravityQuotaSummary(usageInfo, summary)
+	}
 
 	return &QuotaResult{
 		UsageInfo: usageInfo,
@@ -174,24 +180,9 @@ func (f *AntigravityQuotaFetcher) buildUsageInfo(modelsResp *antigravity.FetchAv
 		}
 	}
 
-	// 同时设置 FiveHour 用于兼容展示（取主要模型）
-	priorityModels := []string{"claude-sonnet-4-20250514", "claude-sonnet-4", "gemini-2.5-pro"}
-	for _, modelName := range priorityModels {
-		if modelInfo, ok := modelsResp.Models[modelName]; ok && modelInfo.QuotaInfo != nil {
-			utilization := (1.0 - modelInfo.QuotaInfo.RemainingFraction) * 100
-			progress := &UsageProgress{
-				Utilization: utilization,
-			}
-			if modelInfo.QuotaInfo.ResetTime != "" {
-				if resetTime, err := time.Parse(time.RFC3339, modelInfo.QuotaInfo.ResetTime); err == nil {
-					progress.ResetsAt = &resetTime
-					progress.RemainingSeconds = int(time.Until(resetTime).Seconds())
-				}
-			}
-			info.FiveHour = progress
-			break
-		}
-	}
+	// FiveHour 取剩余比例最低的配额组，不再依赖已下架的固定模型名单。
+	info.AntigravityQuotaGroups = deriveAntigravityQuotaGroups(modelsResp.Models)
+	fillFiveHourFromQuotaGroups(info)
 
 	if loadResp != nil {
 		for _, credit := range loadResp.GetAvailableCredits() {
