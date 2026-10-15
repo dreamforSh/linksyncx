@@ -133,6 +133,7 @@ func quotaGroupsFromSummary(summary *antigravity.RetrieveUserQuotaSummaryRespons
 			Models:            models,
 			RemainingFraction: remaining,
 			ResetTime:         bucket.ResetTime,
+			Window:            strings.TrimSpace(bucket.Window),
 		})
 	}
 	if len(groups) == 0 {
@@ -165,4 +166,47 @@ func fillFiveHourFromQuotaGroups(info *UsageInfo) {
 		}
 	}
 	info.FiveHour = progress
+}
+
+// antigravityQuotaWindowStart 把额度桶的 window 与 reset 解析成本地用量统计的起点。
+// 空 window 且重置时间落在 5 小时内时，沿用历史 FiveHour 口径假定为 5h；更远的空窗口不猜测。
+func antigravityQuotaWindowStart(window, resetTime string, now time.Time) (time.Time, bool) {
+	reset, err := time.Parse(time.RFC3339, strings.TrimSpace(resetTime))
+	if err != nil || !reset.After(now) {
+		return time.Time{}, false
+	}
+	dur, ok := parseAntigravityQuotaWindow(window)
+	if !ok {
+		if strings.TrimSpace(window) != "" || reset.Sub(now) > 5*time.Hour {
+			return time.Time{}, false
+		}
+		dur = 5 * time.Hour
+	}
+	if dur <= 0 || dur > 31*24*time.Hour {
+		return time.Time{}, false
+	}
+	start := reset.Add(-dur)
+	if start.After(now) {
+		return time.Time{}, false
+	}
+	return start, true
+}
+
+func parseAntigravityQuotaWindow(window string) (time.Duration, bool) {
+	switch strings.ToLower(strings.TrimSpace(window)) {
+	case "":
+		return 0, false
+	case "five_hour", "5h", "5_hour":
+		return 5 * time.Hour, true
+	case "daily", "one_day", "1d", "24h":
+		return 24 * time.Hour, true
+	case "weekly", "seven_day", "7d":
+		return 7 * 24 * time.Hour, true
+	default:
+		dur, err := time.ParseDuration(strings.TrimSpace(window))
+		if err != nil {
+			return 0, false
+		}
+		return dur, true
+	}
 }

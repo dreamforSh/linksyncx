@@ -569,6 +569,7 @@ export function applyPlanType(
 // ---------------------------------------------------------------------------
 // 账号设备画像（device profile）：每个账号固定一台“设备”。
 // Claude OAuth/SetupToken：device_os / device_arch（X-Stainless-OS / Arch），user_agent 可选；
+// Antigravity OAuth/SetupToken：device_os / device_arch，User-Agent 由网关按官方枚举派生，不接受手填；
 // OpenAI OAuth/SetupToken：user_agent（Codex UA 的客户端名 / OS / 架构 / 终端段）。
 // 版本号由网关按生效版本重建，填写的版本不生效。
 // ---------------------------------------------------------------------------
@@ -579,6 +580,22 @@ export const DEVICE_PROFILE_ARCH_KEY = 'device_arch'
 
 export const CLAUDE_DEVICE_OS_OPTIONS = ['MacOS', 'Linux', 'Windows'] as const
 export const CLAUDE_DEVICE_ARCH_OPTIONS = ['arm64', 'x64'] as const
+
+/** 官方 ClientMetadata.platform 只有这五对，Windows/arm64 不在枚举里。 */
+export const ANTIGRAVITY_DEVICE_PAIRS = [
+  ['MacOS', 'arm64'],
+  ['MacOS', 'x64'],
+  ['Linux', 'arm64'],
+  ['Linux', 'x64'],
+  ['Windows', 'x64']
+] as const
+
+export function isAntigravityDevicePair(os: string, arch: string): boolean {
+  const deviceOS = os.trim()
+  const deviceArch = arch.trim()
+  if (!deviceOS && !deviceArch) return true
+  return ANTIGRAVITY_DEVICE_PAIRS.some(([allowedOS, allowedArch]) => allowedOS === deviceOS && allowedArch === deviceArch)
+}
 
 /** 与后端 claudeDeviceUserAgentPattern 保持一致 */
 export const CLAUDE_DEVICE_USER_AGENT_PATTERN = /^claude-cli\/\d+\.\d+\.\d+ \(external, [^()]+\)$/
@@ -598,7 +615,7 @@ export type DeviceProfileCreateMode = 'default' | 'random' | 'manual'
 export function isDeviceProfileCapable(platform: string, type: string, isShadow = false): boolean {
   if (isShadow) return false
   if (type !== 'oauth' && type !== 'setup-token') return false
-  return platform === 'anthropic' || platform === 'openai'
+  return platform === 'anthropic' || platform === 'openai' || platform === 'antigravity'
 }
 
 export function emptyDeviceProfile(): DeviceProfileValue {
@@ -615,8 +632,10 @@ export function readDeviceProfile(
   platform: string
 ): DeviceProfileValue {
   const profile = emptyDeviceProfile()
-  profile.user_agent = credentialString(credentials, DEVICE_PROFILE_USER_AGENT_KEY)
-  if (platform === 'anthropic') {
+  if (platform !== 'antigravity') {
+    profile.user_agent = credentialString(credentials, DEVICE_PROFILE_USER_AGENT_KEY)
+  }
+  if (platform === 'anthropic' || platform === 'antigravity') {
     profile.device_os = credentialString(credentials, DEVICE_PROFILE_OS_KEY)
     profile.device_arch = credentialString(credentials, DEVICE_PROFILE_ARCH_KEY)
   }
@@ -633,7 +652,7 @@ export function deviceProfilesEqual(a: DeviceProfileValue, b: DeviceProfileValue
 
 /**
  * 把设备画像写入凭据：非空则设置，空则删除该键（恢复默认）。
- * Codex 账号只写 user_agent。直接修改传入对象并返回。
+ * Codex 账号只写 user_agent。Antigravity 写 OS / 架构并删除 user_agent。直接修改传入对象并返回。
  */
 export function applyDeviceProfile(
   credentials: Record<string, unknown>,
@@ -648,8 +667,12 @@ export function applyDeviceProfile(
       delete credentials[key]
     }
   }
-  setOrDelete(DEVICE_PROFILE_USER_AGENT_KEY, profile.user_agent)
-  if (platform === 'anthropic') {
+  if (platform === 'antigravity') {
+    delete credentials[DEVICE_PROFILE_USER_AGENT_KEY]
+  } else {
+    setOrDelete(DEVICE_PROFILE_USER_AGENT_KEY, profile.user_agent)
+  }
+  if (platform === 'anthropic' || platform === 'antigravity') {
     setOrDelete(DEVICE_PROFILE_OS_KEY, profile.device_os)
     setOrDelete(DEVICE_PROFILE_ARCH_KEY, profile.device_arch)
   }

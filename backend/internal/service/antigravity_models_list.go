@@ -195,6 +195,7 @@ func (s *AccountTestService) loadAntigravityOAuthModels(ctx context.Context, acc
 	if err != nil {
 		return nil, err
 	}
+	ctx = withAntigravityDevice(ctx, account)
 	client, err := antigravity.NewClient(proxyURL)
 	if err != nil {
 		return nil, err

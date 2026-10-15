@@ -1,11 +1,13 @@
 package service
 
 import (
+	"context"
 	"math/rand/v2"
 	"net/http"
 	"regexp"
 	"strings"
 
+	"github.com/Wei-Shaw/sub2api/internal/pkg/antigravity"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/claude"
 	infraerrors "github.com/Wei-Shaw/sub2api/internal/pkg/errors"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/openai"
@@ -16,6 +18,9 @@ import (
 //
 //   - Claude（anthropic oauth / setup-token）：固定 X-Stainless-OS / X-Stainless-Arch，
 //     可选固定 User-Agent 模板（claude-cli/<ver> (external, ...)）。mimic 路径同样生效。
+//   - Antigravity（oauth / setup-token）：固定官方 ClientMetadata.platform
+//     （DARWIN_ARM64 / DARWIN_AMD64 / LINUX_ARM64 / LINUX_AMD64 / WINDOWS_AMD64），
+//     出站 User-Agent 为 antigravity/<当前版本> <goos>/<goarch>。未配置时仍是 windows/amd64。
 //   - Codex（openai oauth / setup-token）：沿用既有 credentials.user_agent，只贡献
 //     客户端名与 OS / 架构 / 终端段（见 resolveCodexOutboundIdentity）。
 //
@@ -54,7 +59,7 @@ func IsDeviceProfileEligible(platform, accountType string) bool {
 	if accountType != AccountTypeOAuth && accountType != AccountTypeSetupToken {
 		return false
 	}
-	return platform == PlatformAnthropic || platform == PlatformOpenAI
+	return platform == PlatformAnthropic || platform == PlatformOpenAI || platform == PlatformAntigravity
 }
 
 // ClaudeDeviceProfile 返回 Claude OAuth / setup-token 账号配置的设备画像；
@@ -136,7 +141,7 @@ func NormalizeDeviceProfileCredentials(platform, accountType string, prev, next 
 	}
 	knownPlatform := platform != ""
 	eligible := IsDeviceProfileEligible(platform, accountType)
-	isClaude := eligible && platform == PlatformAnthropic
+	allowsDeviceOSArch := eligible && (platform == PlatformAnthropic || platform == PlatformAntigravity)
 
 	ua, present, err := deviceProfileCredentialString(next, credKeyDeviceUserAgent)
 	if err != nil {
@@ -171,9 +176,9 @@ func NormalizeDeviceProfileCredentials(platform, accountType string, prev, next 
 			next[field.key] = value
 			continue
 		}
-		if knownPlatform && !isClaude {
+		if knownPlatform && !allowsDeviceOSArch {
 			return infraerrors.Newf(http.StatusBadRequest, deviceProfileErrorCode,
-				"%s is only supported for Claude OAuth / setup-token accounts", field.key)
+				"%s is only supported for Claude or Antigravity OAuth / setup-token accounts", field.key)
 		}
 		canonical := canonicalDeviceValue(value, field.allowed)
 		if canonical == "" {
@@ -181,6 +186,9 @@ func NormalizeDeviceProfileCredentials(platform, accountType string, prev, next 
 				"%s must be one of %s", field.key, strings.Join(field.allowed, " / "))
 		}
 		next[field.key] = canonical
+	}
+	if err := validateAntigravityDevicePair(platform, accountType, next); err != nil {
+		return err
 	}
 	return nil
 }
@@ -203,6 +211,9 @@ func validateDeviceUserAgent(platform, accountType, ua string) error {
 	case platform == PlatformAnthropic:
 		return infraerrors.New(http.StatusBadRequest, deviceProfileErrorCode,
 			"user_agent is only supported for Claude OAuth / setup-token accounts; use header overrides for API key accounts")
+	case platform == PlatformAntigravity && IsDeviceProfileEligible(platform, accountType):
+		return infraerrors.New(http.StatusBadRequest, deviceProfileErrorCode,
+			"Antigravity accounts pin device_os and device_arch; user_agent is derived and cannot be set")
 	case platform == PlatformOpenAI && IsDeviceProfileEligible(platform, accountType):
 		_, paired, ok := openai.PairCodexClientIdentity(ua)
 		if !ok || openai.SetCodexUserAgentVersion(paired, CodexCanonicalClientVersion()) == "" {
@@ -298,10 +309,14 @@ var codexDeviceShapes = []weightedDeviceChoice[codexDeviceShape]{
 // GenerateDeviceProfile 为指定平台随机生成一份设备画像。
 //   - anthropic：只随机 OS / 架构，UA 留空（沿用默认 claude-cli/<ver> (external, cli)，
 //     与 billing 块 cc_entrypoint=cli 保持一致）；
+//   - antigravity：同一组 OS / 架构，UA 留空（出站 User-Agent 与 platform 枚举由这对值派生）；
 //   - openai：生成完整 Codex UA，版本取当前生效版本（出站时仍会按生效版本重建）。
 func GenerateDeviceProfile(platform string) (DeviceProfile, error) {
 	switch platform {
 	case PlatformAnthropic:
+		shape := pickWeightedDevice(claudeDeviceShapes)
+		return DeviceProfile{OS: shape.os, Arch: shape.arch}, nil
+	case PlatformAntigravity:
 		shape := pickWeightedDevice(claudeDeviceShapes)
 		return DeviceProfile{OS: shape.os, Arch: shape.arch}, nil
 	case PlatformOpenAI:
@@ -328,6 +343,10 @@ func allDeviceProfiles(platform string) []DeviceProfile {
 		for _, c := range claudeDeviceShapes {
 			out = append(out, DeviceProfile{OS: c.value.os, Arch: c.value.arch})
 		}
+	case PlatformAntigravity:
+		for _, c := range claudeDeviceShapes {
+			out = append(out, DeviceProfile{OS: c.value.os, Arch: c.value.arch})
+		}
 	case PlatformOpenAI:
 		version := CodexCanonicalClientVersion()
 		for _, c := range codexDeviceShapes {
@@ -349,9 +368,81 @@ func allDeviceProfiles(platform string) []DeviceProfile {
 // 空串即清除）。Codex 账号的 device_os / device_arch 不参与出站，不写。
 func deviceProfileCredentialUpdates(platform string, p DeviceProfile) map[string]any {
 	updates := map[string]any{credKeyDeviceUserAgent: p.UserAgent}
-	if platform == PlatformAnthropic {
+	if platform == PlatformAnthropic || platform == PlatformAntigravity {
 		updates[credKeyDeviceOS] = p.OS
 		updates[credKeyDeviceArch] = p.Arch
 	}
 	return updates
+}
+
+// AntigravityDeviceProfile 返回已钉住且属于官方平台枚举的设备。
+// 缺一项、或 Windows/arm64 这类枚举里没有的组合，一律当成未配置。
+func (a *Account) AntigravityDeviceProfile() DeviceProfile {
+	if a == nil || a.Platform != PlatformAntigravity || !a.IsOAuth() {
+		return DeviceProfile{}
+	}
+	osName := canonicalDeviceValue(a.GetCredential(credKeyDeviceOS), claudeDeviceOSValues)
+	arch := canonicalDeviceValue(a.GetCredential(credKeyDeviceArch), claudeDeviceArchValues)
+	if _, _, platform := antigravityGoDevice(osName, arch); platform == "" {
+		return DeviceProfile{}
+	}
+	return DeviceProfile{OS: osName, Arch: arch}
+}
+
+func antigravityGoDevice(osName, arch string) (goos, goarch, platform string) {
+	switch osName + "/" + arch {
+	case "MacOS/arm64":
+		return "darwin", "arm64", "DARWIN_ARM64"
+	case "MacOS/x64":
+		return "darwin", "amd64", "DARWIN_AMD64"
+	case "Linux/arm64":
+		return "linux", "arm64", "LINUX_ARM64"
+	case "Linux/x64":
+		return "linux", "amd64", "LINUX_AMD64"
+	case "Windows/x64":
+		return "windows", "amd64", "WINDOWS_AMD64"
+	default:
+		return "", "", ""
+	}
+}
+
+// withAntigravityDevice 把账号设备画像放进出站 context。未配置时 context 不变，
+// User-Agent 仍是 antigravity/<版本> windows/amd64。
+func withAntigravityDevice(ctx context.Context, account *Account) context.Context {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	p := account.AntigravityDeviceProfile()
+	goos, goarch, platform := antigravityGoDevice(p.OS, p.Arch)
+	if goos == "" {
+		return ctx
+	}
+	return antigravity.WithDeviceIdentity(ctx, goos, goarch, platform)
+}
+
+func validateAntigravityDevicePair(platform, accountType string, next map[string]any) error {
+	if platform != PlatformAntigravity || !IsDeviceProfileEligible(platform, accountType) || next == nil {
+		return nil
+	}
+	_, osPresent, err := deviceProfileCredentialString(next, credKeyDeviceOS)
+	if err != nil {
+		return err
+	}
+	_, archPresent, err := deviceProfileCredentialString(next, credKeyDeviceArch)
+	if err != nil {
+		return err
+	}
+	if !osPresent && !archPresent {
+		return nil
+	}
+	osName, _, _ := deviceProfileCredentialString(next, credKeyDeviceOS)
+	arch, _, _ := deviceProfileCredentialString(next, credKeyDeviceArch)
+	if osName == "" && arch == "" {
+		return nil
+	}
+	if _, _, enumName := antigravityGoDevice(osName, arch); enumName == "" {
+		return infraerrors.New(http.StatusBadRequest, deviceProfileErrorCode,
+			"Antigravity device_os and device_arch must be one of MacOS/arm64, MacOS/x64, Linux/arm64, Linux/x64, Windows/x64")
+	}
+	return nil
 }

@@ -3,6 +3,7 @@
 package antigravity
 
 import (
+	"context"
 	"crypto/sha256"
 	"encoding/base64"
 	"encoding/hex"
@@ -717,5 +718,37 @@ func TestScopes_包含必要范围(t *testing.T) {
 		if !strings.Contains(Scopes, scope) {
 			t.Errorf("Scopes 缺少 %s", scope)
 		}
+	}
+}
+
+func TestWithDeviceIdentity_UserAgentAndPlatform(t *testing.T) {
+	ctx := WithDeviceIdentity(context.Background(), "darwin", "arm64", "DARWIN_ARM64")
+	if got, want := GetUserAgentForContext(ctx), "antigravity/"+GetUserAgentVersionForContext(ctx)+" darwin/arm64"; got != want {
+		t.Fatalf("user agent = %q, want %q", got, want)
+	}
+	if got := DevicePlatformFromContext(ctx); got != "DARWIN_ARM64" {
+		t.Fatalf("platform = %q", got)
+	}
+
+	normalized := WithDeviceIdentity(context.Background(), "Darwin", "ARM64", "")
+	if got := DevicePlatformFromContext(normalized); got != "DARWIN_ARM64" {
+		t.Fatalf("empty platform was not canonicalized: %q", got)
+	}
+
+	mismatched := WithDeviceIdentity(context.Background(), "darwin", "arm64", "WINDOWS_AMD64")
+	if GetUserAgentForContext(mismatched) != GetUserAgent() || DevicePlatformFromContext(mismatched) != "" {
+		t.Fatal("a platform that disagrees with the OS/arch pair must be ignored")
+	}
+	if DevicePlatformFromContext(context.Background()) != "" || !strings.HasSuffix(GetUserAgent(), " windows/amd64") {
+		t.Fatalf("default device changed: %s", GetUserAgent())
+	}
+	if WithDeviceIdentity(nil, "plan9", "amd64", "") != nil {
+		t.Fatal("invalid identity must return the original nil context")
+	}
+
+	once := WithDeviceIdentity(nil, "linux", "amd64", "LINUX_AMD64")
+	twice := WithDeviceIdentity(once, "linux", "amd64", "LINUX_AMD64")
+	if GetUserAgentForContext(once) != GetUserAgentForContext(twice) || DevicePlatformFromContext(twice) != "LINUX_AMD64" {
+		t.Fatal("stamping the same device twice changed the identity")
 	}
 }

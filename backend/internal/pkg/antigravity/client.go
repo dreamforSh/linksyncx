@@ -82,6 +82,7 @@ type LoadCodeAssistRequest struct {
 		IDEType    string `json:"ideType"`
 		IDEVersion string `json:"ideVersion"`
 		IDEName    string `json:"ideName"`
+		Platform   string `json:"platform,omitempty"`
 	} `json:"metadata"`
 }
 
@@ -442,6 +443,7 @@ func (c *Client) LoadCodeAssist(ctx context.Context, accessToken string) (*LoadC
 	reqBody.Metadata.IDEType = "ANTIGRAVITY"
 	reqBody.Metadata.IDEVersion = GetUserAgentVersionForContext(ctx)
 	reqBody.Metadata.IDEName = "antigravity"
+	reqBody.Metadata.Platform = DevicePlatformFromContext(ctx)
 
 	bodyBytes, err := json.Marshal(reqBody)
 	if err != nil {
@@ -518,7 +520,11 @@ func (c *Client) OnboardUser(ctx context.Context, accessToken, tierID string) (s
 
 	reqBody := OnboardUserRequest{TierID: tierID}
 	reqBody.Metadata.IDEType = "ANTIGRAVITY"
-	reqBody.Metadata.Platform = "PLATFORM_UNSPECIFIED"
+	if platform := DevicePlatformFromContext(ctx); platform != "" {
+		reqBody.Metadata.Platform = platform
+	} else {
+		reqBody.Metadata.Platform = "PLATFORM_UNSPECIFIED"
+	}
 	reqBody.Metadata.PluginType = "GEMINI"
 
 	bodyBytes, err := json.Marshal(reqBody)

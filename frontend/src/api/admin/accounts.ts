@@ -393,14 +393,14 @@ export async function resetClientIdentity(id: number): Promise<ResetClientIdenti
   return data
 }
 
-/** 账号设备画像：Claude 用 OS/架构（UA 可选），Codex 用完整 UA。 */
+/** 账号设备画像：Claude 与 Antigravity 用 OS/架构，Codex 用完整 UA。 */
 export interface DeviceProfile {
   user_agent: string
   device_os: string
   device_arch: string
 }
 
-export type DeviceProfilePlatform = 'anthropic' | 'openai'
+export type DeviceProfilePlatform = 'anthropic' | 'openai' | 'antigravity'
 export type DeviceProfileBatchAction = 'randomize' | 'clear'
 
 export interface DeviceProfileBatchItem {
@@ -423,7 +423,7 @@ export interface DeviceProfileBatchResult {
 
 /**
  * Generate a random device profile for the platform (not persisted).
- * @param platform - anthropic | openai
+ * @param platform - anthropic | openai | antigravity
  */
 export async function randomDeviceProfile(platform: DeviceProfilePlatform): Promise<DeviceProfile> {
   const { data } = await apiClient.get<DeviceProfile>('/admin/accounts/device-profile/random', {
@@ -435,7 +435,7 @@ export async function randomDeviceProfile(platform: DeviceProfilePlatform): Prom
 /**
  * Generate `count` random device profiles that do not repeat within the set (not persisted).
  * Used to give every account of a batch creation its own device.
- * @param platform - anthropic | openai
+ * @param platform - anthropic | openai | antigravity
  * @param count - Number of profiles (1-1000)
  */
 export async function randomDeviceProfiles(platform: DeviceProfilePlatform, count: number): Promise<DeviceProfile[]> {

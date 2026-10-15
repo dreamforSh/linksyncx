@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/Wei-Shaw/sub2api/internal/config"
+	"github.com/Wei-Shaw/sub2api/internal/pkg/antigravity"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/claude"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/openai"
 	"github.com/gin-gonic/gin"
@@ -307,7 +308,7 @@ func TestGenerateDistinctDeviceProfiles(t *testing.T) {
 	require.Len(t, seen, claudeSpace)
 
 	// 兜底枚举出的每个组合都必须是合法画像。
-	for _, platform := range []string{PlatformAnthropic, PlatformOpenAI} {
+	for _, platform := range []string{PlatformAnthropic, PlatformOpenAI, PlatformAntigravity} {
 		for _, p := range allDeviceProfiles(platform) {
 			require.NoError(t, NormalizeDeviceProfileCredentials(platform, AccountTypeOAuth, nil,
 				deviceProfileCredentialUpdates(platform, p)), p)
@@ -444,4 +445,67 @@ func TestBatchUpdateDeviceProfiles(t *testing.T) {
 		})
 		requireApplicationErrorReason(t, err, deviceProfileErrorCode)
 	})
+}
+
+func TestAntigravityDeviceProfile(t *testing.T) {
+	creds := map[string]any{credKeyDeviceOS: "macos", credKeyDeviceArch: "arm64"}
+	require.NoError(t, NormalizeDeviceProfileCredentials(PlatformAntigravity, AccountTypeOAuth, nil, creds))
+	require.Equal(t, "MacOS", creds[credKeyDeviceOS])
+	require.Equal(t, "arm64", creds[credKeyDeviceArch])
+
+	account := &Account{Platform: PlatformAntigravity, Type: AccountTypeOAuth, Credentials: creds}
+	require.Equal(t, DeviceProfile{OS: "MacOS", Arch: "arm64"}, account.AntigravityDeviceProfile())
+	ctx := withAntigravityDevice(context.Background(), account)
+	require.Equal(t, "DARWIN_ARM64", antigravity.DevicePlatformFromContext(ctx))
+	require.Contains(t, antigravity.GetUserAgentForContext(ctx), " darwin/arm64")
+
+	setup := &Account{Platform: PlatformAntigravity, Type: AccountTypeSetupToken, Credentials: map[string]any{
+		credKeyDeviceOS: "Linux", credKeyDeviceArch: "x64",
+	}}
+	require.Equal(t, DeviceProfile{OS: "Linux", Arch: "x64"}, setup.AntigravityDeviceProfile())
+
+	require.Empty(t, (&Account{Platform: PlatformAntigravity, Type: AccountTypeOAuth}).AntigravityDeviceProfile().OS)
+	require.Empty(t, (&Account{Platform: PlatformAntigravity, Type: AccountTypeAPIKey, Credentials: creds}).AntigravityDeviceProfile().OS)
+	require.Empty(t, (&Account{Platform: PlatformAntigravity, Type: AccountTypeUpstream, Credentials: creds}).AntigravityDeviceProfile().OS)
+	require.Empty(t, (*Account)(nil).AntigravityDeviceProfile().OS)
+	require.Empty(t, antigravity.DevicePlatformFromContext(withAntigravityDevice(nil, nil)))
+
+	badPair := map[string]any{credKeyDeviceOS: "Windows", credKeyDeviceArch: "arm64"}
+	err := NormalizeDeviceProfileCredentials(PlatformAntigravity, AccountTypeOAuth, nil, badPair)
+	requireApplicationErrorReason(t, err, deviceProfileErrorCode)
+	half := map[string]any{credKeyDeviceOS: "MacOS"}
+	err = NormalizeDeviceProfileCredentials(PlatformAntigravity, AccountTypeOAuth, nil, half)
+	requireApplicationErrorReason(t, err, deviceProfileErrorCode)
+	changedUA := map[string]any{credKeyDeviceUserAgent: "antigravity/2.23.1 windows/amd64"}
+	err = NormalizeDeviceProfileCredentials(PlatformAntigravity, AccountTypeOAuth, nil, changedUA)
+	requireApplicationErrorReason(t, err, deviceProfileErrorCode)
+	apiKey := map[string]any{credKeyDeviceOS: "Linux", credKeyDeviceArch: "x64"}
+	err = NormalizeDeviceProfileCredentials(PlatformAntigravity, AccountTypeAPIKey, nil, apiKey)
+	requireApplicationErrorReason(t, err, deviceProfileErrorCode)
+
+	legacy := map[string]any{credKeyDeviceUserAgent: "legacy-ua", credKeyDeviceOS: "Linux"}
+	next := map[string]any{credKeyDeviceUserAgent: "legacy-ua", credKeyDeviceOS: "linux", credKeyDeviceArch: "x64"}
+	require.NoError(t, NormalizeDeviceProfileCredentials(PlatformAntigravity, AccountTypeOAuth, legacy, next))
+	require.Equal(t, "Linux", next[credKeyDeviceOS])
+	cleared := map[string]any{credKeyDeviceOS: "", credKeyDeviceArch: ""}
+	require.NoError(t, NormalizeDeviceProfileCredentials(PlatformAntigravity, AccountTypeSetupToken, nil, cleared))
+
+	seen := map[DeviceProfile]bool{}
+	for i := 0; i < 100; i++ {
+		p, genErr := GenerateDeviceProfile(PlatformAntigravity)
+		require.NoError(t, genErr)
+		require.Empty(t, p.UserAgent)
+		updates := deviceProfileCredentialUpdates(PlatformAntigravity, p)
+		require.Equal(t, "", updates[credKeyDeviceUserAgent])
+		require.NoError(t, NormalizeDeviceProfileCredentials(PlatformAntigravity, AccountTypeOAuth, nil, updates))
+		goos, goarch, enumName := antigravityGoDevice(p.OS, p.Arch)
+		require.NotEmpty(t, enumName)
+		stamped := withAntigravityDevice(context.Background(), &Account{
+			Platform: PlatformAntigravity, Type: AccountTypeOAuth, Credentials: updates,
+		})
+		require.Equal(t, enumName, antigravity.DevicePlatformFromContext(stamped))
+		require.Contains(t, antigravity.GetUserAgentForContext(stamped), " "+goos+"/"+goarch)
+		seen[p] = true
+	}
+	require.Greater(t, len(seen), 2, "generator must produce diverse devices")
 }

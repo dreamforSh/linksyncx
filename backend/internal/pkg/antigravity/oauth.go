@@ -120,17 +120,96 @@ func GetUserAgentVersionForContext(ctx context.Context) string {
 	return defaultUserAgentVersion
 }
 
-// BuildUserAgent 使用指定版本号构造 User-Agent；版本为空或非法时回退默认值。
+// BuildUserAgent 使用指定版本号构造默认设备（windows/amd64）的 User-Agent；
+// 版本为空或非法时回退默认值。账号级设备画像走 GetUserAgentForContext。
 func BuildUserAgent(version string) string {
-	if normalized := NormalizeUserAgentVersion(version); normalized != "" {
-		return fmt.Sprintf("antigravity/%s windows/amd64", normalized)
-	}
-	return fmt.Sprintf("antigravity/%s windows/amd64", defaultUserAgentVersion)
+	return formatAntigravityUserAgent(version, "windows", "amd64")
 }
 
 // GetUserAgentForContext 返回当前请求应使用的 User-Agent。
+// 未钉设备时与历史行为一致：antigravity/<版本> windows/amd64。
 func GetUserAgentForContext(ctx context.Context) string {
-	return BuildUserAgent(GetUserAgentVersionForContext(ctx))
+	goos, goarch := "windows", "amd64"
+	if id, ok := deviceIdentityFromContext(ctx); ok {
+		goos, goarch = id.goos, id.goarch
+	}
+	return formatAntigravityUserAgent(GetUserAgentVersionForContext(ctx), goos, goarch)
+}
+
+func formatAntigravityUserAgent(version, goos, goarch string) string {
+	if goos == "" || goarch == "" {
+		goos, goarch = "windows", "amd64"
+	}
+	if normalized := NormalizeUserAgentVersion(version); normalized != "" {
+		return fmt.Sprintf("antigravity/%s %s/%s", normalized, goos, goarch)
+	}
+	return fmt.Sprintf("antigravity/%s %s/%s", defaultUserAgentVersion, goos, goarch)
+}
+
+// antigravityDevice 是一份已校验的官方客户端设备：UA 的 GOOS/GOARCH 与
+// ClientMetadata.platform 枚举必须成对，不能混用。
+type antigravityDevice struct {
+	goos     string
+	goarch   string
+	platform string
+}
+
+type antigravityDeviceKey struct{}
+
+// WithDeviceIdentity 把账号钉住的设备放进出站 context。
+// 取值不在官方平台枚举内时忽略，调用方继续用默认 windows/amd64。
+func WithDeviceIdentity(ctx context.Context, goos, goarch, platform string) context.Context {
+	id, ok := normalizeAntigravityDevice(goos, goarch, platform)
+	if !ok {
+		return ctx
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	return context.WithValue(ctx, antigravityDeviceKey{}, id)
+}
+
+// DevicePlatformFromContext 返回 loadCodeAssist / onboardUser 应上报的 platform 枚举。
+// 未钉设备时返回空串，调用方保持原有的缺省行为。
+func DevicePlatformFromContext(ctx context.Context) string {
+	id, ok := deviceIdentityFromContext(ctx)
+	if !ok {
+		return ""
+	}
+	return id.platform
+}
+
+func deviceIdentityFromContext(ctx context.Context) (antigravityDevice, bool) {
+	if ctx == nil {
+		return antigravityDevice{}, false
+	}
+	id, ok := ctx.Value(antigravityDeviceKey{}).(antigravityDevice)
+	return id, ok && id.goos != "" && id.goarch != ""
+}
+
+func normalizeAntigravityDevice(goos, goarch, platform string) (antigravityDevice, bool) {
+	goos = strings.ToLower(strings.TrimSpace(goos))
+	goarch = strings.ToLower(strings.TrimSpace(goarch))
+	platform = strings.ToUpper(strings.TrimSpace(platform))
+	var canonical antigravityDevice
+	switch goos + "/" + goarch {
+	case "darwin/arm64":
+		canonical = antigravityDevice{"darwin", "arm64", "DARWIN_ARM64"}
+	case "darwin/amd64":
+		canonical = antigravityDevice{"darwin", "amd64", "DARWIN_AMD64"}
+	case "linux/arm64":
+		canonical = antigravityDevice{"linux", "arm64", "LINUX_ARM64"}
+	case "linux/amd64":
+		canonical = antigravityDevice{"linux", "amd64", "LINUX_AMD64"}
+	case "windows/amd64":
+		canonical = antigravityDevice{"windows", "amd64", "WINDOWS_AMD64"}
+	default:
+		return antigravityDevice{}, false
+	}
+	if platform != "" && platform != canonical.platform {
+		return antigravityDevice{}, false
+	}
+	return canonical, true
 }
 
 // GetUserAgent 返回当前配置的 User-Agent。

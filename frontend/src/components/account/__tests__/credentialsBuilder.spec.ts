@@ -581,12 +581,16 @@ describe('plan_type helpers', () => {
 })
 
 describe('device profile credentials', () => {
-  it('limits the editor to Claude / Codex OAuth and setup-token accounts that are not shadows', () => {
+  it('limits the editor to Claude / Codex / Antigravity OAuth and setup-token accounts that are not shadows', () => {
     expect(isDeviceProfileCapable('anthropic', 'oauth')).toBe(true)
     expect(isDeviceProfileCapable('anthropic', 'setup-token')).toBe(true)
     expect(isDeviceProfileCapable('openai', 'oauth')).toBe(true)
     expect(isDeviceProfileCapable('openai', 'oauth', true)).toBe(false)
     expect(isDeviceProfileCapable('anthropic', 'apikey')).toBe(false)
+    expect(isDeviceProfileCapable('antigravity', 'oauth')).toBe(true)
+    expect(isDeviceProfileCapable('antigravity', 'setup-token')).toBe(true)
+    expect(isDeviceProfileCapable('antigravity', 'apikey')).toBe(false)
+    expect(isDeviceProfileCapable('antigravity', 'upstream')).toBe(false)
     expect(isDeviceProfileCapable('grok', 'oauth')).toBe(false)
   })
 
@@ -611,6 +615,22 @@ describe('device profile credentials', () => {
     const credentials: Record<string, unknown> = { device_os: 'Linux' }
     applyDeviceProfile(credentials, { user_agent: 'codex-tui/1.0.0 (Ubuntu 24.4.0; x86_64) xterm-256color', device_os: 'MacOS', device_arch: 'arm64' }, 'openai')
     expect(credentials).toEqual({ device_os: 'Linux', user_agent: 'codex-tui/1.0.0 (Ubuntu 24.4.0; x86_64) xterm-256color' })
+  })
+
+  it('writes OS and arch for Antigravity and drops any user agent', () => {
+    const credentials: Record<string, unknown> = { access_token: 't', user_agent: 'legacy', device_os: 'Windows' }
+    applyDeviceProfile(
+      credentials,
+      { user_agent: 'antigravity/1.0.0 windows/amd64', device_os: 'Linux', device_arch: 'x64' },
+      'antigravity'
+    )
+    expect(credentials).toEqual({ access_token: 't', device_os: 'Linux', device_arch: 'x64' })
+    expect(readDeviceProfile({ user_agent: 'legacy', device_os: 'MacOS', device_arch: 'arm64' }, 'antigravity')).toEqual({
+      user_agent: '',
+      device_os: 'MacOS',
+      device_arch: 'arm64'
+    })
+    expect(readDeviceProfile({ device_os: 'Linux', device_arch: 'x64' }, 'openai').device_os).toBe('')
   })
 
   it('compares profiles ignoring surrounding whitespace', () => {

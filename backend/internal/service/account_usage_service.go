@@ -118,14 +118,15 @@ const (
 
 // UsageCache 封装账户使用量相关的缓存
 type UsageCache struct {
-	apiCache           sync.Map           // accountID -> *apiUsageCache
-	windowStatsCache   sync.Map           // accountID -> *windowStatsCache（5h 窗口）
-	sevenDayStatsCache sync.Map           // accountID -> *windowStatsCache（7d 窗口）
-	antigravityCache   sync.Map           // accountID -> *antigravityUsageCache
-	apiFlight          singleflight.Group // 防止同一账号的并发请求击穿缓存（Anthropic）
-	antigravityFlight  singleflight.Group // 防止同一 Antigravity 账号的并发请求击穿缓存
-	openAIProbeCache   sync.Map           // accountID -> time.Time
-	grokProbeCache     sync.Map           // accountID -> last billing probe attempt
+	apiCache               sync.Map           // accountID -> *apiUsageCache
+	windowStatsCache       sync.Map           // accountID -> *windowStatsCache（5h 窗口）
+	antigravityWindowStats sync.Map           // accountID:windowStartUnix -> *windowStatsCache（反重力额度窗口）
+	sevenDayStatsCache     sync.Map           // accountID -> *windowStatsCache（7d 窗口）
+	antigravityCache       sync.Map           // accountID -> *antigravityUsageCache
+	apiFlight              singleflight.Group // 防止同一账号的并发请求击穿缓存（Anthropic）
+	antigravityFlight      singleflight.Group // 防止同一 Antigravity 账号的并发请求击穿缓存
+	openAIProbeCache       sync.Map           // accountID -> time.Time
+	grokProbeCache         sync.Map           // accountID -> last billing probe attempt
 }
 
 // NewUsageCache 创建 UsageCache 实例
@@ -164,10 +165,12 @@ type AntigravityModelQuota struct {
 
 // AntigravityQuotaGroup 是一组共享剩余比例和重置时间的模型，或上游 summary 的一个桶。
 type AntigravityQuotaGroup struct {
-	Label             string   `json:"label"`
-	Models            []string `json:"models,omitempty"`
-	RemainingFraction float64  `json:"remaining_fraction"`
-	ResetTime         string   `json:"reset_time,omitempty"`
+	Label             string       `json:"label"`
+	Models            []string     `json:"models,omitempty"`
+	RemainingFraction float64      `json:"remaining_fraction"`
+	ResetTime         string       `json:"reset_time,omitempty"`
+	Window            string       `json:"window,omitempty"`
+	WindowStats       *WindowStats `json:"window_stats,omitempty"`
 }
 
 // AntigravityModelDetail Antigravity 单个模型的详细能力信息
@@ -1127,7 +1130,7 @@ func (s *AccountUsageService) getAntigravityUsage(ctx context.Context, account *
 				if usage.FiveHour != nil && usage.FiveHour.ResetsAt != nil {
 					usage.FiveHour.RemainingSeconds = int(time.Until(*usage.FiveHour.ResetsAt).Seconds())
 				}
-				return usage, nil
+				return s.withAntigravityWindowStats(ctx, account, usage), nil
 			}
 		}
 	}
@@ -1183,7 +1186,7 @@ func (s *AccountUsageService) getAntigravityUsage(ctx context.Context, account *
 		now := time.Now()
 		return &UsageInfo{UpdatedAt: &now}, nil
 	}
-	return usage, nil
+	return s.withAntigravityWindowStats(ctx, account, usage), nil
 }
 
 func (s *AccountUsageService) getGrokUsage(ctx context.Context, account *Account, force bool) (*UsageInfo, error) {
@@ -1432,6 +1435,73 @@ func enrichUsageWithAccountError(info *UsageInfo, account *Account) {
 
 // addWindowStats 为 usage 数据添加窗口期统计
 // 使用独立缓存（1 分钟），与 API 缓存分离
+// withAntigravityWindowStats 给反重力额度分组挂上本地窗口统计，前端据此估算满额总费用。
+// 返回浅拷贝：不改缓存里的分组，也不写 FiveHour.WindowStats（该指针与缓存共享）。
+func (s *AccountUsageService) withAntigravityWindowStats(ctx context.Context, account *Account, usage *UsageInfo) *UsageInfo {
+	if s == nil || account == nil || usage == nil || s.usageLogRepo == nil || len(usage.AntigravityQuotaGroups) == 0 {
+		return usage
+	}
+	now := time.Now()
+	type windowAttachment struct {
+		index int
+		start time.Time
+	}
+	pending := make([]windowAttachment, 0, len(usage.AntigravityQuotaGroups))
+	for i, group := range usage.AntigravityQuotaGroups {
+		start, ok := antigravityQuotaWindowStart(group.Window, group.ResetTime, now)
+		if !ok {
+			continue
+		}
+		pending = append(pending, windowAttachment{index: i, start: start})
+	}
+	if len(pending) == 0 {
+		return usage
+	}
+
+	copied := *usage
+	groups := make([]AntigravityQuotaGroup, len(usage.AntigravityQuotaGroups))
+	copy(groups, usage.AntigravityQuotaGroups)
+	copied.AntigravityQuotaGroups = groups
+
+	statsByStart := make(map[int64]*WindowStats, len(pending))
+	for _, item := range pending {
+		key := item.start.Unix()
+		stats, seen := statsByStart[key]
+		if !seen {
+			stats = s.cachedAntigravityWindowStats(ctx, account.ID, item.start)
+			statsByStart[key] = stats
+		}
+		if stats != nil {
+			groups[item.index].WindowStats = stats
+		}
+	}
+	return &copied
+}
+
+func (s *AccountUsageService) cachedAntigravityWindowStats(ctx context.Context, accountID int64, start time.Time) *WindowStats {
+	var cache *sync.Map
+	var key string
+	if s.cache != nil {
+		cache = &s.cache.antigravityWindowStats
+		key = fmt.Sprintf("%d:%d", accountID, start.Unix())
+		if cached, ok := cache.Load(key); ok {
+			if entry, ok := cached.(*windowStatsCache); ok && time.Since(entry.timestamp) < windowStatsCacheTTL {
+				return entry.stats
+			}
+		}
+	}
+	stats, err := s.usageLogRepo.GetAccountWindowStats(ctx, accountID, start)
+	if err != nil {
+		log.Printf("Failed to get antigravity window stats for account %d: %v", accountID, err)
+		return nil
+	}
+	windowStats := windowStatsFromAccountStats(stats)
+	if cache != nil {
+		cache.Store(key, &windowStatsCache{stats: windowStats, timestamp: time.Now()})
+	}
+	return windowStats
+}
+
 func (s *AccountUsageService) addWindowStats(ctx context.Context, account *Account, usage *UsageInfo) {
 	if usage.FiveHour != nil {
 		// 使用统一的窗口开始时间计算逻辑（考虑窗口过期情况）

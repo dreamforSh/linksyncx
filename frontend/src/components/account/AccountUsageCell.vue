@@ -357,6 +357,8 @@
           :label="group.label"
           :utilization="quotaGroupUtilization(group.remaining_fraction)"
           :resets-at="group.reset_time || null"
+          :window-stats="group.window_stats"
+          :estimated-total-cost="quotaGroupEstimatedCost(group)"
           :color="quotaGroupColor(index)"
         />
 
@@ -748,7 +750,7 @@
 import { ref, computed, onMounted, onBeforeUnmount, onUnmounted, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { adminAPI } from '@/api/admin'
-import type { Account, AccountUsageInfo, GeminiCredentials, WindowStats } from '@/types'
+import type { Account, AccountUsageInfo, AntigravityQuotaGroup, GeminiCredentials, WindowStats } from '@/types'
 import { buildOpenAIUsageRefreshKey } from '@/utils/accountUsageRefresh'
 import { enqueueUsageRequest } from '@/utils/usageLoadQueue'
 import { formatCompactNumber } from '@/utils/format'
@@ -936,6 +938,12 @@ const quotaGroupColor = (index: number) => quotaGroupColors[index % quotaGroupCo
 const quotaGroupUtilization = (remainingFraction: number) => {
   if (typeof remainingFraction !== 'number' || Number.isNaN(remainingFraction)) return 0
   return Math.round((1 - remainingFraction) * 100)
+}
+
+// 估算用未四舍五入的使用率；进度条仍显示 quotaGroupUtilization 的整数百分比。
+const quotaGroupEstimatedCost = (group: AntigravityQuotaGroup): number | null => {
+  if (typeof group.remaining_fraction !== 'number' || Number.isNaN(group.remaining_fraction)) return null
+  return estimateTotalCost((1 - group.remaining_fraction) * 100, group.window_stats)
 }
 
 const antigravityQuotaGroups = computed(() => usageInfo.value?.antigravity_quota_groups ?? [])

@@ -1229,6 +1229,7 @@ func (s *AccountTestService) fetchAntigravityOAuthUpstreamModels(ctx context.Con
 	if err != nil {
 		return nil, nil, err
 	}
+	ctx = withAntigravityDevice(ctx, account)
 	client, err := antigravity.NewClient(proxyURL)
 	if err != nil {
 		return nil, nil, newUpstreamModelSyncConfigError("Failed to configure Antigravity client", err)

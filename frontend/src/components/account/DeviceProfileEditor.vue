@@ -1,6 +1,6 @@
 <template>
   <div class="space-y-3" data-testid="device-profile-editor">
-    <div v-if="platform === 'anthropic'" class="grid grid-cols-2 gap-3">
+    <div v-if="platform !== 'openai'" class="grid grid-cols-2 gap-3">
       <div>
         <label class="input-label">{{ t('admin.accounts.deviceProfile.os') }}</label>
         <select
@@ -27,7 +27,7 @@
       </div>
     </div>
 
-    <div>
+    <div v-if="platform !== 'antigravity'">
       <label class="input-label">{{ t('admin.accounts.deviceProfile.userAgent') }}</label>
       <input
         :value="modelValue.user_agent"
@@ -92,7 +92,7 @@ import {
 } from './credentialsBuilder'
 
 const props = defineProps<{
-  platform: 'anthropic' | 'openai'
+  platform: 'anthropic' | 'openai' | 'antigravity'
   modelValue: DeviceProfileValue
 }>()
 
@@ -104,7 +104,12 @@ const { t } = useI18n()
 const appStore = useAppStore()
 
 const osOptions = CLAUDE_DEVICE_OS_OPTIONS
-const archOptions = CLAUDE_DEVICE_ARCH_OPTIONS
+const archOptions = computed(() => {
+  if (props.platform === 'antigravity' && props.modelValue.device_os === 'Windows') {
+    return CLAUDE_DEVICE_ARCH_OPTIONS.filter((arch) => arch !== 'arm64')
+  }
+  return CLAUDE_DEVICE_ARCH_OPTIONS
+})
 const generating = ref(false)
 
 const isEmpty = computed(() =>
@@ -120,7 +125,11 @@ const userAgentInvalid = computed(() => {
 })
 
 const update = (patch: Partial<DeviceProfileValue>) => {
-  emit('update:modelValue', { ...props.modelValue, ...patch })
+  const next = { ...props.modelValue, ...patch }
+  if (props.platform === 'antigravity' && next.device_os === 'Windows' && next.device_arch === 'arm64') {
+    next.device_arch = ''
+  }
+  emit('update:modelValue', next)
 }
 
 const randomize = async () => {
@@ -129,7 +138,12 @@ const randomize = async () => {
     const profile = await adminAPI.accounts.randomDeviceProfile(props.platform)
     // Claude 随机画像不带 UA：保留管理员手填的 UA 模板，只换 OS / 架构。
     emit('update:modelValue', {
-      user_agent: props.platform === 'anthropic' ? props.modelValue.user_agent : profile.user_agent || '',
+      user_agent:
+        props.platform === 'anthropic'
+          ? props.modelValue.user_agent
+          : props.platform === 'antigravity'
+            ? ''
+            : profile.user_agent || '',
       device_os: profile.device_os || '',
       device_arch: profile.device_arch || ''
     })

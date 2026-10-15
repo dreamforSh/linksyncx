@@ -1670,6 +1670,8 @@ export interface AntigravityQuotaGroup {
   models?: string[]
   remaining_fraction: number
   reset_time?: string
+  window?: string
+  window_stats?: WindowStats | null
 }
 
 export interface GrokQuotaWindow {

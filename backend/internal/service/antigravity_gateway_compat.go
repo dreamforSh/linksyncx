@@ -170,6 +170,7 @@ func (s *AntigravityGatewayService) forwardAntigravityCompat(
 	account *Account,
 	request antigravityCompatRequest,
 ) (*ForwardResult, error) {
+	ctx = withAntigravityDevice(ctx, account)
 	beginUpstreamResponseModelObservation(c)
 	call, err := s.prepareAntigravityCompatCall(ctx, c, account, request)
 	if err != nil {

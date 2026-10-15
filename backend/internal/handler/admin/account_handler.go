@@ -1829,7 +1829,7 @@ func (h *AccountHandler) ResetClientIdentity(c *gin.Context) {
 }
 
 // RandomDeviceProfile 为指定平台随机生成一份设备画像（不落库，供编辑表单填充）。
-// GET /api/v1/admin/accounts/device-profile/random?platform=anthropic|openai
+// GET /api/v1/admin/accounts/device-profile/random?platform=anthropic|openai|antigravity
 func (h *AccountHandler) RandomDeviceProfile(c *gin.Context) {
 	profile, err := service.GenerateDeviceProfile(strings.TrimSpace(c.Query("platform")))
 	if err != nil {
@@ -1846,7 +1846,7 @@ type RandomDeviceProfilesResponse struct {
 
 // RandomDeviceProfiles 一次生成 count 份尽量互不重复的设备画像（不落库），
 // 供「添加账号」批量创建时为每个账号分配不同设备。
-// GET /api/v1/admin/accounts/device-profile/random-set?platform=anthropic|openai&count=N
+// GET /api/v1/admin/accounts/device-profile/random-set?platform=anthropic|openai|antigravity&count=N
 func (h *AccountHandler) RandomDeviceProfiles(c *gin.Context) {
 	count, err := strconv.Atoi(strings.TrimSpace(c.DefaultQuery("count", "1")))
 	if err != nil {

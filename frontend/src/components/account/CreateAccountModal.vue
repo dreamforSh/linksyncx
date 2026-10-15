@@ -1139,6 +1139,18 @@
         <p class="input-hint">{{ t('admin.accounts.antigravityProjectIdHint') }}</p>
       </div>
 
+      <div
+        v-if="form.platform === 'antigravity' && antigravityAccountType === 'oauth'"
+        class="rounded-lg border border-gray-200 p-4 dark:border-dark-600"
+        data-testid="create-antigravity-device-profile"
+      >
+        <DeviceProfileCreateField
+          v-model:mode="deviceProfileMode"
+          v-model="deviceProfile"
+          platform="antigravity"
+        />
+      </div>
+
       <!-- Upstream config (only for Antigravity upstream type) -->
       <div v-if="form.platform === 'antigravity' && antigravityAccountType === 'upstream'" class="space-y-4">
         <div>
@@ -4054,6 +4066,7 @@ import {
   type CnNativeApiProtocol,
   type CnProviderPlatform,
   CLAUDE_DEVICE_USER_AGENT_PATTERN,
+  isAntigravityDevicePair,
   type DeviceProfileCreateMode,
   type DeviceProfileValue,
   type HeaderOverrideRow,
@@ -4566,11 +4579,15 @@ const codexFingerprintModeOptions = computed(() => [
 // 账号级设备指纹（Claude / Codex 的 OAuth 与 Setup Token）。默认沿用默认指纹。
 const deviceProfileMode = ref<DeviceProfileCreateMode>('default')
 const deviceProfile = ref<DeviceProfileValue>(emptyDeviceProfile())
-const deviceProfilePlatform = computed<'anthropic' | 'openai' | null>(() =>
-  accountCategory.value === 'oauth-based' && (form.platform === 'anthropic' || form.platform === 'openai')
+const deviceProfilePlatform = computed<'anthropic' | 'openai' | 'antigravity' | null>(() => {
+  if (form.platform === 'antigravity') {
+    // 反重力的「上游 / API Key」仍停在 oauth-based 分类上，不能只看分类。
+    return antigravityAccountType.value === 'oauth' ? 'antigravity' : null
+  }
+  return accountCategory.value === 'oauth-based' && (form.platform === 'anthropic' || form.platform === 'openai')
     ? form.platform
     : null
-)
+})
 type AnthropicAPIKeyAuthScheme = 'x_api_key' | 'authorization_bearer'
 const anthropicPassthroughEnabled = ref(false)
 const anthropicAPIKeyAuthScheme = ref<AnthropicAPIKeyAuthScheme>('x_api_key')
@@ -6183,6 +6200,14 @@ const validateDeviceProfileInput = () => {
     appStore.showError(t('admin.accounts.deviceProfile.claudeUserAgentInvalid'))
     return false
   }
+  if (
+    deviceProfilePlatform.value === 'antigravity' &&
+    deviceProfileMode.value === 'manual' &&
+    !isAntigravityDevicePair(deviceProfile.value.device_os, deviceProfile.value.device_arch)
+  ) {
+    appStore.showError(t('admin.accounts.deviceProfile.antigravityPairInvalid'))
+    return false
+  }
   return true
 }
 
@@ -7012,6 +7037,15 @@ const handleAntigravityValidateRT = async (refreshTokenInput: string) => {
   }
   if (blockClashBatchCreate(refreshTokens.length, (message) => (antigravityOAuth.error.value = message))) return
 
+  let deviceProfiles: Array<DeviceProfileValue | null>
+  try {
+    deviceProfiles = await resolveCreateDeviceProfiles(refreshTokens.length)
+  } catch (error) {
+    antigravityOAuth.error.value = extractApiErrorMessage(error, t('admin.accounts.deviceProfile.randomizeFailed'))
+    appStore.showError(antigravityOAuth.error.value)
+    return
+  }
+
   antigravityOAuth.loading.value = true
   antigravityOAuth.error.value = ''
 
@@ -7033,7 +7067,10 @@ const handleAntigravityValidateRT = async (refreshTokenInput: string) => {
           continue
         }
 
-        const credentials = antigravityOAuth.buildCredentials(tokenInfo, refreshTokens[i])
+        const credentials = withDeviceProfile(
+          antigravityOAuth.buildCredentials(tokenInfo, refreshTokens[i]),
+          deviceProfiles[i]
+        )
         applyAntigravityProjectID(credentials, antigravityProjectId.value, 'create')
         
         // Generate account name with index for batch
@@ -7134,6 +7171,7 @@ const handleAntigravityExchange = async (authCode: string) => {
   antigravityOAuth.error.value = ''
 
   try {
+    const [accountDeviceProfile] = await resolveCreateDeviceProfiles(1)
     const stateFromInput = oauthFlowRef.value?.oauthState || ''
     const stateToUse = stateFromInput || antigravityOAuth.state.value
     if (!stateToUse) {
@@ -7153,6 +7191,7 @@ const handleAntigravityExchange = async (authCode: string) => {
 		const credentials = antigravityOAuth.buildCredentials(tokenInfo)
 		applyAntigravityProjectID(credentials, antigravityProjectId.value, 'create')
 		applyInterceptWarmup(credentials, interceptWarmupRequests.value, 'create')
+		withDeviceProfile(credentials, accountDeviceProfile)
 		// Antigravity 只使用映射模式
 		const antigravityModelMapping = buildModelMappingObject(
 			'mapping',

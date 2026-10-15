@@ -3,9 +3,7 @@
     <div>
       <label class="input-label mb-0">{{ t('admin.accounts.deviceProfile.title') }}</label>
       <p class="mt-1 text-xs text-gray-500 dark:text-gray-400">
-        {{ platform === 'anthropic'
-          ? t('admin.accounts.deviceProfile.claudeHint')
-          : t('admin.accounts.deviceProfile.codexHint') }}
+        {{ profileHint }}
       </p>
     </div>
 
@@ -46,7 +44,7 @@ import DeviceProfileEditor from './DeviceProfileEditor.vue'
 import type { DeviceProfileCreateMode, DeviceProfileValue } from './credentialsBuilder'
 
 const props = defineProps<{
-  platform: 'anthropic' | 'openai'
+  platform: 'anthropic' | 'openai' | 'antigravity'
   mode: DeviceProfileCreateMode
   modelValue: DeviceProfileValue
 }>()
@@ -57,6 +55,12 @@ const emit = defineEmits<{
 }>()
 
 const { t } = useI18n()
+
+const profileHint = computed(() => {
+  if (props.platform === 'anthropic') return t('admin.accounts.deviceProfile.claudeHint')
+  if (props.platform === 'antigravity') return t('admin.accounts.deviceProfile.antigravityHint')
+  return t('admin.accounts.deviceProfile.codexHint')
+})
 
 const modeOptions = computed<{ value: DeviceProfileCreateMode; label: string }[]>(() => [
   { value: 'default', label: t('admin.accounts.deviceProfile.create.default') },

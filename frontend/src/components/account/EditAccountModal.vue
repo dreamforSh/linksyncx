@@ -1329,6 +1329,18 @@
         <p class="input-hint">{{ t('admin.accounts.antigravityProjectIdHint') }}</p>
       </div>
 
+      <div
+        v-if="account.platform === 'antigravity' && deviceProfileEditable"
+        class="border-t border-gray-200 pt-4 dark:border-dark-600"
+        data-testid="edit-antigravity-device-profile"
+      >
+        <label class="input-label mb-0">{{ t('admin.accounts.deviceProfile.title') }}</label>
+        <p class="mb-3 mt-1 text-xs text-gray-500 dark:text-gray-400">
+          {{ t('admin.accounts.deviceProfile.antigravityHint') }}
+        </p>
+        <DeviceProfileEditor v-model="deviceProfile" platform="antigravity" />
+      </div>
+
       <!-- Antigravity model restriction (applies to all antigravity types) -->
       <!-- Antigravity 只支持模型映射模式，不支持白名单模式 -->
       <div v-if="account.platform === 'antigravity'" class="border-t border-gray-200 pt-4 dark:border-dark-600">
@@ -5636,7 +5648,7 @@ const handleSubmit = async () => {
       updatePayload.credentials = applyPlanType({ ...currentCredentials }, editPlanType.value)
     }
 
-    // 设备画像：Claude / Codex 的 OAuth 与 setup-token 非影子账号（空值删除键，恢复默认指纹）
+    // 设备画像：Claude / Codex / Antigravity 的 OAuth 与 setup-token 非影子账号（空值删除键，恢复默认指纹）
     if (deviceProfileEditable.value) {
       const currentCredentials = (updatePayload.credentials as Record<string, unknown>) ||
         ((props.account.credentials as Record<string, unknown>) || {})
