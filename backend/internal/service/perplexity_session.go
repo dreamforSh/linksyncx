@@ -1,0 +1,145 @@
+package service
+
+import (
+	"context"
+	"encoding/json"
+	"fmt"
+	"io"
+	"net/http"
+	"strings"
+	"time"
+
+	"github.com/Wei-Shaw/sub2api/internal/pkg/logger"
+	"github.com/Wei-Shaw/sub2api/internal/pkg/perplexity"
+	"github.com/Wei-Shaw/sub2api/internal/pkg/tlsfingerprint"
+	"github.com/gin-gonic/gin"
+	"github.com/tidwall/gjson"
+	"go.uber.org/zap"
+)
+
+// perplexityQuotaSnapshotExtraKey 是账号 Extra 中 Perplexity 配额快照的键。
+const perplexityQuotaSnapshotExtraKey = "perplexity_quota_snapshot"
+
+// perplexityDefaultTLSProfile 返回未绑定 profile 时的默认 TLS 指纹。
+// 空字段 → dialer 使用内置抓包指纹；纯 Go TLS 是 Perplexity 反爬的强 bot
+// 信号，本平台绝不裸发。
+func perplexityDefaultTLSProfile() *tlsfingerprint.Profile {
+	return &tlsfingerprint.Profile{Name: "perplexity-default"}
+}
+
+// doPerplexityRequest 以 fetch 风格头 + Cookie 会话 + TLS 指纹发送 Perplexity
+// 网页端请求（与转发路径同一套反爬约束）。
+func (s *AccountTestService) doPerplexityRequest(ctx context.Context, account *Account, method, path string) (*http.Response, error) {
+	creds := perplexityCredentialsFromAccount(account)
+	if strings.TrimSpace(creds.SessionToken) == "" {
+		return nil, fmt.Errorf("perplexity session token is missing (credentials.api_key)")
+	}
+	proxyURL, err := account.ProxyURLForOutbound()
+	if err != nil {
+		return nil, err
+	}
+	req, err := http.NewRequestWithContext(ctx, method, creds.NormalizedBaseURL()+path, nil)
+	if err != nil {
+		return nil, fmt.Errorf("build perplexity request: %w", err)
+	}
+	creds.SetFetchStyleHeaders(req.Header, "application/json")
+
+	profile := perplexityDefaultTLSProfile()
+	if s.tlsFPProfileService != nil {
+		if p := s.tlsFPProfileService.ResolveTLSProfile(account); p != nil {
+			profile = p
+		}
+	}
+	return s.httpUpstream.DoWithTLS(req, proxyURL, account.ID, account.Concurrency, profile)
+}
+
+// ValidatePerplexitySession 探测 Perplexity 网页会话是否存活：
+// GET /api/auth/session 返回 200 且 JSON 含非空 user 对象即为有效；
+// 401/403 表示会话 Cookie 已失效。
+func (s *AccountTestService) ValidatePerplexitySession(ctx context.Context, account *Account) error {
+	if s == nil || account == nil {
+		return fmt.Errorf("perplexity session validation is not available")
+	}
+	resp, err := s.doPerplexityRequest(ctx, account, http.MethodGet, perplexity.SessionPath)
+	if err != nil {
+		return fmt.Errorf("perplexity session check failed: %w", err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+	body, err := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
+	if err != nil {
+		return fmt.Errorf("read perplexity session response: %w", err)
+	}
+	if resp.StatusCode == http.StatusUnauthorized || resp.StatusCode == http.StatusForbidden {
+		return fmt.Errorf("perplexity session cookie is invalid or expired (HTTP %d)", resp.StatusCode)
+	}
+	if resp.StatusCode != http.StatusOK {
+		return fmt.Errorf("perplexity session check returned HTTP %d", resp.StatusCode)
+	}
+	if user := gjson.GetBytes(body, "user"); !user.Exists() || !user.IsObject() || len(user.Map()) == 0 {
+		return fmt.Errorf("perplexity session is not authenticated (empty user object)")
+	}
+	return nil
+}
+
+// FetchPerplexityQuota 拉取 /rest/rate-limit/all 并把原始 JSON 快照写入账号 Extra
+// （键 perplexity_quota_snapshot）。尽力而为：任何失败仅记日志并返回 nil。
+func (s *AccountTestService) FetchPerplexityQuota(ctx context.Context, account *Account) error {
+	if s == nil || account == nil {
+		return nil
+	}
+	resp, err := s.doPerplexityRequest(ctx, account, http.MethodGet, perplexity.RateLimitAllPath)
+	if err != nil {
+		logger.L().Debug("perplexity: fetch quota failed", zap.Int64("account_id", account.ID), zap.Error(err))
+		return nil
+	}
+	defer func() { _ = resp.Body.Close() }()
+	body, readErr := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
+	if readErr != nil || resp.StatusCode != http.StatusOK || !gjson.ValidBytes(body) {
+		logger.L().Debug("perplexity: fetch quota non-OK",
+			zap.Int64("account_id", account.ID),
+			zap.Int("status_code", resp.StatusCode),
+			zap.Error(readErr),
+		)
+		return nil
+	}
+	var raw map[string]any
+	if err := json.Unmarshal(body, &raw); err != nil {
+		return nil
+	}
+	if s.accountRepo != nil && account.ID > 0 {
+		if err := s.accountRepo.UpdateExtra(ctx, account.ID, map[string]any{
+			perplexityQuotaSnapshotExtraKey: map[string]any{
+				"fetched_at": time.Now().UTC().Format(time.RFC3339),
+				"raw":        raw,
+			},
+		}); err != nil {
+			logger.L().Debug("perplexity: persist quota snapshot failed", zap.Int64("account_id", account.ID), zap.Error(err))
+		}
+	}
+	return nil
+}
+
+// testPerplexityAccountConnection 是管理端账号测试入口：探测网页会话存活，
+// 并尽力刷新配额快照。
+func (s *AccountTestService) testPerplexityAccountConnection(c *gin.Context, account *Account, modelID string) error {
+	testModelID := strings.TrimSpace(modelID)
+	if testModelID == "" {
+		testModelID = "sonar"
+	}
+	testModelID = account.GetMappedModel(testModelID)
+	c.Writer.Header().Set("Content-Type", "text/event-stream")
+	c.Writer.Header().Set("Cache-Control", "no-cache")
+	c.Writer.Header().Set("Connection", "keep-alive")
+	c.Writer.Header().Set("X-Accel-Buffering", "no")
+	c.Writer.Flush()
+	s.sendEvent(c, TestEvent{Type: "test_start", Model: testModelID})
+
+	ctx := c.Request.Context()
+	if err := s.ValidatePerplexitySession(ctx, account); err != nil {
+		return s.sendErrorAndEnd(c, err.Error())
+	}
+	_ = s.FetchPerplexityQuota(ctx, account)
+	s.sendEvent(c, TestEvent{Type: "content", Text: "Perplexity web session is valid."})
+	s.sendEvent(c, TestEvent{Type: "test_complete", Success: true})
+	return nil
+}

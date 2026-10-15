@@ -18,6 +18,7 @@ import (
 	"github.com/Wei-Shaw/sub2api/internal/pkg/claude"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/geminicli"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/openai_compat"
+	"github.com/Wei-Shaw/sub2api/internal/pkg/perplexity"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/xai"
 )
 
@@ -269,6 +270,11 @@ func (a *Account) IsGrok() bool {
 	return a.Platform == PlatformGrok
 }
 
+// IsPerplexity 标识 Perplexity.ai 网页订阅账号（Cookie 会话，APIKey 类型）。
+func (a *Account) IsPerplexity() bool {
+	return a.Platform == PlatformPerplexity
+}
+
 func (a *Account) IsGrokOAuth() bool {
 	return a.IsGrok() && a.Type == AccountTypeOAuth
 }
@@ -298,8 +304,9 @@ func (a *Account) IsCNProvider() bool {
 // IsOpenAICompatible 报告账号是否走 OpenAI 网关（OpenAI 协议族）。
 // openai/grok 原生走 OpenAI 网关；国产供应商同为 OpenAI Chat Completions
 // 兼容上游，也经 OpenAI 网关转发。OpenCode 同样经 OpenAI 网关按模型分流。
+// Perplexity 经 OpenAI 网关转发到网页端问答 API（内部合成 CC 协议）。
 func (a *Account) IsOpenAICompatible() bool {
-	return a != nil && (a.Platform == PlatformOpenAI || a.Platform == PlatformGrok || a.IsCNProvider() || a.IsOpenCodeGo())
+	return a != nil && (a.Platform == PlatformOpenAI || a.Platform == PlatformGrok || a.Platform == PlatformPerplexity || a.IsCNProvider() || a.IsOpenCodeGo())
 }
 
 func (a *Account) GeminiOAuthType() string {
@@ -1757,6 +1764,35 @@ func (a *Account) GetGrokMediaBaseURL() string {
 		return xai.DefaultBaseURL
 	}
 	return baseURL
+}
+
+// GetPerplexityBaseURL 返回 Perplexity 网页端 base_url，默认 https://www.perplexity.ai。
+func (a *Account) GetPerplexityBaseURL() string {
+	if a == nil || !a.IsPerplexity() {
+		return ""
+	}
+	baseURL := strings.TrimRight(strings.TrimSpace(a.GetCredential("base_url")), "/")
+	if baseURL == "" {
+		return perplexity.DefaultBaseURL
+	}
+	return baseURL
+}
+
+// GetPerplexitySessionToken 返回 Perplexity 网页会话 token
+// （__Secure-next-auth.session-token 的值，存于 credentials.api_key）。
+func (a *Account) GetPerplexitySessionToken() string {
+	if a == nil || !a.IsPerplexity() {
+		return ""
+	}
+	return strings.TrimSpace(a.GetCredential("api_key"))
+}
+
+// GetPerplexityCSRFToken 返回可选的 next-auth.csrf-token Cookie 值。
+func (a *Account) GetPerplexityCSRFToken() string {
+	if a == nil || !a.IsPerplexity() {
+		return ""
+	}
+	return strings.TrimSpace(a.GetCredential("csrf_token"))
 }
 
 func (a *Account) GetGrokAccessToken() string {

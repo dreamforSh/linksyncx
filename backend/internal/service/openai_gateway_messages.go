@@ -53,6 +53,11 @@ func (s *OpenAIGatewayService) ForwardAsAnthropic(
 		return nil, err
 	}
 
+	// Perplexity：网页订阅问答 API，Messages 入站统一折叠为单次查询。
+	if account.Platform == PlatformPerplexity {
+		return s.forwardPerplexityMessages(ctx, c, account, body, defaultMappedModel)
+	}
+
 	// OpenCode Go：按模型原生协议分流。规则未命中兜底 Chat Completions。
 	if account.IsOpenCodeGo() {
 		mapped := resolveOpenCodeGoMappedModel(account, body, defaultMappedModel)

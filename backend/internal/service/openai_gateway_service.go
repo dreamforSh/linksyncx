@@ -486,6 +486,7 @@ type OpenAIGatewayService struct {
 	deferredService       *DeferredService
 	openAITokenProvider   *OpenAITokenProvider
 	grokTokenProvider     *GrokTokenProvider
+	tlsFPProfileService   *TLSFingerprintProfileService
 	toolCorrector         *CodexToolCorrector
 	openaiWSResolver      OpenAIWSProtocolResolver
 	resolver              *ModelPricingResolver
@@ -611,6 +612,12 @@ func NewOpenAIGatewayService(
 	}
 	svc.logOpenAIWSModeBootstrap()
 	return svc
+}
+
+// SetTLSFingerprintProfileService 挂载 TLS 指纹模板服务（可选）。
+// 仅 Perplexity 等强反爬平台的出站路径使用；未挂载时回落内置默认指纹。
+func (s *OpenAIGatewayService) SetTLSFingerprintProfileService(svc *TLSFingerprintProfileService) {
+	s.tlsFPProfileService = svc
 }
 
 // ResolveChannelMapping 解析渠道级模型映射（代理到 ChannelService）
