@@ -523,29 +523,6 @@ func perplexityShouldFailover(statusCode int) bool {
 		statusCode >= 500
 }
 
-// perplexityThinkingRequested 检测客户端是否显式请求思考链：
-// thinking:true/{type:"enabled"}、reasoning_effort（非 none）、reasoning.effort（非 none）。
-func perplexityThinkingRequested(chatBody []byte) bool {
-	if !gjson.ValidBytes(chatBody) {
-		return false
-	}
-	if thinking := gjson.GetBytes(chatBody, "thinking"); thinking.Exists() {
-		if thinking.Type == gjson.True {
-			return true
-		}
-		if thinking.IsObject() && thinking.Get("type").String() == "enabled" {
-			return true
-		}
-	}
-	for _, path := range []string{"reasoning_effort", "reasoning.effort"} {
-		effort := strings.ToLower(strings.TrimSpace(gjson.GetBytes(chatBody, path).String()))
-		if effort != "" && effort != "none" {
-			return true
-		}
-	}
-	return false
-}
-
 // handlePerplexityAccountUpstreamError 对 >=400 的上游响应做账号级副作用：
 //   - 401/403（非 Cloudflare）：会话 Cookie 失效，临时停调（10m/30m）
 //   - 429：按 Retry-After 冷却（缺省 5m）

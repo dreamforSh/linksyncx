@@ -118,10 +118,10 @@ func writePerplexityTranslation(ctx context.Context, upstream io.Reader, pw io.W
 		if !p.StripCitations {
 			return emitDelta(map[string]any{"content": text}, nil, nil)
 		}
-		citePending.WriteString(text)
+		_, _ = citePending.WriteString(text)
 		emit, rest := perplexity.StripCitationMarkersStreaming(citePending.String())
 		citePending.Reset()
-		citePending.WriteString(rest)
+		_, _ = citePending.WriteString(rest)
 		if emit == "" {
 			return nil
 		}

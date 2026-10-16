@@ -35,7 +35,7 @@ func parseFamilyPreference(pref string) (familyPreference, bool) {
 	for i := 0; i < len(name); i++ {
 		c := name[i]
 		if c < '0' || c > '9' {
-			key.WriteByte(c)
+			_ = key.WriteByte(c)
 			continue
 		}
 		value := 0
