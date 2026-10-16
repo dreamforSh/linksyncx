@@ -61,6 +61,20 @@ type UsageLog struct {
 	CacheCreationTokens int `json:"cache_creation_tokens,omitempty"`
 	// CacheReadTokens holds the value of the "cache_read_tokens" field.
 	CacheReadTokens int `json:"cache_read_tokens,omitempty"`
+	// RawInputTokens holds the value of the "raw_input_tokens" field.
+	RawInputTokens *int `json:"raw_input_tokens,omitempty"`
+	// RawOutputTokens holds the value of the "raw_output_tokens" field.
+	RawOutputTokens *int `json:"raw_output_tokens,omitempty"`
+	// RawCacheCreationTokens holds the value of the "raw_cache_creation_tokens" field.
+	RawCacheCreationTokens *int `json:"raw_cache_creation_tokens,omitempty"`
+	// RawCacheReadTokens holds the value of the "raw_cache_read_tokens" field.
+	RawCacheReadTokens *int `json:"raw_cache_read_tokens,omitempty"`
+	// CacheBillingCompensationTokens holds the value of the "cache_billing_compensation_tokens" field.
+	CacheBillingCompensationTokens *int `json:"cache_billing_compensation_tokens,omitempty"`
+	// CacheBillingCompensationReason holds the value of the "cache_billing_compensation_reason" field.
+	CacheBillingCompensationReason *string `json:"cache_billing_compensation_reason,omitempty"`
+	// UsageIncomplete holds the value of the "usage_incomplete" field.
+	UsageIncomplete bool `json:"usage_incomplete,omitempty"`
 	// CacheCreation5mTokens holds the value of the "cache_creation_5m_tokens" field.
 	CacheCreation5mTokens int `json:"cache_creation_5m_tokens,omitempty"`
 	// CacheCreation1hTokens holds the value of the "cache_creation_1h_tokens" field.
@@ -202,13 +216,13 @@ func (*UsageLog) scanValues(columns []string) ([]any, error) {
 		switch columns[i] {
 		case usagelog.FieldImageSizeBreakdown:
 			values[i] = new([]byte)
-		case usagelog.FieldUpstreamModelMismatch, usagelog.FieldLongContextBillingApplied, usagelog.FieldStream, usagelog.FieldCacheTTLOverridden:
+		case usagelog.FieldUpstreamModelMismatch, usagelog.FieldUsageIncomplete, usagelog.FieldLongContextBillingApplied, usagelog.FieldStream, usagelog.FieldCacheTTLOverridden:
 			values[i] = new(sql.NullBool)
 		case usagelog.FieldInputCost, usagelog.FieldOutputCost, usagelog.FieldCacheCreationCost, usagelog.FieldCacheReadCost, usagelog.FieldTotalCost, usagelog.FieldActualCost, usagelog.FieldRateMultiplier, usagelog.FieldAccountRateMultiplier:
 			values[i] = new(sql.NullFloat64)
-		case usagelog.FieldID, usagelog.FieldUserID, usagelog.FieldAPIKeyID, usagelog.FieldAccountID, usagelog.FieldChannelID, usagelog.FieldGroupID, usagelog.FieldSubscriptionID, usagelog.FieldInputTokens, usagelog.FieldOutputTokens, usagelog.FieldCacheCreationTokens, usagelog.FieldCacheReadTokens, usagelog.FieldCacheCreation5mTokens, usagelog.FieldCacheCreation1hTokens, usagelog.FieldBillingType, usagelog.FieldDurationMs, usagelog.FieldFirstTokenMs, usagelog.FieldImageCount, usagelog.FieldVideoCount, usagelog.FieldVideoDurationSeconds:
+		case usagelog.FieldID, usagelog.FieldUserID, usagelog.FieldAPIKeyID, usagelog.FieldAccountID, usagelog.FieldChannelID, usagelog.FieldGroupID, usagelog.FieldSubscriptionID, usagelog.FieldInputTokens, usagelog.FieldOutputTokens, usagelog.FieldCacheCreationTokens, usagelog.FieldCacheReadTokens, usagelog.FieldRawInputTokens, usagelog.FieldRawOutputTokens, usagelog.FieldRawCacheCreationTokens, usagelog.FieldRawCacheReadTokens, usagelog.FieldCacheBillingCompensationTokens, usagelog.FieldCacheCreation5mTokens, usagelog.FieldCacheCreation1hTokens, usagelog.FieldBillingType, usagelog.FieldDurationMs, usagelog.FieldFirstTokenMs, usagelog.FieldImageCount, usagelog.FieldVideoCount, usagelog.FieldVideoDurationSeconds:
 			values[i] = new(sql.NullInt64)
-		case usagelog.FieldRequestID, usagelog.FieldModel, usagelog.FieldRequestedModel, usagelog.FieldUpstreamModel, usagelog.FieldUpstreamResponseModel, usagelog.FieldModelMappingChain, usagelog.FieldBillingTier, usagelog.FieldBillingMode, usagelog.FieldUserAgent, usagelog.FieldIPAddress, usagelog.FieldImageSize, usagelog.FieldImageInputSize, usagelog.FieldImageOutputSize, usagelog.FieldImageSizeSource, usagelog.FieldVideoResolution:
+		case usagelog.FieldRequestID, usagelog.FieldModel, usagelog.FieldRequestedModel, usagelog.FieldUpstreamModel, usagelog.FieldUpstreamResponseModel, usagelog.FieldModelMappingChain, usagelog.FieldBillingTier, usagelog.FieldBillingMode, usagelog.FieldCacheBillingCompensationReason, usagelog.FieldUserAgent, usagelog.FieldIPAddress, usagelog.FieldImageSize, usagelog.FieldImageInputSize, usagelog.FieldImageOutputSize, usagelog.FieldImageSizeSource, usagelog.FieldVideoResolution:
 			values[i] = new(sql.NullString)
 		case usagelog.FieldCreatedAt:
 			values[i] = new(sql.NullTime)
@@ -356,6 +370,54 @@ func (_m *UsageLog) assignValues(columns []string, values []any) error {
 				return fmt.Errorf("unexpected type %T for field cache_read_tokens", values[i])
 			} else if value.Valid {
 				_m.CacheReadTokens = int(value.Int64)
+			}
+		case usagelog.FieldRawInputTokens:
+			if value, ok := values[i].(*sql.NullInt64); !ok {
+				return fmt.Errorf("unexpected type %T for field raw_input_tokens", values[i])
+			} else if value.Valid {
+				_m.RawInputTokens = new(int)
+				*_m.RawInputTokens = int(value.Int64)
+			}
+		case usagelog.FieldRawOutputTokens:
+			if value, ok := values[i].(*sql.NullInt64); !ok {
+				return fmt.Errorf("unexpected type %T for field raw_output_tokens", values[i])
+			} else if value.Valid {
+				_m.RawOutputTokens = new(int)
+				*_m.RawOutputTokens = int(value.Int64)
+			}
+		case usagelog.FieldRawCacheCreationTokens:
+			if value, ok := values[i].(*sql.NullInt64); !ok {
+				return fmt.Errorf("unexpected type %T for field raw_cache_creation_tokens", values[i])
+			} else if value.Valid {
+				_m.RawCacheCreationTokens = new(int)
+				*_m.RawCacheCreationTokens = int(value.Int64)
+			}
+		case usagelog.FieldRawCacheReadTokens:
+			if value, ok := values[i].(*sql.NullInt64); !ok {
+				return fmt.Errorf("unexpected type %T for field raw_cache_read_tokens", values[i])
+			} else if value.Valid {
+				_m.RawCacheReadTokens = new(int)
+				*_m.RawCacheReadTokens = int(value.Int64)
+			}
+		case usagelog.FieldCacheBillingCompensationTokens:
+			if value, ok := values[i].(*sql.NullInt64); !ok {
+				return fmt.Errorf("unexpected type %T for field cache_billing_compensation_tokens", values[i])
+			} else if value.Valid {
+				_m.CacheBillingCompensationTokens = new(int)
+				*_m.CacheBillingCompensationTokens = int(value.Int64)
+			}
+		case usagelog.FieldCacheBillingCompensationReason:
+			if value, ok := values[i].(*sql.NullString); !ok {
+				return fmt.Errorf("unexpected type %T for field cache_billing_compensation_reason", values[i])
+			} else if value.Valid {
+				_m.CacheBillingCompensationReason = new(string)
+				*_m.CacheBillingCompensationReason = value.String
+			}
+		case usagelog.FieldUsageIncomplete:
+			if value, ok := values[i].(*sql.NullBool); !ok {
+				return fmt.Errorf("unexpected type %T for field usage_incomplete", values[i])
+			} else if value.Valid {
+				_m.UsageIncomplete = value.Bool
 			}
 		case usagelog.FieldCacheCreation5mTokens:
 			if value, ok := values[i].(*sql.NullInt64); !ok {
@@ -675,6 +737,39 @@ func (_m *UsageLog) String() string {
 	builder.WriteString(", ")
 	builder.WriteString("cache_read_tokens=")
 	builder.WriteString(fmt.Sprintf("%v", _m.CacheReadTokens))
+	builder.WriteString(", ")
+	if v := _m.RawInputTokens; v != nil {
+		builder.WriteString("raw_input_tokens=")
+		builder.WriteString(fmt.Sprintf("%v", *v))
+	}
+	builder.WriteString(", ")
+	if v := _m.RawOutputTokens; v != nil {
+		builder.WriteString("raw_output_tokens=")
+		builder.WriteString(fmt.Sprintf("%v", *v))
+	}
+	builder.WriteString(", ")
+	if v := _m.RawCacheCreationTokens; v != nil {
+		builder.WriteString("raw_cache_creation_tokens=")
+		builder.WriteString(fmt.Sprintf("%v", *v))
+	}
+	builder.WriteString(", ")
+	if v := _m.RawCacheReadTokens; v != nil {
+		builder.WriteString("raw_cache_read_tokens=")
+		builder.WriteString(fmt.Sprintf("%v", *v))
+	}
+	builder.WriteString(", ")
+	if v := _m.CacheBillingCompensationTokens; v != nil {
+		builder.WriteString("cache_billing_compensation_tokens=")
+		builder.WriteString(fmt.Sprintf("%v", *v))
+	}
+	builder.WriteString(", ")
+	if v := _m.CacheBillingCompensationReason; v != nil {
+		builder.WriteString("cache_billing_compensation_reason=")
+		builder.WriteString(*v)
+	}
+	builder.WriteString(", ")
+	builder.WriteString("usage_incomplete=")
+	builder.WriteString(fmt.Sprintf("%v", _m.UsageIncomplete))
 	builder.WriteString(", ")
 	builder.WriteString("cache_creation_5m_tokens=")
 	builder.WriteString(fmt.Sprintf("%v", _m.CacheCreation5mTokens))

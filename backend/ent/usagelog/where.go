@@ -150,6 +150,41 @@ func CacheReadTokens(v int) predicate.UsageLog {
 	return predicate.UsageLog(sql.FieldEQ(FieldCacheReadTokens, v))
 }
 
+// RawInputTokens applies equality check predicate on the "raw_input_tokens" field. It's identical to RawInputTokensEQ.
+func RawInputTokens(v int) predicate.UsageLog {
+	return predicate.UsageLog(sql.FieldEQ(FieldRawInputTokens, v))
+}
+
+// RawOutputTokens applies equality check predicate on the "raw_output_tokens" field. It's identical to RawOutputTokensEQ.
+func RawOutputTokens(v int) predicate.UsageLog {
+	return predicate.UsageLog(sql.FieldEQ(FieldRawOutputTokens, v))
+}
+
+// RawCacheCreationTokens applies equality check predicate on the "raw_cache_creation_tokens" field. It's identical to RawCacheCreationTokensEQ.
+func RawCacheCreationTokens(v int) predicate.UsageLog {
+	return predicate.UsageLog(sql.FieldEQ(FieldRawCacheCreationTokens, v))
+}
+
+// RawCacheReadTokens applies equality check predicate on the "raw_cache_read_tokens" field. It's identical to RawCacheReadTokensEQ.
+func RawCacheReadTokens(v int) predicate.UsageLog {
+	return predicate.UsageLog(sql.FieldEQ(FieldRawCacheReadTokens, v))
+}
+
+// CacheBillingCompensationTokens applies equality check predicate on the "cache_billing_compensation_tokens" field. It's identical to CacheBillingCompensationTokensEQ.
+func CacheBillingCompensationTokens(v int) predicate.UsageLog {
+	return predicate.UsageLog(sql.FieldEQ(FieldCacheBillingCompensationTokens, v))
+}
+
+// CacheBillingCompensationReason applies equality check predicate on the "cache_billing_compensation_reason" field. It's identical to CacheBillingCompensationReasonEQ.
+func CacheBillingCompensationReason(v string) predicate.UsageLog {
+	return predicate.UsageLog(sql.FieldEQ(FieldCacheBillingCompensationReason, v))
+}
+
+// UsageIncomplete applies equality check predicate on the "usage_incomplete" field. It's identical to UsageIncompleteEQ.
+func UsageIncomplete(v bool) predicate.UsageLog {
+	return predicate.UsageLog(sql.FieldEQ(FieldUsageIncomplete, v))
+}
+
 // CacheCreation5mTokens applies equality check predicate on the "cache_creation_5m_tokens" field. It's identical to CacheCreation5mTokensEQ.
 func CacheCreation5mTokens(v int) predicate.UsageLog {
 	return predicate.UsageLog(sql.FieldEQ(FieldCacheCreation5mTokens, v))
@@ -1213,6 +1248,341 @@ func CacheReadTokensLT(v int) predicate.UsageLog {
 // CacheReadTokensLTE applies the LTE predicate on the "cache_read_tokens" field.
 func CacheReadTokensLTE(v int) predicate.UsageLog {
 	return predicate.UsageLog(sql.FieldLTE(FieldCacheReadTokens, v))
+}
+
+// RawInputTokensEQ applies the EQ predicate on the "raw_input_tokens" field.
+func RawInputTokensEQ(v int) predicate.UsageLog {
+	return predicate.UsageLog(sql.FieldEQ(FieldRawInputTokens, v))
+}
+
+// RawInputTokensNEQ applies the NEQ predicate on the "raw_input_tokens" field.
+func RawInputTokensNEQ(v int) predicate.UsageLog {
+	return predicate.UsageLog(sql.FieldNEQ(FieldRawInputTokens, v))
+}
+
+// RawInputTokensIn applies the In predicate on the "raw_input_tokens" field.
+func RawInputTokensIn(vs ...int) predicate.UsageLog {
+	return predicate.UsageLog(sql.FieldIn(FieldRawInputTokens, vs...))
+}
+
+// RawInputTokensNotIn applies the NotIn predicate on the "raw_input_tokens" field.
+func RawInputTokensNotIn(vs ...int) predicate.UsageLog {
+	return predicate.UsageLog(sql.FieldNotIn(FieldRawInputTokens, vs...))
+}
+
+// RawInputTokensGT applies the GT predicate on the "raw_input_tokens" field.
+func RawInputTokensGT(v int) predicate.UsageLog {
+	return predicate.UsageLog(sql.FieldGT(FieldRawInputTokens, v))
+}
+
+// RawInputTokensGTE applies the GTE predicate on the "raw_input_tokens" field.
+func RawInputTokensGTE(v int) predicate.UsageLog {
+	return predicate.UsageLog(sql.FieldGTE(FieldRawInputTokens, v))
+}
+
+// RawInputTokensLT applies the LT predicate on the "raw_input_tokens" field.
+func RawInputTokensLT(v int) predicate.UsageLog {
+	return predicate.UsageLog(sql.FieldLT(FieldRawInputTokens, v))
+}
+
+// RawInputTokensLTE applies the LTE predicate on the "raw_input_tokens" field.
+func RawInputTokensLTE(v int) predicate.UsageLog {
+	return predicate.UsageLog(sql.FieldLTE(FieldRawInputTokens, v))
+}
+
+// RawInputTokensIsNil applies the IsNil predicate on the "raw_input_tokens" field.
+func RawInputTokensIsNil() predicate.UsageLog {
+	return predicate.UsageLog(sql.FieldIsNull(FieldRawInputTokens))
+}
+
+// RawInputTokensNotNil applies the NotNil predicate on the "raw_input_tokens" field.
+func RawInputTokensNotNil() predicate.UsageLog {
+	return predicate.UsageLog(sql.FieldNotNull(FieldRawInputTokens))
+}
+
+// RawOutputTokensEQ applies the EQ predicate on the "raw_output_tokens" field.
+func RawOutputTokensEQ(v int) predicate.UsageLog {
+	return predicate.UsageLog(sql.FieldEQ(FieldRawOutputTokens, v))
+}
+
+// RawOutputTokensNEQ applies the NEQ predicate on the "raw_output_tokens" field.
+func RawOutputTokensNEQ(v int) predicate.UsageLog {
+	return predicate.UsageLog(sql.FieldNEQ(FieldRawOutputTokens, v))
+}
+
+// RawOutputTokensIn applies the In predicate on the "raw_output_tokens" field.
+func RawOutputTokensIn(vs ...int) predicate.UsageLog {
+	return predicate.UsageLog(sql.FieldIn(FieldRawOutputTokens, vs...))
+}
+
+// RawOutputTokensNotIn applies the NotIn predicate on the "raw_output_tokens" field.
+func RawOutputTokensNotIn(vs ...int) predicate.UsageLog {
+	return predicate.UsageLog(sql.FieldNotIn(FieldRawOutputTokens, vs...))
+}
+
+// RawOutputTokensGT applies the GT predicate on the "raw_output_tokens" field.
+func RawOutputTokensGT(v int) predicate.UsageLog {
+	return predicate.UsageLog(sql.FieldGT(FieldRawOutputTokens, v))
+}
+
+// RawOutputTokensGTE applies the GTE predicate on the "raw_output_tokens" field.
+func RawOutputTokensGTE(v int) predicate.UsageLog {
+	return predicate.UsageLog(sql.FieldGTE(FieldRawOutputTokens, v))
+}
+
+// RawOutputTokensLT applies the LT predicate on the "raw_output_tokens" field.
+func RawOutputTokensLT(v int) predicate.UsageLog {
+	return predicate.UsageLog(sql.FieldLT(FieldRawOutputTokens, v))
+}
+
+// RawOutputTokensLTE applies the LTE predicate on the "raw_output_tokens" field.
+func RawOutputTokensLTE(v int) predicate.UsageLog {
+	return predicate.UsageLog(sql.FieldLTE(FieldRawOutputTokens, v))
+}
+
+// RawOutputTokensIsNil applies the IsNil predicate on the "raw_output_tokens" field.
+func RawOutputTokensIsNil() predicate.UsageLog {
+	return predicate.UsageLog(sql.FieldIsNull(FieldRawOutputTokens))
+}
+
+// RawOutputTokensNotNil applies the NotNil predicate on the "raw_output_tokens" field.
+func RawOutputTokensNotNil() predicate.UsageLog {
+	return predicate.UsageLog(sql.FieldNotNull(FieldRawOutputTokens))
+}
+
+// RawCacheCreationTokensEQ applies the EQ predicate on the "raw_cache_creation_tokens" field.
+func RawCacheCreationTokensEQ(v int) predicate.UsageLog {
+	return predicate.UsageLog(sql.FieldEQ(FieldRawCacheCreationTokens, v))
+}
+
+// RawCacheCreationTokensNEQ applies the NEQ predicate on the "raw_cache_creation_tokens" field.
+func RawCacheCreationTokensNEQ(v int) predicate.UsageLog {
+	return predicate.UsageLog(sql.FieldNEQ(FieldRawCacheCreationTokens, v))
+}
+
+// RawCacheCreationTokensIn applies the In predicate on the "raw_cache_creation_tokens" field.
+func RawCacheCreationTokensIn(vs ...int) predicate.UsageLog {
+	return predicate.UsageLog(sql.FieldIn(FieldRawCacheCreationTokens, vs...))
+}
+
+// RawCacheCreationTokensNotIn applies the NotIn predicate on the "raw_cache_creation_tokens" field.
+func RawCacheCreationTokensNotIn(vs ...int) predicate.UsageLog {
+	return predicate.UsageLog(sql.FieldNotIn(FieldRawCacheCreationTokens, vs...))
+}
+
+// RawCacheCreationTokensGT applies the GT predicate on the "raw_cache_creation_tokens" field.
+func RawCacheCreationTokensGT(v int) predicate.UsageLog {
+	return predicate.UsageLog(sql.FieldGT(FieldRawCacheCreationTokens, v))
+}
+
+// RawCacheCreationTokensGTE applies the GTE predicate on the "raw_cache_creation_tokens" field.
+func RawCacheCreationTokensGTE(v int) predicate.UsageLog {
+	return predicate.UsageLog(sql.FieldGTE(FieldRawCacheCreationTokens, v))
+}
+
+// RawCacheCreationTokensLT applies the LT predicate on the "raw_cache_creation_tokens" field.
+func RawCacheCreationTokensLT(v int) predicate.UsageLog {
+	return predicate.UsageLog(sql.FieldLT(FieldRawCacheCreationTokens, v))
+}
+
+// RawCacheCreationTokensLTE applies the LTE predicate on the "raw_cache_creation_tokens" field.
+func RawCacheCreationTokensLTE(v int) predicate.UsageLog {
+	return predicate.UsageLog(sql.FieldLTE(FieldRawCacheCreationTokens, v))
+}
+
+// RawCacheCreationTokensIsNil applies the IsNil predicate on the "raw_cache_creation_tokens" field.
+func RawCacheCreationTokensIsNil() predicate.UsageLog {
+	return predicate.UsageLog(sql.FieldIsNull(FieldRawCacheCreationTokens))
+}
+
+// RawCacheCreationTokensNotNil applies the NotNil predicate on the "raw_cache_creation_tokens" field.
+func RawCacheCreationTokensNotNil() predicate.UsageLog {
+	return predicate.UsageLog(sql.FieldNotNull(FieldRawCacheCreationTokens))
+}
+
+// RawCacheReadTokensEQ applies the EQ predicate on the "raw_cache_read_tokens" field.
+func RawCacheReadTokensEQ(v int) predicate.UsageLog {
+	return predicate.UsageLog(sql.FieldEQ(FieldRawCacheReadTokens, v))
+}
+
+// RawCacheReadTokensNEQ applies the NEQ predicate on the "raw_cache_read_tokens" field.
+func RawCacheReadTokensNEQ(v int) predicate.UsageLog {
+	return predicate.UsageLog(sql.FieldNEQ(FieldRawCacheReadTokens, v))
+}
+
+// RawCacheReadTokensIn applies the In predicate on the "raw_cache_read_tokens" field.
+func RawCacheReadTokensIn(vs ...int) predicate.UsageLog {
+	return predicate.UsageLog(sql.FieldIn(FieldRawCacheReadTokens, vs...))
+}
+
+// RawCacheReadTokensNotIn applies the NotIn predicate on the "raw_cache_read_tokens" field.
+func RawCacheReadTokensNotIn(vs ...int) predicate.UsageLog {
+	return predicate.UsageLog(sql.FieldNotIn(FieldRawCacheReadTokens, vs...))
+}
+
+// RawCacheReadTokensGT applies the GT predicate on the "raw_cache_read_tokens" field.
+func RawCacheReadTokensGT(v int) predicate.UsageLog {
+	return predicate.UsageLog(sql.FieldGT(FieldRawCacheReadTokens, v))
+}
+
+// RawCacheReadTokensGTE applies the GTE predicate on the "raw_cache_read_tokens" field.
+func RawCacheReadTokensGTE(v int) predicate.UsageLog {
+	return predicate.UsageLog(sql.FieldGTE(FieldRawCacheReadTokens, v))
+}
+
+// RawCacheReadTokensLT applies the LT predicate on the "raw_cache_read_tokens" field.
+func RawCacheReadTokensLT(v int) predicate.UsageLog {
+	return predicate.UsageLog(sql.FieldLT(FieldRawCacheReadTokens, v))
+}
+
+// RawCacheReadTokensLTE applies the LTE predicate on the "raw_cache_read_tokens" field.
+func RawCacheReadTokensLTE(v int) predicate.UsageLog {
+	return predicate.UsageLog(sql.FieldLTE(FieldRawCacheReadTokens, v))
+}
+
+// RawCacheReadTokensIsNil applies the IsNil predicate on the "raw_cache_read_tokens" field.
+func RawCacheReadTokensIsNil() predicate.UsageLog {
+	return predicate.UsageLog(sql.FieldIsNull(FieldRawCacheReadTokens))
+}
+
+// RawCacheReadTokensNotNil applies the NotNil predicate on the "raw_cache_read_tokens" field.
+func RawCacheReadTokensNotNil() predicate.UsageLog {
+	return predicate.UsageLog(sql.FieldNotNull(FieldRawCacheReadTokens))
+}
+
+// CacheBillingCompensationTokensEQ applies the EQ predicate on the "cache_billing_compensation_tokens" field.
+func CacheBillingCompensationTokensEQ(v int) predicate.UsageLog {
+	return predicate.UsageLog(sql.FieldEQ(FieldCacheBillingCompensationTokens, v))
+}
+
+// CacheBillingCompensationTokensNEQ applies the NEQ predicate on the "cache_billing_compensation_tokens" field.
+func CacheBillingCompensationTokensNEQ(v int) predicate.UsageLog {
+	return predicate.UsageLog(sql.FieldNEQ(FieldCacheBillingCompensationTokens, v))
+}
+
+// CacheBillingCompensationTokensIn applies the In predicate on the "cache_billing_compensation_tokens" field.
+func CacheBillingCompensationTokensIn(vs ...int) predicate.UsageLog {
+	return predicate.UsageLog(sql.FieldIn(FieldCacheBillingCompensationTokens, vs...))
+}
+
+// CacheBillingCompensationTokensNotIn applies the NotIn predicate on the "cache_billing_compensation_tokens" field.
+func CacheBillingCompensationTokensNotIn(vs ...int) predicate.UsageLog {
+	return predicate.UsageLog(sql.FieldNotIn(FieldCacheBillingCompensationTokens, vs...))
+}
+
+// CacheBillingCompensationTokensGT applies the GT predicate on the "cache_billing_compensation_tokens" field.
+func CacheBillingCompensationTokensGT(v int) predicate.UsageLog {
+	return predicate.UsageLog(sql.FieldGT(FieldCacheBillingCompensationTokens, v))
+}
+
+// CacheBillingCompensationTokensGTE applies the GTE predicate on the "cache_billing_compensation_tokens" field.
+func CacheBillingCompensationTokensGTE(v int) predicate.UsageLog {
+	return predicate.UsageLog(sql.FieldGTE(FieldCacheBillingCompensationTokens, v))
+}
+
+// CacheBillingCompensationTokensLT applies the LT predicate on the "cache_billing_compensation_tokens" field.
+func CacheBillingCompensationTokensLT(v int) predicate.UsageLog {
+	return predicate.UsageLog(sql.FieldLT(FieldCacheBillingCompensationTokens, v))
+}
+
+// CacheBillingCompensationTokensLTE applies the LTE predicate on the "cache_billing_compensation_tokens" field.
+func CacheBillingCompensationTokensLTE(v int) predicate.UsageLog {
+	return predicate.UsageLog(sql.FieldLTE(FieldCacheBillingCompensationTokens, v))
+}
+
+// CacheBillingCompensationTokensIsNil applies the IsNil predicate on the "cache_billing_compensation_tokens" field.
+func CacheBillingCompensationTokensIsNil() predicate.UsageLog {
+	return predicate.UsageLog(sql.FieldIsNull(FieldCacheBillingCompensationTokens))
+}
+
+// CacheBillingCompensationTokensNotNil applies the NotNil predicate on the "cache_billing_compensation_tokens" field.
+func CacheBillingCompensationTokensNotNil() predicate.UsageLog {
+	return predicate.UsageLog(sql.FieldNotNull(FieldCacheBillingCompensationTokens))
+}
+
+// CacheBillingCompensationReasonEQ applies the EQ predicate on the "cache_billing_compensation_reason" field.
+func CacheBillingCompensationReasonEQ(v string) predicate.UsageLog {
+	return predicate.UsageLog(sql.FieldEQ(FieldCacheBillingCompensationReason, v))
+}
+
+// CacheBillingCompensationReasonNEQ applies the NEQ predicate on the "cache_billing_compensation_reason" field.
+func CacheBillingCompensationReasonNEQ(v string) predicate.UsageLog {
+	return predicate.UsageLog(sql.FieldNEQ(FieldCacheBillingCompensationReason, v))
+}
+
+// CacheBillingCompensationReasonIn applies the In predicate on the "cache_billing_compensation_reason" field.
+func CacheBillingCompensationReasonIn(vs ...string) predicate.UsageLog {
+	return predicate.UsageLog(sql.FieldIn(FieldCacheBillingCompensationReason, vs...))
+}
+
+// CacheBillingCompensationReasonNotIn applies the NotIn predicate on the "cache_billing_compensation_reason" field.
+func CacheBillingCompensationReasonNotIn(vs ...string) predicate.UsageLog {
+	return predicate.UsageLog(sql.FieldNotIn(FieldCacheBillingCompensationReason, vs...))
+}
+
+// CacheBillingCompensationReasonGT applies the GT predicate on the "cache_billing_compensation_reason" field.
+func CacheBillingCompensationReasonGT(v string) predicate.UsageLog {
+	return predicate.UsageLog(sql.FieldGT(FieldCacheBillingCompensationReason, v))
+}
+
+// CacheBillingCompensationReasonGTE applies the GTE predicate on the "cache_billing_compensation_reason" field.
+func CacheBillingCompensationReasonGTE(v string) predicate.UsageLog {
+	return predicate.UsageLog(sql.FieldGTE(FieldCacheBillingCompensationReason, v))
+}
+
+// CacheBillingCompensationReasonLT applies the LT predicate on the "cache_billing_compensation_reason" field.
+func CacheBillingCompensationReasonLT(v string) predicate.UsageLog {
+	return predicate.UsageLog(sql.FieldLT(FieldCacheBillingCompensationReason, v))
+}
+
+// CacheBillingCompensationReasonLTE applies the LTE predicate on the "cache_billing_compensation_reason" field.
+func CacheBillingCompensationReasonLTE(v string) predicate.UsageLog {
+	return predicate.UsageLog(sql.FieldLTE(FieldCacheBillingCompensationReason, v))
+}
+
+// CacheBillingCompensationReasonContains applies the Contains predicate on the "cache_billing_compensation_reason" field.
+func CacheBillingCompensationReasonContains(v string) predicate.UsageLog {
+	return predicate.UsageLog(sql.FieldContains(FieldCacheBillingCompensationReason, v))
+}
+
+// CacheBillingCompensationReasonHasPrefix applies the HasPrefix predicate on the "cache_billing_compensation_reason" field.
+func CacheBillingCompensationReasonHasPrefix(v string) predicate.UsageLog {
+	return predicate.UsageLog(sql.FieldHasPrefix(FieldCacheBillingCompensationReason, v))
+}
+
+// CacheBillingCompensationReasonHasSuffix applies the HasSuffix predicate on the "cache_billing_compensation_reason" field.
+func CacheBillingCompensationReasonHasSuffix(v string) predicate.UsageLog {
+	return predicate.UsageLog(sql.FieldHasSuffix(FieldCacheBillingCompensationReason, v))
+}
+
+// CacheBillingCompensationReasonIsNil applies the IsNil predicate on the "cache_billing_compensation_reason" field.
+func CacheBillingCompensationReasonIsNil() predicate.UsageLog {
+	return predicate.UsageLog(sql.FieldIsNull(FieldCacheBillingCompensationReason))
+}
+
+// CacheBillingCompensationReasonNotNil applies the NotNil predicate on the "cache_billing_compensation_reason" field.
+func CacheBillingCompensationReasonNotNil() predicate.UsageLog {
+	return predicate.UsageLog(sql.FieldNotNull(FieldCacheBillingCompensationReason))
+}
+
+// CacheBillingCompensationReasonEqualFold applies the EqualFold predicate on the "cache_billing_compensation_reason" field.
+func CacheBillingCompensationReasonEqualFold(v string) predicate.UsageLog {
+	return predicate.UsageLog(sql.FieldEqualFold(FieldCacheBillingCompensationReason, v))
+}
+
+// CacheBillingCompensationReasonContainsFold applies the ContainsFold predicate on the "cache_billing_compensation_reason" field.
+func CacheBillingCompensationReasonContainsFold(v string) predicate.UsageLog {
+	return predicate.UsageLog(sql.FieldContainsFold(FieldCacheBillingCompensationReason, v))
+}
+
+// UsageIncompleteEQ applies the EQ predicate on the "usage_incomplete" field.
+func UsageIncompleteEQ(v bool) predicate.UsageLog {
+	return predicate.UsageLog(sql.FieldEQ(FieldUsageIncomplete, v))
+}
+
+// UsageIncompleteNEQ applies the NEQ predicate on the "usage_incomplete" field.
+func UsageIncompleteNEQ(v bool) predicate.UsageLog {
+	return predicate.UsageLog(sql.FieldNEQ(FieldUsageIncomplete, v))
 }
 
 // CacheCreation5mTokensEQ applies the EQ predicate on the "cache_creation_5m_tokens" field.

@@ -309,7 +309,12 @@ func (s *OpenAIGatewayService) handleCCStreamingFromNativeAnthropic(
 	reasoningEffort *string,
 	startTime time.Time,
 	includeUsage bool,
-) (*OpenAIForwardResult, error) {
+) (outResult *OpenAIForwardResult, outErr error) {
+	defer func() {
+		if outResult != nil && outErr != nil {
+			outResult.UsageIncomplete = true
+		}
+	}()
 	requestID := resp.Header.Get("x-request-id")
 
 	if s.responseHeaderFilter != nil {

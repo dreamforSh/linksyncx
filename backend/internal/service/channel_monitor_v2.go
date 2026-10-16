@@ -7,6 +7,8 @@ import (
 	"sort"
 	"strings"
 	"time"
+
+	"github.com/Wei-Shaw/sub2api/internal/pkg/usagestats"
 )
 
 const (
@@ -89,6 +91,7 @@ type ChannelMonitorV2Filter struct {
 }
 
 type ChannelMonitorV2Metric struct {
+	usagestats.RawUsageStats
 	SuccessRequests          int64                   `json:"success_requests"`
 	ErrorRequests            int64                   `json:"error_requests"`
 	RequestCount             int64                   `json:"request_count"`
@@ -102,6 +105,7 @@ type ChannelMonitorV2Metric struct {
 	ErrorRate                float64                 `json:"error_rate"`
 	SuccessRate              float64                 `json:"success_rate"`
 	CacheRate                float64                 `json:"cache_rate"`
+	CacheRateKnown           bool                    `json:"cache_rate_known"`
 	CacheRateNumerator       int64                   `json:"cache_rate_numerator"`
 	CacheRateDenominator     int64                   `json:"cache_rate_denominator"`
 	TTFT                     ChannelMonitorV2Latency `json:"ttft"`
@@ -645,6 +649,7 @@ func redactChannelMonitorV2Metric(m *ChannelMonitorV2Metric, hideThroughput bool
 	m.OutputTokens = 0
 	m.CacheCreationTokens = 0
 	m.CacheReadTokens = 0
+	m.RawUsageStats = usagestats.RawUsageStats{}
 	m.TokenCount = 0
 	m.CacheRateNumerator = 0
 	m.CacheRateDenominator = 0
@@ -993,7 +998,7 @@ func ChannelMonitorV2HealthForWithThresholds(metrics ChannelMonitorV2Metric, thr
 		}
 	}
 	// Cache: need a meaningful denominator; higher rate is better.
-	if metrics.CacheRateDenominator >= result.MinimumSample {
+	if metrics.CacheRateKnown && metrics.CacheRateDenominator >= result.MinimumSample {
 		s := cacheRateScore(metrics.CacheRate)
 		if thresholds.WarningCacheRate <= 0 && thresholds.CriticalCacheRate <= 0 {
 			// A zero/zero cache threshold means "do not penalize cache misses".

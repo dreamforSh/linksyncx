@@ -253,6 +253,104 @@ func (_c *UsageLogCreate) SetNillableCacheReadTokens(v *int) *UsageLogCreate {
 	return _c
 }
 
+// SetRawInputTokens sets the "raw_input_tokens" field.
+func (_c *UsageLogCreate) SetRawInputTokens(v int) *UsageLogCreate {
+	_c.mutation.SetRawInputTokens(v)
+	return _c
+}
+
+// SetNillableRawInputTokens sets the "raw_input_tokens" field if the given value is not nil.
+func (_c *UsageLogCreate) SetNillableRawInputTokens(v *int) *UsageLogCreate {
+	if v != nil {
+		_c.SetRawInputTokens(*v)
+	}
+	return _c
+}
+
+// SetRawOutputTokens sets the "raw_output_tokens" field.
+func (_c *UsageLogCreate) SetRawOutputTokens(v int) *UsageLogCreate {
+	_c.mutation.SetRawOutputTokens(v)
+	return _c
+}
+
+// SetNillableRawOutputTokens sets the "raw_output_tokens" field if the given value is not nil.
+func (_c *UsageLogCreate) SetNillableRawOutputTokens(v *int) *UsageLogCreate {
+	if v != nil {
+		_c.SetRawOutputTokens(*v)
+	}
+	return _c
+}
+
+// SetRawCacheCreationTokens sets the "raw_cache_creation_tokens" field.
+func (_c *UsageLogCreate) SetRawCacheCreationTokens(v int) *UsageLogCreate {
+	_c.mutation.SetRawCacheCreationTokens(v)
+	return _c
+}
+
+// SetNillableRawCacheCreationTokens sets the "raw_cache_creation_tokens" field if the given value is not nil.
+func (_c *UsageLogCreate) SetNillableRawCacheCreationTokens(v *int) *UsageLogCreate {
+	if v != nil {
+		_c.SetRawCacheCreationTokens(*v)
+	}
+	return _c
+}
+
+// SetRawCacheReadTokens sets the "raw_cache_read_tokens" field.
+func (_c *UsageLogCreate) SetRawCacheReadTokens(v int) *UsageLogCreate {
+	_c.mutation.SetRawCacheReadTokens(v)
+	return _c
+}
+
+// SetNillableRawCacheReadTokens sets the "raw_cache_read_tokens" field if the given value is not nil.
+func (_c *UsageLogCreate) SetNillableRawCacheReadTokens(v *int) *UsageLogCreate {
+	if v != nil {
+		_c.SetRawCacheReadTokens(*v)
+	}
+	return _c
+}
+
+// SetCacheBillingCompensationTokens sets the "cache_billing_compensation_tokens" field.
+func (_c *UsageLogCreate) SetCacheBillingCompensationTokens(v int) *UsageLogCreate {
+	_c.mutation.SetCacheBillingCompensationTokens(v)
+	return _c
+}
+
+// SetNillableCacheBillingCompensationTokens sets the "cache_billing_compensation_tokens" field if the given value is not nil.
+func (_c *UsageLogCreate) SetNillableCacheBillingCompensationTokens(v *int) *UsageLogCreate {
+	if v != nil {
+		_c.SetCacheBillingCompensationTokens(*v)
+	}
+	return _c
+}
+
+// SetCacheBillingCompensationReason sets the "cache_billing_compensation_reason" field.
+func (_c *UsageLogCreate) SetCacheBillingCompensationReason(v string) *UsageLogCreate {
+	_c.mutation.SetCacheBillingCompensationReason(v)
+	return _c
+}
+
+// SetNillableCacheBillingCompensationReason sets the "cache_billing_compensation_reason" field if the given value is not nil.
+func (_c *UsageLogCreate) SetNillableCacheBillingCompensationReason(v *string) *UsageLogCreate {
+	if v != nil {
+		_c.SetCacheBillingCompensationReason(*v)
+	}
+	return _c
+}
+
+// SetUsageIncomplete sets the "usage_incomplete" field.
+func (_c *UsageLogCreate) SetUsageIncomplete(v bool) *UsageLogCreate {
+	_c.mutation.SetUsageIncomplete(v)
+	return _c
+}
+
+// SetNillableUsageIncomplete sets the "usage_incomplete" field if the given value is not nil.
+func (_c *UsageLogCreate) SetNillableUsageIncomplete(v *bool) *UsageLogCreate {
+	if v != nil {
+		_c.SetUsageIncomplete(*v)
+	}
+	return _c
+}
+
 // SetCacheCreation5mTokens sets the "cache_creation_5m_tokens" field.
 func (_c *UsageLogCreate) SetCacheCreation5mTokens(v int) *UsageLogCreate {
 	_c.mutation.SetCacheCreation5mTokens(v)
@@ -713,6 +811,10 @@ func (_c *UsageLogCreate) defaults() {
 		v := usagelog.DefaultCacheReadTokens
 		_c.mutation.SetCacheReadTokens(v)
 	}
+	if _, ok := _c.mutation.UsageIncomplete(); !ok {
+		v := usagelog.DefaultUsageIncomplete
+		_c.mutation.SetUsageIncomplete(v)
+	}
 	if _, ok := _c.mutation.CacheCreation5mTokens(); !ok {
 		v := usagelog.DefaultCacheCreation5mTokens
 		_c.mutation.SetCacheCreation5mTokens(v)
@@ -847,6 +949,14 @@ func (_c *UsageLogCreate) check() error {
 	}
 	if _, ok := _c.mutation.CacheReadTokens(); !ok {
 		return &ValidationError{Name: "cache_read_tokens", err: errors.New(`ent: missing required field "UsageLog.cache_read_tokens"`)}
+	}
+	if v, ok := _c.mutation.CacheBillingCompensationReason(); ok {
+		if err := usagelog.CacheBillingCompensationReasonValidator(v); err != nil {
+			return &ValidationError{Name: "cache_billing_compensation_reason", err: fmt.Errorf(`ent: validator failed for field "UsageLog.cache_billing_compensation_reason": %w`, err)}
+		}
+	}
+	if _, ok := _c.mutation.UsageIncomplete(); !ok {
+		return &ValidationError{Name: "usage_incomplete", err: errors.New(`ent: missing required field "UsageLog.usage_incomplete"`)}
 	}
 	if _, ok := _c.mutation.CacheCreation5mTokens(); !ok {
 		return &ValidationError{Name: "cache_creation_5m_tokens", err: errors.New(`ent: missing required field "UsageLog.cache_creation_5m_tokens"`)}
@@ -1022,6 +1132,34 @@ func (_c *UsageLogCreate) createSpec() (*UsageLog, *sqlgraph.CreateSpec) {
 	if value, ok := _c.mutation.CacheReadTokens(); ok {
 		_spec.SetField(usagelog.FieldCacheReadTokens, field.TypeInt, value)
 		_node.CacheReadTokens = value
+	}
+	if value, ok := _c.mutation.RawInputTokens(); ok {
+		_spec.SetField(usagelog.FieldRawInputTokens, field.TypeInt, value)
+		_node.RawInputTokens = &value
+	}
+	if value, ok := _c.mutation.RawOutputTokens(); ok {
+		_spec.SetField(usagelog.FieldRawOutputTokens, field.TypeInt, value)
+		_node.RawOutputTokens = &value
+	}
+	if value, ok := _c.mutation.RawCacheCreationTokens(); ok {
+		_spec.SetField(usagelog.FieldRawCacheCreationTokens, field.TypeInt, value)
+		_node.RawCacheCreationTokens = &value
+	}
+	if value, ok := _c.mutation.RawCacheReadTokens(); ok {
+		_spec.SetField(usagelog.FieldRawCacheReadTokens, field.TypeInt, value)
+		_node.RawCacheReadTokens = &value
+	}
+	if value, ok := _c.mutation.CacheBillingCompensationTokens(); ok {
+		_spec.SetField(usagelog.FieldCacheBillingCompensationTokens, field.TypeInt, value)
+		_node.CacheBillingCompensationTokens = &value
+	}
+	if value, ok := _c.mutation.CacheBillingCompensationReason(); ok {
+		_spec.SetField(usagelog.FieldCacheBillingCompensationReason, field.TypeString, value)
+		_node.CacheBillingCompensationReason = &value
+	}
+	if value, ok := _c.mutation.UsageIncomplete(); ok {
+		_spec.SetField(usagelog.FieldUsageIncomplete, field.TypeBool, value)
+		_node.UsageIncomplete = value
 	}
 	if value, ok := _c.mutation.CacheCreation5mTokens(); ok {
 		_spec.SetField(usagelog.FieldCacheCreation5mTokens, field.TypeInt, value)
@@ -2093,6 +2231,27 @@ func (u *UsageLogUpsert) UpdateCacheTTLOverridden() *UsageLogUpsert {
 func (u *UsageLogUpsertOne) UpdateNewValues() *UsageLogUpsertOne {
 	u.create.conflict = append(u.create.conflict, sql.ResolveWithNewValues())
 	u.create.conflict = append(u.create.conflict, sql.ResolveWith(func(s *sql.UpdateSet) {
+		if _, exists := u.create.mutation.RawInputTokens(); exists {
+			s.SetIgnore(usagelog.FieldRawInputTokens)
+		}
+		if _, exists := u.create.mutation.RawOutputTokens(); exists {
+			s.SetIgnore(usagelog.FieldRawOutputTokens)
+		}
+		if _, exists := u.create.mutation.RawCacheCreationTokens(); exists {
+			s.SetIgnore(usagelog.FieldRawCacheCreationTokens)
+		}
+		if _, exists := u.create.mutation.RawCacheReadTokens(); exists {
+			s.SetIgnore(usagelog.FieldRawCacheReadTokens)
+		}
+		if _, exists := u.create.mutation.CacheBillingCompensationTokens(); exists {
+			s.SetIgnore(usagelog.FieldCacheBillingCompensationTokens)
+		}
+		if _, exists := u.create.mutation.CacheBillingCompensationReason(); exists {
+			s.SetIgnore(usagelog.FieldCacheBillingCompensationReason)
+		}
+		if _, exists := u.create.mutation.UsageIncomplete(); exists {
+			s.SetIgnore(usagelog.FieldUsageIncomplete)
+		}
 		if _, exists := u.create.mutation.CreatedAt(); exists {
 			s.SetIgnore(usagelog.FieldCreatedAt)
 		}
@@ -3248,6 +3407,27 @@ func (u *UsageLogUpsertBulk) UpdateNewValues() *UsageLogUpsertBulk {
 	u.create.conflict = append(u.create.conflict, sql.ResolveWithNewValues())
 	u.create.conflict = append(u.create.conflict, sql.ResolveWith(func(s *sql.UpdateSet) {
 		for _, b := range u.create.builders {
+			if _, exists := b.mutation.RawInputTokens(); exists {
+				s.SetIgnore(usagelog.FieldRawInputTokens)
+			}
+			if _, exists := b.mutation.RawOutputTokens(); exists {
+				s.SetIgnore(usagelog.FieldRawOutputTokens)
+			}
+			if _, exists := b.mutation.RawCacheCreationTokens(); exists {
+				s.SetIgnore(usagelog.FieldRawCacheCreationTokens)
+			}
+			if _, exists := b.mutation.RawCacheReadTokens(); exists {
+				s.SetIgnore(usagelog.FieldRawCacheReadTokens)
+			}
+			if _, exists := b.mutation.CacheBillingCompensationTokens(); exists {
+				s.SetIgnore(usagelog.FieldCacheBillingCompensationTokens)
+			}
+			if _, exists := b.mutation.CacheBillingCompensationReason(); exists {
+				s.SetIgnore(usagelog.FieldCacheBillingCompensationReason)
+			}
+			if _, exists := b.mutation.UsageIncomplete(); exists {
+				s.SetIgnore(usagelog.FieldUsageIncomplete)
+			}
 			if _, exists := b.mutation.CreatedAt(); exists {
 				s.SetIgnore(usagelog.FieldCreatedAt)
 			}

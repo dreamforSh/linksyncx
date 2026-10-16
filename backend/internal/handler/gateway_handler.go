@@ -269,9 +269,10 @@ func (h *GatewayHandler) Messages(c *gin.Context) {
 
 	// 计算粘性会话hash
 	parsedReq.SessionContext = &service.SessionContext{
-		ClientIP:  ip.GetClientIP(c),
-		UserAgent: c.GetHeader("User-Agent"),
-		APIKeyID:  apiKey.ID,
+		ClientIP:        ip.GetClientIP(c),
+		UserAgent:       c.GetHeader("User-Agent"),
+		APIKeyID:        apiKey.ID,
+		ClientSessionID: service.MessagesClientSessionIDFromHeader(c),
 	}
 	sessionHash := h.gatewayService.GenerateSessionHash(parsedReq)
 
@@ -476,17 +477,7 @@ func (h *GatewayHandler) Messages(c *gin.Context) {
 			// 记录 Forward 前已写入字节数，Forward 后若增加则说明 SSE 内容已发，禁止 failover
 			writerSizeBeforeForward := c.Writer.Size()
 			if account.Platform == service.PlatformAntigravity {
-				result, err = h.antigravityGatewayService.ForwardGemini(
-					requestCtx,
-					c,
-					account,
-					reqModel,
-					"generateContent",
-					reqStream,
-					body,
-					hasBoundSession,
-					service.WithForwardGeminiSession(derefGroupID(apiKey.GroupID), sessionKey),
-				)
+				result, err = h.antigravityGatewayService.Forward(requestCtx, c, account, body, hasBoundSession)
 			} else {
 				result, err = h.geminiCompatService.Forward(requestCtx, c, account, body)
 			}
@@ -494,6 +485,13 @@ func (h *GatewayHandler) Messages(c *gin.Context) {
 				accountReleaseFunc()
 			}
 			if err != nil {
+				if result != nil {
+					h.recordPartialAntigravityUsage(c, err, body, &service.RecordUsageInput{
+						Result: result, APIKey: apiKey, Account: account,
+						Subscription: subscription, PricingAt: pricingAt, ForceCacheBilling: fs.ForceCacheBilling,
+						ChannelUsageFields: clientRequestedUsageFields(c, channelMapping, reqModel, result.UpstreamModel),
+					})
+				}
 				var failoverErr *service.UpstreamFailoverError
 				if errors.As(err, &failoverErr) {
 					// 流式内容已写入客户端，无法撤销，禁止 failover 以防止流拼接腐化
@@ -2222,9 +2220,10 @@ func (h *GatewayHandler) CountTokens(c *gin.Context) {
 
 	// 计算粘性会话 hash
 	parsedReq.SessionContext = &service.SessionContext{
-		ClientIP:  ip.GetClientIP(c),
-		UserAgent: c.GetHeader("User-Agent"),
-		APIKeyID:  apiKey.ID,
+		ClientIP:        ip.GetClientIP(c),
+		UserAgent:       c.GetHeader("User-Agent"),
+		APIKeyID:        apiKey.ID,
+		ClientSessionID: service.MessagesClientSessionIDFromHeader(c),
 	}
 	sessionHash := h.gatewayService.GenerateSessionHash(parsedReq)
 

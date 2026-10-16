@@ -757,7 +757,12 @@ func logResponseModelBillingApplied(component string, account *Account, requestI
 
 // recordUsageCore 是 RecordUsage 的核心实现。
 func (s *GatewayService) recordUsageCore(ctx context.Context, input *recordUsageCoreInput) error {
-	result := input.Result
+	// Billing classification must not mutate the immutable upstream usage held by
+	// the caller (or apply compensation twice when recording is retried).
+	billingResult := *input.Result
+	result := &billingResult
+	rawUsage := result.Usage
+	compensationTokens := 0
 	apiKey := input.APIKey
 	user := input.User
 	account := input.Account
@@ -768,6 +773,7 @@ func (s *GatewayService) recordUsageCore(ctx context.Context, input *recordUsage
 	// 强制缓存计费：将 input_tokens 转为 cache_read_input_tokens
 	// 用于粘性会话切换时的特殊计费处理
 	if input.ForceCacheBilling && result.Usage.InputTokens > 0 {
+		compensationTokens = result.Usage.InputTokens
 		logger.LegacyPrintf("service.gateway", "force_cache_billing: %d input_tokens → cache_read_input_tokens (account=%d)",
 			result.Usage.InputTokens, account.ID)
 		result.Usage.CacheReadInputTokens += result.Usage.InputTokens
@@ -860,6 +866,13 @@ func (s *GatewayService) recordUsageCore(ctx context.Context, input *recordUsage
 	accountRateMultiplier := account.BillingRateMultiplier()
 	usageLog := s.buildRecordUsageLog(ctx, input, result, apiKey, user, account, subscription,
 		requestedModel, multiplier, imageMultiplier, accountRateMultiplier, billingType, cacheTTLOverridden, cost)
+	setObservedRawUsage(usageLog, rawUsage.InputTokens, rawUsage.OutputTokens, rawUsage.CacheCreationInputTokens, rawUsage.CacheReadInputTokens)
+	usageLog.CacheBillingCompensationTokens = &compensationTokens
+	usageLog.UsageIncomplete = result.UsageIncomplete
+	if compensationTokens > 0 {
+		reason := "sticky_session_failover"
+		usageLog.CacheBillingCompensationReason = &reason
+	}
 
 	// 计算账号统计定价费用（使用最终上游模型匹配自定义规则）
 	if apiKey.GroupID != nil {

@@ -4,8 +4,11 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
+	"io"
 	"log"
 	"strings"
+
+	"github.com/Wei-Shaw/sub2api/internal/pkg/apicompat"
 )
 
 // BlockType 内容块类型
@@ -27,6 +30,10 @@ type StreamingProcessor struct {
 	blockIndex        int
 	messageStartSent  bool
 	messageStopSent   bool
+	finished          bool
+	finishReason      string
+	responseID        string
+	err               error
 	usedTool          bool
 	pendingSignature  string
 	trailingSignature string
@@ -34,8 +41,10 @@ type StreamingProcessor struct {
 	webSearchQueries  []string
 	groundingChunks   []GeminiGroundingChunk
 	usageMapHook      UsageMapHook
+	startUsage        any
+	finalUsage        any
 
-	// 累计 usage
+	// Gemini 的 prompt tokens 包含缓存命中，Claude 的 input tokens 不包含。
 	inputTokens       int
 	outputTokens      int
 	cacheReadTokens   int
@@ -50,7 +59,7 @@ func NewStreamingProcessor(originalModel string) *StreamingProcessor {
 	}
 }
 
-// SetUsageMapHook sets an optional hook that modifies usage maps before they are emitted.
+// SetUsageMapHook 的额外字段由字节 API 保留；结构化 API 保留 AnthropicUsage 支持的字段。
 func (p *StreamingProcessor) SetUsageMapHook(fn UsageMapHook) {
 	p.usageMapHook = fn
 }
@@ -72,8 +81,16 @@ func usageToMap(u ClaudeUsage) map[string]any {
 	return m
 }
 
-// ProcessLine 处理 SSE 行，返回 Claude SSE 事件
+// ProcessLine 保留原有的 SSE 字节接口，错误由 Err 返回。
 func (p *StreamingProcessor) ProcessLine(line string) []byte {
+	return p.formatEvents(p.ProcessLineEvents(line))
+}
+
+// ProcessLineEvents 不发送最终终止事件；调用方必须继续读取尾部用量并调用 FinishEvents。
+func (p *StreamingProcessor) ProcessLineEvents(line string) []apicompat.AnthropicStreamEvent {
+	if p.finished || p.err != nil {
+		return nil
+	}
 	line = strings.TrimSpace(line)
 	if line == "" || !strings.HasPrefix(line, "data:") {
 		return nil
@@ -84,482 +101,435 @@ func (p *StreamingProcessor) ProcessLine(line string) []byte {
 		return nil
 	}
 
-	// 解包 v1internal 响应
-	var v1Resp V1InternalResponse
-	if err := json.Unmarshal([]byte(data), &v1Resp); err != nil {
-		// 尝试直接解析为 GeminiResponse
-		var directResp GeminiResponse
-		if err2 := json.Unmarshal([]byte(data), &directResp); err2 != nil {
-			return nil
-		}
-		v1Resp.Response = directResp
-		v1Resp.ResponseID = directResp.ResponseID
-		v1Resp.ModelVersion = directResp.ModelVersion
-	}
-
-	geminiResp := &v1Resp.Response
-
-	var result bytes.Buffer
-
-	// 发送 message_start
-	if !p.messageStartSent {
-		_, _ = result.Write(p.emitMessageStart(&v1Resp))
-	}
-
-	// 更新 usage
-	// 注意：Gemini 的 promptTokenCount 包含 cachedContentTokenCount，
-	// 但 Claude 的 input_tokens 不包含 cache_read_input_tokens，需要减去
-	if geminiResp.UsageMetadata != nil {
-		cached := geminiResp.UsageMetadata.CachedContentTokenCount
-		p.inputTokens = geminiResp.UsageMetadata.PromptTokenCount - cached
-		p.outputTokens = geminiResp.UsageMetadata.CandidatesTokenCount + geminiResp.UsageMetadata.ThoughtsTokenCount
+	v1Resp, err := parseGeminiResponse([]byte(data))
+	if v1Resp != nil && v1Resp.Response.UsageMetadata != nil {
+		metadata := v1Resp.Response.UsageMetadata
+		cached := metadata.CachedContentTokenCount
+		p.inputTokens = metadata.PromptTokenCount - cached
+		p.outputTokens = metadata.CandidatesTokenCount + metadata.ThoughtsTokenCount
 		p.cacheReadTokens = cached
-		p.imageOutputTokens = geminiResp.UsageMetadata.ImageOutputTokens()
+		p.imageOutputTokens = metadata.ImageOutputTokens()
 	}
-
-	// 处理 parts
-	if len(geminiResp.Candidates) > 0 && geminiResp.Candidates[0].Content != nil {
-		for _, part := range geminiResp.Candidates[0].Content.Parts {
-			_, _ = result.Write(p.processPart(&part))
+	if err != nil {
+		p.err = err
+		return nil
+	}
+	geminiResp := &v1Resp.Response
+	if p.responseID == "" {
+		p.responseID = v1Resp.ResponseID
+		if p.responseID == "" {
+			p.responseID = geminiResp.ResponseID
 		}
 	}
 
+	var events []apicompat.AnthropicStreamEvent
 	if len(geminiResp.Candidates) > 0 {
-		p.captureGrounding(geminiResp.Candidates[0].GroundingMetadata)
-	}
-
-	// 检查是否结束
-	if len(geminiResp.Candidates) > 0 {
-		finishReason := geminiResp.Candidates[0].FinishReason
-		if finishReason == "MALFORMED_FUNCTION_CALL" {
-			log.Printf("[Antigravity] MALFORMED_FUNCTION_CALL detected in stream for model %s", p.originalModel)
-			if geminiResp.Candidates[0].Content != nil {
-				if b, err := json.Marshal(geminiResp.Candidates[0].Content); err == nil {
-					log.Printf("[Antigravity] Malformed content: %s", string(b))
-				}
+		candidate := &geminiResp.Candidates[0]
+		if !p.messageStartSent && geminiCandidateHasContent(candidate) {
+			events = append(events, p.emitMessageStart()...)
+		}
+		if candidate.Content != nil {
+			for _, part := range candidate.Content.Parts {
+				events = append(events, p.processPart(&part)...)
 			}
 		}
-		if finishReason != "" {
-			_, _ = result.Write(p.emitFinish(finishReason))
+		p.captureGrounding(candidate.GroundingMetadata)
+		if candidate.FinishReason != "" {
+			p.finishReason = candidate.FinishReason
+			if candidate.FinishReason == "MALFORMED_FUNCTION_CALL" {
+				log.Printf("[Antigravity] MALFORMED_FUNCTION_CALL detected in stream for model %s", p.originalModel)
+			}
 		}
 	}
-
-	return result.Bytes()
+	if p.err != nil {
+		return nil
+	}
+	return events
 }
 
-// Finish 结束处理，返回最终事件和用量。
-// 若整个流未收到任何可解析的上游数据（messageStartSent == false），
-// 则不补发任何结束事件，防止客户端收到没有 message_start 的残缺流。
+// Finish 保留原有的 SSE 字节接口；调用方必须检查 Err，不能把 EOF 当作正常终止。
 func (p *StreamingProcessor) Finish() ([]byte, *ClaudeUsage) {
-	usage := &ClaudeUsage{
+	events, usage := p.FinishEvents()
+	return p.formatEvents(events), usage
+}
+
+// FinishEvents 只在收到 finishReason 且没有错误时输出最终事件，重复调用不再输出。
+func (p *StreamingProcessor) FinishEvents() ([]apicompat.AnthropicStreamEvent, *ClaudeUsage) {
+	usage := p.Usage()
+	if p.finished {
+		return nil, usage
+	}
+	p.finished = true
+	if p.err != nil {
+		return nil, usage
+	}
+	if p.finishReason == "" {
+		p.err = fmt.Errorf("gemini stream ended without finishReason: %w", io.ErrUnexpectedEOF)
+		return nil, usage
+	}
+	if !p.messageStartSent {
+		return nil, usage
+	}
+	events := p.emitFinish(p.finishReason)
+	if p.err != nil {
+		return nil, usage
+	}
+	return events, usage
+}
+
+// Usage 返回不受后续处理或调用方修改影响的上游用量快照。
+func (p *StreamingProcessor) Usage() *ClaudeUsage {
+	return &ClaudeUsage{
 		InputTokens:          p.inputTokens,
 		OutputTokens:         p.outputTokens,
 		CacheReadInputTokens: p.cacheReadTokens,
 		ImageOutputTokens:    p.imageOutputTokens,
 	}
-
-	if !p.messageStartSent {
-		return nil, usage
-	}
-
-	var result bytes.Buffer
-	if !p.messageStopSent {
-		_, _ = result.Write(p.emitFinish(""))
-	}
-
-	return result.Bytes(), usage
 }
 
-// MessageStartSent 报告流中是否已发出过 message_start 事件（即是否收到过有效的上游数据）
+// Err 保留首个解析或编码错误；缺失 finishReason 的 EOF 由 FinishEvents 记录。
+func (p *StreamingProcessor) Err() error {
+	return p.err
+}
+
+// MessageStartSent 报告流中是否已发出过 message_start 事件。
 func (p *StreamingProcessor) MessageStartSent() bool {
 	return p.messageStartSent
 }
 
-// emitMessageStart 发送 message_start 事件
-func (p *StreamingProcessor) emitMessageStart(v1Resp *V1InternalResponse) []byte {
-	if p.messageStartSent {
-		return nil
+func (p *StreamingProcessor) eventUsage() (apicompat.AnthropicUsage, any) {
+	usage := *p.Usage()
+	typedUsage := apicompat.AnthropicUsage{
+		InputTokens:              usage.InputTokens,
+		OutputTokens:             usage.OutputTokens,
+		CacheCreationInputTokens: usage.CacheCreationInputTokens,
+		CacheReadInputTokens:     usage.CacheReadInputTokens,
 	}
+	if p.usageMapHook == nil {
+		return typedUsage, usage
+	}
+	usageMap := usageToMap(usage)
+	p.usageMapHook(usageMap)
+	data, err := json.Marshal(usageMap)
+	if err == nil {
+		typedUsage = apicompat.AnthropicUsage{}
+		err = json.Unmarshal(data, &typedUsage)
+	}
+	if err != nil && p.err == nil {
+		p.err = fmt.Errorf("encode gemini stream usage: %w", err)
+	}
+	return typedUsage, usageMap
+}
 
-	usage := ClaudeUsage{}
-	if v1Resp.Response.UsageMetadata != nil {
-		cached := v1Resp.Response.UsageMetadata.CachedContentTokenCount
-		usage.InputTokens = v1Resp.Response.UsageMetadata.PromptTokenCount - cached
-		usage.OutputTokens = v1Resp.Response.UsageMetadata.CandidatesTokenCount + v1Resp.Response.UsageMetadata.ThoughtsTokenCount
-		usage.CacheReadInputTokens = cached
-		usage.ImageOutputTokens = v1Resp.Response.UsageMetadata.ImageOutputTokens()
+func geminiCandidateHasContent(candidate *GeminiCandidate) bool {
+	if candidate.Content != nil {
+		for _, part := range candidate.Content.Parts {
+			if part.Text != "" || part.Thought || part.ThoughtSignature != "" || part.FunctionCall != nil ||
+				(part.InlineData != nil && part.InlineData.Data != "") {
+				return true
+			}
+		}
 	}
+	return buildGroundingText(candidate.GroundingMetadata) != ""
+}
 
-	responseID := v1Resp.ResponseID
-	if responseID == "" {
-		responseID = v1Resp.Response.ResponseID
-	}
+func (p *StreamingProcessor) emitMessageStart() []apicompat.AnthropicStreamEvent {
+	responseID := p.responseID
 	if responseID == "" {
 		responseID = generateAnthropicMsgID()
 	}
 
-	var usageValue any = usage
-	if p.usageMapHook != nil {
-		usageMap := usageToMap(usage)
-		p.usageMapHook(usageMap)
-		usageValue = usageMap
-	}
-
-	message := map[string]any{
-		"id":            responseID,
-		"type":          "message",
-		"role":          "assistant",
-		"content":       []any{},
-		"model":         p.originalModel,
-		"stop_reason":   nil,
-		"stop_sequence": nil,
-		"usage":         usageValue,
-	}
-
-	event := map[string]any{
-		"type":    "message_start",
-		"message": message,
-	}
-
+	usage, wireUsage := p.eventUsage()
+	p.startUsage = wireUsage
 	p.messageStartSent = true
-	return p.formatSSE("message_start", event)
+	return []apicompat.AnthropicStreamEvent{{
+		Type: "message_start",
+		Message: &apicompat.AnthropicResponse{
+			ID:      responseID,
+			Type:    "message",
+			Role:    "assistant",
+			Content: []apicompat.AnthropicContentBlock{},
+			Model:   p.originalModel,
+			Usage:   usage,
+		},
+	}}
 }
 
-// processPart 处理单个 part
-func (p *StreamingProcessor) processPart(part *GeminiPart) []byte {
-	var result bytes.Buffer
+func (p *StreamingProcessor) processPart(part *GeminiPart) []apicompat.AnthropicStreamEvent {
+	var events []apicompat.AnthropicStreamEvent
 	signature := part.ThoughtSignature
-
-	// 1. FunctionCall 处理
 	if part.FunctionCall != nil {
-		// 先处理 trailingSignature
-		if p.trailingSignature != "" {
-			_, _ = result.Write(p.endBlock())
-			_, _ = result.Write(p.emitEmptyThinkingWithSignature(p.trailingSignature))
-			p.trailingSignature = ""
-		}
-
-		_, _ = result.Write(p.processFunctionCall(part.FunctionCall, signature))
-		return result.Bytes()
+		events = append(events, p.flushTrailingSignature()...)
+		return append(events, p.processFunctionCall(part.FunctionCall, signature)...)
 	}
 
-	// 2. Text 处理
+	// 独立签名属于尚未关闭的 thinking，不能另建空块而留下原 thinking 无签名。
+	if part.Text == "" && !part.Thought && part.InlineData == nil && signature != "" {
+		if p.blockType == BlockTypeThinking {
+			p.pendingSignature = signature
+			return nil
+		}
+		events = append(events, p.flushTrailingSignature()...)
+		p.trailingSignature = signature
+		return events
+	}
+
 	if part.Text != "" || part.Thought {
 		if part.Thought {
-			_, _ = result.Write(p.processThinking(part.Text, signature))
+			events = append(events, p.processThinking(part.Text, signature)...)
 		} else {
-			_, _ = result.Write(p.processText(part.Text, signature))
+			events = append(events, p.processText(part.Text, signature)...)
 		}
 	}
-
-	// 3. InlineData (Image) 处理
 	if part.InlineData != nil && part.InlineData.Data != "" {
-		markdownImg := fmt.Sprintf("![image](data:%s;base64,%s)",
-			part.InlineData.MimeType, part.InlineData.Data)
-		_, _ = result.Write(p.processText(markdownImg, ""))
+		markdownImg := fmt.Sprintf("![image](data:%s;base64,%s)", part.InlineData.MimeType, part.InlineData.Data)
+		events = append(events, p.processText(markdownImg, "")...)
 	}
-
-	return result.Bytes()
+	return events
 }
 
 func (p *StreamingProcessor) captureGrounding(grounding *GeminiGroundingMetadata) {
 	if grounding == nil {
 		return
 	}
-
 	if len(grounding.WebSearchQueries) > 0 && len(p.webSearchQueries) == 0 {
 		p.webSearchQueries = append([]string(nil), grounding.WebSearchQueries...)
 	}
-
 	if len(grounding.GroundingChunks) > 0 && len(p.groundingChunks) == 0 {
 		p.groundingChunks = append([]GeminiGroundingChunk(nil), grounding.GroundingChunks...)
 	}
 }
 
-// processThinking 处理 thinking
-func (p *StreamingProcessor) processThinking(text, signature string) []byte {
-	var result bytes.Buffer
-
-	// 处理之前的 trailingSignature
-	if p.trailingSignature != "" {
-		_, _ = result.Write(p.endBlock())
-		_, _ = result.Write(p.emitEmptyThinkingWithSignature(p.trailingSignature))
-		p.trailingSignature = ""
-	}
-
-	// 开始或继续 thinking 块
+func (p *StreamingProcessor) processThinking(text, signature string) []apicompat.AnthropicStreamEvent {
+	events := p.flushTrailingSignature()
 	if p.blockType != BlockTypeThinking {
-		_, _ = result.Write(p.startBlock(BlockTypeThinking, map[string]any{
-			"type":     "thinking",
-			"thinking": "",
-		}))
+		events = append(events, p.startBlock(BlockTypeThinking, &apicompat.AnthropicContentBlock{Type: "thinking"})...)
 	}
-
 	if text != "" {
-		_, _ = result.Write(p.emitDelta("thinking_delta", map[string]any{
-			"thinking": text,
-		}))
+		events = append(events, p.emitDelta(&apicompat.AnthropicDelta{Type: "thinking_delta", Thinking: text}))
 	}
-
-	// 暂存签名
 	if signature != "" {
 		p.pendingSignature = signature
 	}
-
-	return result.Bytes()
+	return events
 }
 
-// processText 处理普通 text
-func (p *StreamingProcessor) processText(text, signature string) []byte {
-	var result bytes.Buffer
-
-	// 空 text 带签名 - 暂存
+func (p *StreamingProcessor) processText(text, signature string) []apicompat.AnthropicStreamEvent {
 	if text == "" {
 		if signature != "" {
 			p.trailingSignature = signature
 		}
 		return nil
 	}
-
-	// 处理之前的 trailingSignature
-	if p.trailingSignature != "" {
-		_, _ = result.Write(p.endBlock())
-		_, _ = result.Write(p.emitEmptyThinkingWithSignature(p.trailingSignature))
-		p.trailingSignature = ""
-	}
-
-	// 非空 text 带签名 - 特殊处理
+	events := p.flushTrailingSignature()
 	if signature != "" {
-		_, _ = result.Write(p.startBlock(BlockTypeText, map[string]any{
-			"type": "text",
-			"text": "",
-		}))
-		_, _ = result.Write(p.emitDelta("text_delta", map[string]any{
-			"text": text,
-		}))
-		_, _ = result.Write(p.endBlock())
-		_, _ = result.Write(p.emitEmptyThinkingWithSignature(signature))
-		return result.Bytes()
+		events = append(events, p.startBlock(BlockTypeText, &apicompat.AnthropicContentBlock{Type: "text"})...)
+		events = append(events, p.emitDelta(&apicompat.AnthropicDelta{Type: "text_delta", Text: text}))
+		events = append(events, p.endBlock()...)
+		return append(events, p.emitEmptyThinkingWithSignature(signature)...)
 	}
-
-	// 普通 text (无签名)
 	if p.blockType != BlockTypeText {
-		_, _ = result.Write(p.startBlock(BlockTypeText, map[string]any{
-			"type": "text",
-			"text": "",
-		}))
+		events = append(events, p.startBlock(BlockTypeText, &apicompat.AnthropicContentBlock{Type: "text"})...)
 	}
-
-	_, _ = result.Write(p.emitDelta("text_delta", map[string]any{
-		"text": text,
-	}))
-
-	return result.Bytes()
+	return append(events, p.emitDelta(&apicompat.AnthropicDelta{Type: "text_delta", Text: text}))
 }
 
-// processFunctionCall 处理 function call
-func (p *StreamingProcessor) processFunctionCall(fc *GeminiFunctionCall, signature string) []byte {
-	var result bytes.Buffer
-
+func (p *StreamingProcessor) processFunctionCall(fc *GeminiFunctionCall, signature string) []apicompat.AnthropicStreamEvent {
+	var argsJSON []byte
+	if fc.Args != nil {
+		var err error
+		argsJSON, err = json.Marshal(fc.Args)
+		if err != nil {
+			p.err = fmt.Errorf("marshal gemini function arguments: %w", err)
+			return nil
+		}
+	}
 	p.usedTool = true
-
 	toolID := fc.ID
 	if toolID == "" {
 		toolID = fmt.Sprintf("%s-%s", fc.Name, generateRandomID())
 	}
-
-	toolUse := map[string]any{
-		"type":  "tool_use",
-		"id":    toolID,
-		"name":  fc.Name,
-		"input": map[string]any{},
+	toolUse := &apicompat.AnthropicContentBlock{
+		Type:      "tool_use",
+		ID:        toolID,
+		Name:      fc.Name,
+		Input:     json.RawMessage(`{}`),
+		Signature: signature,
 	}
-
-	if signature != "" {
-		toolUse["signature"] = signature
-	}
-
-	_, _ = result.Write(p.startBlock(BlockTypeFunction, toolUse))
-
-	// 发送 input_json_delta
-	if fc.Args != nil {
-		argsJSON, _ := json.Marshal(fc.Args)
-		_, _ = result.Write(p.emitDelta("input_json_delta", map[string]any{
-			"partial_json": string(argsJSON),
+	events := p.startBlock(BlockTypeFunction, toolUse)
+	if argsJSON != nil {
+		events = append(events, p.emitDelta(&apicompat.AnthropicDelta{
+			Type:        "input_json_delta",
+			PartialJSON: string(argsJSON),
 		}))
 	}
-
-	_, _ = result.Write(p.endBlock())
-
-	return result.Bytes()
+	return append(events, p.endBlock()...)
 }
 
-// startBlock 开始新的内容块
-func (p *StreamingProcessor) startBlock(blockType BlockType, contentBlock map[string]any) []byte {
-	var result bytes.Buffer
-
-	if p.blockType != BlockTypeNone {
-		_, _ = result.Write(p.endBlock())
-	}
-
-	event := map[string]any{
-		"type":          "content_block_start",
-		"index":         p.blockIndex,
-		"content_block": contentBlock,
-	}
-
-	_, _ = result.Write(p.formatSSE("content_block_start", event))
+func (p *StreamingProcessor) startBlock(blockType BlockType, contentBlock *apicompat.AnthropicContentBlock) []apicompat.AnthropicStreamEvent {
+	events := p.endBlock()
+	events = append(events, apicompat.AnthropicStreamEvent{
+		Type:         "content_block_start",
+		Index:        streamBlockIndex(p.blockIndex),
+		ContentBlock: contentBlock,
+	})
 	p.blockType = blockType
-
-	return result.Bytes()
+	return events
 }
 
-// endBlock 结束当前内容块
-func (p *StreamingProcessor) endBlock() []byte {
+func (p *StreamingProcessor) endBlock() []apicompat.AnthropicStreamEvent {
 	if p.blockType == BlockTypeNone {
 		return nil
 	}
-
-	var result bytes.Buffer
-
-	// Thinking 块结束时发送暂存的签名
+	var events []apicompat.AnthropicStreamEvent
 	if p.blockType == BlockTypeThinking && p.pendingSignature != "" {
-		_, _ = result.Write(p.emitDelta("signature_delta", map[string]any{
-			"signature": p.pendingSignature,
+		events = append(events, p.emitDelta(&apicompat.AnthropicDelta{
+			Type:      "signature_delta",
+			Signature: p.pendingSignature,
 		}))
 		p.pendingSignature = ""
 	}
-
-	event := map[string]any{
-		"type":  "content_block_stop",
-		"index": p.blockIndex,
-	}
-
-	_, _ = result.Write(p.formatSSE("content_block_stop", event))
-
+	events = append(events, apicompat.AnthropicStreamEvent{
+		Type:  "content_block_stop",
+		Index: streamBlockIndex(p.blockIndex),
+	})
 	p.blockIndex++
 	p.blockType = BlockTypeNone
-
-	return result.Bytes()
+	return events
 }
 
-// emitDelta 发送 delta 事件
-func (p *StreamingProcessor) emitDelta(deltaType string, deltaContent map[string]any) []byte {
-	delta := map[string]any{
-		"type": deltaType,
-	}
-	for k, v := range deltaContent {
-		delta[k] = v
-	}
-
-	event := map[string]any{
-		"type":  "content_block_delta",
-		"index": p.blockIndex,
-		"delta": delta,
-	}
-
-	return p.formatSSE("content_block_delta", event)
+func streamBlockIndex(index int) *int {
+	return &index
 }
 
-// emitEmptyThinkingWithSignature 发送空 thinking 块承载签名
-func (p *StreamingProcessor) emitEmptyThinkingWithSignature(signature string) []byte {
-	var result bytes.Buffer
-
-	_, _ = result.Write(p.startBlock(BlockTypeThinking, map[string]any{
-		"type":     "thinking",
-		"thinking": "",
-	}))
-	_, _ = result.Write(p.emitDelta("thinking_delta", map[string]any{
-		"thinking": "",
-	}))
-	_, _ = result.Write(p.emitDelta("signature_delta", map[string]any{
-		"signature": signature,
-	}))
-	_, _ = result.Write(p.endBlock())
-
-	return result.Bytes()
+func (p *StreamingProcessor) emitDelta(delta *apicompat.AnthropicDelta) apicompat.AnthropicStreamEvent {
+	return apicompat.AnthropicStreamEvent{
+		Type:  "content_block_delta",
+		Index: streamBlockIndex(p.blockIndex),
+		Delta: delta,
+	}
 }
 
-// emitFinish 发送结束事件
-func (p *StreamingProcessor) emitFinish(finishReason string) []byte {
-	var result bytes.Buffer
-
-	// 关闭最后一个块
-	_, _ = result.Write(p.endBlock())
-
-	// 处理 trailingSignature
-	if p.trailingSignature != "" {
-		_, _ = result.Write(p.emitEmptyThinkingWithSignature(p.trailingSignature))
-		p.trailingSignature = ""
+func (p *StreamingProcessor) flushTrailingSignature() []apicompat.AnthropicStreamEvent {
+	if p.trailingSignature == "" {
+		return nil
 	}
+	events := p.endBlock()
+	events = append(events, p.emitEmptyThinkingWithSignature(p.trailingSignature)...)
+	p.trailingSignature = ""
+	return events
+}
 
+func (p *StreamingProcessor) emitEmptyThinkingWithSignature(signature string) []apicompat.AnthropicStreamEvent {
+	events := p.startBlock(BlockTypeThinking, &apicompat.AnthropicContentBlock{Type: "thinking"})
+	events = append(events, p.emitDelta(&apicompat.AnthropicDelta{Type: "thinking_delta"}))
+	events = append(events, p.emitDelta(&apicompat.AnthropicDelta{Type: "signature_delta", Signature: signature}))
+	return append(events, p.endBlock()...)
+}
+
+func (p *StreamingProcessor) emitFinish(finishReason string) []apicompat.AnthropicStreamEvent {
+	events := p.endBlock()
+	events = append(events, p.flushTrailingSignature()...)
 	if len(p.webSearchQueries) > 0 || len(p.groundingChunks) > 0 {
 		groundingText := buildGroundingText(&GeminiGroundingMetadata{
 			WebSearchQueries: p.webSearchQueries,
 			GroundingChunks:  p.groundingChunks,
 		})
 		if groundingText != "" {
-			_, _ = result.Write(p.startBlock(BlockTypeText, map[string]any{
-				"type": "text",
-				"text": "",
-			}))
-			_, _ = result.Write(p.emitDelta("text_delta", map[string]any{
-				"text": groundingText,
-			}))
-			_, _ = result.Write(p.endBlock())
+			events = append(events, p.startBlock(BlockTypeText, &apicompat.AnthropicContentBlock{Type: "text"})...)
+			events = append(events, p.emitDelta(&apicompat.AnthropicDelta{Type: "text_delta", Text: groundingText}))
+			events = append(events, p.endBlock()...)
 		}
 	}
 
-	// 确定 stop_reason
 	stopReason := "end_turn"
 	if p.usedTool {
 		stopReason = "tool_use"
 	} else if finishReason == "MAX_TOKENS" {
 		stopReason = "max_tokens"
 	}
-
-	usage := ClaudeUsage{
-		InputTokens:          p.inputTokens,
-		OutputTokens:         p.outputTokens,
-		CacheReadInputTokens: p.cacheReadTokens,
-		ImageOutputTokens:    p.imageOutputTokens,
-	}
-
-	var usageValue any = usage
-	if p.usageMapHook != nil {
-		usageMap := usageToMap(usage)
-		p.usageMapHook(usageMap)
-		usageValue = usageMap
-	}
-
-	deltaEvent := map[string]any{
-		"type": "message_delta",
-		"delta": map[string]any{
-			"stop_reason":   stopReason,
-			"stop_sequence": nil,
+	usage, wireUsage := p.eventUsage()
+	p.finalUsage = wireUsage
+	events = append(events, apicompat.AnthropicStreamEvent{
+		Type: "message_delta",
+		Delta: &apicompat.AnthropicDelta{
+			StopReason: stopReason,
 		},
-		"usage": usageValue,
-	}
-
-	_, _ = result.Write(p.formatSSE("message_delta", deltaEvent))
-
+		Usage: &usage,
+	})
 	if !p.messageStopSent {
-		stopEvent := map[string]any{
-			"type": "message_stop",
-		}
-		_, _ = result.Write(p.formatSSE("message_stop", stopEvent))
+		events = append(events, apicompat.AnthropicStreamEvent{Type: "message_stop"})
 		p.messageStopSent = true
 	}
-
-	return result.Bytes()
+	return events
 }
 
-// formatSSE 格式化 SSE 事件
-func (p *StreamingProcessor) formatSSE(eventType string, data any) []byte {
-	jsonData, err := json.Marshal(data)
-	if err != nil {
-		return nil
+// 字节接口保留空 text/thinking、null stop_sequence、图片用量和 hook 扩展字段。
+func (p *StreamingProcessor) formatEvents(events []apicompat.AnthropicStreamEvent) []byte {
+	var result bytes.Buffer
+	for _, event := range events {
+		data := map[string]any{"type": event.Type}
+		if event.Index != nil {
+			data["index"] = *event.Index
+		}
+		switch event.Type {
+		case "message_start":
+			data["message"] = map[string]any{
+				"id":            event.Message.ID,
+				"type":          event.Message.Type,
+				"role":          event.Message.Role,
+				"content":       []any{},
+				"model":         event.Message.Model,
+				"stop_reason":   nil,
+				"stop_sequence": nil,
+				"usage":         p.startUsage,
+			}
+		case "content_block_start":
+			block := event.ContentBlock
+			content := map[string]any{"type": block.Type}
+			switch block.Type {
+			case "text":
+				content["text"] = block.Text
+			case "thinking":
+				content["thinking"] = block.Thinking
+			case "tool_use":
+				content["id"] = block.ID
+				content["name"] = block.Name
+				content["input"] = block.Input
+				if block.Signature != "" {
+					content["signature"] = block.Signature
+				}
+			}
+			data["content_block"] = content
+		case "content_block_delta":
+			delta := event.Delta
+			content := map[string]any{"type": delta.Type}
+			switch delta.Type {
+			case "text_delta":
+				content["text"] = delta.Text
+			case "thinking_delta":
+				content["thinking"] = delta.Thinking
+			case "signature_delta":
+				content["signature"] = delta.Signature
+			case "input_json_delta":
+				content["partial_json"] = delta.PartialJSON
+			}
+			data["delta"] = content
+		case "message_delta":
+			data["delta"] = map[string]any{
+				"stop_reason":   event.Delta.StopReason,
+				"stop_sequence": nil,
+			}
+			data["usage"] = p.finalUsage
+		}
+		jsonData, err := json.Marshal(data)
+		if err != nil {
+			if p.err == nil {
+				p.err = fmt.Errorf("marshal gemini stream event: %w", err)
+			}
+			return nil
+		}
+		_, _ = fmt.Fprintf(&result, "event: %s\ndata: %s\n\n", event.Type, jsonData)
 	}
-
-	return []byte(fmt.Sprintf("event: %s\ndata: %s\n\n", eventType, string(jsonData)))
+	return result.Bytes()
 }

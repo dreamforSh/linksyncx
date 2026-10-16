@@ -143,6 +143,54 @@ describe('admin UsageTable tooltip', () => {
     } as DOMRect)
   })
 
+  it.each([
+    { name: 'flips left and clamps to the bottom', viewportWidth: 1440, viewportHeight: 900, left: 1300, right: 1320, top: 860, boxWidth: 350, boxHeight: 400, expectedX: 942, expectedY: 692 },
+    { name: 'keeps the right side and clamps to the top', viewportWidth: 1440, viewportHeight: 900, left: 20, right: 40, top: 0, boxWidth: 350, boxHeight: 400, expectedX: 48, expectedY: 208 },
+    { name: 'clamps horizontally when neither side has room', viewportWidth: 375, viewportHeight: 812, left: 180, right: 196, top: 300, boxWidth: 359, boxHeight: 400, expectedX: 8, expectedY: 310 }
+  ])('measures the token tooltip and $name', async ({ viewportWidth, viewportHeight, left, right, top, boxWidth, boxHeight, expectedX, expectedY }) => {
+    vi.stubGlobal('innerWidth', viewportWidth)
+    vi.stubGlobal('innerHeight', viewportHeight)
+    vi.mocked(HTMLElement.prototype.getBoundingClientRect).mockImplementation(function (this: HTMLElement) {
+      const tooltip = this.dataset.testid === 'usage-token-tooltip'
+      return {
+        x: tooltip ? 0 : left, y: tooltip ? 0 : top,
+        left: tooltip ? 0 : left, right: tooltip ? boxWidth : right,
+        top: tooltip ? 0 : top, bottom: tooltip ? boxHeight : top + 20,
+        width: tooltip ? boxWidth : right - left, height: tooltip ? boxHeight : 20,
+        toJSON: () => ({})
+      } as DOMRect
+    })
+    const reason = 'long-compensation-reason-'.repeat(40)
+    const wrapper = mount(UsageTable, {
+      props: {
+        data: [{ ...baseImageRow, billing_mode: 'token', image_count: 0, input_tokens: 0, output_tokens: 7, cache_read_tokens: 100,
+          raw_input_tokens: 100, raw_output_tokens: 7, raw_cache_creation_tokens: 0, raw_cache_read_tokens: 0,
+          cache_billing_compensation_tokens: 100, cache_billing_compensation_reason: reason }],
+        columns: []
+      },
+      global: { stubs: { DataTable: DataTableStub, EmptyState: true, Icon: true, Teleport: true } }
+    })
+    try {
+      await wrapper.get('.group.relative').trigger('mouseenter')
+      await nextTick()
+      const tooltip = wrapper.get('[data-testid="usage-token-tooltip"]').element as HTMLElement
+      const x = Number.parseFloat(tooltip.style.left)
+      const y = Number.parseFloat(tooltip.style.top)
+      expect(x).toBe(expectedX)
+      expect(y).toBe(expectedY)
+      expect(x).toBeGreaterThanOrEqual(8)
+      expect(x + boxWidth).toBeLessThanOrEqual(viewportWidth - 8)
+      expect(y - boxHeight / 2).toBeGreaterThanOrEqual(8)
+      expect(y + boxHeight / 2).toBeLessThanOrEqual(viewportHeight - 8)
+      expect(tooltip.style.maxWidth).toBe('calc(100vw - 16px)')
+      const reasonText = wrapper.get('[data-testid="usage-raw-details"]').findAll('div').find(node => node.text() === reason)
+      expect(reasonText?.classes()).toEqual(expect.arrayContaining(['whitespace-normal', 'break-words']))
+    } finally {
+      wrapper.unmount()
+      vi.unstubAllGlobals()
+    }
+  })
+
   it('marks only usage rows that actually applied long-context billing', () => {
     const wrapper = mount(UsageTable, {
       props: {

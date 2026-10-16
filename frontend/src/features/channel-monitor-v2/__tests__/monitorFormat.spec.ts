@@ -3,6 +3,8 @@ import {
   formatLatencyKpiSecondary,
   formatLatencyPrivacy,
   formatMonitorMs,
+  formatMonitorCacheRate,
+  monitorCacheRate,
   formatMonitorNumber,
   formatMonitorPercent,
   formatMonitorRate,
@@ -19,6 +21,13 @@ import {
 import type { MonitorHealth } from '@/api/channelMonitorV2'
 
 describe('monitorFormat accuracy', () => {
+  it('distinguishes measured zero cache hits from legacy or incomplete telemetry', () => {
+    expect(formatMonitorCacheRate({ cache_rate: 0, cache_rate_known: true })).toBe('0.00%')
+    expect(formatMonitorCacheRate({ cache_rate: 1, cache_rate_known: false })).toBe('—')
+    expect(formatMonitorCacheRate({ cache_rate: 1 })).toBe('—')
+    expect(monitorCacheRate({ cache_rate: 0.25, cache_rate_known: true })).toBe(0.25)
+    expect(monitorCacheRate({ cache_rate: 1, cache_rate_known: false })).toBeNull()
+  })
   it('converts backend TPM (per minute) to tokens/sec for display', () => {
     expect(tokensPerSecondFromTpm(60)).toBe(1)
     expect(tokensPerSecondFromTpm(6000)).toBe(100)

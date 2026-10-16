@@ -153,3 +153,96 @@ func TestExtractClientSessionID_InjectionHeaderDropped(t *testing.T) {
 	c.Request.Header.Set("session_id", "abc\r\nX-Injected: 1")
 	require.Equal(t, "", ExtractClientSessionID(c))
 }
+
+func TestMessagesClientSessionIDFromHeader(t *testing.T) {
+	tests := []struct {
+		name    string
+		headers map[string]string
+		want    string
+	}{
+		{name: "absent"},
+		{
+			name:    "claude code",
+			headers: map[string]string{claudeCodeSessionHeader: "cc-session"},
+			want:    "cc-session",
+		},
+		{
+			name:    "trimmed",
+			headers: map[string]string{claudeCodeSessionHeader: "  cc-session  "},
+			want:    "cc-session",
+		},
+		{
+			name:    "session_id precedes claude code",
+			headers: map[string]string{"session_id": "primary", claudeCodeSessionHeader: "secondary"},
+			want:    "primary",
+		},
+		{
+			name:    "session-id precedes session_id",
+			headers: map[string]string{"session-id": "primary", "session_id": "secondary"},
+			want:    "primary",
+		},
+		{
+			name:    "invalid primary falls through",
+			headers: map[string]string{"session_id": "bad\nsession", claudeCodeSessionHeader: "valid"},
+			want:    "valid",
+		},
+		{
+			name:    "empty primary falls through",
+			headers: map[string]string{"session_id": "   ", claudeCodeSessionHeader: "valid"},
+			want:    "valid",
+		},
+		{
+			name: "ignores non-session and proxy headers",
+			headers: map[string]string{
+				"X-Request-Id":           "request",
+				"X-Correlation-Id":       "correlation",
+				"X-Forwarded-Session-Id": "proxy-session",
+				"prompt_cache_key":       "cache",
+				grokConversationIDHeader: "grok-session",
+			},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			c := newSessionHeaderContext(t, tt.headers)
+			require.Equal(t, tt.want, MessagesClientSessionIDFromHeader(c))
+		})
+	}
+
+	t.Run("nil context", func(t *testing.T) {
+		require.Empty(t, MessagesClientSessionIDFromHeader(nil))
+	})
+	t.Run("nil request", func(t *testing.T) {
+		require.Empty(t, MessagesClientSessionIDFromHeader(&gin.Context{}))
+	})
+	for _, header := range []string{
+		"session-id", "session_id", "conversation_id", openCodeSessionAffinityHeader,
+		openCodeSessionIDHeader, openCodeNativeSessionHeader, codeBuddyConversationHeader,
+		claudeCodeSessionHeader,
+	} {
+		t.Run(header, func(t *testing.T) {
+			c := newSessionHeaderContext(t, map[string]string{header: "recognized-session"})
+			require.Equal(t, "recognized-session", MessagesClientSessionIDFromHeader(c))
+		})
+	}
+}
+
+func TestMessagesClientSessionIDFromHeader_RejectsInvalidValues(t *testing.T) {
+	for _, value := range []string{
+		"", "   ", "bad\rsession", "bad\nsession", "bad\tsession", "bad\x00session", "bad\x7fsession",
+		string([]byte{'b', 'a', 'd', 0xff}),
+		strings.Repeat("a", maxPersistedSessionIDLength+1),
+		strings.Repeat("好", maxPersistedSessionIDLength+1),
+	} {
+		t.Run(value, func(t *testing.T) {
+			c := newSessionHeaderContext(t, map[string]string{claudeCodeSessionHeader: value})
+			require.Empty(t, MessagesClientSessionIDFromHeader(c))
+		})
+	}
+
+	t.Run("accepts maximum length without truncation", func(t *testing.T) {
+		value := strings.Repeat("好", maxPersistedSessionIDLength)
+		c := newSessionHeaderContext(t, map[string]string{claudeCodeSessionHeader: value})
+		require.Equal(t, value, MessagesClientSessionIDFromHeader(c))
+	})
+}

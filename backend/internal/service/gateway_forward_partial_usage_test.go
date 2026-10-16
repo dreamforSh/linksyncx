@@ -119,6 +119,7 @@ func TestGatewayService_Forward_StreamMissingTerminalPreservesPartialUsage(t *te
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "missing terminal event")
 	require.NotNil(t, result, "流中断但已观测到 usage 时必须返回部分结果用于计费")
+	require.True(t, result.UsageIncomplete, "partial usage must not count as complete raw telemetry")
 	require.True(t, result.Stream)
 	require.Equal(t, 11, result.Usage.InputTokens)
 	require.Equal(t, 7, result.Usage.CacheReadInputTokens)
@@ -154,6 +155,7 @@ func TestGatewayService_Forward_StreamReadErrorAfterOutputPreservesPartialUsage(
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "stream read error")
 	require.NotNil(t, result, "已写出内容后的读错误必须保留部分 usage")
+	require.True(t, result.UsageIncomplete)
 	require.Equal(t, 9, result.Usage.InputTokens)
 	require.Equal(t, 4, result.Usage.CacheCreationInputTokens)
 }
@@ -337,6 +339,7 @@ func TestGatewayService_AnthropicAPIKeyPassthrough_ForwardStreamMissingTerminalP
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "missing terminal event")
 	require.NotNil(t, result, "透传流中断但已观测到 usage 时必须返回部分结果用于计费")
+	require.True(t, result.UsageIncomplete)
 	require.True(t, result.Stream)
 	require.Equal(t, 9, result.Usage.InputTokens)
 	require.Equal(t, 2, result.Usage.CacheReadInputTokens)

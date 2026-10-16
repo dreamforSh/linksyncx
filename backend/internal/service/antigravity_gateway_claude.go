@@ -102,6 +102,8 @@ func (s *AntigravityGatewayService) Forward(ctx context.Context, c *gin.Context,
 	// Antigravity 上游只支持流式请求，统一使用 streamGenerateContent
 	// 如果客户端请求非流式，在响应处理阶段会收集完整流式响应后转换返回
 	action := "streamGenerateContent"
+	ctx, releaseUpstream := s.upstreamStreamContext(ctx, c)
+	defer releaseUpstream()
 
 	// 执行带重试的请求
 	result, err := s.antigravityRetryLoop(antigravityRetryLoopParams{
@@ -440,34 +442,28 @@ func (s *AntigravityGatewayService) Forward(ctx context.Context, c *gin.Context,
 		c.Header("x-request-id", requestID)
 	}
 
-	var usage *ClaudeUsage
-	var firstTokenMs *int
-	var clientDisconnect bool
+	var streamRes *antigravityStreamResult
+	var streamErr error
 	if claudeReq.Stream {
-		// 客户端要求流式，直接透传转换
-		streamRes, err := s.handleClaudeStreamingResponse(c, resp, startTime, originalModel)
-		if err != nil {
-			logger.LegacyPrintf("service.antigravity_gateway", "%s status=stream_error error=%v", prefix, err)
-			return nil, err
-		}
-		usage = streamRes.usage
-		firstTokenMs = streamRes.firstTokenMs
-		clientDisconnect = streamRes.clientDisconnect
+		streamRes, streamErr = s.handleClaudeStreamingResponse(c, resp, startTime, originalModel)
 	} else {
-		// 客户端要求非流式，收集流式响应后转换返回
-		streamRes, err := s.handleClaudeStreamToNonStreaming(c, resp, startTime, originalModel)
-		if err != nil {
-			logger.LegacyPrintf("service.antigravity_gateway", "%s status=stream_collect_error error=%v", prefix, err)
-			return nil, err
-		}
-		usage = streamRes.usage
-		firstTokenMs = streamRes.firstTokenMs
+		streamRes, streamErr = s.handleClaudeStreamToNonStreaming(c, resp, startTime, originalModel)
 	}
+	if streamErr != nil {
+		logger.LegacyPrintf("service.antigravity_gateway", "%s status=stream_error error=%v", prefix, streamErr)
+		return partialAntigravityUsageResult(c, resp, streamRes, originalModel, billingModel, claudeReq.Stream, startTime, streamErr), streamErr
+	}
+	usage := streamRes.usage
+	if usage == nil {
+		usage = &ClaudeUsage{}
+	}
+	firstTokenMs, clientDisconnect := streamRes.firstTokenMs, streamRes.clientDisconnect
 
 	return &ForwardResult{
 		RequestID:                     requestID,
 		UpstreamHeaders:               resp.Header,
 		Usage:                         *usage,
+		UsageIncomplete:               streamRes.usageIncomplete,
 		Model:                         originalModel,
 		UpstreamModel:                 billingModel,
 		UpstreamResponseModel:         observedUpstreamResponseModel(c),

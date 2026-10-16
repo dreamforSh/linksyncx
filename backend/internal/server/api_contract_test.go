@@ -535,6 +535,12 @@ func TestAPIContracts(t *testing.T) {
 				"message": "success",
 				"data": {
 					"total_requests": 2,
+					"raw_input_tokens": 0,
+					"raw_output_tokens": 0,
+					"raw_cache_creation_tokens": 0,
+					"raw_cache_read_tokens": 0,
+					"raw_usage_known_requests": 0,
+					"raw_usage_unknown_requests": 2,
 					"total_input_tokens": 15,
 					"total_output_tokens": 35,
 					"total_cache_tokens": 3,
@@ -599,6 +605,13 @@ func TestAPIContracts(t *testing.T) {
 							"output_tokens": 20,
 							"cache_creation_tokens": 1,
 							"cache_read_tokens": 2,
+							"raw_input_tokens": null,
+							"raw_output_tokens": null,
+							"raw_cache_creation_tokens": null,
+							"raw_cache_read_tokens": null,
+							"cache_billing_compensation_tokens": null,
+							"cache_billing_compensation_reason": null,
+							"usage_incomplete": false,
 							"cache_creation_5m_tokens": 0,
 							"cache_creation_1h_tokens": 0,
 							"input_cost": 0,
@@ -2819,6 +2832,22 @@ func (r *stubUsageLogRepo) GetStatsWithFilters(ctx context.Context, filters usag
 		return nil, err
 	}
 
+	var rawStats usagestats.RawUsageStats
+	for _, log := range logs {
+		if !log.UsageIncomplete && log.RawInputTokens != nil && log.RawOutputTokens != nil &&
+			log.RawCacheCreationTokens != nil && log.RawCacheReadTokens != nil &&
+			*log.RawInputTokens >= 0 && *log.RawOutputTokens >= 0 &&
+			*log.RawCacheCreationTokens >= 0 && *log.RawCacheReadTokens >= 0 {
+			rawStats.RawUsageKnownRequests++
+			rawStats.RawInputTokens += int64(*log.RawInputTokens)
+			rawStats.RawOutputTokens += int64(*log.RawOutputTokens)
+			rawStats.RawCacheCreationTokens += int64(*log.RawCacheCreationTokens)
+			rawStats.RawCacheReadTokens += int64(*log.RawCacheReadTokens)
+		} else {
+			rawStats.RawUsageUnknownRequests++
+		}
+	}
+
 	var totalRequests int64
 	var totalInputTokens int64
 	var totalOutputTokens int64
@@ -2862,6 +2891,7 @@ func (r *stubUsageLogRepo) GetStatsWithFilters(ctx context.Context, filters usag
 		TotalActualCost:          totalActualCost,
 		AverageDurationMs:        avgDuration,
 		Endpoints:                []usagestats.EndpointStat{},
+		RawUsageStats:            rawStats,
 	}, nil
 }
 func (r *stubUsageLogRepo) GetAllGroupUsageSummary(ctx context.Context, todayStart time.Time) ([]usagestats.GroupUsageSummary, error) {

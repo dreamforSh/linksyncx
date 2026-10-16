@@ -624,6 +624,7 @@ type ForwardResult struct {
 	// UpstreamHeaders 是直接上游的响应头，用于按账户配置解析上游请求标识。
 	UpstreamHeaders http.Header
 	Usage           ClaudeUsage
+	UsageIncomplete bool
 	Model           string
 	// UpstreamModel is the actual upstream model after mapping.
 	// Prefer empty when it is identical to Model; persistence normalizes equal values away as no-op mappings.
@@ -700,6 +701,7 @@ type UpstreamFailoverError struct {
 	ResponseHeaders          http.Header   // 上游响应头，用于透传 cf-ray/cf-mitigated/content-type 等诊断信息
 	ForceCacheBilling        bool          // Antigravity 粘性会话切换时设为 true
 	StickyHoldSoft           bool          // 粘性保持生效时的软性切换信号：不真正换号，由入口转成可重试错误
+	StickyHoldHard           bool          // 明确的硬切换原因，不能再按通用 429/5xx 降为软性保持
 	RetryableOnSameAccount   bool          // 临时性错误（如 Google 间歇性 400、空响应），应在同一账号上重试 N 次再切换
 	SameAccountRetryDelay    time.Duration // 同账号重试的最小间隔；零值使用 handler 默认值
 	SameAccountRetryDeadline time.Time     // 同账号重试截止时间；零值表示仅受 retryLimit 限制
@@ -922,7 +924,16 @@ func (s *GatewayService) GenerateSessionHash(parsed *ParsedRequest) string {
 		)
 	}
 
-	// 2. 提取带 cache_control: {type: "ephemeral"} 的内容
+	// 2. 明确的客户端会话头优先于内容摘要；按 API key 隔离，避免跨用户复用。
+	if hash := clientSessionHash(parsed.SessionContext); hash != "" {
+		slog.Debug("sticky.hash_source",
+			"source", "client_session_header",
+			"hash", hash,
+		)
+		return hash
+	}
+
+	// 3. 提取带 cache_control: {type: "ephemeral"} 的内容
 	cacheableContent := s.extractCacheableContent(parsed)
 	if cacheableContent != "" {
 		hash := s.hashContent(cacheableContent)
@@ -933,7 +944,7 @@ func (s *GatewayService) GenerateSessionHash(parsed *ParsedRequest) string {
 		return hash
 	}
 
-	// 3. 最后 fallback: 使用 session上下文 + system + 所有消息的完整摘要串
+	// 4. 最后 fallback: 使用 session上下文 + system + 所有消息的完整摘要串
 	var combined strings.Builder
 	// 混入请求上下文区分因子，避免不同用户相同消息产生相同 hash
 	if parsed.SessionContext != nil {

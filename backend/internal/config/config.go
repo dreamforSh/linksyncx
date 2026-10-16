@@ -1150,6 +1150,10 @@ type GatewayConfig struct {
 
 	// Antigravity 429 fallback 限流时间（分钟），解析重置时间失败时使用
 	AntigravityFallbackCooldownMinutes int `mapstructure:"antigravity_fallback_cooldown_minutes"`
+	// Antigravity stream limits are in seconds; zero uses the bounded defaults.
+	AntigravityStreamWriteTimeout int `mapstructure:"antigravity_stream_write_timeout"`
+	AntigravityStreamDrainTimeout int `mapstructure:"antigravity_stream_drain_timeout"`
+	AntigravityStreamMaxDuration  int `mapstructure:"antigravity_stream_max_duration"`
 
 	// Scheduling: 账号调度相关配置
 	Scheduling GatewaySchedulingConfig `mapstructure:"scheduling"`
@@ -2593,6 +2597,9 @@ func setDefaults() {
 	viper.SetDefault("gateway.concurrency_slot_ttl_minutes", 30) // 并发槽位过期时间（支持超长请求）
 	viper.SetDefault("gateway.stream_data_interval_timeout", 180)
 	viper.SetDefault("gateway.stream_keepalive_interval", 10)
+	viper.SetDefault("gateway.antigravity_stream_write_timeout", 15)
+	viper.SetDefault("gateway.antigravity_stream_drain_timeout", 10)
+	viper.SetDefault("gateway.antigravity_stream_max_duration", 1800)
 	viper.SetDefault("gateway.image_stream_data_interval_timeout", 900)
 	viper.SetDefault("gateway.image_stream_keepalive_interval", 10)
 	viper.SetDefault("gateway.image_nonstream_keepalive_interval", 0)
@@ -3465,6 +3472,15 @@ func (c *Config) Validate() error {
 	}
 	if c.Gateway.ConcurrencySlotTTLMinutes <= 0 {
 		return fmt.Errorf("gateway.concurrency_slot_ttl_minutes must be positive")
+	}
+	for key, value := range map[string]int{
+		"antigravity_stream_write_timeout": c.Gateway.AntigravityStreamWriteTimeout,
+		"antigravity_stream_drain_timeout": c.Gateway.AntigravityStreamDrainTimeout,
+		"antigravity_stream_max_duration":  c.Gateway.AntigravityStreamMaxDuration,
+	} {
+		if value < 0 || value > 86400 {
+			return fmt.Errorf("gateway.%s must be between 0 and 86400 seconds", key)
+		}
 	}
 	if c.Gateway.StreamDataIntervalTimeout < 0 {
 		return fmt.Errorf("gateway.stream_data_interval_timeout must be non-negative")

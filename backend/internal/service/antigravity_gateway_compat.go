@@ -177,6 +177,8 @@ func (s *AntigravityGatewayService) forwardAntigravityCompat(
 		return nil, err
 	}
 
+	ctx, releaseUpstream := s.upstreamStreamContext(ctx, c)
+	defer releaseUpstream()
 	result, err := s.antigravityRetryLoop(antigravityRetryLoopParams{
 		ctx:             ctx,
 		prefix:          call.prefix,
@@ -397,7 +399,11 @@ func (s *AntigravityGatewayService) consumeAntigravityCompatResponse(
 	}
 	streamResult, err := s.consumeAntigravityCompatSuccess(c, call, resp)
 	if err != nil {
-		return nil, err
+		partial := partialAntigravityUsageResult(c, resp, streamResult, call.request.originalModel, call.billingModel, call.request.clientStream, call.request.startTime, err)
+		if partial != nil {
+			partial.ReasoningEffort = call.request.reasoningEffort
+		}
+		return partial, err
 	}
 	if streamResult.usage == nil {
 		streamResult.usage = &ClaudeUsage{}
@@ -407,6 +413,7 @@ func (s *AntigravityGatewayService) consumeAntigravityCompatResponse(
 		RequestID:                     requestID,
 		UpstreamHeaders:               resp.Header,
 		Usage:                         *streamResult.usage,
+		UsageIncomplete:               streamResult.usageIncomplete,
 		Model:                         call.request.originalModel,
 		UpstreamModel:                 call.billingModel,
 		UpstreamResponseModel:         observedUpstreamResponseModel(c),
@@ -566,7 +573,7 @@ func (s *AntigravityGatewayService) handleChatCompletionsNonStreamingFromAntigra
 ) (*antigravityStreamResult, error) {
 	claudeResponse, result, err := s.collectClaudeStreamResponse(c, resp, startTime, originalModel)
 	if err != nil {
-		return nil, s.mapAntigravityCompatCollectionError(c, err)
+		return result, s.mapAntigravityCompatCollectionError(c, err)
 	}
 	var anthropicResponse apicompat.AnthropicResponse
 	if json.Unmarshal(claudeResponse, &anthropicResponse) != nil {
@@ -585,7 +592,7 @@ func (s *AntigravityGatewayService) handleResponsesNonStreamingFromAntigravity(
 ) (*antigravityStreamResult, error) {
 	claudeResponse, result, err := s.collectClaudeStreamResponse(c, resp, startTime, originalModel)
 	if err != nil {
-		return nil, s.mapAntigravityCompatCollectionError(c, err)
+		return result, s.mapAntigravityCompatCollectionError(c, err)
 	}
 	var anthropicResponse apicompat.AnthropicResponse
 	if json.Unmarshal(claudeResponse, &anthropicResponse) != nil {

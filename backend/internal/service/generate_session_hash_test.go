@@ -4,6 +4,7 @@ package service
 
 import (
 	"encoding/json"
+	"strings"
 	"testing"
 
 	"github.com/Wei-Shaw/sub2api/internal/domain"
@@ -645,4 +646,124 @@ func TestGenerateSessionHash_GeminiEndToEnd(t *testing.T) {
 	parsed3 := mustParseGeminiSessionHashRequest(t, body, &SessionContext{ClientIP: "10.0.0.2", UserAgent: "gemini-cli/1.0", APIKeyID: 99})
 	h3 := svc.GenerateSessionHash(parsed3)
 	require.NotEqual(t, h, h3, "different user with same Gemini request should get different hash")
+}
+
+func TestGenerateSessionHash_ClientSessionHeaderGrowingConversationStable(t *testing.T) {
+	svc := &GatewayService{}
+	for _, header := range []string{claudeCodeSessionHeader, "session_id"} {
+		t.Run(header, func(t *testing.T) {
+			for _, metadata := range []string{"", "invalid-metadata", `{"session_id":"missing-device"}`} {
+				t.Run(metadata, func(t *testing.T) {
+					c := newSessionHeaderContext(t, map[string]string{header: "client-conversation-42"})
+					sessionID := MessagesClientSessionIDFromHeader(c)
+					first := mustParseSessionHashRequest(t, anthropicSessionBody("System", []any{msg("user", "hello")}, metadata), &SessionContext{
+						ClientIP: "1.2.3.4", UserAgent: "cli/1.0", APIKeyID: 42, ClientSessionID: sessionID,
+					})
+					continued := mustParseSessionHashRequest(t, anthropicSessionBody("Updated system", []any{
+						msg("user", "hello"), msg("assistant", "Hi!"), msg("user", "continue"),
+					}, metadata), &SessionContext{
+						ClientIP: "9.8.7.6", UserAgent: "other-cli/2.0", APIKeyID: 42, ClientSessionID: sessionID,
+					})
+
+					hash := svc.GenerateSessionHash(first)
+					require.NotEmpty(t, hash)
+					require.Equal(t, hash, svc.GenerateSessionHash(continued), "explicit session must survive history, system, IP, and UA changes")
+					require.Equal(t, hash, svc.GenerateSessionHash(first), "retries must be deterministic")
+					require.NotContains(t, hash, sessionID, "raw client identity must not appear in the routing hash")
+				})
+			}
+		})
+	}
+}
+
+func TestGenerateSessionHash_ClientSessionIsolation(t *testing.T) {
+	svc := &GatewayService{}
+	body := anthropicSessionBody(nil, []any{msg("user", "same first message")}, "")
+	hashes := make(map[string]struct{})
+	for _, ctx := range []*SessionContext{
+		{APIKeyID: 1, ClientSessionID: "shared-session"},
+		{APIKeyID: 2, ClientSessionID: "shared-session"},
+		{APIKeyID: 1, ClientSessionID: "different-session"},
+		{APIKeyID: 1, ClientSessionID: "23"},
+		{APIKeyID: 12, ClientSessionID: "3"},
+	} {
+		hash := svc.GenerateSessionHash(mustParseSessionHashRequest(t, body, ctx))
+		require.True(t, strings.HasPrefix(hash, "cs1_"))
+		require.Len(t, hash, len("cs1_")+64)
+		_, duplicate := hashes[hash]
+		require.False(t, duplicate, "distinct API keys and sessions must not share a hash")
+		hashes[hash] = struct{}{}
+	}
+
+	plain := svc.GenerateSessionHash(mustParseSessionHashRequest(t, body, &SessionContext{APIKeyID: 1, ClientSessionID: "shared-session"}))
+	trimmed := svc.GenerateSessionHash(mustParseSessionHashRequest(t, body, &SessionContext{APIKeyID: 1, ClientSessionID: "  shared-session  "}))
+	require.Equal(t, plain, trimmed, "direct SessionContext callers must get the same normalization")
+	fallback := svc.GenerateSessionHash(mustParseSessionHashRequest(t, body, &SessionContext{APIKeyID: 1}))
+	require.NotEqual(t, plain, fallback, "explicit IDs and legacy content hashes must stay in separate namespaces")
+}
+
+func TestGenerateSessionHash_ClientSessionMetadataPriority(t *testing.T) {
+	svc := &GatewayService{}
+	const sessionID = "123e4567-e89b-12d3-a456-426614174000"
+	metadataValues := []string{
+		"user_a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2_account__session_" + sessionID,
+		`{"device_id":"client-device","account_uuid":"","session_id":"` + sessionID + `"}`,
+	}
+	system := []any{map[string]any{"type": "text", "text": "cache anchor", "cache_control": map[string]any{"type": "ephemeral"}}}
+	for _, metadata := range metadataValues {
+		for _, ctx := range []*SessionContext{
+			{APIKeyID: 1, ClientSessionID: "header-session-a"},
+			{APIKeyID: 2, ClientSessionID: "header-session-b"},
+		} {
+			parsed := mustParseSessionHashRequest(t, anthropicSessionBody(system, []any{msg("user", "hello")}, metadata), ctx)
+			require.Equal(t, sessionID, svc.GenerateSessionHash(parsed), "valid metadata retains its existing raw session result and highest priority")
+		}
+	}
+}
+
+func TestGenerateSessionHash_ClientSessionOverridesCache(t *testing.T) {
+	svc := &GatewayService{}
+	parse := func(anchor, sessionID string) *ParsedRequest {
+		system := []any{map[string]any{"type": "text", "text": anchor, "cache_control": map[string]any{"type": "ephemeral"}}}
+		return mustParseSessionHashRequest(t, anthropicSessionBody(system, []any{msg("user", "hello")}, ""), &SessionContext{
+			APIKeyID: 42, ClientSessionID: sessionID,
+		})
+	}
+	first := svc.GenerateSessionHash(parse("cache anchor A", "explicit-session"))
+	changedCache := svc.GenerateSessionHash(parse("cache anchor B", "explicit-session"))
+	otherSession := svc.GenerateSessionHash(parse("cache anchor A", "other-session"))
+	require.Equal(t, first, changedCache, "explicit session has priority over changing cache markers")
+	require.NotEqual(t, first, otherSession, "shared cache content must not merge explicit sessions")
+}
+
+func TestGenerateSessionHash_InvalidClientSessionPreservesFallback(t *testing.T) {
+	svc := &GatewayService{}
+	body := anthropicSessionBody("System", []any{msg("user", "hello")}, "")
+	continuedBody := anthropicSessionBody("System", []any{msg("user", "hello"), msg("assistant", "Hi!"), msg("user", "continue")}, "")
+	cacheBody := anthropicSessionBody([]any{map[string]any{
+		"type": "text", "text": "cache anchor", "cache_control": map[string]any{"type": "ephemeral"},
+	}}, []any{msg("user", "hello")}, "")
+	for _, value := range []string{
+		"", "   ", "bad\nsession", "bad\tsession", "bad\x00session", "bad\x7fsession",
+		string([]byte{'b', 'a', 'd', 0xff}), strings.Repeat("a", maxPersistedSessionIDLength+1),
+	} {
+		t.Run(value, func(t *testing.T) {
+			ctx := &SessionContext{ClientIP: "1.2.3.4", UserAgent: "test", APIKeyID: 7, ClientSessionID: value}
+			first := svc.GenerateSessionHash(mustParseSessionHashRequest(t, body, ctx))
+			continued := svc.GenerateSessionHash(mustParseSessionHashRequest(t, continuedBody, ctx))
+			require.Equal(t, svc.hashContent("1.2.3.4:test:7|Systemhello"), first, "invalid explicit ID must preserve the exact old fallback seed")
+			require.NotEqual(t, first, continued, "without explicit ID the old full-history fallback must remain")
+			require.Equal(t, svc.hashContent("cache anchor"), svc.GenerateSessionHash(mustParseSessionHashRequest(t, cacheBody, ctx)), "invalid explicit ID must preserve cache fallback")
+		})
+	}
+}
+
+func TestGenerateSessionHash_ClientSessionRequiresAPIKey(t *testing.T) {
+	svc := &GatewayService{}
+	body := anthropicSessionBody(nil, []any{msg("user", "hello")}, "")
+	for _, keyID := range []int64{0, -1} {
+		withID := mustParseSessionHashRequest(t, body, &SessionContext{APIKeyID: keyID, ClientSessionID: "shared-session"})
+		withoutID := mustParseSessionHashRequest(t, body, &SessionContext{APIKeyID: keyID})
+		require.Equal(t, svc.GenerateSessionHash(withoutID), svc.GenerateSessionHash(withID), "missing authenticated API key must not enable an unscoped explicit hash")
+	}
 }

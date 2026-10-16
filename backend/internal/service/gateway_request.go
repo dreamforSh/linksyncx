@@ -54,12 +54,13 @@ var (
 )
 
 // SessionContext 粘性会话上下文，用于区分不同来源的请求。
-// 仅在 GenerateSessionHash 第 3 级 fallback（消息内容 hash）时混入，
-// 避免不同用户发送相同消息产生相同 hash 导致账号集中。
+// ClientSessionID 在合法 metadata 之后、内容 fallback 之前按 API key 隔离派生 hash；
+// 无明确会话 ID 时，使用其余字段区分相同消息的不同请求来源。
 type SessionContext struct {
-	ClientIP  string
-	UserAgent string
-	APIKeyID  int64
+	ClientIP        string
+	UserAgent       string
+	APIKeyID        int64
+	ClientSessionID string // 已清洗的客户端会话头，仅用于本地粘性路由，不转发上游
 }
 
 type jsonRange struct {

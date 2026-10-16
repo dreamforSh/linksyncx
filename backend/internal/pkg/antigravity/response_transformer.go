@@ -1,6 +1,7 @@
 package antigravity
 
 import (
+	"bytes"
 	"crypto/rand"
 	"encoding/json"
 	"fmt"
@@ -12,26 +13,12 @@ import (
 
 // TransformGeminiToClaude 将 Gemini 响应转换为 Claude 格式（非流式）
 func TransformGeminiToClaude(geminiResp []byte, originalModel string) ([]byte, *ClaudeUsage, error) {
-	// 解包 v1internal 响应
-	var v1Resp V1InternalResponse
-	if err := json.Unmarshal(geminiResp, &v1Resp); err != nil {
-		// 尝试直接解析为 GeminiResponse
-		var directResp GeminiResponse
-		if err2 := json.Unmarshal(geminiResp, &directResp); err2 != nil {
-			return nil, nil, fmt.Errorf("parse gemini response: %w", err)
-		}
-		v1Resp.Response = directResp
-		v1Resp.ResponseID = directResp.ResponseID
-		v1Resp.ModelVersion = directResp.ModelVersion
-	} else if len(v1Resp.Response.Candidates) == 0 {
-		// 第一次解析成功但 candidates 为空，说明是直接的 GeminiResponse 格式
-		var directResp GeminiResponse
-		if err2 := json.Unmarshal(geminiResp, &directResp); err2 != nil {
-			return nil, nil, fmt.Errorf("parse gemini response as direct: %w", err2)
-		}
-		v1Resp.Response = directResp
-		v1Resp.ResponseID = directResp.ResponseID
-		v1Resp.ModelVersion = directResp.ModelVersion
+	v1Resp, err := parseGeminiResponse(geminiResp)
+	if err != nil {
+		return nil, nil, err
+	}
+	if len(v1Resp.Response.Candidates) == 0 {
+		return nil, nil, fmt.Errorf("gemini response has no candidates")
 	}
 
 	// 使用处理器转换
@@ -45,6 +32,55 @@ func TransformGeminiToClaude(geminiResp []byte, originalModel string) ([]byte, *
 	}
 
 	return respBytes, &claudeResp.Usage, nil
+}
+
+// response 字段存在时必须按包装响应解析，不能因 candidates 为空而误读外层字段。
+func parseGeminiResponse(data []byte) (*V1InternalResponse, error) {
+	var envelope struct {
+		Response     json.RawMessage `json:"response"`
+		Error        json.RawMessage `json:"error"`
+		ResponseID   string          `json:"responseId"`
+		ModelVersion string          `json:"modelVersion"`
+	}
+	if err := json.Unmarshal(data, &envelope); err != nil {
+		return nil, fmt.Errorf("parse gemini response: %w", err)
+	}
+
+	responseData := data
+	if envelope.Response != nil {
+		responseData = envelope.Response
+	}
+	var fields struct {
+		Candidates    json.RawMessage `json:"candidates"`
+		UsageMetadata json.RawMessage `json:"usageMetadata"`
+		Error         json.RawMessage `json:"error"`
+	}
+	if err := json.Unmarshal(responseData, &fields); err != nil {
+		return nil, fmt.Errorf("parse gemini response body: %w", err)
+	}
+
+	resp := &V1InternalResponse{
+		ResponseID:   envelope.ResponseID,
+		ModelVersion: envelope.ModelVersion,
+	}
+	if err := json.Unmarshal(responseData, &resp.Response); err != nil {
+		return nil, fmt.Errorf("parse gemini response body: %w", err)
+	}
+	// 错误帧中的合法用量仍需计费，但调用方不得把响应内容当作成功输出。
+	if hasGeminiError(envelope.Error) {
+		return resp, fmt.Errorf("gemini upstream error: %s", envelope.Error)
+	}
+	if hasGeminiError(fields.Error) {
+		return resp, fmt.Errorf("gemini upstream error: %s", fields.Error)
+	}
+	if fields.Candidates == nil && fields.UsageMetadata == nil {
+		return nil, fmt.Errorf("gemini response has neither candidates nor usageMetadata")
+	}
+	return resp, nil
+}
+
+func hasGeminiError(data json.RawMessage) bool {
+	return len(data) > 0 && !bytes.Equal(bytes.TrimSpace(data), []byte("null"))
 }
 
 // NonStreamingProcessor 非流式响应处理器
@@ -142,6 +178,23 @@ func (p *NonStreamingProcessor) processPart(part *GeminiPart) {
 		return
 	}
 
+	// 独立签名必须附着在尚未刷新的 thinking 上，不能另建空块代替。
+	if part.Text == "" && !part.Thought && part.InlineData == nil && signature != "" {
+		if p.thinkingBuilder != "" || p.thinkingSignature != "" {
+			p.thinkingSignature = signature
+		} else {
+			if p.trailingSignature != "" {
+				p.flushText()
+				p.contentBlocks = append(p.contentBlocks, ClaudeContentItem{
+					Type:      "thinking",
+					Signature: p.trailingSignature,
+				})
+			}
+			p.trailingSignature = signature
+		}
+		return
+	}
+
 	// 2. Text 处理
 	if part.Text != "" || part.Thought {
 		if part.Thought {
@@ -188,6 +241,7 @@ func (p *NonStreamingProcessor) processPart(part *GeminiPart) {
 
 			// 非空 text 带签名 - 特殊处理：先输出 text，再输出空 thinking 块
 			if signature != "" {
+				p.flushText()
 				p.contentBlocks = append(p.contentBlocks, ClaudeContentItem{
 					Type: "text",
 					Text: part.Text,

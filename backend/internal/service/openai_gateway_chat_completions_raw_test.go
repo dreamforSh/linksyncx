@@ -721,6 +721,7 @@ func TestForwardAsRawChatCompletions_TruncatedStreamAfterOutputFailsRequest(t *t
 	result, err := svc.forwardAsRawChatCompletions(context.Background(), c, rawChatCompletionsTestAccount(), body, "")
 	require.Error(t, err)
 	require.NotNil(t, result, "已收字节的用量仍需带回，供 ops 记录首 token 时延")
+	require.True(t, result.UsageIncomplete)
 	var failoverErr *UpstreamFailoverError
 	require.False(t, errors.As(err, &failoverErr), "已写出语义字节后不得再 failover")
 

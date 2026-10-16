@@ -706,7 +706,12 @@ func (s *OpenAIGatewayService) handleChatStreamingResponse(
 	upstreamModel string,
 	startTime time.Time,
 	requestBodyLen int,
-) (*OpenAIForwardResult, error) {
+) (outResult *OpenAIForwardResult, outErr error) {
+	defer func() {
+		if outResult != nil && outErr != nil {
+			outResult.UsageIncomplete = true
+		}
+	}()
 	requestID := resp.Header.Get("x-request-id")
 	writeStreamHeaders := s.newStreamHeaderWriter(c, resp.Header)
 

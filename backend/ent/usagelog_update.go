@@ -1216,6 +1216,24 @@ func (_u *UsageLogUpdate) sqlSave(ctx context.Context) (_node int, err error) {
 	if value, ok := _u.mutation.AddedCacheReadTokens(); ok {
 		_spec.AddField(usagelog.FieldCacheReadTokens, field.TypeInt, value)
 	}
+	if _u.mutation.RawInputTokensCleared() {
+		_spec.ClearField(usagelog.FieldRawInputTokens, field.TypeInt)
+	}
+	if _u.mutation.RawOutputTokensCleared() {
+		_spec.ClearField(usagelog.FieldRawOutputTokens, field.TypeInt)
+	}
+	if _u.mutation.RawCacheCreationTokensCleared() {
+		_spec.ClearField(usagelog.FieldRawCacheCreationTokens, field.TypeInt)
+	}
+	if _u.mutation.RawCacheReadTokensCleared() {
+		_spec.ClearField(usagelog.FieldRawCacheReadTokens, field.TypeInt)
+	}
+	if _u.mutation.CacheBillingCompensationTokensCleared() {
+		_spec.ClearField(usagelog.FieldCacheBillingCompensationTokens, field.TypeInt)
+	}
+	if _u.mutation.CacheBillingCompensationReasonCleared() {
+		_spec.ClearField(usagelog.FieldCacheBillingCompensationReason, field.TypeString)
+	}
 	if value, ok := _u.mutation.CacheCreation5mTokens(); ok {
 		_spec.SetField(usagelog.FieldCacheCreation5mTokens, field.TypeInt, value)
 	}
@@ -2759,6 +2777,24 @@ func (_u *UsageLogUpdateOne) sqlSave(ctx context.Context) (_node *UsageLog, err 
 	}
 	if value, ok := _u.mutation.AddedCacheReadTokens(); ok {
 		_spec.AddField(usagelog.FieldCacheReadTokens, field.TypeInt, value)
+	}
+	if _u.mutation.RawInputTokensCleared() {
+		_spec.ClearField(usagelog.FieldRawInputTokens, field.TypeInt)
+	}
+	if _u.mutation.RawOutputTokensCleared() {
+		_spec.ClearField(usagelog.FieldRawOutputTokens, field.TypeInt)
+	}
+	if _u.mutation.RawCacheCreationTokensCleared() {
+		_spec.ClearField(usagelog.FieldRawCacheCreationTokens, field.TypeInt)
+	}
+	if _u.mutation.RawCacheReadTokensCleared() {
+		_spec.ClearField(usagelog.FieldRawCacheReadTokens, field.TypeInt)
+	}
+	if _u.mutation.CacheBillingCompensationTokensCleared() {
+		_spec.ClearField(usagelog.FieldCacheBillingCompensationTokens, field.TypeInt)
+	}
+	if _u.mutation.CacheBillingCompensationReasonCleared() {
+		_spec.ClearField(usagelog.FieldCacheBillingCompensationReason, field.TypeString)
 	}
 	if value, ok := _u.mutation.CacheCreation5mTokens(); ok {
 		_spec.SetField(usagelog.FieldCacheCreation5mTokens, field.TypeInt, value)

@@ -1208,8 +1208,8 @@ func TestUpdateAccountModelRateLimitInCache_NilSchedulerSnapshot(t *testing.T) {
 	// 不应 panic
 	svc.updateAccountModelRateLimitInCache(context.Background(), account, "claude-sonnet-4-5", time.Now().Add(30*time.Second))
 
-	// Extra 不应被更新（因为函数提前返回）
-	require.Nil(t, account.Extra)
+	// 即使没有 Redis 快照，当前请求也必须看到限流状态。
+	require.True(t, account.isModelRateLimitedWithContext(context.Background(), "claude-sonnet-4-5"))
 }
 
 // TestUpdateAccountModelRateLimitInCache_PreservesExistingExtra 测试保留已有的 Extra 数据

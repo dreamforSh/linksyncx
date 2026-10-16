@@ -2,7 +2,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { flushPromises, mount } from '@vue/test-utils'
 import { createPinia, setActivePinia } from 'pinia'
 
-import type { DashboardStats } from '@/types'
+import type { DashboardStats, ModelStat } from '@/types'
 import DashboardView from '../DashboardView.vue'
 
 const {
@@ -57,7 +57,7 @@ vi.mock('vue-i18n', async () => {
   return {
     ...actual,
     useI18n: () => ({
-      t: (key: string) => key,
+      t: (key: string, params?: Record<string, unknown>) => params ? `${key}:${JSON.stringify(params)}` : key,
       locale: { value: 'en' }
     })
   }
@@ -168,6 +168,45 @@ describe('admin DashboardView', () => {
       granularity: 'hour',
       include_group_stats: true
     }))
+  })
+
+  it.each([
+    { name: 'measured zero cache', unknown: false },
+    { name: 'unknown historical cache', unknown: true }
+  ])('uses raw rather than billable cache counts in the $name breakdown', async ({ unknown }) => {
+    const stats = createDashboardStats()
+    stats.today_cache_read_tokens = 4_820_000
+    stats.today_cache_creation_tokens = 9000
+    getSnapshotV2.mockResolvedValue({ stats, trend: [], models: [] })
+    const model: ModelStat = {
+      model: 'test-model', requests: 1, input_tokens: 0, output_tokens: 7,
+      cache_creation_tokens: 9000, cache_read_tokens: 4_820_000, total_tokens: 4_829_007,
+      cost: 1, actual_cost: 1,
+      raw_input_tokens: 100, raw_output_tokens: 7, raw_cache_creation_tokens: 0, raw_cache_read_tokens: 0,
+      raw_usage_known_requests: unknown ? 0 : 1, raw_usage_unknown_requests: unknown ? 1 : 0
+    }
+    getModelStats.mockResolvedValue({ models: [model], start_date: '', end_date: '' })
+    const wrapper = mount(DashboardView, {
+      global: {
+        stubs: {
+          AppLayout: { template: '<div><slot /></div>' },
+          Icon: true, DateRangePicker: true, ModelDistributionChart: true,
+          TokenUsageTrend: true, RevenueProfitTrend: true, GroupDistributionChart: true,
+          TodayModelUsageCard: true, UsageHeatmap: true, Line: true
+        }
+      }
+    })
+    await flushPromises()
+    const breakdown = wrapper.get('[data-testid="dashboard-cache-breakdown"]').text()
+    expect(breakdown).not.toContain('4.82M')
+    expect(breakdown).not.toContain('9K')
+    if (unknown) {
+      expect(breakdown).toBe('usage.rawUsageUnknown')
+    } else {
+      expect(breakdown).toContain('"read":"0"')
+      expect(breakdown).toContain('"write":"0"')
+    }
+    wrapper.unmount()
   })
 
   it('loads today, cost, customer and heatmap data for the insight cards', async () => {

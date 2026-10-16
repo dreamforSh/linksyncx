@@ -1,6 +1,7 @@
 package antigravity
 
 import (
+	"encoding/json"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -214,6 +215,40 @@ func TestCleanJSONSchema_AnyOfNestedPrefixItems(t *testing.T) {
 	extraItems, ok := extraTuple["items"].(map[string]any)
 	require.True(t, ok, "extra_tuple.items must be an object")
 	assert.Equal(t, "integer", extraItems["type"])
+}
+
+func TestCleanJSONSchema_AllOfRequiredStableAcrossFreshDecodes(t *testing.T) {
+	const input = `{
+		"type":"object",
+		"properties":{"root":{"type":"string"},"shared":{"type":"string"}},
+		"required":["root","shared","root"],
+		"allOf":[
+			{"properties":{"b":{"type":"string"},"a":{"type":"string"}},"required":["b","shared","a","b"]},
+			{"properties":{"c":{"type":"string"}},"required":["c","a","missing"]}
+		]
+	}`
+	var baseline []byte
+	for i := 0; i < 128; i++ {
+		var schema map[string]any
+		require.NoError(t, json.Unmarshal([]byte(input), &schema))
+		cleaned := CleanJSONSchema(schema)
+		assert.Equal(t, []any{"root", "shared", "b", "a", "c"}, cleaned["required"], "iteration %d", i)
+		encoded, err := json.Marshal(cleaned)
+		require.NoError(t, err)
+		if i == 0 {
+			baseline = encoded
+		}
+		assert.Equal(t, string(baseline), string(encoded), "iteration %d must produce identical wire bytes", i)
+	}
+}
+
+func TestCleanJSONSchema_AllOfWithoutRootRequiredKeepsBranchOrder(t *testing.T) {
+	const input = `{"type":"object","allOf":[{"properties":{"z":{"type":"string"},"a":{"type":"string"}},"required":["z","a"]},{"properties":{"m":{"type":"string"}},"required":["m","z"]}]}`
+	for i := 0; i < 64; i++ {
+		var schema map[string]any
+		require.NoError(t, json.Unmarshal([]byte(input), &schema))
+		assert.Equal(t, []any{"z", "a", "m"}, CleanJSONSchema(schema)["required"])
+	}
 }
 
 func TestCleanJSONSchema_EmptyPrefixItems(t *testing.T) {

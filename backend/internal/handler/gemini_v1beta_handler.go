@@ -660,6 +660,13 @@ func (h *GatewayHandler) GeminiV1BetaModels(c *gin.Context) {
 			accountReleaseFunc()
 		}
 		if err != nil {
+			if result != nil {
+				h.recordPartialAntigravityUsage(c, err, body, &service.RecordUsageInput{
+					Result: result, APIKey: apiKey, Account: account,
+					Subscription: subscription, PricingAt: pricingAt, ForceCacheBilling: fs.ForceCacheBilling,
+					ChannelUsageFields: clientRequestedUsageFields(c, channelMapping, reqModel, result.UpstreamModel),
+				})
+			}
 			var failoverErr *service.UpstreamFailoverError
 			if errors.As(err, &failoverErr) {
 				failoverAction := fs.HandleFailoverError(c.Request.Context(), h.gatewayService, account.ID, account.Platform, account.GetPoolModeRetryCount(), failoverErr)

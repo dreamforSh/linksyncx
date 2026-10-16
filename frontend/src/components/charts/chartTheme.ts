@@ -1,5 +1,6 @@
 import { computed } from 'vue'
 import type { Chart, TooltipModel } from 'chart.js'
+import type { RawUsageStats } from '@/types'
 import { useDarkMode } from '@/composables/useDarkMode'
 
 /**
@@ -174,14 +175,43 @@ export function formatPercent(ratio: unknown, digits = 1): string {
 }
 
 /**
- * 缓存命中率：缓存读 ÷ (输入 + 缓存写 + 缓存读)。各平台写入用量日志时
- * input_tokens 已扣除缓存读写，所以三者相加就是完整的提示词 token。
+ * 缓存命中率的算术原语：缓存读 ÷ (输入 + 缓存写 + 缓存读)。
+ * 调用方必须提供真实上游分类，不能传入优惠后重分类的 billing token。
  * 没有提示词 token 时返回 null（显示为“—”，不能当成 0%）。
  */
 export function cacheHitRatio(input: unknown, cacheCreation: unknown, cacheRead: unknown): number | null {
   const read = toFinite(cacheRead)
   const prompt = toFinite(input) + toFinite(cacheCreation) + read
   return prompt > 0 ? read / prompt : null
+}
+
+/** Historical, partial, or old-API billing-only data must not become measured cache hits. */
+export function hasCompleteRawUsage(usage: RawUsageStats | null | undefined): boolean {
+  return !!usage && Number(usage.raw_usage_known_requests) > 0 && usage.raw_usage_unknown_requests === 0 &&
+    [usage.raw_input_tokens, usage.raw_output_tokens, usage.raw_cache_creation_tokens, usage.raw_cache_read_tokens]
+      .every((value) => typeof value === 'number' && Number.isFinite(value) && value >= 0)
+}
+
+/** Returns null for unknown/partial coverage and for a known empty prompt. */
+export function rawCacheHitRatio(usage: RawUsageStats | null | undefined): number | null {
+  return hasCompleteRawUsage(usage)
+    ? cacheHitRatio(usage?.raw_input_tokens, usage?.raw_cache_creation_tokens, usage?.raw_cache_read_tokens)
+    : null
+}
+
+/** Sums raw numerators/denominators, not percentages; unknown rows invalidate the rate. */
+export function rawCacheHitRatioForRows(rows: RawUsageStats[]): number | null {
+  let input = 0
+  let creation = 0
+  let read = 0
+  for (const row of rows) {
+    if (row.raw_usage_known_requests === 0 && row.raw_usage_unknown_requests === 0) continue
+    if (!hasCompleteRawUsage(row)) return null
+    input += row.raw_input_tokens ?? 0
+    creation += row.raw_cache_creation_tokens ?? 0
+    read += row.raw_cache_read_tokens ?? 0
+  }
+  return cacheHitRatio(input, creation, read)
 }
 
 /** 毛利率：(营收 − 成本) ÷ 营收；没有营收时返回 null */

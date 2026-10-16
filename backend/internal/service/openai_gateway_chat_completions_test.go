@@ -80,6 +80,7 @@ func TestHandleChatStreamingResponse_ClassifiesHTTP2ReadError(t *testing.T) {
 
 	require.Error(t, err)
 	require.NotNil(t, result)
+	require.True(t, result.UsageIncomplete)
 	require.True(t, c.Writer.Written(), "partial output must make replay unsafe")
 	code, message, ok := OpenAIUpstreamStreamReadErrorDetails(err)
 	require.True(t, ok)

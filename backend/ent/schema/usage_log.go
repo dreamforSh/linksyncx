@@ -84,6 +84,14 @@ func (UsageLog) Fields() []ent.Field {
 			Default(0),
 		field.Int("cache_read_tokens").
 			Default(0),
+		// NULL is unknown, never a fallback to billing usage. No defaults/backfill.
+		field.Int("raw_input_tokens").Optional().Nillable().Immutable(),
+		field.Int("raw_output_tokens").Optional().Nillable().Immutable(),
+		field.Int("raw_cache_creation_tokens").Optional().Nillable().Immutable(),
+		field.Int("raw_cache_read_tokens").Optional().Nillable().Immutable(),
+		field.Int("cache_billing_compensation_tokens").Optional().Nillable().Immutable(),
+		field.String("cache_billing_compensation_reason").MaxLen(64).Optional().Nillable().Immutable(),
+		field.Bool("usage_incomplete").Default(false).Immutable(),
 		field.Int("cache_creation_5m_tokens").
 			Default(0),
 		field.Int("cache_creation_1h_tokens").

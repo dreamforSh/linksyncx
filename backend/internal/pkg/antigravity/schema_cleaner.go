@@ -486,7 +486,8 @@ func mergeAllOf(m map[string]any) {
 	delete(m, "allOf")
 
 	mergedProps := make(map[string]any)
-	mergedReq := make(map[string]bool)
+	var mergedReq []string
+	seenReq := make(map[string]bool)
 	otherFields := make(map[string]any)
 
 	for _, sub := range allOf {
@@ -500,8 +501,9 @@ func mergeAllOf(m map[string]any) {
 			// Required
 			if reqs, ok := subMap["required"].([]any); ok {
 				for _, r := range reqs {
-					if s, ok := r.(string); ok {
-						mergedReq[s] = true
+					if s, ok := r.(string); ok && !seenReq[s] {
+						seenReq[s] = true
+						mergedReq = append(mergedReq, s)
 					}
 				}
 			}
@@ -536,16 +538,19 @@ func mergeAllOf(m map[string]any) {
 	}
 	if len(mergedReq) > 0 {
 		existReq, _ := m["required"].([]any)
-		var validReqs []any
+		validReqs := make([]any, 0, len(existReq)+len(mergedReq))
+		seen := make(map[string]bool)
 		for _, r := range existReq {
-			if s, ok := r.(string); ok {
+			if s, ok := r.(string); ok && !seen[s] {
 				validReqs = append(validReqs, s)
-				delete(mergedReq, s) // already exists
+				seen[s] = true
 			}
 		}
-		// append new
-		for r := range mergedReq {
-			validReqs = append(validReqs, r)
+		// required 的顺序必须与输入数组一致，不能依赖 map 的遍历顺序。
+		for _, r := range mergedReq {
+			if !seen[r] {
+				validReqs = append(validReqs, r)
+			}
 		}
 		m["required"] = validReqs
 	}

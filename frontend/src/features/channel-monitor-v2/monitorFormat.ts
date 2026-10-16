@@ -6,7 +6,7 @@
  * request/error/token counts in user-facing surfaces.
  */
 
-import type { HealthScoreBand, HealthState, MonitorHealth } from '@/api/channelMonitorV2'
+import type { HealthScoreBand, HealthState, MonitorHealth, MonitorMetric } from '@/api/channelMonitorV2'
 import { formatCompactNumber } from '@/utils/format'
 
 export function monitorIntlLocale(): string {
@@ -61,6 +61,16 @@ export function formatMonitorPercent(value: number, locale = monitorIntlLocale()
     minimumFractionDigits: value < 0.01 ? 2 : 1,
     maximumFractionDigits: value < 0.01 ? 2 : 1,
   }).format((value || 0) * 100)}%`
+}
+
+/** The explicit flag survives privacy redaction; legacy billing-only rates are unknown. */
+export function monitorCacheRate(metric: Pick<MonitorMetric, 'cache_rate' | 'cache_rate_known'>): number | null {
+  return metric.cache_rate_known === true && Number.isFinite(metric.cache_rate) ? metric.cache_rate : null
+}
+
+export function formatMonitorCacheRate(metric: Pick<MonitorMetric, 'cache_rate' | 'cache_rate_known'>): string {
+  const rate = monitorCacheRate(metric)
+  return rate === null ? '—' : formatMonitorPercent(rate)
 }
 
 export function formatMonitorMs(value: number | null | undefined): string {

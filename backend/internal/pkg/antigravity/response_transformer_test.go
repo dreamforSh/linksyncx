@@ -3,6 +3,7 @@
 package antigravity
 
 import (
+	"encoding/json"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -106,4 +107,107 @@ func BenchmarkGenerateRandomID(b *testing.B) {
 	for i := 0; i < b.N; i++ {
 		_ = generateRandomID()
 	}
+}
+
+func TestTransformGeminiToClaude_ResponseShapes(t *testing.T) {
+	const body = `{"responseId":"msg_direct","candidates":[{"content":{"parts":[{"text":"hello"}]},"finishReason":"STOP"}],"usageMetadata":{"promptTokenCount":20,"cachedContentTokenCount":4,"candidatesTokenCount":3}}`
+	for _, data := range []string{body, `{"response":` + body + `}`} {
+		out, usage, err := TransformGeminiToClaude([]byte(data), "gemini-test")
+		require.NoError(t, err)
+		var response ClaudeResponse
+		require.NoError(t, json.Unmarshal(out, &response))
+		assert.Equal(t, "msg_direct", response.ID)
+		require.Len(t, response.Content, 1)
+		assert.Equal(t, "hello", response.Content[0].Text)
+		assert.Equal(t, "end_turn", response.StopReason)
+		assert.Equal(t, 16, usage.InputTokens)
+		assert.Equal(t, 4, usage.CacheReadInputTokens)
+	}
+}
+
+func TestParseGeminiResponse_UsesResponseFieldPresence(t *testing.T) {
+	resp, err := parseGeminiResponse([]byte(`{"response":{"usageMetadata":{"promptTokenCount":42}},"candidates":[{"content":{"parts":[{"text":"outer decoy"}]},"finishReason":"STOP"}],"usageMetadata":{"promptTokenCount":7}}`))
+	require.NoError(t, err)
+	assert.Empty(t, resp.Response.Candidates)
+	require.NotNil(t, resp.Response.UsageMetadata)
+	assert.Equal(t, 42, resp.Response.UsageMetadata.PromptTokenCount)
+}
+
+func TestParseGeminiResponse_ErrorRetainsTypedUsage(t *testing.T) {
+	for _, body := range []string{
+		`{"error":{"code":500},"usageMetadata":{"promptTokenCount":8,"candidatesTokenCount":3}}`,
+		`{"error":{"code":500},"response":{"usageMetadata":{"promptTokenCount":8,"candidatesTokenCount":3}}}`,
+		`{"response":{"error":{"code":500},"usageMetadata":{"promptTokenCount":8,"candidatesTokenCount":3}}}`,
+	} {
+		resp, err := parseGeminiResponse([]byte(body))
+		require.Error(t, err)
+		require.NotNil(t, resp)
+		require.NotNil(t, resp.Response.UsageMetadata)
+		assert.Equal(t, 8, resp.Response.UsageMetadata.PromptTokenCount)
+		assert.Equal(t, 3, resp.Response.UsageMetadata.CandidatesTokenCount)
+		out, usage, err := TransformGeminiToClaude([]byte(body), "gemini-test")
+		require.Error(t, err)
+		assert.Nil(t, out)
+		assert.Nil(t, usage)
+	}
+}
+
+func TestTransformGeminiToClaude_RejectsInvalidOrErrorResponses(t *testing.T) {
+	for _, data := range []string{
+		`{"response":`,
+		`null`,
+		`[]`,
+		`{}`,
+		`{"usageMetadata":{"promptTokenCount":5}}`,
+		`{"response":null,"candidates":[{"finishReason":"STOP"}]}`,
+		`{"response":{"candidates":[]},"candidates":[{"finishReason":"STOP"}]}`,
+		`{"response":{"candidates":"invalid"},"candidates":[{"finishReason":"STOP"}]}`,
+		`{"error":{"code":429,"message":"quota exceeded"}}`,
+		`{"response":{"error":{"message":"failed"}}}`,
+		`{"error":{"code":500},"response":{"candidates":[{"finishReason":"STOP"}]}}`,
+	} {
+		out, usage, err := TransformGeminiToClaude([]byte(data), "gemini-test")
+		require.Error(t, err, "body=%s", data)
+		assert.Nil(t, out)
+		assert.Nil(t, usage)
+	}
+}
+
+func TestNonStreamingProcessor_SignatureOnlyBindsThinking(t *testing.T) {
+	for _, textField := range []string{"", `"text":"",`} {
+		body := `{"candidates":[{"content":{"parts":[{"text":"plan","thought":true},{` + textField + `"thoughtSignature":"sig"},{"text":"answer"}]},"finishReason":"STOP"}]}`
+		out, _, err := TransformGeminiToClaude([]byte(body), "gemini-test")
+		require.NoError(t, err)
+		var response ClaudeResponse
+		require.NoError(t, json.Unmarshal(out, &response))
+		require.Len(t, response.Content, 2)
+		assert.Equal(t, "thinking", response.Content[0].Type)
+		assert.Equal(t, "plan", response.Content[0].Thinking)
+		assert.Equal(t, "sig", response.Content[0].Signature)
+		assert.Equal(t, "answer", response.Content[1].Text)
+	}
+}
+
+func TestNonStreamingProcessor_StandaloneSignatureIsPreserved(t *testing.T) {
+	out, _, err := TransformGeminiToClaude([]byte(`{"candidates":[{"content":{"parts":[{"thoughtSignature":"sig"}]},"finishReason":"STOP"}]}`), "gemini-test")
+	require.NoError(t, err)
+	var response ClaudeResponse
+	require.NoError(t, json.Unmarshal(out, &response))
+	require.Len(t, response.Content, 1)
+	assert.Equal(t, "thinking", response.Content[0].Type)
+	assert.Empty(t, response.Content[0].Thinking)
+	assert.Equal(t, "sig", response.Content[0].Signature)
+}
+
+func TestNonStreamingProcessor_SignedTextPreservesPreviousTextOrder(t *testing.T) {
+	out, _, err := TransformGeminiToClaude([]byte(`{"candidates":[{"content":{"parts":[{"text":"before"},{"text":"signed","thoughtSignature":"sig"},{"text":"after"}]},"finishReason":"STOP"}]}`), "gemini-test")
+	require.NoError(t, err)
+	var response ClaudeResponse
+	require.NoError(t, json.Unmarshal(out, &response))
+	require.Len(t, response.Content, 4)
+	assert.Equal(t, "before", response.Content[0].Text)
+	assert.Equal(t, "signed", response.Content[1].Text)
+	assert.Equal(t, "thinking", response.Content[2].Type)
+	assert.Equal(t, "sig", response.Content[2].Signature)
+	assert.Equal(t, "after", response.Content[3].Text)
 }

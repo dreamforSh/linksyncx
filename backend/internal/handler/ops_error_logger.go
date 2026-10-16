@@ -780,6 +780,31 @@ func (w *opsCaptureWriter) Flush() {
 	defer finishDelegatedCall(state)
 	rw.Flush()
 }
+func (w *opsCaptureWriter) SetWriteDeadline(deadline time.Time) error {
+	state, rw := w.beginDelegatedCall()
+	if state == nil {
+		return errors.New("response writer released")
+	}
+	state.mu.Unlock()
+	defer finishDelegatedCall(state)
+	return http.NewResponseController(rw).SetWriteDeadline(deadline)
+}
+
+func (w *opsCaptureWriter) FlushError() error {
+	state, rw := w.beginDelegatedCall()
+	if state == nil {
+		return errors.New("response writer released")
+	}
+	state.mu.Unlock()
+	defer finishDelegatedCall(state)
+	rw.WriteHeaderNow()
+	var underlying http.ResponseWriter = rw
+	if unwrapper, ok := rw.(interface{ Unwrap() http.ResponseWriter }); ok {
+		underlying = unwrapper.Unwrap()
+	}
+	return http.NewResponseController(underlying).Flush()
+}
+
 func (w *opsCaptureWriter) Hijack() (net.Conn, *bufio.ReadWriter, error) {
 	state, rw := w.beginDelegatedCall()
 	if state == nil {

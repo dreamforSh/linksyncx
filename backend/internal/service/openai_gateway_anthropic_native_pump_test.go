@@ -150,6 +150,9 @@ func TestCCStreamingFromNativeAnthropic_HangTimesOut(t *testing.T) {
 	if res == nil {
 		t.Fatalf("expected result carrying accumulated usage")
 	}
+	if !res.UsageIncomplete {
+		t.Fatal("error-partial usage must not count as complete raw telemetry")
+	}
 	if elapsed := time.Since(start); elapsed > 5*time.Second {
 		t.Fatalf("handler did not respect interval bound: %v", elapsed)
 	}
@@ -199,6 +202,9 @@ func TestResponsesStreamingFromNativeAnthropic_HangTimesOut(t *testing.T) {
 	}
 	if res == nil {
 		t.Fatalf("expected result carrying accumulated usage")
+	}
+	if !res.UsageIncomplete {
+		t.Fatal("error-partial usage must not count as complete raw telemetry")
 	}
 	if elapsed := time.Since(start); elapsed > 5*time.Second {
 		t.Fatalf("handler did not respect interval bound: %v", elapsed)

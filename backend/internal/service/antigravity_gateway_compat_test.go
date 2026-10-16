@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -544,7 +545,7 @@ func TestAntigravityCompatEmptyStreamTriggersFailover(t *testing.T) {
 	}
 }
 
-func TestAntigravityCompatUsageOnlyStreamTriggersFailover(t *testing.T) {
+func TestAntigravityCompatUsageOnlyStreamRetainsPartialUsage(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 
 	tests := []struct {
@@ -579,17 +580,19 @@ func TestAntigravityCompatUsageOnlyStreamTriggersFailover(t *testing.T) {
 
 			result, err := tt.run(svc, c, resp)
 
-			require.Nil(t, result)
+			require.NotNil(t, result)
+			require.Error(t, err)
+			require.Equal(t, 8, result.usage.InputTokens)
+			require.True(t, result.usageIncomplete)
 			var failoverErr *UpstreamFailoverError
-			require.ErrorAs(t, err, &failoverErr)
-			require.True(t, failoverErr.RetryableOnSameAccount)
-			require.Empty(t, recorder.Body.String())
-			require.Empty(t, recorder.Header().Get("Content-Type"))
+			require.False(t, errors.As(err, &failoverErr), "already observed usage must not cause duplicate generation")
+			require.Equal(t, http.StatusBadGateway, recorder.Code)
+			require.NotContains(t, recorder.Body.String(), "data: [DONE]")
 		})
 	}
 }
 
-func TestAntigravityCompatUsageOnlyNonStreamingTriggersFailover(t *testing.T) {
+func TestAntigravityCompatUsageOnlyNonStreamingRetainsPartialUsage(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 
 	tests := []struct {
@@ -636,12 +639,14 @@ func TestAntigravityCompatUsageOnlyNonStreamingTriggersFailover(t *testing.T) {
 				tt.body,
 			)
 
-			require.Nil(t, result)
+			require.NotNil(t, result)
+			require.Error(t, err)
+			require.Equal(t, 8, result.Usage.InputTokens)
+			require.True(t, result.UsageIncomplete)
 			var failoverErr *UpstreamFailoverError
-			require.ErrorAs(t, err, &failoverErr)
-			require.True(t, failoverErr.RetryableOnSameAccount)
-			require.Empty(t, recorder.Body.String())
-			require.Empty(t, recorder.Header().Get("Content-Type"))
+			require.False(t, errors.As(err, &failoverErr), "already observed usage must not cause duplicate generation")
+			require.Equal(t, http.StatusBadGateway, recorder.Code)
+			require.NotContains(t, recorder.Body.String(), "data: [DONE]")
 		})
 	}
 }
@@ -754,9 +759,13 @@ func TestAntigravityCompatStreamErrorCommitsSingleTerminalFrame(t *testing.T) {
 	result, err := svc.handleResponsesStreamingFromAntigravity(c, resp, time.Now(), "gemini-3.1-pro-high")
 
 	require.Error(t, err)
-	require.Nil(t, result)
+	require.NotNil(t, result)
+	require.Equal(t, 8, result.usage.InputTokens)
+	require.Equal(t, 1, result.usage.OutputTokens)
+	require.True(t, result.usageIncomplete)
 	require.True(t, IsResponseCommitted(c))
-	require.Equal(t, 1, strings.Count(recorder.Body.String(), "event: error"))
+	require.Equal(t, 1, strings.Count(recorder.Body.String(), "event: response.failed"))
+	require.NotContains(t, recorder.Body.String(), "event: response.completed")
 }
 
 func TestAntigravityCompatKeepaliveAfterFirstEvent(t *testing.T) {
@@ -780,6 +789,8 @@ func TestAntigravityCompatKeepaliveAfterFirstEvent(t *testing.T) {
 	)
 	require.NoError(t, err)
 	time.Sleep(1200 * time.Millisecond)
+	_, err = io.WriteString(writer, `data: {"response":{"candidates":[{"finishReason":"STOP"}]}}`+"\n\n")
+	require.NoError(t, err)
 	require.NoError(t, writer.Close())
 	require.NoError(t, <-done)
 	require.Contains(t, recorder.Body.String(), ": ping\n\n")

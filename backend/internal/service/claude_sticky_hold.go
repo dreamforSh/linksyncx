@@ -209,7 +209,10 @@ func ClaudeStickyUpstreamRetryAfter(err *UpstreamFailoverError) time.Duration {
 // 与 Claude 的差异：Antigravity 的 429 没有 Anthropic 限流头，改用响应体分类——
 // 明确配额耗尽（quota_exhausted）才是硬性原因。
 func IsAntigravityStickySoftFailure(err *UpstreamFailoverError) bool {
-	if err == nil || err.IsCredentialFailure() || err.AccountUnavailable {
+	if err == nil || err.IsCredentialFailure() || err.AccountUnavailable || err.StickyHoldHard {
+		return false
+	}
+	if classifyAntigravity429(err.ResponseBody) == antigravity429QuotaExhausted {
 		return false
 	}
 	if err.StickyHoldSoft {
@@ -331,6 +334,25 @@ func claudeModelRateLimitHold(ctx context.Context, account *Account, requestedMo
 	return remaining, allCustomRule && limited, limited
 }
 
+// antigravityModelQuotaExhausted 不把持久化的硬配额原因随剩余时间缩短而降级成软冷却。
+func antigravityModelQuotaExhausted(ctx context.Context, account *Account, requestedModel string, now time.Time) bool {
+	if account == nil {
+		return false
+	}
+	limits, _ := account.Extra[modelRateLimitsKey].(map[string]any)
+	for _, key := range account.modelRateLimitKeysForRequest(ctx, requestedModel) {
+		resetAt := account.modelRateLimitResetAt(key)
+		if resetAt == nil || !now.Before(*resetAt) {
+			continue
+		}
+		entry, _ := limits[key].(map[string]any)
+		if reason, _ := entry["reason"].(string); reason == string(antigravity429QuotaExhausted) {
+			return true
+		}
+	}
+	return false
+}
+
 // stickyHoldEnv 是 SelectAccountWithLoadAwareness 已算好、判定粘性账号时需要复用的上下文。
 type stickyHoldEnv struct {
 	groupID             *int64
@@ -406,11 +428,12 @@ func (s *GatewayService) selectBoundClaudeAccount(ctx context.Context, stickyAcc
 		}
 		return hold("temp_unschedulable", left)
 	}
-	if left, customRule, limited := claudeModelRateLimitHold(ctx, account, env.requestedModel, now); limited {
+	// 可用积分只绕过普通模型 hold；账号硬门已检查，RPM 和并发仍在下面检查。
+	creditsAvailable := account.Platform == PlatformAntigravity && account.IsOveragesEnabled() && !account.isCreditsExhausted()
+	if left, customRule, limited := claudeModelRateLimitHold(ctx, account, env.requestedModel, now); limited && !creditsAvailable {
 		if account.Platform == PlatformAntigravity {
-			// Antigravity 的模型限流来自上游 429 的 RetryInfo，本身就是短时冷却：
-			// 剩余不超过 MaxWait 时原地等待以保住缓存前缀，超过才换号。
-			if left > settings.MaxWait {
+			// RetryInfo 也可能伴随 quota_exhausted；硬配额不能仅凭剩余时间短就变成软冷却。
+			if antigravityModelQuotaExhausted(ctx, account, env.requestedModel, now) || left > settings.MaxWait {
 				return nil, nil, false
 			}
 			return hold("model_rate_limited", left)

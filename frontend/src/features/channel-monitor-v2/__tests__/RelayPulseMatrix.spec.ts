@@ -72,6 +72,7 @@ function metrics(requestCount: number): MonitorMetric {
     tpm: 10.2,
     error_rate: requestCount ? 1 / requestCount : 0,
     cache_rate: 0.5,
+    cache_rate_known: true,
     cache_rate_numerator: 50,
     cache_rate_denominator: 100,
     ttft: { sample_count: requestCount, p50_ms: 100, p95_ms: 300, avg_ms: 150 },

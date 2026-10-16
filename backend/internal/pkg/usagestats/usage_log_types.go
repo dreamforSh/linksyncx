@@ -79,8 +79,21 @@ type DashboardStats struct {
 	Tpm int64 `json:"tpm"` // 近5分钟平均每分钟Token数
 }
 
+// RawUsageStats contains only observed upstream usage, never billing reclassification.
+// Sums cover known requests only; callers must show unknown/partial coverage when
+// RawUsageUnknownRequests > 0 and must not infer a zero hit rate without a denominator.
+type RawUsageStats struct {
+	RawInputTokens          int64 `json:"raw_input_tokens"`
+	RawOutputTokens         int64 `json:"raw_output_tokens"`
+	RawCacheCreationTokens  int64 `json:"raw_cache_creation_tokens"`
+	RawCacheReadTokens      int64 `json:"raw_cache_read_tokens"`
+	RawUsageKnownRequests   int64 `json:"raw_usage_known_requests"`
+	RawUsageUnknownRequests int64 `json:"raw_usage_unknown_requests"`
+}
+
 // TrendDataPoint represents a single point in trend data
 type TrendDataPoint struct {
+	RawUsageStats
 	Date                string  `json:"date"`
 	Requests            int64   `json:"requests"`
 	InputTokens         int64   `json:"input_tokens"`
@@ -105,6 +118,7 @@ type CostTrendPoint struct {
 
 // ModelStat represents usage statistics for a single model
 type ModelStat struct {
+	RawUsageStats
 	Model               string  `json:"model"`
 	Requests            int64   `json:"requests"`
 	InputTokens         int64   `json:"input_tokens"`
@@ -177,6 +191,7 @@ type UserSpendingRankingResponse struct {
 
 // UserBreakdownItem represents per-user usage breakdown within a dimension (group, model, endpoint).
 type UserBreakdownItem struct {
+	RawUsageStats
 	UserID       int64   `json:"user_id"`
 	Email        string  `json:"email"`
 	Requests     int64   `json:"requests"`
@@ -305,6 +320,7 @@ type UsageLogFilters struct {
 
 // UsageStats represents usage statistics
 type UsageStats struct {
+	RawUsageStats
 	TotalRequests            int64          `json:"total_requests"`
 	TotalInputTokens         int64          `json:"total_input_tokens"`
 	TotalOutputTokens        int64          `json:"total_output_tokens"`

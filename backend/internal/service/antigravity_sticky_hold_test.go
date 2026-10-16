@@ -5,6 +5,7 @@ package service
 import (
 	"bytes"
 	"context"
+	"fmt"
 	"io"
 	"net/http"
 	"testing"
@@ -47,16 +48,17 @@ func newAntigravityStickyHoldFixture(t *testing.T, settings map[string]string, m
 	if settings == nil {
 		settings = map[string]string{}
 	}
+	concurrency := &mockConcurrencyCache{}
 	svc := &GatewayService{
 		accountRepo:        accountRepo,
 		groupRepo:          &mockGroupRepoForGateway{groups: map[int64]*Group{groupID: group}},
 		cache:              &mockGatewayCacheForPlatform{sessionBindings: map[string]int64{"conv": 1}},
 		cfg:                cfg,
-		concurrencyService: NewConcurrencyService(&mockConcurrencyCache{}),
+		concurrencyService: NewConcurrencyService(concurrency),
 		settingService:     NewSettingService(&settingRepoStub{values: settings}, &config.Config{}),
 	}
 	ctx := WithClaudeStickyHold(context.WithValue(context.Background(), ctxkey.Group, group))
-	return &antigravityStickyHoldFixture{svc: svc, ctx: ctx, groupID: groupID}
+	return &antigravityStickyHoldFixture{svc: svc, ctx: ctx, groupID: groupID, concurrency: concurrency}
 }
 
 func (f *antigravityStickyHoldFixture) selectFor(t *testing.T, model string) (*AccountSelectionResult, error) {
@@ -292,8 +294,11 @@ func TestHandleSmartRetryStickyHoldSoftensLongDelay(t *testing.T) {
 	require.Equal(t, "conv", cache2.deleteCalls[0].sessionHash)
 
 	failover = result.switchError.toFailoverError()
-	require.Equal(t, http.StatusServiceUnavailable, failover.StatusCode)
+	require.Equal(t, http.StatusTooManyRequests, failover.StatusCode)
+	require.Equal(t, longBody, failover.ResponseBody)
 	require.False(t, failover.StickyHoldSoft)
+	require.True(t, failover.StickyHoldHard)
+	require.False(t, IsAntigravityStickySoftFailure(failover), "硬换号不得被 429/503 软错误分类撤销")
 }
 
 // 预检查：账号已在限流中，粘性保持生效且剩余不超过 MaxWait → 软保持信号而不是硬切换。
@@ -350,6 +355,10 @@ func TestIsAntigravityStickySoftFailure(t *testing.T) {
 	}{
 		{"nil", nil, false},
 		{"soft hold switch", &UpstreamFailoverError{StatusCode: 429, StickyHoldSoft: true}, true},
+		{"hard switch", &UpstreamFailoverError{StatusCode: 503, StickyHoldHard: true}, false},
+		{"hard overrides soft", &UpstreamFailoverError{StatusCode: 429, StickyHoldSoft: true, StickyHoldHard: true}, false},
+		{"quota overrides soft", &UpstreamFailoverError{StatusCode: 429, StickyHoldSoft: true, ResponseBody: quotaBody}, false},
+		{"quota preserved in server error", &UpstreamFailoverError{StatusCode: 503, ResponseBody: quotaBody}, false},
 		{"rate limited 429", &UpstreamFailoverError{StatusCode: 429, ResponseBody: rateLimitedBody}, true},
 		{"unknown 429", &UpstreamFailoverError{StatusCode: 429, ResponseBody: []byte(`{"error":{"message":"slow down"}}`)}, true},
 		{"quota exhausted 429", &UpstreamFailoverError{StatusCode: 429, ResponseBody: quotaBody}, false},
@@ -381,6 +390,279 @@ func TestStickyUpstreamRetryAfterAntigravity(t *testing.T) {
 
 	claude := &Account{Platform: PlatformAnthropic, Type: AccountTypeOAuth}
 	require.Equal(t, 12*time.Second, StickyUpstreamRetryAfter(claude, &UpstreamFailoverError{ResponseHeaders: headers}))
+}
+
+type stickyHoldReasonRepo struct {
+	*stubAntigravityAccountRepo
+	reasons map[string]string
+}
+
+func (r *stickyHoldReasonRepo) SetModelRateLimit(ctx context.Context, id int64, model string, resetAt time.Time, reason ...string) error {
+	if len(reason) > 0 {
+		r.reasons[model] = reason[0]
+	}
+	return r.stubAntigravityAccountRepo.SetModelRateLimit(ctx, id, model, resetAt, reason...)
+}
+
+func antigravityStickyRetryBody(message, delay string) []byte {
+	return []byte(fmt.Sprintf(`{"error":{"status":"RESOURCE_EXHAUSTED","message":%q,"details":[{"@type":"type.googleapis.com/google.rpc.ErrorInfo","reason":"RATE_LIMIT_EXCEEDED","metadata":{"model":"claude-sonnet-4-5"}},{"@type":"type.googleapis.com/google.rpc.RetryInfo","retryDelay":%q}]}}`, message, delay))
+}
+
+func TestHandleSmartRetryStickyHoldQuotaRemainsHardUnlessCreditsSucceed(t *testing.T) {
+	for _, tc := range []struct {
+		name             string
+		allowOverages    bool
+		creditsExhausted bool
+		creditsStatus    int
+		creditsBody      string
+	}{
+		{name: "overages disabled"},
+		{name: "credits already exhausted", allowOverages: true, creditsExhausted: true},
+		{name: "credits retry temporarily fails", allowOverages: true, creditsStatus: http.StatusServiceUnavailable, creditsBody: `{"error":{"message":"temporarily unavailable"}}`},
+		{name: "credits retry confirms exhaustion", allowOverages: true, creditsStatus: http.StatusPaymentRequired, creditsBody: `{"error":{"message":"insufficient credits"}}`},
+		{name: "credits retry succeeds", allowOverages: true, creditsStatus: http.StatusOK, creditsBody: `{"ok":true}`},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			repo := &stickyHoldReasonRepo{stubAntigravityAccountRepo: &stubAntigravityAccountRepo{}, reasons: make(map[string]string)}
+			cache := &stubSmartRetryCache{}
+			snapshotCache := &stubSchedulerCache{}
+			account := &Account{ID: 1, Platform: PlatformAntigravity, Type: AccountTypeOAuth, Extra: map[string]any{"allow_overages": tc.allowOverages}}
+			if tc.creditsExhausted {
+				setAccountModelRateLimitSnapshot(account, creditsExhaustedKey, time.Now().Add(time.Hour), "", time.Now())
+			}
+			upstream := &mockSmartRetryUpstream{}
+			if tc.creditsStatus != 0 {
+				upstream.responses = []*http.Response{{StatusCode: tc.creditsStatus, Header: http.Header{}, Body: io.NopCloser(bytes.NewBufferString(tc.creditsBody))}}
+				upstream.errors = []error{nil}
+			}
+			svc := &AntigravityGatewayService{accountRepo: repo, cache: cache, schedulerSnapshot: &SchedulerSnapshotService{cache: snapshotCache}}
+			body := antigravityStickyRetryBody("quota_exhausted: daily limit", "15s")
+			headers := http.Header{"X-Request-Id": []string{"quota-request"}, "Content-Type": []string{"application/json"}}
+			params := antigravityRetryLoopParams{
+				ctx: WithClaudeStickyHold(context.Background()), account: account, accountRepo: repo,
+				settingService: NewSettingService(&settingRepoStub{values: map[string]string{}}, &config.Config{}),
+				httpUpstream:   upstream, action: "generateContent", accessToken: "token", body: []byte(`{"request":{}}`),
+				requestedModel: "claude-sonnet-4-5", isStickySession: true, groupID: 10, sessionHash: "conv", handleError: svc.handleUpstreamError,
+			}
+			result := svc.handleSmartRetry(params, &http.Response{StatusCode: http.StatusTooManyRequests, Header: headers}, body, "https://ag.test", 0, []string{"https://ag.test"})
+			require.Equal(t, smartRetryActionBreakWithResp, result.action)
+			if tc.creditsStatus == http.StatusOK {
+				require.Nil(t, result.switchError)
+				require.Equal(t, http.StatusOK, result.resp.StatusCode)
+				_ = result.resp.Body.Close()
+				require.Empty(t, repo.modelRateLimitCalls)
+				require.Empty(t, cache.deleteCalls)
+				return
+			}
+			require.NotNil(t, result.switchError)
+			require.False(t, result.switchError.SoftHold)
+			failover := result.switchError.toFailoverError()
+			require.True(t, failover.StickyHoldHard)
+			require.False(t, failover.StickyHoldSoft)
+			require.False(t, failover.AccountUnavailable, "硬配额不等于账号本身不可用")
+			require.False(t, IsAntigravityStickySoftFailure(failover))
+			require.Equal(t, http.StatusTooManyRequests, failover.StatusCode)
+			require.Equal(t, body, failover.ResponseBody)
+			require.Equal(t, headers, failover.ResponseHeaders)
+			require.Equal(t, string(antigravity429QuotaExhausted), repo.reasons["claude-sonnet-4-5"])
+			require.NotEmpty(t, snapshotCache.setAccountCalls)
+			limits := snapshotCache.setAccountCalls[len(snapshotCache.setAccountCalls)-1].Extra[modelRateLimitsKey].(map[string]any)
+			require.Equal(t, string(antigravity429QuotaExhausted), limits["claude-sonnet-4-5"].(map[string]any)["reason"])
+			require.Len(t, cache.deleteCalls, 1)
+			if tc.creditsStatus == http.StatusPaymentRequired {
+				require.True(t, account.isCreditsExhausted())
+			}
+		})
+	}
+}
+
+func TestHandleSmartRetryStickyHoldExhaustionKeepsHardResponse(t *testing.T) {
+	for _, tc := range []struct {
+		name         string
+		initialQuota bool
+		retryQuota   bool
+	}{
+		{name: "quota cannot be erased by retry server error", initialQuota: true},
+		{name: "retry discovers hard quota", retryQuota: true},
+		{name: "ordinary retry failure remains soft"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			message := "slow down"
+			if tc.initialQuota {
+				message = "quota_exhausted"
+			}
+			body := antigravityStickyRetryBody(message, "0.01s")
+			retryStatus := http.StatusServiceUnavailable
+			retryBody := []byte(`{"error":{"message":"temporarily unavailable"}}`)
+			if tc.retryQuota {
+				retryStatus = http.StatusTooManyRequests
+				retryBody = antigravityStickyRetryBody("quota_exhausted", "15s")
+			}
+			repo := &stickyHoldReasonRepo{stubAntigravityAccountRepo: &stubAntigravityAccountRepo{}, reasons: make(map[string]string)}
+			upstream := &mockSmartRetryUpstream{responses: []*http.Response{{StatusCode: retryStatus, Header: http.Header{"X-Request-Id": []string{"retry"}}, Body: io.NopCloser(bytes.NewReader(retryBody))}}, errors: []error{nil}}
+			cache := &stubSmartRetryCache{}
+			params := antigravityRetryLoopParams{
+				ctx: WithClaudeStickyHold(context.Background()), account: &Account{ID: 1, Platform: PlatformAntigravity, Type: AccountTypeOAuth}, accountRepo: repo,
+				settingService: NewSettingService(&settingRepoStub{values: map[string]string{}}, &config.Config{}),
+				httpUpstream:   upstream, action: "generateContent", accessToken: "token", body: []byte(`{"request":{}}`), isStickySession: true,
+				groupID: 10, sessionHash: "conv",
+			}
+			svc := &AntigravityGatewayService{cache: cache}
+			params.handleError = svc.handleUpstreamError
+			result := svc.handleSmartRetry(params, &http.Response{StatusCode: http.StatusTooManyRequests, Header: http.Header{"X-Request-Id": []string{"original"}}}, body, "https://ag.test", 0, []string{"https://ag.test"})
+			require.NotNil(t, result.switchError)
+			failover := result.switchError.toFailoverError()
+			hard := tc.initialQuota || tc.retryQuota
+			require.Equal(t, hard, failover.StickyHoldHard)
+			require.Equal(t, !hard, IsAntigravityStickySoftFailure(failover))
+			require.Equal(t, hard, len(cache.deleteCalls) > 0)
+			if tc.initialQuota {
+				require.Equal(t, body, failover.ResponseBody)
+				require.Equal(t, http.StatusTooManyRequests, failover.StatusCode)
+				require.Equal(t, "original", failover.ResponseHeaders.Get("x-request-id"))
+			} else {
+				require.Equal(t, retryBody, failover.ResponseBody)
+				require.Equal(t, retryStatus, failover.StatusCode)
+				require.Equal(t, "retry", failover.ResponseHeaders.Get("x-request-id"))
+			}
+			require.Equal(t, antigravityModelRateLimitReason(failover.ResponseBody), repo.reasons["claude-sonnet-4-5"])
+		})
+	}
+}
+
+func TestHandleModelRateLimitStickyHoldPreservesHardQuota(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		message string
+		delay   string
+		soft    bool
+	}{
+		{name: "short cooldown", message: "slow down", delay: "15s", soft: true},
+		{name: "quota with short RetryInfo", message: "quota_exhausted", delay: "15s"},
+		{name: "long cooldown hard switch", message: "slow down", delay: "900s"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			repo := &stickyHoldReasonRepo{stubAntigravityAccountRepo: &stubAntigravityAccountRepo{}, reasons: make(map[string]string)}
+			cache := &stubSmartRetryCache{}
+			svc := &AntigravityGatewayService{accountRepo: repo, settingService: NewSettingService(&settingRepoStub{values: map[string]string{}}, &config.Config{})}
+			body := antigravityStickyRetryBody(tc.message, tc.delay)
+			params := &handleModelRateLimitParams{ctx: WithClaudeStickyHold(context.Background()), account: &Account{ID: 1, Platform: PlatformAntigravity, Type: AccountTypeOAuth}, statusCode: http.StatusTooManyRequests, headers: http.Header{"X-Request-Id": []string{"model-limit"}}, body: body, cache: cache, groupID: 10, sessionHash: "conv", isStickySession: true}
+			result := svc.handleModelRateLimit(params)
+			require.True(t, result.Handled)
+			require.NotNil(t, result.SwitchError)
+			require.Equal(t, tc.soft, result.SwitchError.SoftHold)
+			failover := result.SwitchError.toFailoverError()
+			require.Equal(t, tc.soft, IsAntigravityStickySoftFailure(failover))
+			require.Equal(t, !tc.soft, failover.StickyHoldHard)
+			require.Equal(t, body, failover.ResponseBody)
+			require.Equal(t, http.StatusTooManyRequests, failover.StatusCode)
+			require.Equal(t, "model-limit", failover.ResponseHeaders.Get("x-request-id"))
+			require.Equal(t, antigravityModelRateLimitReason(body), repo.reasons["claude-sonnet-4-5"])
+			require.Equal(t, !tc.soft, len(cache.deleteCalls) > 0)
+		})
+	}
+}
+
+func TestAntigravityStickyHoldPersistedQuotaAndCreditsRouting(t *testing.T) {
+	for _, tc := range []struct {
+		name             string
+		quota            bool
+		allowOverages    bool
+		creditsExhausted bool
+		wantAccount      int64
+		wantHold         bool
+	}{
+		{name: "ordinary five minute cooldown", wantHold: true},
+		{name: "hard quota remains hard within MaxWait", quota: true, wantAccount: 2},
+		{name: "available credits bypass cooldown", allowOverages: true, wantAccount: 1},
+		{name: "available credits bypass free quota", quota: true, allowOverages: true, wantAccount: 1},
+		{name: "exhausted credits keep cooldown", allowOverages: true, creditsExhausted: true, wantHold: true},
+		{name: "exhausted credits cannot soften hard quota", quota: true, allowOverages: true, creditsExhausted: true, wantAccount: 2},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			f := newAntigravityStickyHoldFixture(t, nil, func(a *Account) {
+				reason := string(antigravity429RateLimited)
+				if tc.quota {
+					reason = string(antigravity429QuotaExhausted)
+				}
+				a.Extra = map[string]any{"allow_overages": tc.allowOverages}
+				setAccountModelRateLimitSnapshot(a, "claude-sonnet-4-5", time.Now().Add(5*time.Minute), reason, time.Now())
+				if tc.creditsExhausted {
+					setAccountModelRateLimitSnapshot(a, creditsExhaustedKey, time.Now().Add(time.Hour), "", time.Now())
+				}
+			})
+			selection, err := f.selectFor(t, "claude-sonnet-4-5")
+			if tc.wantHold {
+				hold, ok := AsClaudeStickyHoldError(err)
+				require.True(t, ok, "got %v", err)
+				require.Equal(t, "model_rate_limited", hold.Reason)
+				return
+			}
+			require.NoError(t, err)
+			require.Equal(t, tc.wantAccount, selection.Account.ID)
+		})
+	}
+}
+
+func TestAntigravityStickyHoldCreditsStillRespectHardGatesAndConcurrency(t *testing.T) {
+	withCredits := func(a *Account) {
+		a.Extra = map[string]any{"allow_overages": true}
+		setAccountModelRateLimitSnapshot(a, "claude-sonnet-4-5", time.Now().Add(5*time.Minute), string(antigravity429QuotaExhausted), time.Now())
+	}
+	t.Run("administrator disabled account", func(t *testing.T) {
+		f := newAntigravityStickyHoldFixture(t, nil, func(a *Account) { withCredits(a); a.Schedulable = false })
+		selection, err := f.selectFor(t, "claude-sonnet-4-5")
+		require.NoError(t, err)
+		require.Equal(t, int64(2), selection.Account.ID)
+	})
+	t.Run("temporary hard account failure", func(t *testing.T) {
+		f := newAntigravityStickyHoldFixture(t, nil, func(a *Account) {
+			withCredits(a)
+			until := time.Now().Add(time.Minute)
+			a.TempUnschedulableUntil = &until
+			a.TempUnschedulableReason = "upstream transport error (proxy/network): timeout"
+		})
+		selection, err := f.selectFor(t, "claude-sonnet-4-5")
+		require.NoError(t, err)
+		require.Equal(t, int64(2), selection.Account.ID)
+	})
+	t.Run("concurrency queue", func(t *testing.T) {
+		f := newAntigravityStickyHoldFixture(t, nil, withCredits)
+		f.concurrency.acquireResults = map[int64]bool{1: false}
+		selection, err := f.selectFor(t, "claude-sonnet-4-5")
+		require.NoError(t, err)
+		require.Equal(t, int64(1), selection.Account.ID)
+		require.False(t, selection.Acquired)
+		require.NotNil(t, selection.WaitPlan)
+		f.concurrency.waitCounts = map[int64]int{1: 3}
+		_, err = f.selectFor(t, "claude-sonnet-4-5")
+		hold, ok := AsClaudeStickyHoldError(err)
+		require.True(t, ok, "got %v", err)
+		require.Equal(t, "queue_full", hold.Reason)
+	})
+}
+
+func TestAntigravityStickyHoldPreCheckKeepsPersistedQuotaHard(t *testing.T) {
+	account := &Account{ID: 1, Platform: PlatformAntigravity, Type: AccountTypeOAuth}
+	setAccountModelRateLimitSnapshot(account, "claude-sonnet-4-5", time.Now().Add(15*time.Second), string(antigravity429QuotaExhausted), time.Now())
+	svc := &AntigravityGatewayService{}
+	params := antigravityRetryLoopParams{ctx: WithClaudeStickyHold(context.Background()), account: account, requestedModel: "claude-sonnet-4-5", isStickySession: true, settingService: NewSettingService(&settingRepoStub{values: map[string]string{}}, &config.Config{})}
+	_, err := svc.antigravityRetryLoop(params)
+	switchErr, ok := IsAntigravityAccountSwitchError(err)
+	require.True(t, ok, "got %v", err)
+	require.False(t, switchErr.SoftHold)
+	failover := switchErr.toFailoverError()
+	require.True(t, failover.StickyHoldHard)
+	require.False(t, IsAntigravityStickySoftFailure(failover), "无原始响应的 503 也必须保留硬换号语义")
+}
+
+func TestHandleModelRateLimitStickyHoldFallbackPersistsQuotaReason(t *testing.T) {
+	repo := &stickyHoldReasonRepo{stubAntigravityAccountRepo: &stubAntigravityAccountRepo{}, reasons: make(map[string]string)}
+	account := &Account{ID: 1, Platform: PlatformAntigravity, Type: AccountTypeOAuth}
+	svc := &AntigravityGatewayService{accountRepo: repo}
+	svc.handleUpstreamError(context.Background(), "[test]", account, http.StatusTooManyRequests, nil, []byte(`{"error":{"message":"quota_exhausted"}}`), "claude-sonnet-4-5", 10, "conv", true)
+	require.Equal(t, string(antigravity429QuotaExhausted), repo.reasons["claude-sonnet-4-5"])
+	require.True(t, antigravityModelQuotaExhausted(context.Background(), account, "claude-sonnet-4-5", time.Now()))
 }
 
 // 换号水位线对 Antigravity 账号同样生效：剥离旧账号签发的 thinking 签名。

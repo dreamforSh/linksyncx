@@ -168,10 +168,10 @@
           :loading="loading && !stats"
         >
           <template v-if="stats">
-            {{ t('admin.dashboard.kpi.cacheHitBreakdown', {
-              read: formatCompact(stats.today_cache_read_tokens || 0),
-              write: formatCompact(stats.today_cache_creation_tokens || 0)
-            }) }}
+            <span data-testid="dashboard-cache-breakdown">{{ todayCacheTokens ? t('admin.dashboard.kpi.cacheHitBreakdown', {
+              read: formatCompact(todayCacheTokens.read),
+              write: formatCompact(todayCacheTokens.write)
+            }) : t('usage.rawUsageUnknown') }}</span>
           </template>
           <!-- 比率对 100% 的进度：同色系浅色轨道 -->
           <template v-if="stats && todayCacheHit !== null" #footer>
@@ -339,7 +339,8 @@ import RevenueProfitTrend from '@/components/admin/dashboard/RevenueProfitTrend.
 import CustomerUsageTable from '@/components/admin/dashboard/CustomerUsageTable.vue'
 import GroupDistributionChart from '@/components/charts/GroupDistributionChart.vue'
 import {
-  cacheHitRatio,
+  rawCacheHitRatioForRows,
+  hasCompleteRawUsage,
   formatCompact,
   formatDurationMs,
   formatPercent,
@@ -441,11 +442,15 @@ const tokensTrend = computed(() => trendData.value.map((p) => p.total_tokens))
 const costTrend = computed(() => trendData.value.map((p) => p.actual_cost))
 
 // 今日缓存命中率与毛利：口径与图表一致（缓存读 ÷ 全部提示词 token；实际扣费 − 账号成本）
-const todayCacheHit = computed(() =>
-  stats.value
-    ? cacheHitRatio(stats.value.today_input_tokens, stats.value.today_cache_creation_tokens, stats.value.today_cache_read_tokens)
-    : null
-)
+const todayCacheHit = computed(() => rawCacheHitRatioForRows(todayModels.value))
+const todayCacheTokens = computed(() => {
+  const models = todayModels.value
+  if (models.length === 0 || models.some((model) => !hasCompleteRawUsage(model))) return null
+  return models.reduce((total, model) => ({
+    read: total.read + (model.raw_cache_read_tokens ?? 0),
+    write: total.write + (model.raw_cache_creation_tokens ?? 0)
+  }), { read: 0, write: 0 })
+})
 const todayProfit = computed(() => toFiniteNumber(stats.value?.today_actual_cost) - toFiniteNumber(stats.value?.today_account_cost))
 const todayMargin = computed(() => marginRatio(stats.value?.today_actual_cost, stats.value?.today_account_cost))
 

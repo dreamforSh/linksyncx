@@ -147,10 +147,24 @@ type UsageLog struct {
 	GroupID        *int64
 	SubscriptionID *int64
 
+	// Existing token fields are the billable classification, not upstream cache telemetry.
 	InputTokens         int
 	OutputTokens        int
 	CacheCreationTokens int
 	CacheReadTokens     int
+
+	// Raw tokens are captured before billing adjustments. Nil means unknown (including
+	// historical rows); zero is a known upstream value and must not be inferred from billing.
+	RawInputTokens         *int
+	RawOutputTokens        *int
+	RawCacheCreationTokens *int
+	RawCacheReadTokens     *int
+	// CacheBillingCompensationTokens is the input amount reclassified as cache reads.
+	// Nil means not recorded; a non-nil zero means known no compensation.
+	CacheBillingCompensationTokens *int
+	CacheBillingCompensationReason *string
+	// UsageIncomplete marks observed partial usage, not a completed upstream total.
+	UsageIncomplete bool
 
 	CacheCreation5mTokens int `gorm:"column:cache_creation_5m_tokens"`
 	CacheCreation1hTokens int `gorm:"column:cache_creation_1h_tokens"`
@@ -215,6 +229,19 @@ type UsageLog struct {
 	Account      *Account
 	Group        *Group
 	Subscription *UserSubscription
+}
+
+// setObservedRawUsage records canonical, mutually exclusive upstream token buckets.
+// A completely empty value has no presence information, so keep it unknown rather
+// than claiming missing telemetry is a measured zero. Billing fields are never read.
+func setObservedRawUsage(log *UsageLog, input, output, creation, read int) {
+	if input == 0 && output == 0 && creation == 0 && read == 0 {
+		return
+	}
+	log.RawInputTokens = &input
+	log.RawOutputTokens = &output
+	log.RawCacheCreationTokens = &creation
+	log.RawCacheReadTokens = &read
 }
 
 func (u *UsageLog) TotalTokens() int {

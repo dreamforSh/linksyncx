@@ -62,7 +62,7 @@
             </span>
             <span class="mt-2 flex items-center justify-between gap-3 border-t border-gray-100 pt-2 dark:border-dark-700">
               <span>{{ t('admin.dashboard.trend.cacheHitRate') }}</span>
-              <span class="font-medium tabular-nums text-gray-900 dark:text-white">{{ cacheHitRateText }}</span>
+              <span data-testid="usage-cache-hit-rate" :title="cacheHitRateText === '—' ? t('usage.rawUsageUnknown') : t('usage.rawTokens')" class="font-medium tabular-nums text-gray-900 dark:text-white">{{ cacheHitRateText }}</span>
             </span>
           </span>
         </span>
@@ -103,7 +103,7 @@ import { useI18n } from 'vue-i18n'
 import type { AdminUsageStatsResponse } from '@/api/admin/usage'
 import type { TrendDataPoint, UsageStatsResponse } from '@/types'
 import StatTile from '@/components/common/StatTile.vue'
-import { formatCompact, formatUSD } from '@/components/charts/chartTheme'
+import { formatCompact, formatUSD, formatPercent, rawCacheHitRatio } from '@/components/charts/chartTheme'
 
 const props = withDefaults(defineProps<{
   stats: (AdminUsageStatsResponse | UsageStatsResponse) | null
@@ -134,13 +134,10 @@ const requestsTrend = computed(() => props.trend.map((p) => p.requests))
 const tokensTrend = computed(() => props.trend.map((p) => p.total_tokens))
 const costTrend = computed(() => props.trend.map((p) => p.actual_cost))
 
-// 命中率 = 缓存读取 / 全部提示 token（输入 + 缓存读取 + 缓存写入）
+// Only complete raw upstream telemetry is eligible; historical/partial coverage is unknown.
 const cacheHitRateText = computed(() => {
-  const s = props.stats
-  if (!s) return '0.0%'
-  const read = Number(s.total_cache_read_tokens) || 0
-  const prompt = (Number(s.total_input_tokens) || 0) + read + (Number(s.total_cache_creation_tokens) || 0)
-  return prompt > 0 ? `${((read / prompt) * 100).toFixed(1)}%` : '0.0%'
+  const ratio = rawCacheHitRatio(props.stats)
+  return ratio === null ? '—' : formatPercent(ratio)
 })
 
 const formatDuration = (ms: number) =>

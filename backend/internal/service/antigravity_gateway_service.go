@@ -97,8 +97,11 @@ type AntigravityAccountSwitchError struct {
 	IsStickySession   bool // 是否为粘性会话切换（决定是否缓存计费）
 	// SoftHold：粘性保持生效时的软性切换信号——限流在可等待窗口内，粘性绑定保留，
 	// 由上层换成可重试错误（429 + retry-after）交回客户端退避，而不是真的换号。
-	SoftHold   bool
-	RetryAfter time.Duration
+	SoftHold        bool
+	RetryAfter      time.Duration
+	StatusCode      int
+	ResponseHeaders http.Header
+	ResponseBody    []byte
 }
 
 func (e *AntigravityAccountSwitchError) Error() string {
@@ -106,24 +109,32 @@ func (e *AntigravityAccountSwitchError) Error() string {
 		e.OriginalAccountID, e.RateLimitedModel)
 }
 
-// toFailoverError 把切换信号转成上层 failover 错误。SoftHold 转为 429 + retry-after +
-// StickyHoldSoft 标记（软性，配合粘性保持不换号），其余维持 503 硬切换。
+// toFailoverError 保留上游响应，并显式标记软保持或硬换号，避免硬换号的 503 再被当作软故障。
+// 没有上游响应的预检查信号沿用 429（软保持）或 503（硬换号）。
 func (e *AntigravityAccountSwitchError) toFailoverError() *UpstreamFailoverError {
-	if e.SoftHold {
-		headers := http.Header{}
+	statusCode := e.StatusCode
+	headers := e.ResponseHeaders.Clone()
+	soft := e.SoftHold && classifyAntigravity429(e.ResponseBody) != antigravity429QuotaExhausted
+	if soft {
+		if statusCode == 0 {
+			statusCode = http.StatusTooManyRequests
+		}
 		if e.RetryAfter > 0 {
+			if headers == nil {
+				headers = make(http.Header)
+			}
 			headers.Set("retry-after", strconv.Itoa(int(math.Ceil(e.RetryAfter.Seconds()))))
 		}
-		return &UpstreamFailoverError{
-			StatusCode:        http.StatusTooManyRequests,
-			ForceCacheBilling: e.IsStickySession,
-			ResponseHeaders:   headers,
-			StickyHoldSoft:    true,
-		}
+	} else if statusCode == 0 {
+		statusCode = http.StatusServiceUnavailable
 	}
 	return &UpstreamFailoverError{
-		StatusCode:        http.StatusServiceUnavailable,
+		StatusCode:        statusCode,
+		ResponseBody:      e.ResponseBody,
+		ResponseHeaders:   headers,
 		ForceCacheBilling: e.IsStickySession,
+		StickyHoldSoft:    soft,
+		StickyHoldHard:    !soft,
 	}
 }
 
@@ -253,7 +264,14 @@ func (s *AntigravityGatewayService) applyErrorPolicy(p antigravityRetryLoopParam
 	case ErrorPolicyTempUnscheduled:
 		slog.Info("temp_unschedulable_matched",
 			"prefix", p.prefix, "status_code", statusCode, "account_id", p.account.ID)
-		return true, statusCode, &AntigravityAccountSwitchError{OriginalAccountID: p.account.ID, RateLimitedModel: p.requestedModel, IsStickySession: p.isStickySession}
+		return true, statusCode, &AntigravityAccountSwitchError{
+			OriginalAccountID: p.account.ID,
+			RateLimitedModel:  p.requestedModel,
+			IsStickySession:   p.isStickySession,
+			StatusCode:        statusCode,
+			ResponseHeaders:   headers.Clone(),
+			ResponseBody:      respBody,
+		}
 	}
 	return false, statusCode, nil
 }
@@ -274,7 +292,7 @@ func (s *AntigravityGatewayService) handleAntigravityModelRateLimitBeforePolicy(
 		rateLimitDuration = antigravityDefaultRateLimitDuration
 	}
 	resetAt := time.Now().Add(rateLimitDuration)
-	if !s.setAntigravityModelRateLimits(p.ctx, p.accountRepo, p.account, modelName, p.prefix, statusCode, resetAt, false) {
+	if !s.setAntigravityModelRateLimits(p.ctx, p.accountRepo, p.account, modelName, p.prefix, statusCode, resetAt, false, antigravityModelRateLimitReason(respBody)) {
 		return false
 	}
 	s.clearStickySession(p.ctx, p.groupID, p.sessionHash)

@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/Wei-Shaw/sub2api/internal/pkg/claude"
@@ -164,7 +165,7 @@ func anthropicStopReasonToResponsesStatus(stopReason string, blocks []AnthropicC
 // ---------------------------------------------------------------------------
 
 // AnthropicEventToResponsesState tracks state for converting a sequence of
-// Anthropic SSE events into Responses SSE events.
+// Anthropic SSE events into Responses SSE events. It must not be copied after use.
 type AnthropicEventToResponsesState struct {
 	ResponseID     string
 	Model          string
@@ -175,6 +176,14 @@ type AnthropicEventToResponsesState struct {
 	CreatedSent bool
 	// CompletedSent tracks whether the terminal event has been emitted.
 	CompletedSent bool
+
+	// DeltaOnly skips retaining text, thinking (including signatures), and closed
+	// outputs for consumers such as the Chat bridge that only read their deltas.
+	// Done events still close each item/part, but omit accumulated text/thinking;
+	// the terminal response carries usage/status with an empty output list.
+	// Function arguments are always retained, including arguments.done payloads.
+	// Set this before the first event. The default preserves full Responses output.
+	DeltaOnly bool
 
 	// Current output tracking
 	OutputIndex     int
@@ -213,6 +222,14 @@ type AnthropicEventToResponsesState struct {
 	CacheCreationInputTokens int
 
 	StopReason string
+
+	// Builders own the backing storage of the public string snapshots above.
+	// strings.Builder.String returns a zero-copy view, so keeping those fields
+	// current does not copy the accumulated prefix on each delta.
+	textBuilder      strings.Builder
+	argsBuilder      strings.Builder
+	summaryBuilder   strings.Builder
+	signatureBuilder strings.Builder
 }
 
 // NewAnthropicEventToResponsesState returns an initialised stream state.
@@ -323,8 +340,10 @@ func anthToResHandleContentBlockStart(evt *AnthropicStreamEvent, state *Anthropi
 
 		state.CurrentItemID = generateItemID()
 		state.CurrentItemType = "reasoning"
-		state.CurrentThinking = *evt.ContentBlock
-		state.CurrentSummary = evt.ContentBlock.Thinking
+		if !state.DeltaOnly {
+			state.CurrentThinking = *evt.ContentBlock
+			state.CurrentSummary = evt.ContentBlock.Thinking
+		}
 		state.ContentIndex = 0
 
 		events = append(events, makeResponsesEvent(state, "response.output_item.added", &ResponsesStreamEvent{
@@ -373,6 +392,7 @@ func anthToResHandleContentBlockStart(evt *AnthropicStreamEvent, state *Anthropi
 			Part:         &ResponsesContentPart{Type: "output_text", Text: ""},
 		}))
 		state.TextAccum = ""
+		state.textBuilder.Reset()
 
 	case "tool_use":
 		// Close previous item if any
@@ -408,7 +428,9 @@ func anthToResHandleContentBlockDelta(evt *AnthropicStreamEvent, state *Anthropi
 		if evt.Delta.Text == "" {
 			return nil
 		}
-		state.TextAccum += evt.Delta.Text
+		if !state.DeltaOnly {
+			appendResponsesStreamText(&state.textBuilder, &state.TextAccum, evt.Delta.Text)
+		}
 		return []ResponsesStreamEvent{makeResponsesEvent(state, "response.output_text.delta", &ResponsesStreamEvent{
 			OutputIndex:  state.OutputIndex,
 			ContentIndex: state.ContentIndex,
@@ -420,7 +442,9 @@ func anthToResHandleContentBlockDelta(evt *AnthropicStreamEvent, state *Anthropi
 		if evt.Delta.Thinking == "" {
 			return nil
 		}
-		state.CurrentSummary += evt.Delta.Thinking
+		if !state.DeltaOnly {
+			appendResponsesStreamText(&state.summaryBuilder, &state.CurrentSummary, evt.Delta.Thinking)
+		}
 		return []ResponsesStreamEvent{makeResponsesEvent(state, "response.reasoning_summary_text.delta", &ResponsesStreamEvent{
 			OutputIndex:  state.OutputIndex,
 			SummaryIndex: 0,
@@ -432,7 +456,7 @@ func anthToResHandleContentBlockDelta(evt *AnthropicStreamEvent, state *Anthropi
 		if evt.Delta.PartialJSON == "" {
 			return nil
 		}
-		state.CurrentArgs += evt.Delta.PartialJSON
+		appendResponsesStreamText(&state.argsBuilder, &state.CurrentArgs, evt.Delta.PartialJSON)
 		return []ResponsesStreamEvent{makeResponsesEvent(state, "response.function_call_arguments.delta", &ResponsesStreamEvent{
 			OutputIndex: state.OutputIndex,
 			Delta:       evt.Delta.PartialJSON,
@@ -443,8 +467,8 @@ func anthToResHandleContentBlockDelta(evt *AnthropicStreamEvent, state *Anthropi
 
 	case "signature_delta":
 		// Keep signatures in the opaque bridge envelope, never in visible text.
-		if state.PreserveThinkingSignatures {
-			state.CurrentThinking.Signature += evt.Delta.Signature
+		if state.PreserveThinkingSignatures && !state.DeltaOnly {
+			appendResponsesStreamText(&state.signatureBuilder, &state.CurrentThinking.Signature, evt.Delta.Signature)
 		}
 		return nil
 	}
@@ -491,8 +515,11 @@ func anthToResHandleContentBlockStop(evt *AnthropicStreamEvent, state *Anthropic
 		// item itself stays open since more blocks may follow.
 		text := state.TextAccum
 		state.TextAccum = ""
+		state.textBuilder.Reset()
 		contentIndex := state.ContentIndex
-		state.CurrentContent = append(state.CurrentContent, ResponsesContentPart{Type: "output_text", Text: text})
+		if !state.DeltaOnly {
+			state.CurrentContent = append(state.CurrentContent, ResponsesContentPart{Type: "output_text", Text: text})
+		}
 		// 关掉一个 part 就推进 content_index：上面那句注释说的「item 保持打开，
 		// 因为后面可能还有块」正是这里的触发条件。不推进的话，同一 item 里第二个
 		// text 块会再发一次 content_part.added(content_index=0)，与第一个 part 撞在
@@ -555,6 +582,17 @@ func anthToResHandleMessageStop(state *AnthropicEventToResponsesState) []Respons
 
 // --- helper functions ---
 
+func appendResponsesStreamText(builder *strings.Builder, current *string, delta string) {
+	// The public fields can be seeded or replaced by a caller. Normally current
+	// is the builder's previous zero-copy view, so this comparison is O(1).
+	if builder.String() != *current {
+		builder.Reset()
+		_, _ = builder.WriteString(*current)
+	}
+	_, _ = builder.WriteString(delta)
+	*current = builder.String()
+}
+
 func anthropicResponsesStreamTerminalState(stopReason string) (string, *ResponsesIncompleteDetails) {
 	if stopReason == "max_tokens" {
 		return "incomplete", &ResponsesIncompleteDetails{Reason: "max_output_tokens"}
@@ -596,7 +634,9 @@ func closeCurrentResponsesItem(state *AnthropicEventToResponsesState) []Response
 			item.Summary = []ResponsesSummary{{Type: "summary_text", Text: state.CurrentSummary}}
 		}
 	}
-	state.Outputs = append(state.Outputs, item)
+	if !state.DeltaOnly {
+		state.Outputs = append(state.Outputs, item)
+	}
 
 	// Reset
 	state.CurrentItemType = ""
@@ -608,6 +648,12 @@ func closeCurrentResponsesItem(state *AnthropicEventToResponsesState) []Response
 	state.CurrentSummary = ""
 	state.CurrentThinking = AnthropicContentBlock{}
 	state.TextAccum = ""
+	// Reset drops the backing buffers rather than reusing them, keeping strings
+	// already referenced by emitted events and completed outputs immutable.
+	state.textBuilder.Reset()
+	state.argsBuilder.Reset()
+	state.summaryBuilder.Reset()
+	state.signatureBuilder.Reset()
 	state.OutputIndex++
 	state.ContentIndex = 0
 

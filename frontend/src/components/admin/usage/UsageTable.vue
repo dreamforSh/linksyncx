@@ -313,16 +313,19 @@
   <Teleport to="body">
     <div
       v-if="tokenTooltipVisible"
-      class="fixed z-[9999] pointer-events-none -translate-y-1/2"
+      ref="tokenTooltipElement"
+      data-testid="usage-token-tooltip"
+      class="fixed z-[9999] w-max pointer-events-none -translate-y-1/2"
       :style="{
         left: tokenTooltipPosition.x + 'px',
-        top: tokenTooltipPosition.y + 'px'
+        top: tokenTooltipPosition.y + 'px',
+        maxWidth: 'calc(100vw - 16px)'
       }"
     >
-      <div class="whitespace-nowrap rounded-lg border border-gray-700 bg-gray-900 px-3 py-2.5 text-xs text-white shadow-xl dark:border-gray-600 dark:bg-gray-800">
+      <div class="whitespace-normal break-words rounded-lg border border-gray-700 bg-gray-900 px-3 py-2.5 text-xs text-white shadow-xl dark:border-gray-600 dark:bg-gray-800">
         <div class="space-y-1.5">
           <div>
-            <div class="text-xs font-semibold text-gray-300 mb-1">{{ t('usage.tokenDetails') }}</div>
+            <div class="text-xs font-semibold text-gray-300 mb-1">{{ t('usage.tokenDetails') }} · {{ t('usage.billingTokens') }}</div>
             <div v-if="tokenTooltipData && tokenTooltipData.input_tokens > 0 && !hasImageInputTokens(tokenTooltipData)" class="flex items-center justify-between gap-4">
               <span class="text-gray-400">{{ t('admin.usage.inputTokens') }}</span>
               <span class="font-medium text-white">{{ tokenTooltipData.input_tokens.toLocaleString() }}</span>
@@ -387,8 +390,28 @@
             <span class="text-gray-400">{{ t('usage.totalTokens') }}</span>
             <span class="font-semibold text-blue-400">{{ ((tokenTooltipData?.input_tokens || 0) + (tokenTooltipData?.output_tokens || 0) + (tokenTooltipData?.cache_creation_tokens || 0) + (tokenTooltipData?.cache_read_tokens || 0)).toLocaleString() }}</span>
           </div>
+          <div v-if="tokenTooltipData" data-testid="usage-raw-details" class="space-y-1 border-t border-gray-700 pt-1.5">
+            <div class="font-semibold text-gray-300">{{ t('usage.rawTokens') }}</div>
+            <div v-if="tokenTooltipData.usage_incomplete" class="text-amber-300">{{ t('usage.usageIncomplete') }}</div>
+            <template v-if="tokenTooltipData.raw_input_tokens != null && tokenTooltipData.raw_output_tokens != null && tokenTooltipData.raw_cache_creation_tokens != null && tokenTooltipData.raw_cache_read_tokens != null">
+              <div class="flex justify-between gap-4"><span class="text-gray-400">{{ t('admin.usage.inputTokens') }}</span><span>{{ tokenTooltipData.raw_input_tokens.toLocaleString() }}</span></div>
+              <div class="flex justify-between gap-4"><span class="text-gray-400">{{ t('admin.usage.outputTokens') }}</span><span>{{ tokenTooltipData.raw_output_tokens.toLocaleString() }}</span></div>
+              <div class="flex justify-between gap-4"><span class="text-gray-400">{{ t('admin.usage.cacheCreationTokens') }}</span><span>{{ tokenTooltipData.raw_cache_creation_tokens.toLocaleString() }}</span></div>
+              <div class="flex justify-between gap-4"><span class="text-gray-400">{{ t('admin.usage.cacheReadTokens') }}</span><span>{{ tokenTooltipData.raw_cache_read_tokens.toLocaleString() }}</span></div>
+            </template>
+            <div v-else class="text-gray-400">{{ t('usage.rawUsageUnknown') }}</div>
+            <div v-if="tokenTooltipData.cache_billing_compensation_tokens != null" class="flex justify-between gap-4" :title="tokenTooltipData.cache_billing_compensation_reason === 'sticky_session_failover' ? t('usage.cacheBillingCompensationReason') : undefined">
+              <span class="text-gray-400">{{ t('usage.cacheBillingCompensation') }}</span>
+              <span>{{ tokenTooltipData.cache_billing_compensation_tokens.toLocaleString() }}</span>
+            </div>
+            <div v-else class="text-gray-400">{{ t('usage.compensationUnknown') }}</div>
+            <div v-if="tokenTooltipData.cache_billing_compensation_reason" class="whitespace-normal break-words text-gray-300">{{ tokenTooltipData.cache_billing_compensation_reason === 'sticky_session_failover' ? t('usage.cacheBillingCompensationReason') : tokenTooltipData.cache_billing_compensation_reason }}</div>
+          </div>
         </div>
-        <div class="absolute right-full top-1/2 h-0 w-0 -translate-y-1/2 border-b-[6px] border-r-[6px] border-t-[6px] border-b-transparent border-r-gray-900 border-t-transparent dark:border-r-gray-800"></div>
+        <div
+          class="absolute top-1/2 h-0 w-0 -translate-y-1/2 border-b-[6px] border-t-[6px] border-b-transparent border-t-transparent"
+          :class="tokenTooltipOnLeft ? 'left-full border-l-[6px] border-l-gray-900 dark:border-l-gray-800' : 'right-full border-r-[6px] border-r-gray-900 dark:border-r-gray-800'"
+        ></div>
       </div>
     </div>
   </Teleport>
@@ -532,7 +555,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed, ref } from 'vue'
+import { computed, nextTick, ref } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useAppStore } from '@/stores/app'
 import { formatDateTime, formatReasoningEffort, reasoningEffortValuesEqual } from '@/utils/format'
@@ -697,6 +720,9 @@ const tooltipData = ref<AdminUsageLog | null>(null)
 const tokenTooltipVisible = ref(false)
 const tokenTooltipPosition = ref({ x: 0, y: 0 })
 const tokenTooltipData = ref<AdminUsageLog | null>(null)
+const tokenTooltipElement = ref<HTMLElement | null>(null)
+const tokenTooltipOnLeft = ref(false)
+let tokenTooltipRequest = 0
 
 const getRequestTypeLabel = (row: AdminUsageLog): string => {
   const requestType = resolveUsageRequestType(row)
@@ -750,16 +776,30 @@ const hideTooltip = () => {
 }
 
 // Token tooltip functions
-const showTokenTooltip = (event: MouseEvent, row: AdminUsageLog) => {
+const showTokenTooltip = async (event: MouseEvent, row: AdminUsageLog) => {
+  const request = ++tokenTooltipRequest
   const target = event.currentTarget as HTMLElement
   const rect = target.getBoundingClientRect()
   tokenTooltipData.value = row
   tokenTooltipPosition.value.x = rect.right + 8
   tokenTooltipPosition.value.y = rect.top + rect.height / 2
   tokenTooltipVisible.value = true
+  await nextTick()
+  if (request !== tokenTooltipRequest || !tokenTooltipVisible.value || !tokenTooltipElement.value) return
+
+  const box = tokenTooltipElement.value.getBoundingClientRect()
+  const viewportWidth = document.documentElement.clientWidth || window.innerWidth
+  const viewportHeight = document.documentElement.clientHeight || window.innerHeight
+  const margin = 8
+  tokenTooltipOnLeft.value = rect.right + margin + box.width > viewportWidth - margin
+  const preferredX = tokenTooltipOnLeft.value ? rect.left - margin - box.width : rect.right + margin
+  tokenTooltipPosition.value.x = Math.max(margin, Math.min(preferredX, viewportWidth - margin - box.width))
+  tokenTooltipPosition.value.y = Math.max(margin + box.height / 2,
+    Math.min(rect.top + rect.height / 2, viewportHeight - margin - box.height / 2))
 }
 
 const hideTokenTooltip = () => {
+  tokenTooltipRequest++
   tokenTooltipVisible.value = false
   tokenTooltipData.value = null
 }

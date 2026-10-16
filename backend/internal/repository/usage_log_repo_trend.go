@@ -236,7 +236,8 @@ func (r *usageLogRepository) GetUserUsageTrendByUserID(ctx context.Context, user
 			COALESCE(SUM(cache_read_tokens), 0) as cache_read_tokens,
 			COALESCE(SUM(input_tokens + output_tokens + cache_creation_tokens + cache_read_tokens), 0) as total_tokens,
 			COALESCE(SUM(total_cost), 0) as cost,
-			COALESCE(SUM(actual_cost), 0) as actual_cost
+			COALESCE(SUM(actual_cost), 0) as actual_cost,
+			`+rawUsageAggregateSQL("")+`
 		FROM usage_logs
 		WHERE user_id = $1 AND created_at >= $2 AND created_at < $3
 		GROUP BY date
@@ -297,7 +298,8 @@ func (r *usageLogRepository) getUsageTrendWithFilters(ctx context.Context, start
 			COALESCE(SUM(cache_read_tokens), 0) as cache_read_tokens,
 			COALESCE(SUM(input_tokens + output_tokens + cache_creation_tokens + cache_read_tokens), 0) as total_tokens,
 			COALESCE(SUM(total_cost), 0) as cost,
-			COALESCE(SUM(actual_cost), 0) as actual_cost
+			COALESCE(SUM(actual_cost), 0) as actual_cost,
+			`+rawUsageAggregateSQL("")+`
 		FROM usage_logs
 		WHERE created_at >= $1 AND created_at < $2
 	`, dateFormat)
@@ -386,7 +388,10 @@ func (r *usageLogRepository) getUsageTrendFromAggregates(ctx context.Context, st
 				cache_read_tokens,
 				(input_tokens + output_tokens + cache_creation_tokens + cache_read_tokens) as total_tokens,
 				total_cost as cost,
-				actual_cost
+				actual_cost,
+				COALESCE(raw_input_tokens, 0), COALESCE(raw_output_tokens, 0),
+				COALESCE(raw_cache_creation_tokens, 0), COALESCE(raw_cache_read_tokens, 0),
+				COALESCE(raw_usage_known_requests, 0), COALESCE(raw_usage_unknown_requests, total_requests)
 			FROM usage_dashboard_hourly
 			WHERE bucket_start >= $1 AND bucket_start < $2
 			ORDER BY bucket_start ASC
@@ -402,7 +407,10 @@ func (r *usageLogRepository) getUsageTrendFromAggregates(ctx context.Context, st
 				cache_read_tokens,
 				(input_tokens + output_tokens + cache_creation_tokens + cache_read_tokens) as total_tokens,
 				total_cost as cost,
-				actual_cost
+				actual_cost,
+				COALESCE(raw_input_tokens, 0), COALESCE(raw_output_tokens, 0),
+				COALESCE(raw_cache_creation_tokens, 0), COALESCE(raw_cache_read_tokens, 0),
+				COALESCE(raw_usage_known_requests, 0), COALESCE(raw_usage_unknown_requests, total_requests)
 			FROM usage_dashboard_daily
 			WHERE bucket_date >= $1::date AND bucket_date < $2::date
 			ORDER BY bucket_date ASC
@@ -464,7 +472,8 @@ func (r *usageLogRepository) getModelStatsWithFiltersBySource(ctx context.Contex
 			COALESCE(SUM(input_tokens + output_tokens + cache_creation_tokens + cache_read_tokens), 0) as total_tokens,
 			COALESCE(SUM(total_cost), 0) as cost,
 			%s,
-			%s
+			%s,
+			`+rawUsageAggregateSQL("")+`
 		FROM usage_logs
 		WHERE created_at >= $1 AND created_at < $2
 	`, modelExpr, actualCostExpr, accountCostExpr)
@@ -628,7 +637,8 @@ func (r *usageLogRepository) GetUserBreakdownStats(ctx context.Context, startTim
 			COALESCE(SUM(ul.actual_cost), 0) as actual_cost,
 			COALESCE(SUM(COALESCE(ul.account_stats_cost, ul.total_cost) * COALESCE(ul.account_rate_multiplier, 1)), 0) as account_cost,
 			COALESCE(SUM(ul.cache_creation_tokens), 0) as cache_creation_tokens,
-			COALESCE(SUM(ul.cache_read_tokens), 0) as cache_read_tokens
+			COALESCE(SUM(ul.cache_read_tokens), 0) as cache_read_tokens,
+			` + rawUsageAggregateSQL("ul") + `
 		FROM usage_logs ul
 		LEFT JOIN users u ON u.id = ul.user_id
 		WHERE ul.created_at >= $1 AND ul.created_at < $2
@@ -713,6 +723,12 @@ func (r *usageLogRepository) GetUserBreakdownStats(ctx context.Context, startTim
 			&row.AccountCost,
 			&row.CacheCreationTokens,
 			&row.CacheReadTokens,
+			&row.RawInputTokens,
+			&row.RawOutputTokens,
+			&row.RawCacheCreationTokens,
+			&row.RawCacheReadTokens,
+			&row.RawUsageKnownRequests,
+			&row.RawUsageUnknownRequests,
 		); err != nil {
 			return nil, err
 		}
@@ -847,6 +863,12 @@ func scanTrendRows(rows *sql.Rows) ([]TrendDataPoint, error) {
 			&row.TotalTokens,
 			&row.Cost,
 			&row.ActualCost,
+			&row.RawInputTokens,
+			&row.RawOutputTokens,
+			&row.RawCacheCreationTokens,
+			&row.RawCacheReadTokens,
+			&row.RawUsageKnownRequests,
+			&row.RawUsageUnknownRequests,
 		); err != nil {
 			return nil, err
 		}
@@ -873,6 +895,12 @@ func scanModelStatsRows(rows *sql.Rows) ([]ModelStat, error) {
 			&row.Cost,
 			&row.ActualCost,
 			&row.AccountCost,
+			&row.RawInputTokens,
+			&row.RawOutputTokens,
+			&row.RawCacheCreationTokens,
+			&row.RawCacheReadTokens,
+			&row.RawUsageKnownRequests,
+			&row.RawUsageUnknownRequests,
 		); err != nil {
 			return nil, err
 		}

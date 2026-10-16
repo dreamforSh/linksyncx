@@ -295,6 +295,13 @@ func (h *GatewayHandler) ChatCompletions(c *gin.Context) {
 		}
 
 		if err != nil {
+			if result != nil {
+				h.recordPartialAntigravityUsage(c, err, body, &service.RecordUsageInput{
+					Result: result, APIKey: apiKey, Account: account,
+					Subscription: subscription, PricingAt: pricingAt, ForceCacheBilling: fs.ForceCacheBilling,
+					ChannelUsageFields: clientRequestedUsageFields(c, channelMapping, reqModel, result.UpstreamModel),
+				})
+			}
 			var failoverErr *service.UpstreamFailoverError
 			if errors.As(err, &failoverErr) {
 				if c.Writer.Size() != writerSizeBeforeForward {

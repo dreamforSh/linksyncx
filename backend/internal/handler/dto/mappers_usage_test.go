@@ -8,6 +8,30 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+func TestUsageLogFromService_PreservesRawBillingAndUnknownSeparately(t *testing.T) {
+	input, output, zero, compensation := 100, 7, 0, 100
+	reason := "sticky_session_failover"
+	log := &service.UsageLog{CacheReadTokens: 100, RawInputTokens: &input, RawOutputTokens: &output,
+		RawCacheCreationTokens: &zero, RawCacheReadTokens: &zero,
+		CacheBillingCompensationTokens: &compensation, CacheBillingCompensationReason: &reason, UsageIncomplete: true}
+	for _, got := range []*UsageLog{UsageLogFromService(log), &UsageLogFromServiceAdmin(log).UsageLog} {
+		require.Equal(t, 100, got.CacheReadTokens)
+		require.Equal(t, 0, *got.RawCacheReadTokens)
+		require.Equal(t, 100, *got.RawInputTokens)
+		require.Equal(t, 100, *got.CacheBillingCompensationTokens)
+		require.Equal(t, reason, *got.CacheBillingCompensationReason)
+		require.True(t, got.UsageIncomplete)
+	}
+	encoded, err := json.Marshal(UsageLogFromService(&service.UsageLog{CacheReadTokens: 100}))
+	require.NoError(t, err)
+	var historical map[string]any
+	require.NoError(t, json.Unmarshal(encoded, &historical))
+	for _, name := range []string{"raw_input_tokens", "raw_output_tokens", "raw_cache_creation_tokens", "raw_cache_read_tokens", "cache_billing_compensation_tokens", "cache_billing_compensation_reason"} {
+		require.Contains(t, historical, name)
+		require.Nil(t, historical[name], "unknown must be JSON null, not a fabricated zero")
+	}
+}
+
 func TestUsageLogFromService_IncludesOpenAIWSMode(t *testing.T) {
 	t.Parallel()
 

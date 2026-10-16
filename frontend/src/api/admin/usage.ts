@@ -5,11 +5,11 @@
 
 import { apiClient } from '../client'
 import type { AdminUsageLog, UsageQueryParams, PaginatedResponse, UsageRequestType } from '@/types'
-import type { EndpointStat } from '@/types'
+import type { EndpointStat, RawUsageStats } from '@/types'
 
 // ==================== Types ====================
 
-export interface AdminUsageStatsResponse {
+export interface AdminUsageStatsResponse extends RawUsageStats {
   total_requests: number
   total_input_tokens: number
   total_output_tokens: number

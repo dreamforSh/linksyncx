@@ -159,6 +159,7 @@ func (s *OpenAIGatewayService) RecordUsage(ctx context.Context, input *OpenAIRec
 	if result == nil {
 		return errors.New("openai usage result is nil")
 	}
+	rawUsage := result.Usage
 	if s.rateLimitService != nil && input.Account != nil && input.Account.Platform == PlatformOpenAI {
 		s.rateLimitService.ResetOpenAI403Counter(ctx, input.Account.ID)
 	}
@@ -404,7 +405,15 @@ func (s *OpenAIGatewayService) RecordUsage(ctx context.Context, input *OpenAIRec
 		ImageSizeSource:          optionalTrimmedStringPtr(result.ImageSizeSource),
 		ImageSizeBreakdown:       imageSizeBreakdown,
 		NativeCompactionV2:       input.NativeCompactionV2,
+		UsageIncomplete:          result.UsageIncomplete,
 	}
+	// OpenAI reports total input including cache buckets. Preserve its normalized
+	// upstream classification independently from billing; do not clamp invalid raw
+	// counts or manufacture observed zeros when no usage was reported.
+	setObservedRawUsage(usageLog, rawUsage.InputTokens-rawUsage.CacheReadInputTokens-rawUsage.CacheCreationInputTokens,
+		rawUsage.OutputTokens, rawUsage.CacheCreationInputTokens, rawUsage.CacheReadInputTokens)
+	noCompensation := 0
+	usageLog.CacheBillingCompensationTokens = &noCompensation
 	isVideoUsage := isGrokVideoUsageResult(result, billingModels)
 	if isVideoUsage {
 		usageLog.VideoCount = result.VideoCount

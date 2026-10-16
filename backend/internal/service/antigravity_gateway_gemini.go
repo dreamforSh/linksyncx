@@ -153,6 +153,8 @@ func (s *AntigravityGatewayService) ForwardGemini(ctx context.Context, c *gin.Co
 	upstreamAction := "streamGenerateContent"
 
 	// 执行带重试的请求
+	ctx, releaseUpstream := s.upstreamStreamContext(ctx, c)
+	defer releaseUpstream()
 	result, err := s.antigravityRetryLoop(antigravityRetryLoopParams{
 		ctx:             ctx,
 		prefix:          prefix,
@@ -206,10 +208,14 @@ func (s *AntigravityGatewayService) ForwardGemini(ctx context.Context, c *gin.Co
 
 				fallbackWrapped, err := s.wrapV1InternalRequest(projectID, fallbackModel, injectedBody)
 				if err == nil {
-					fallbackReq, err := antigravity.NewAPIRequest(ctx, upstreamAction, accessToken, fallbackWrapped)
+					if err := antigravityDownstreamError(ctx); err != nil {
+						return nil, err
+					}
+					fallbackCtx := WithHTTPUpstreamProfile(antigravityOutboundContext(ctx), HTTPUpstreamProfileLongStream)
+					fallbackReq, err := antigravity.NewAPIRequestWithURL(fallbackCtx, resolveAntigravityForwardBaseURL(account), upstreamAction, accessToken, fallbackWrapped)
 					if err == nil {
 						fallbackResp, err := s.httpUpstream.Do(fallbackReq, proxyURL, account.ID, account.Concurrency)
-						if err == nil && fallbackResp.StatusCode < 400 {
+						if err == nil && fallbackResp != nil && fallbackResp.StatusCode < 400 {
 							_ = resp.Body.Close()
 							resp = fallbackResp
 							forwardedModel = fallbackModel
@@ -415,34 +421,27 @@ handleSuccess:
 		c.Header("x-request-id", requestID)
 	}
 
-	var usage *ClaudeUsage
-	var firstTokenMs *int
-	var clientDisconnect bool
-
+	var streamRes *antigravityStreamResult
+	var streamErr error
 	if stream {
-		// 客户端要求流式，直接透传
-		streamRes, err := s.handleGeminiStreamingResponse(c, resp, startTime)
-		if err != nil {
-			logger.LegacyPrintf("service.antigravity_gateway", "%s status=stream_error error=%v", prefix, err)
-			return nil, err
-		}
-		usage = streamRes.usage
-		firstTokenMs = streamRes.firstTokenMs
-		clientDisconnect = streamRes.clientDisconnect
+		streamRes, streamErr = s.handleGeminiStreamingResponse(c, resp, startTime)
 	} else {
-		// 客户端要求非流式，收集流式响应后返回
-		streamRes, err := s.handleGeminiStreamToNonStreaming(c, resp, startTime)
-		if err != nil {
-			logger.LegacyPrintf("service.antigravity_gateway", "%s status=stream_collect_error error=%v", prefix, err)
-			return nil, err
-		}
-		usage = streamRes.usage
-		firstTokenMs = streamRes.firstTokenMs
+		streamRes, streamErr = s.handleGeminiStreamToNonStreaming(c, resp, startTime)
 	}
-
+	if streamErr != nil {
+		logger.LegacyPrintf("service.antigravity_gateway", "%s status=stream_error error=%v", prefix, streamErr)
+		partial := partialAntigravityUsageResult(c, resp, streamRes, originalModel, forwardedModel, stream, startTime, streamErr)
+		if partial != nil {
+			partial.ReasoningEffort = extractGeminiReasoningEffortFromBody(injectedBody)
+			partial.ImageSize, partial.ImageInputSize = imageSize, imageInputSize
+		}
+		return partial, streamErr
+	}
+	usage := streamRes.usage
 	if usage == nil {
 		usage = &ClaudeUsage{}
 	}
+	firstTokenMs, clientDisconnect := streamRes.firstTokenMs, streamRes.clientDisconnect
 
 	// 判断是否为图片生成模型
 	imageCount := 0
@@ -455,6 +454,7 @@ handleSuccess:
 		RequestID:                     requestID,
 		UpstreamHeaders:               resp.Header,
 		Usage:                         *usage,
+		UsageIncomplete:               streamRes.usageIncomplete,
 		Model:                         originalModel,
 		UpstreamModel:                 forwardedModel,
 		UpstreamResponseModel:         observedUpstreamResponseModel(c),

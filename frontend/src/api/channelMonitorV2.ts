@@ -1,4 +1,5 @@
 import { apiClient } from './client'
+import type { RawUsageStats } from '@/types'
 
 export type MonitorRange = '90m' | '24h' | '7d' | '30d'
 export type HealthState = 'unknown' | 'healthy' | 'warning' | 'critical'
@@ -33,7 +34,7 @@ export interface LatencyMetric {
   avg_ms: number | null
 }
 
-export interface MonitorMetric {
+export interface MonitorMetric extends RawUsageStats {
   success_requests: number
   error_requests: number
   request_count: number
@@ -42,6 +43,7 @@ export interface MonitorMetric {
   tpm: number
   error_rate: number
   cache_rate: number
+  cache_rate_known?: boolean
   cache_rate_numerator: number
   cache_rate_denominator: number
   ttft: LatencyMetric

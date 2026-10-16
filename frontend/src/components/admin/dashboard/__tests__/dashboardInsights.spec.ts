@@ -6,7 +6,7 @@ import TodayModelUsageCard from '../TodayModelUsageCard.vue'
 import CustomerUsageTable from '../CustomerUsageTable.vue'
 import RevenueProfitTrend from '../RevenueProfitTrend.vue'
 import TokenUsageTrend from '@/components/charts/TokenUsageTrend.vue'
-import { cacheHitRatio, marginRatio } from '@/components/charts/chartTheme'
+import { cacheHitRatio, marginRatio, rawCacheHitRatio, rawCacheHitRatioForRows } from '@/components/charts/chartTheme'
 
 vi.mock('vue-i18n', async () => {
   const actual = await vi.importActual<typeof import('vue-i18n')>('vue-i18n')
@@ -34,12 +34,28 @@ const hourPoint = (date: string, requests: number) => ({
   output_tokens: requests,
   cache_creation_tokens: 0,
   cache_read_tokens: requests * 30,
+  raw_input_tokens: requests * 10,
+  raw_output_tokens: requests,
+  raw_cache_creation_tokens: 0,
+  raw_cache_read_tokens: requests * 30,
+  raw_usage_known_requests: requests,
+  raw_usage_unknown_requests: 0,
   total_tokens: requests * 41,
   cost: requests * 0.02,
   actual_cost: requests * 0.01
 })
 
 describe('ratio helpers', () => {
+  it('uses raw observations, preserves a measured zero, and rejects unknown coverage', () => {
+    const miss = { raw_input_tokens: 100, raw_output_tokens: 7, raw_cache_creation_tokens: 0, raw_cache_read_tokens: 0, raw_usage_known_requests: 1, raw_usage_unknown_requests: 0 }
+    const mixed = { ...miss, raw_input_tokens: 80, raw_cache_read_tokens: 20 }
+    expect(rawCacheHitRatio(miss)).toBe(0)
+    expect(rawCacheHitRatio(mixed)).toBe(0.2)
+    expect(rawCacheHitRatioForRows([miss, mixed])).toBe(0.1)
+    expect(rawCacheHitRatio({ ...mixed, raw_usage_unknown_requests: 1 })).toBeNull()
+    expect(rawCacheHitRatioForRows([mixed, {}])).toBeNull()
+    expect(rawCacheHitRatio({ ...miss, raw_input_tokens: 0 })).toBeNull()
+  })
   it('measures cache hits against every prompt token and margin against revenue', () => {
     expect(cacheHitRatio(100, 100, 200)).toBe(0.5)
     expect(cacheHitRatio(0, 0, 0)).toBeNull()
@@ -109,6 +125,12 @@ describe('TodayModelUsageCard', () => {
     output_tokens: 50,
     cache_creation_tokens: 0,
     cache_read_tokens: 300,
+    raw_input_tokens: 100,
+    raw_output_tokens: 50,
+    raw_cache_creation_tokens: 0,
+    raw_cache_read_tokens: 300,
+    raw_usage_known_requests: 10,
+    raw_usage_unknown_requests: 0,
     total_tokens: 450,
     cost: actual * 2,
     actual_cost: actual,
@@ -135,7 +157,7 @@ describe('CustomerUsageTable', () => {
         sortBy: 'actual_cost',
         totalRevenue: 20,
         users: [
-          { user_id: 1, email: 'a@x.test', requests: 3, input_tokens: 100, output_tokens: 10, cache_tokens: 300, total_tokens: 410, cost: 12, actual_cost: 10, account_cost: 4, cache_creation_tokens: 100, cache_read_tokens: 200 },
+          { user_id: 1, email: 'a@x.test', requests: 3, input_tokens: 100, output_tokens: 10, cache_tokens: 300, total_tokens: 410, cost: 12, actual_cost: 10, account_cost: 4, cache_creation_tokens: 100, cache_read_tokens: 200, raw_input_tokens: 100, raw_output_tokens: 10, raw_cache_creation_tokens: 100, raw_cache_read_tokens: 200, raw_usage_known_requests: 3, raw_usage_unknown_requests: 0 },
           { user_id: 2, email: 'b@x.test', requests: 1, input_tokens: 10, output_tokens: 1, cache_tokens: 0, total_tokens: 11, cost: 1, actual_cost: 1, account_cost: 2 }
         ]
       }

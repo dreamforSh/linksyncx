@@ -45,6 +45,12 @@ const point = (overrides: Record<string, unknown> = {}) => ({
   total_tokens: 2100,
   cost: 0.01,
   actual_cost: 0.005,
+  raw_input_tokens: Number(overrides.input_tokens ?? 500),
+  raw_output_tokens: Number(overrides.output_tokens ?? 100),
+  raw_cache_creation_tokens: Number(overrides.cache_creation_tokens ?? 0),
+  raw_cache_read_tokens: Number(overrides.cache_read_tokens ?? 1500),
+  raw_usage_known_requests: Number(overrides.requests ?? 1),
+  raw_usage_unknown_requests: 0,
   ...overrides,
 })
 
@@ -62,11 +68,11 @@ describe('TokenUsageTrend', () => {
     expect(wrapper.text()).toContain('75.0%')
   })
 
-  it('returns 0 hit rate when all prompt tokens are zero', () => {
+  it('keeps a known empty prompt unavailable rather than inventing a zero rate', () => {
     const wrapper = mountTrend([
       point({ requests: 0, input_tokens: 0, output_tokens: 0, cache_read_tokens: 0, total_tokens: 0, cost: 0, actual_cost: 0 }),
     ])
-    expect(wrapper.text()).toContain('0.0%')
+    expect(wrapper.text()).toContain('—')
   })
 
   it('includes cache_creation_tokens in denominator for Anthropic models', () => {
@@ -75,6 +81,24 @@ describe('TokenUsageTrend', () => {
       point({ input_tokens: 200, output_tokens: 50, cache_creation_tokens: 300, cache_read_tokens: 500, total_tokens: 1050 }),
     ])
     expect(wrapper.text()).toContain('50.0%')
+  })
+
+  it('does not count a compensated billing read as an upstream hit', () => {
+    const wrapper = mountTrend([point({
+      input_tokens: 0, cache_read_tokens: 100,
+      raw_input_tokens: 100, raw_cache_read_tokens: 0,
+    })])
+    expect(wrapper.text()).toContain('0.0%')
+    expect(wrapper.text()).not.toContain('100.0%')
+  })
+
+  it('does not substitute billing tokens for historical raw telemetry', () => {
+    const wrapper = mountTrend([point({
+      input_tokens: 0, cache_read_tokens: 100,
+      raw_usage_known_requests: 0, raw_usage_unknown_requests: 1,
+    })])
+    expect(wrapper.text()).toContain('—')
+    expect(wrapper.text()).not.toContain('100.0%')
   })
 
   it('renders token composition as stacked bars on a single y axis', () => {

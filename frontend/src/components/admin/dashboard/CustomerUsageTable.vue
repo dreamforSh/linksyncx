@@ -92,7 +92,7 @@ import { useI18n } from 'vue-i18n'
 import SegmentedControl from '@/components/common/SegmentedControl.vue'
 import type { UserBreakdownItem } from '@/types'
 import {
-  cacheHitRatio,
+  rawCacheHitRatio,
   formatCompact,
   formatPercent,
   formatUSD,
@@ -141,15 +141,13 @@ const rows = computed(() => {
   return list.map((u) => {
     const revenue = num(u.actual_cost)
     const accountCost = num(u.account_cost)
-    const cacheRead = num(u.cache_read_tokens)
-    // 旧版接口只返回缓存合计，拿不到读写拆分时不显示命中率
-    const hasSplit = u.cache_read_tokens !== undefined && u.cache_creation_tokens !== undefined
+    // Missing raw or mixed historical coverage must remain unknown.
     return {
       userId: u.user_id,
       email: u.email,
       requests: num(u.requests),
       tokens: num(u.total_tokens),
-      cacheHit: hasSplit ? cacheHitRatio(u.input_tokens, u.cache_creation_tokens, cacheRead) : null,
+      cacheHit: rawCacheHitRatio(u),
       revenue,
       accountCost,
       profit: revenue - accountCost,

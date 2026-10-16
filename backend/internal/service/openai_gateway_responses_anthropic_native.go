@@ -319,7 +319,12 @@ func (s *OpenAIGatewayService) handleResponsesStreamingFromNativeAnthropic(
 	reasoningEffort *string,
 	startTime time.Time,
 	clientToolMapping apicompat.ResponsesClientToolMapping,
-) (*OpenAIForwardResult, error) {
+) (outResult *OpenAIForwardResult, outErr error) {
+	defer func() {
+		if outResult != nil && outErr != nil {
+			outResult.UsageIncomplete = true
+		}
+	}()
 	requestID := resp.Header.Get("x-request-id")
 
 	if s.responseHeaderFilter != nil {

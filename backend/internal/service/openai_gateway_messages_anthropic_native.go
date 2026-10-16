@@ -295,7 +295,12 @@ func (s *OpenAIGatewayService) handleNativeAnthropicStreamingResponse(
 	upstreamModel string,
 	reasoningEffort *string,
 	startTime time.Time,
-) (*OpenAIForwardResult, error) {
+) (outResult *OpenAIForwardResult, outErr error) {
+	defer func() {
+		if outResult != nil && outErr != nil {
+			outResult.UsageIncomplete = true
+		}
+	}()
 	observer := upstreamResponseModelObserverFromContext(c)
 	if observer == nil {
 		observer = beginUpstreamResponseModelObservation(c)

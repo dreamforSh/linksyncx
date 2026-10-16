@@ -91,6 +91,7 @@ import SegmentedControl from '@/components/common/SegmentedControl.vue'
 import type { ModelStat } from '@/types'
 import {
   cacheHitRatio,
+  hasCompleteRawUsage,
   formatCompact,
   formatPercent,
   formatUSD,
@@ -133,6 +134,7 @@ interface Row {
   input: number
   cacheCreation: number
   cacheRead: number
+  rawComplete: boolean
   revenue: number
   accountCost: number
   share: number
@@ -150,9 +152,10 @@ const toRow = (m: ModelStat): Row => {
     other: false,
     requests: num(m.requests),
     tokens,
-    input: num(m.input_tokens),
-    cacheCreation: num(m.cache_creation_tokens),
-    cacheRead: num(m.cache_read_tokens),
+    input: num(m.raw_input_tokens),
+    cacheCreation: num(m.raw_cache_creation_tokens),
+    cacheRead: num(m.raw_cache_read_tokens),
+    rawComplete: hasCompleteRawUsage(m),
     revenue: num(m.actual_cost),
     accountCost: num(m.account_cost),
     share: 0,
@@ -163,7 +166,7 @@ const toRow = (m: ModelStat): Row => {
 
 const finish = (row: Row, total: number) => {
   row.share = total > 0 ? metricOf(row) / total : 0
-  row.cacheHit = cacheHitRatio(row.input, row.cacheCreation, row.cacheRead)
+  row.cacheHit = row.rawComplete ? cacheHitRatio(row.input, row.cacheCreation, row.cacheRead) : null
   row.margin = marginRatio(row.revenue, row.accountCost)
   return row
 }
@@ -180,15 +183,16 @@ const totals = computed(() => {
       acc.input += r.input
       acc.cacheCreation += r.cacheCreation
       acc.cacheRead += r.cacheRead
+      acc.rawComplete &&= r.rawComplete
       acc.revenue += r.revenue
       acc.accountCost += r.accountCost
       return acc
     },
-    { requests: 0, tokens: 0, input: 0, cacheCreation: 0, cacheRead: 0, revenue: 0, accountCost: 0 }
+    { requests: 0, tokens: 0, input: 0, cacheCreation: 0, cacheRead: 0, rawComplete: true, revenue: 0, accountCost: 0 }
   )
   return {
     ...sum,
-    cacheHit: cacheHitRatio(sum.input, sum.cacheCreation, sum.cacheRead),
+    cacheHit: sum.rawComplete ? cacheHitRatio(sum.input, sum.cacheCreation, sum.cacheRead) : null,
     margin: marginRatio(sum.revenue, sum.accountCost)
   }
 })
@@ -207,6 +211,7 @@ const rows = computed<Row[]>(() => {
         acc.input += r.input
         acc.cacheCreation += r.cacheCreation
         acc.cacheRead += r.cacheRead
+        acc.rawComplete &&= r.rawComplete
         acc.revenue += r.revenue
         acc.accountCost += r.accountCost
         return acc
@@ -221,6 +226,7 @@ const rows = computed<Row[]>(() => {
         input: 0,
         cacheCreation: 0,
         cacheRead: 0,
+        rawComplete: true,
         revenue: 0,
         accountCost: 0,
         share: 0,

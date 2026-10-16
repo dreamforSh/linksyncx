@@ -2124,6 +2124,13 @@ export interface UsageLog {
   output_tokens: number
   cache_creation_tokens: number
   cache_read_tokens: number
+  raw_input_tokens?: number | null
+  raw_output_tokens?: number | null
+  raw_cache_creation_tokens?: number | null
+  raw_cache_read_tokens?: number | null
+  cache_billing_compensation_tokens?: number | null
+  cache_billing_compensation_reason?: string | null
+  usage_incomplete?: boolean
   cache_creation_5m_tokens: number
   cache_creation_1h_tokens: number
 
@@ -2325,7 +2332,17 @@ export interface DashboardStats {
   tpm: number // 近5分钟平均每分钟Token数
 }
 
-export interface UsageStatsResponse {
+/** Only complete observed upstream snapshots contribute; absent fields mean unknown. */
+export interface RawUsageStats {
+  raw_input_tokens?: number | null
+  raw_output_tokens?: number | null
+  raw_cache_creation_tokens?: number | null
+  raw_cache_read_tokens?: number | null
+  raw_usage_known_requests?: number
+  raw_usage_unknown_requests?: number
+}
+
+export interface UsageStatsResponse extends RawUsageStats {
   period?: string
   total_requests: number
   total_input_tokens: number
@@ -2345,7 +2362,7 @@ export interface UsageStatsResponse {
 
 // ==================== Trend & Chart Types ====================
 
-export interface TrendDataPoint {
+export interface TrendDataPoint extends RawUsageStats {
   date: string
   requests: number
   input_tokens: number
@@ -2357,7 +2374,7 @@ export interface TrendDataPoint {
   actual_cost: number // 实际扣除
 }
 
-export interface ModelStat {
+export interface ModelStat extends RawUsageStats {
   model: string
   requests: number
   input_tokens: number
@@ -2388,7 +2405,7 @@ export interface GroupStat {
   account_cost?: number // 账号成本（仅管理员接口返回）
 }
 
-export interface UserBreakdownItem {
+export interface UserBreakdownItem extends RawUsageStats {
   user_id: number
   email: string
   requests: number

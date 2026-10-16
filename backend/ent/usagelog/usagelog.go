@@ -52,6 +52,20 @@ const (
 	FieldCacheCreationTokens = "cache_creation_tokens"
 	// FieldCacheReadTokens holds the string denoting the cache_read_tokens field in the database.
 	FieldCacheReadTokens = "cache_read_tokens"
+	// FieldRawInputTokens holds the string denoting the raw_input_tokens field in the database.
+	FieldRawInputTokens = "raw_input_tokens"
+	// FieldRawOutputTokens holds the string denoting the raw_output_tokens field in the database.
+	FieldRawOutputTokens = "raw_output_tokens"
+	// FieldRawCacheCreationTokens holds the string denoting the raw_cache_creation_tokens field in the database.
+	FieldRawCacheCreationTokens = "raw_cache_creation_tokens"
+	// FieldRawCacheReadTokens holds the string denoting the raw_cache_read_tokens field in the database.
+	FieldRawCacheReadTokens = "raw_cache_read_tokens"
+	// FieldCacheBillingCompensationTokens holds the string denoting the cache_billing_compensation_tokens field in the database.
+	FieldCacheBillingCompensationTokens = "cache_billing_compensation_tokens"
+	// FieldCacheBillingCompensationReason holds the string denoting the cache_billing_compensation_reason field in the database.
+	FieldCacheBillingCompensationReason = "cache_billing_compensation_reason"
+	// FieldUsageIncomplete holds the string denoting the usage_incomplete field in the database.
+	FieldUsageIncomplete = "usage_incomplete"
 	// FieldCacheCreation5mTokens holds the string denoting the cache_creation_5m_tokens field in the database.
 	FieldCacheCreation5mTokens = "cache_creation_5m_tokens"
 	// FieldCacheCreation1hTokens holds the string denoting the cache_creation_1h_tokens field in the database.
@@ -179,6 +193,13 @@ var Columns = []string{
 	FieldOutputTokens,
 	FieldCacheCreationTokens,
 	FieldCacheReadTokens,
+	FieldRawInputTokens,
+	FieldRawOutputTokens,
+	FieldRawCacheCreationTokens,
+	FieldRawCacheReadTokens,
+	FieldCacheBillingCompensationTokens,
+	FieldCacheBillingCompensationReason,
+	FieldUsageIncomplete,
 	FieldCacheCreation5mTokens,
 	FieldCacheCreation1hTokens,
 	FieldInputCost,
@@ -244,6 +265,10 @@ var (
 	DefaultCacheCreationTokens int
 	// DefaultCacheReadTokens holds the default value on creation for the "cache_read_tokens" field.
 	DefaultCacheReadTokens int
+	// CacheBillingCompensationReasonValidator is a validator for the "cache_billing_compensation_reason" field. It is called by the builders before save.
+	CacheBillingCompensationReasonValidator func(string) error
+	// DefaultUsageIncomplete holds the default value on creation for the "usage_incomplete" field.
+	DefaultUsageIncomplete bool
 	// DefaultCacheCreation5mTokens holds the default value on creation for the "cache_creation_5m_tokens" field.
 	DefaultCacheCreation5mTokens int
 	// DefaultCacheCreation1hTokens holds the default value on creation for the "cache_creation_1h_tokens" field.
@@ -393,6 +418,41 @@ func ByCacheCreationTokens(opts ...sql.OrderTermOption) OrderOption {
 // ByCacheReadTokens orders the results by the cache_read_tokens field.
 func ByCacheReadTokens(opts ...sql.OrderTermOption) OrderOption {
 	return sql.OrderByField(FieldCacheReadTokens, opts...).ToFunc()
+}
+
+// ByRawInputTokens orders the results by the raw_input_tokens field.
+func ByRawInputTokens(opts ...sql.OrderTermOption) OrderOption {
+	return sql.OrderByField(FieldRawInputTokens, opts...).ToFunc()
+}
+
+// ByRawOutputTokens orders the results by the raw_output_tokens field.
+func ByRawOutputTokens(opts ...sql.OrderTermOption) OrderOption {
+	return sql.OrderByField(FieldRawOutputTokens, opts...).ToFunc()
+}
+
+// ByRawCacheCreationTokens orders the results by the raw_cache_creation_tokens field.
+func ByRawCacheCreationTokens(opts ...sql.OrderTermOption) OrderOption {
+	return sql.OrderByField(FieldRawCacheCreationTokens, opts...).ToFunc()
+}
+
+// ByRawCacheReadTokens orders the results by the raw_cache_read_tokens field.
+func ByRawCacheReadTokens(opts ...sql.OrderTermOption) OrderOption {
+	return sql.OrderByField(FieldRawCacheReadTokens, opts...).ToFunc()
+}
+
+// ByCacheBillingCompensationTokens orders the results by the cache_billing_compensation_tokens field.
+func ByCacheBillingCompensationTokens(opts ...sql.OrderTermOption) OrderOption {
+	return sql.OrderByField(FieldCacheBillingCompensationTokens, opts...).ToFunc()
+}
+
+// ByCacheBillingCompensationReason orders the results by the cache_billing_compensation_reason field.
+func ByCacheBillingCompensationReason(opts ...sql.OrderTermOption) OrderOption {
+	return sql.OrderByField(FieldCacheBillingCompensationReason, opts...).ToFunc()
+}
+
+// ByUsageIncomplete orders the results by the usage_incomplete field.
+func ByUsageIncomplete(opts ...sql.OrderTermOption) OrderOption {
+	return sql.OrderByField(FieldUsageIncomplete, opts...).ToFunc()
 }
 
 // ByCacheCreation5mTokens orders the results by the cache_creation_5m_tokens field.

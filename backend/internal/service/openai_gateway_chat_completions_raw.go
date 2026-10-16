@@ -289,7 +289,12 @@ func (s *OpenAIGatewayService) streamRawChatCompletions(
 	serviceTier *string,
 	startTime time.Time,
 	requestBodyLen int,
-) (*OpenAIForwardResult, error) {
+) (outResult *OpenAIForwardResult, outErr error) {
+	defer func() {
+		if outResult != nil && outErr != nil {
+			outResult.UsageIncomplete = true
+		}
+	}()
 	observer := upstreamResponseModelObserverFromContext(c)
 	if observer == nil {
 		observer = beginUpstreamResponseModelObservation(c)

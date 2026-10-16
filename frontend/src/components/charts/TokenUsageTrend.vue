@@ -129,7 +129,8 @@ import {
   formatPercent,
   formatUSD,
   formatUSDCompact,
-  cacheHitRatio,
+  rawCacheHitRatio,
+  rawCacheHitRatioForRows,
   htmlTooltip,
   seriesColor,
   useChartTheme,
@@ -253,7 +254,7 @@ const series = computed<SeriesDef[]>(() => {
   }
   if (metric.value === 'cacheRate') {
     // 没有提示词 token 的时段记为 null，折线在此断开，而不是画成 0%
-    const values = data.map((p) => cacheHitRatio(p.input_tokens, p.cache_creation_tokens, p.cache_read_tokens) as number)
+    const values = data.map((p) => rawCacheHitRatio(p) as number)
     return [{ key: 'cacheRate', label: t('admin.dashboard.trend.cacheHitRate'), color: th.accent, values, totalText: cacheHitRateText.value }]
   }
   // 费用：实际扣费为主，标准计费作为灰色上下文（强调式，而非两种分类色）
@@ -287,17 +288,12 @@ const totalText = computed(() => {
   return formatUSD(data.reduce((a, p) => a + num(p.actual_cost), 0))
 })
 
-const cacheHitRate = (points: TrendDataPoint[]) => {
-  let read = 0
-  let prompt = 0
-  for (const p of points) {
-    read += num(p.cache_read_tokens)
-    prompt += num(p.input_tokens) + num(p.cache_read_tokens) + num(p.cache_creation_tokens)
-  }
-  return prompt > 0 ? read / prompt : 0
+const cacheHitRateTextFor = (points: TrendDataPoint[]) => {
+  const ratio = rawCacheHitRatioForRows(points)
+  return ratio === null ? '—' : formatPercent(ratio)
 }
 
-const cacheHitRateText = computed(() => formatPercent(cacheHitRate(props.trendData ?? [])))
+const cacheHitRateText = computed(() => cacheHitRateTextFor(props.trendData ?? []))
 
 // ==================== X 轴刻度 ====================
 const HOUR_RE = /^(\d{4})-(\d{2})-(\d{2})[ T](\d{2}):(\d{2})/
@@ -337,12 +333,13 @@ const tooltipExternal = htmlTooltip((tooltip) => {
   const footer: string[] = []
   if (metric.value === 'tokens') {
     footer.push(`${t('admin.dashboard.trend.total')} ${formatCompact(num(point.total_tokens) || tokenSum(point))}`)
-    footer.push(`${t('admin.dashboard.trend.cacheHitRate')} ${formatPercent(cacheHitRate([point]))}`)
+    footer.push(`${t('admin.dashboard.trend.cacheHitRate')} ${cacheHitRateTextFor([point])}`)
   } else if (metric.value === 'requests') {
     footer.push(`${t('admin.dashboard.trend.actualCost')} ${formatUSD(point.actual_cost)}`)
   } else if (metric.value === 'cacheRate') {
-    footer.push(`${t('admin.dashboard.trend.cacheRead')} ${formatCompact(point.cache_read_tokens)}`)
-    footer.push(`${t('admin.dashboard.trend.input')} ${formatCompact(point.input_tokens)} · ${t('admin.dashboard.trend.cacheCreation')} ${formatCompact(point.cache_creation_tokens)}`)
+    const observed = rawCacheHitRatio(point) !== null
+    footer.push(`${t('usage.rawTokens')} · ${t('admin.dashboard.trend.cacheRead')} ${observed ? formatCompact(point.raw_cache_read_tokens) : '—'}`)
+    footer.push(`${t('admin.dashboard.trend.input')} ${observed ? formatCompact(point.raw_input_tokens) : '—'} · ${t('admin.dashboard.trend.cacheCreation')} ${observed ? formatCompact(point.raw_cache_creation_tokens) : '—'}`)
   }
   return { title: point.date, rows, footer }
 })

@@ -68,6 +68,7 @@ func TestGetUserBreakdownStatsRequestTypeIncludesLegacyFallback(t *testing.T) {
 			"user_id", "email", "requests", "input_tokens", "output_tokens",
 			"cache_tokens", "total_tokens", "cost", "actual_cost", "account_cost",
 			"cache_creation_tokens", "cache_read_tokens",
+			"raw_input_tokens", "raw_output_tokens", "raw_cache_creation_tokens", "raw_cache_read_tokens", "raw_usage_known_requests", "raw_usage_unknown_requests",
 		}))
 
 	rows, err := repo.GetUserBreakdownStats(context.Background(), start, end, usagestats.UserBreakdownDimension{
@@ -92,6 +93,7 @@ func TestGetUserBreakdownStatsFiltersNativeCompactionV2(t *testing.T) {
 			"user_id", "email", "requests", "input_tokens", "output_tokens",
 			"cache_tokens", "total_tokens", "cost", "actual_cost", "account_cost",
 			"cache_creation_tokens", "cache_read_tokens",
+			"raw_input_tokens", "raw_output_tokens", "raw_cache_creation_tokens", "raw_cache_read_tokens", "raw_usage_known_requests", "raw_usage_unknown_requests",
 		}))
 
 	rows, err := repo.GetUserBreakdownStats(context.Background(), start, end, usagestats.UserBreakdownDimension{
@@ -115,7 +117,8 @@ func TestGetUserBreakdownStatsScansCacheSplit(t *testing.T) {
 			"user_id", "email", "requests", "input_tokens", "output_tokens",
 			"cache_tokens", "total_tokens", "cost", "actual_cost", "account_cost",
 			"cache_creation_tokens", "cache_read_tokens",
-		}).AddRow(int64(7), "a@example.test", int64(3), int64(100), int64(50), int64(900), int64(1050), 1.5, 1.2, 0.4, int64(200), int64(700)))
+			"raw_input_tokens", "raw_output_tokens", "raw_cache_creation_tokens", "raw_cache_read_tokens", "raw_usage_known_requests", "raw_usage_unknown_requests",
+		}).AddRow(int64(7), "a@example.test", int64(3), int64(100), int64(50), int64(900), int64(1050), 1.5, 1.2, 0.4, int64(200), int64(700), 300, 50, 200, 500, 3, 0))
 
 	rows, err := repo.GetUserBreakdownStats(context.Background(), start, end, usagestats.UserBreakdownDimension{SortBy: "account_cost"}, 20)
 
@@ -123,6 +126,9 @@ func TestGetUserBreakdownStatsScansCacheSplit(t *testing.T) {
 	require.Len(t, rows, 1)
 	require.Equal(t, int64(200), rows[0].CacheCreationTokens)
 	require.Equal(t, int64(700), rows[0].CacheReadTokens)
+	require.Equal(t, int64(500), rows[0].RawCacheReadTokens)
+	require.Equal(t, int64(300), rows[0].RawInputTokens)
+	require.Equal(t, int64(3), rows[0].RawUsageKnownRequests)
 	require.Equal(t, 0.4, rows[0].AccountCost)
 	require.NoError(t, mock.ExpectationsWereMet())
 }

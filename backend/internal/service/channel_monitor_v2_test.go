@@ -223,6 +223,7 @@ func TestChannelMonitorV2HealthBlendsErrorTTFTAndCache(t *testing.T) {
 		RequestCount:         100,
 		ErrorRate:            0.03,
 		CacheRate:            0.50,
+		CacheRateKnown:       true,
 		CacheRateDenominator: 100,
 		TTFT:                 ChannelMonitorV2Latency{SampleCount: 100, P50Ms: &p50, P95Ms: &p95},
 	}
@@ -257,6 +258,7 @@ func TestChannelMonitorV2HealthLeavesMissingTTFTUnknown(t *testing.T) {
 		RequestCount:         200,
 		ErrorRate:            0,
 		CacheRate:            0,
+		CacheRateKnown:       true,
 		CacheRateDenominator: 200,
 		TTFT:                 ChannelMonitorV2Latency{SampleCount: 0},
 	})
@@ -266,12 +268,20 @@ func TestChannelMonitorV2HealthLeavesMissingTTFTUnknown(t *testing.T) {
 	require.Equal(t, "healthy", health.Overall)
 }
 
+func TestChannelMonitorV2HealthDoesNotScoreUnknownRawCacheRate(t *testing.T) {
+	metric := ChannelMonitorV2Metric{RequestCount: 100, CacheRate: 1, CacheRateDenominator: 100, CacheRateKnown: false}
+	health := ChannelMonitorV2HealthFor(metric)
+	require.Equal(t, "unknown", health.Cache)
+	require.Nil(t, health.CacheScore)
+}
+
 func TestChannelMonitorV2DefaultHealthThresholdsAreTolerant(t *testing.T) {
 	p50 := int64(2500)
 	health := ChannelMonitorV2HealthFor(ChannelMonitorV2Metric{
 		RequestCount:         100,
 		ErrorRate:            0.03,
 		CacheRate:            0,
+		CacheRateKnown:       true,
 		CacheRateDenominator: 100,
 		TTFT:                 ChannelMonitorV2Latency{SampleCount: 100, P50Ms: &p50},
 	})

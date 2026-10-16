@@ -619,6 +619,14 @@ type UsageLog struct {
 	CacheCreationTokens int `json:"cache_creation_tokens"`
 	CacheReadTokens     int `json:"cache_read_tokens"`
 
+	RawInputTokens                 *int    `json:"raw_input_tokens"`
+	RawOutputTokens                *int    `json:"raw_output_tokens"`
+	RawCacheCreationTokens         *int    `json:"raw_cache_creation_tokens"`
+	RawCacheReadTokens             *int    `json:"raw_cache_read_tokens"`
+	CacheBillingCompensationTokens *int    `json:"cache_billing_compensation_tokens"`
+	CacheBillingCompensationReason *string `json:"cache_billing_compensation_reason"`
+	UsageIncomplete                bool    `json:"usage_incomplete"`
+
 	CacheCreation5mTokens int `json:"cache_creation_5m_tokens"`
 	CacheCreation1hTokens int `json:"cache_creation_1h_tokens"`
 
