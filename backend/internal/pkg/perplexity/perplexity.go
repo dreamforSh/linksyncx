@@ -334,7 +334,7 @@ func ParseEvent(data []byte) (Event, bool) {
 				} else if chunks := md.Get("chunks"); chunks.IsArray() {
 					var sb strings.Builder
 					for _, chunk := range chunks.Array() {
-						sb.WriteString(chunk.String())
+						_, _ = sb.WriteString(chunk.String())
 					}
 					if sb.Len() > 0 {
 						ev.Text = sb.String()
@@ -448,7 +448,7 @@ func FoldMessagesToQuery(messages gjson.Result) (string, error) {
 			for _, part := range content.Array() {
 				switch part.Get("type").String() {
 				case "text":
-					sb.WriteString(part.Get("text").String())
+					_, _ = sb.WriteString(part.Get("text").String())
 					hasText = true
 				case "image_url", "input_image", "image":
 					hasImage = true
@@ -510,9 +510,9 @@ func FoldMessagesToQuery(messages gjson.Result) (string, error) {
 
 	var sb strings.Builder
 	if len(instructions) > 0 {
-		sb.WriteString("Instructions: ")
-		sb.WriteString(strings.Join(instructions, "\n"))
-		sb.WriteString("\n\n")
+		_, _ = sb.WriteString("Instructions: ")
+		_, _ = sb.WriteString(strings.Join(instructions, "\n"))
+		_, _ = sb.WriteString("\n\n")
 	}
 	for i, t := range turns {
 		line := strings.TrimSpace(t.text)
@@ -520,15 +520,15 @@ func FoldMessagesToQuery(messages gjson.Result) (string, error) {
 			continue
 		}
 		if i == lastUser {
-			sb.WriteString(line)
+			_, _ = sb.WriteString(line)
 		} else {
 			if t.role == "user" {
-				sb.WriteString("User: ")
+				_, _ = sb.WriteString("User: ")
 			} else {
-				sb.WriteString("Assistant: ")
+				_, _ = sb.WriteString("Assistant: ")
 			}
-			sb.WriteString(line)
-			sb.WriteString("\n")
+			_, _ = sb.WriteString(line)
+			_, _ = sb.WriteString("\n")
 		}
 	}
 	query := strings.TrimSpace(sb.String())
