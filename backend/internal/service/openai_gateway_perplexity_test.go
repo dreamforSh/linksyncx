@@ -189,17 +189,17 @@ func TestTranslatePerplexitySSEToCC_NonStreamToolCalls(t *testing.T) {
 // jsonQuoteForTest 把字符串编码为 JSON 字符串字面量（含引号）。
 func jsonQuoteForTest(s string) string {
 	var b strings.Builder
-	b.WriteByte('"')
+	_ = b.WriteByte('"')
 	for _, r := range s {
 		switch r {
 		case '"':
-			b.WriteString(`\"`)
+			_, _ = b.WriteString(`\"`)
 		case '\\':
-			b.WriteString(`\\`)
+			_, _ = b.WriteString(`\\`)
 		default:
-			b.WriteRune(r)
+			_, _ = b.WriteRune(r)
 		}
 	}
-	b.WriteByte('"')
+	_ = b.WriteByte('"')
 	return b.String()
 }

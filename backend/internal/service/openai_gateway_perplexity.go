@@ -568,14 +568,14 @@ func translatePerplexitySSEToCC(ctx context.Context, upstream io.ReadCloser, pw 
 			if p.stream {
 				if !roleSent {
 					if err := emitDelta(map[string]any{"role": "assistant"}, nil); err != nil {
-						pw.CloseWithError(err)
+						_ = pw.CloseWithError(err)
 						return
 					}
 					roleSent = true
 				}
 				tc := toolCalls[len(toolCalls)-1]
 				if err := emitDelta(map[string]any{"tool_calls": []any{tc}}, nil); err != nil {
-					pw.CloseWithError(err)
+					_ = pw.CloseWithError(err)
 					return
 				}
 			}
@@ -591,17 +591,17 @@ func translatePerplexitySSEToCC(ctx context.Context, upstream io.ReadCloser, pw 
 		if p.stream {
 			if !roleSent {
 				if err := emitDelta(map[string]any{"role": "assistant"}, nil); err != nil {
-					pw.CloseWithError(err)
+					_ = pw.CloseWithError(err)
 					return
 				}
 				roleSent = true
 			}
 			if err := emitDelta(map[string]any{"content": delta}, nil); err != nil {
-				pw.CloseWithError(err)
+				_ = pw.CloseWithError(err)
 				return
 			}
 		}
-		accumulated.WriteString(delta)
+		_, _ = accumulated.WriteString(delta)
 		produced = true
 	}
 	scanErr = scanner.Err()
@@ -609,7 +609,7 @@ func translatePerplexitySSEToCC(ctx context.Context, upstream io.ReadCloser, pw 
 	if scanErr != nil {
 		if errors.Is(scanErr, context.Canceled) || errors.Is(scanErr, context.DeadlineExceeded) || errors.Is(scanErr, io.ErrClosedPipe) {
 			// 客户端断连/取消：静默收尾，不计为上游故障。
-			pw.CloseWithError(scanErr)
+			_ = pw.CloseWithError(scanErr)
 			return
 		}
 		logger.L().Warn("perplexity: upstream stream read error",
@@ -618,20 +618,20 @@ func translatePerplexitySSEToCC(ctx context.Context, upstream io.ReadCloser, pw 
 			zap.String("upstream_model", p.upstreamModel),
 		)
 		// 中途读错：直接关 pipe，下游截断处理（failover 或带类型错误）接管。
-		pw.CloseWithError(scanErr)
+		_ = pw.CloseWithError(scanErr)
 		return
 	}
 	if ctx.Err() != nil {
-		pw.CloseWithError(ctx.Err())
+		_ = pw.CloseWithError(ctx.Err())
 		return
 	}
 	if !produced {
 		// 干净 EOF 但没有任何回答：按截断处理，让下游可换号。
-		pw.CloseWithError(errors.New("perplexity: stream ended without answer content"))
+		_ = pw.CloseWithError(errors.New("perplexity: stream ended without answer content"))
 		return
 	}
 	if err := finalize(); err != nil {
-		pw.CloseWithError(err)
+		_ = pw.CloseWithError(err)
 		return
 	}
 	_ = pw.Close()
