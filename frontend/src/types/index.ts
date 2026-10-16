@@ -843,6 +843,20 @@ export interface UpdateGroupRequest {
 
 // ==================== Account & Proxy Types ====================
 
+export type PerplexitySource = 'web' | 'scholar' | 'social'
+
+/** Account defaults; request-level body.perplexity values may override these. */
+export interface PerplexityRequestOptions {
+  sources: PerplexitySource[]
+  language: string
+  timezone: string
+  is_incognito: boolean
+  include_sources: boolean
+  include_search_progress: boolean
+  native_followups: boolean
+  strict_parameters: boolean
+}
+
 export type AccountPlatform = 'anthropic' | 'openai' | 'gemini' | 'antigravity' | 'grok' | 'perplexity' | 'kimi' | 'zhipu' | 'deepseek' | 'minimax' | 'opencode_go'
 export type AccountType = 'oauth' | 'setup-token' | 'apikey' | 'upstream' | 'bedrock' | 'service_account'
 export type OAuthAddMethod = 'oauth' | 'setup-token'
@@ -1717,7 +1731,27 @@ export interface GrokBillingSummary {
   failed_windows?: string[]
 }
 
+/** Per-section timestamps are real last-good snapshots, never live counters. */
+export interface PerplexityUsageSection {
+  status: 'success' | 'stale' | 'error'
+  fetched_at?: string
+  attempted_at?: string
+  error?: string
+}
+
+export type PerplexityUsageSectionName = 'session' | 'credits' | 'rate_limits'
+
+export interface PerplexityUsageInfo {
+  snapshot: Partial<Record<PerplexityUsageSectionName, Record<string, unknown>>>
+  sections: Partial<Record<PerplexityUsageSectionName, PerplexityUsageSection>>
+  fetched_at?: string
+  attempted_at?: string
+  /** Omitted means unknown; a failed network probe cannot establish validity. */
+  session_valid?: boolean
+}
+
 export interface AccountUsageInfo {
+  perplexity?: PerplexityUsageInfo | null
   source?: 'passive' | 'active'
   updated_at: string | null
   five_hour: UsageProgress | null

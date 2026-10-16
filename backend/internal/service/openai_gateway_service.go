@@ -265,7 +265,9 @@ type OpenAIForwardResult struct {
 	Usage           OpenAIUsage
 	// UsageIncomplete marks an existing error-partial result, not final upstream totals.
 	UsageIncomplete bool
-	Model           string // 原始模型（用于响应和日志显示）
+	// UsageEstimated is a local approximation and must not be persisted as raw usage.
+	UsageEstimated bool
+	Model          string // 原始模型（用于响应和日志显示）
 	// BillingModel is the model used for cost calculation.
 	// When non-empty, CalculateCost uses this instead of Model.
 	// This is set by the Anthropic Messages conversion path where
@@ -531,6 +533,8 @@ type OpenAIGatewayService struct {
 	openAIModelsCache                   openAIModelsCache
 	openaiCompatSessionResponses        sync.Map
 	openaiCompatAnthropicDigestSessions sync.Map
+	perplexityThreadsOnce               sync.Once
+	perplexityThreads                   *perplexityThreadCache
 	// openaiCodexTurnStateOrigins: 下游会话 seed → openAICodexTurnStateOrigin，
 	// 记录最近一次向该会话下发 x-codex-turn-state 的铸造账号，供出站守卫
 	// 剥离跨账号回带（openai_codex_turn_state.go）。

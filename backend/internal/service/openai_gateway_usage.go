@@ -405,13 +405,15 @@ func (s *OpenAIGatewayService) RecordUsage(ctx context.Context, input *OpenAIRec
 		ImageSizeSource:          optionalTrimmedStringPtr(result.ImageSizeSource),
 		ImageSizeBreakdown:       imageSizeBreakdown,
 		NativeCompactionV2:       input.NativeCompactionV2,
-		UsageIncomplete:          result.UsageIncomplete,
+		UsageIncomplete:          result.UsageIncomplete || result.UsageEstimated,
 	}
 	// OpenAI reports total input including cache buckets. Preserve its normalized
 	// upstream classification independently from billing; do not clamp invalid raw
 	// counts or manufacture observed zeros when no usage was reported.
-	setObservedRawUsage(usageLog, rawUsage.InputTokens-rawUsage.CacheReadInputTokens-rawUsage.CacheCreationInputTokens,
-		rawUsage.OutputTokens, rawUsage.CacheCreationInputTokens, rawUsage.CacheReadInputTokens)
+	if !result.UsageEstimated {
+		setObservedRawUsage(usageLog, rawUsage.InputTokens-rawUsage.CacheReadInputTokens-rawUsage.CacheCreationInputTokens,
+			rawUsage.OutputTokens, rawUsage.CacheCreationInputTokens, rawUsage.CacheReadInputTokens)
+	}
 	noCompensation := 0
 	usageLog.CacheBillingCompensationTokens = &noCompensation
 	isVideoUsage := isGrokVideoUsageResult(result, billingModels)

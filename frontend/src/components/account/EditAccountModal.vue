@@ -258,6 +258,8 @@
           <p class="input-hint">{{ t('admin.accounts.perplexity.csrfTokenEditHint') }}</p>
         </div>
 
+        <PerplexityOptionsFields v-if="account.platform === 'perplexity'" v-model="editPerplexityOptions" />
+
         <!-- Model Restriction Section (不适用于 Antigravity) -->
         <div v-if="account.platform !== 'antigravity'" class="border-t border-gray-200 pt-4 dark:border-dark-600">
           <label class="input-label">{{ t('admin.accounts.modelRestriction') }}</label>
@@ -3241,6 +3243,7 @@ import QuotaLimitCard from '@/components/account/QuotaLimitCard.vue'
 import GrokBaseUrlPresets from '@/components/account/GrokBaseUrlPresets.vue'
 import CnBaseUrlPresets from '@/components/account/CnBaseUrlPresets.vue'
 import OpenCodeGoProtocolRulesEditor from '@/components/account/OpenCodeGoProtocolRulesEditor.vue'
+import PerplexityOptionsFields from '@/components/account/PerplexityOptionsFields.vue'
 import HeaderOverrideEditor from '@/components/account/HeaderOverrideEditor.vue'
 import DeviceProfileEditor from '@/components/account/DeviceProfileEditor.vue'
 import OllamaCloudUsageSettings from '@/components/account/OllamaCloudUsageSettings.vue'
@@ -3251,6 +3254,10 @@ import {
   applyInterceptWarmup,
   applyOpenCodeGoProtocolRules,
   applyPerplexitySession,
+  applyPerplexityOptions,
+  defaultPerplexityOptions,
+  readPerplexityOptions,
+  validatePerplexityOptions,
   applyPlanType,
   buildPlanTypeOptions,
   cloneOpenCodeGoProtocolRules,
@@ -3467,6 +3474,7 @@ const editBaseUrl = ref('https://api.anthropic.com')
 const editApiKey = ref('')
 // Perplexity 网页会话的 CSRF token（可选；脱敏字段不回显，留空=保留已存值）
 const editPerplexityCsrfToken = ref('')
+const editPerplexityOptions = ref(defaultPerplexityOptions())
 
 // ── 国产供应商（Kimi / Zhipu / DeepSeek）account_mode / api_protocol 编辑 ──
 // account_mode 决定额度/余额监控路径，api_protocol 决定转发端点与格式；
@@ -4683,6 +4691,7 @@ const syncFormFromAccount = (newAccount: Account | null) => {
   }
   editApiKey.value = ''
   editPerplexityCsrfToken.value = ''
+  editPerplexityOptions.value = readPerplexityOptions(newAccount.credentials)
 }
 
 async function loadTLSProfiles() {
@@ -5286,6 +5295,13 @@ const submitUpdateAccount = async (accountID: number, updatePayload: Record<stri
 
 const handleSubmit = async () => {
   if (!props.account) return
+  if (props.account.platform === 'perplexity') {
+    const validationError = validatePerplexityOptions(editPerplexityOptions.value)
+    if (validationError) {
+      appStore.showError(t(`admin.accounts.perplexity.${validationError}`))
+      return
+    }
+  }
   const accountID = props.account.id
 
   if (form.status !== 'active' && form.status !== 'inactive' && form.status !== 'error') {
@@ -5408,6 +5424,7 @@ const handleSubmit = async () => {
           },
           'edit'
         )
+        applyPerplexityOptions(newCredentials, editPerplexityOptions.value)
       }
 
       // Add model mapping if configured（OpenAI 开启自动透传时保留现有映射，不再编辑）

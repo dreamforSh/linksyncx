@@ -745,6 +745,8 @@ export interface SyncUpstreamPreviewParams {
   api_key: string
   model_mapping?: Record<string, string>
   proxy_id?: number
+  /** Perplexity cookie pair; never sent as a bearer token. */
+  csrf_token?: string
 }
 
 /**

@@ -220,6 +220,17 @@ describe('ModelWhitelistSelector', () => {
     expect(wrapper.emitted('update:modelValue')).toEqual([[['x-preview-f-free']]])
   })
 
+  it('preserves Perplexity proxy and CSRF settings during an unsaved model preview', async () => {
+    syncUpstreamModelsPreview.mockResolvedValue({ models: ['turbo'] })
+    const credentials = { platform: 'perplexity', type: 'apikey', api_key: 'fake-session', csrf_token: 'fake-csrf', proxy_id: 42 }
+    const wrapper = mountSelector({ platform: 'perplexity', syncCredentials: credentials })
+    const button = wrapper.findAll('button').find(candidate => candidate.text() === 'admin.accounts.syncUpstreamModels')
+    await button?.trigger('click')
+    await flushPromises()
+    expect(syncUpstreamModelsPreview).toHaveBeenCalledWith(credentials)
+    expect(wrapper.emitted('update:modelValue')).toEqual([[['turbo']]])
+  })
+
   it('shows the upstream sync button for OpenCode Go create-account credentials', () => {
     const wrapper = mountSelector({
       platform: 'opencode_go',

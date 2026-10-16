@@ -160,6 +160,7 @@ func (s *OpenAIGatewayService) bufferChatCompletionsAsResponses(
 	c.JSON(http.StatusOK, responsesResp)
 
 	return &OpenAIForwardResult{
+		ResponseID:                  responsesResp.ID,
 		RequestID:                   requestID,
 		UpstreamHeaders:             resp.Header,
 		Usage:                       usage,
@@ -231,7 +232,14 @@ func (s *OpenAIGatewayService) streamChatCompletionsAsResponses(
 	})
 
 	if scan.Err != nil {
+		if isPerplexityCCResponse(resp) && c.Writer.Written() && !clientDisconnected && !state.CompletedSent &&
+			(c.Request == nil || c.Request.Context().Err() == nil) {
+			writeEvents([]apicompat.ResponsesStreamEvent{perplexityResponsesFailure(state, "Perplexity upstream stream did not complete")})
+			MarkResponseCommitted(c)
+		}
 		return &OpenAIForwardResult{
+			ResponseID:                  state.ResponseID,
+			UsageIncomplete:             true,
 			RequestID:                   requestID,
 			UpstreamHeaders:             resp.Header,
 			Usage:                       scan.Usage,
@@ -247,7 +255,13 @@ func (s *OpenAIGatewayService) streamChatCompletionsAsResponses(
 		}, fmt.Errorf("stream usage incomplete: %w", scan.Err)
 	}
 	if err := state.ValidateToolCallArguments(); err != nil {
+		if isPerplexityCCResponse(resp) && c.Writer.Written() && !clientDisconnected && !state.CompletedSent {
+			writeEvents([]apicompat.ResponsesStreamEvent{perplexityResponsesFailure(state, "Invalid upstream tool call")})
+			MarkResponseCommitted(c)
+		}
 		return &OpenAIForwardResult{
+			ResponseID:                  state.ResponseID,
+			UsageIncomplete:             true,
 			RequestID:                   requestID,
 			UpstreamHeaders:             resp.Header,
 			Usage:                       scan.Usage,
@@ -280,6 +294,7 @@ func (s *OpenAIGatewayService) streamChatCompletionsAsResponses(
 	}
 
 	return &OpenAIForwardResult{
+		ResponseID:                  state.ResponseID,
 		RequestID:                   requestID,
 		UpstreamHeaders:             resp.Header,
 		Usage:                       scan.Usage,

@@ -2980,6 +2980,19 @@ func (h *AccountHandler) GetAvailableModels(c *gin.Context) {
 		return
 	}
 
+	// Perplexity is a cookie-authenticated web catalog, not Anthropic. Discovery
+	// failures may only fall back to the platform's own mapped local aliases.
+	if account.IsPerplexity() {
+		if h.accountTestService != nil {
+			if models, fetchErr := h.accountTestService.FetchPerplexityAccountModels(c.Request.Context(), account); fetchErr == nil {
+				response.Success(c, models)
+				return
+			}
+		}
+		response.Success(c, service.DefaultPerplexityAccountModels(account))
+		return
+	}
+
 	// Handle OpenAI accounts
 	if account.IsOpenAI() {
 		// Prefer the shared, account-keyed upstream catalog. If discovery fails,
@@ -3229,6 +3242,7 @@ func (h *AccountHandler) SyncUpstreamModelsPreview(c *gin.Context) {
 		Type         string            `json:"type" binding:"required"`
 		BaseURL      string            `json:"base_url"`
 		APIKey       string            `json:"api_key" binding:"required"`
+		CSRFToken    string            `json:"csrf_token"`
 		ModelMapping map[string]string `json:"model_mapping"`
 		ProxyID      *int64            `json:"proxy_id"`
 	}
@@ -3251,6 +3265,17 @@ func (h *AccountHandler) SyncUpstreamModelsPreview(c *gin.Context) {
 		},
 	}
 
+	if tempAccount.IsPerplexity() {
+		tempAccount.Credentials["csrf_token"] = req.CSRFToken
+		if req.ProxyID != nil {
+			if *req.ProxyID <= 0 {
+				response.BadRequest(c, "Selected proxy is unavailable")
+				return
+			}
+			tempAccount.ProxyID = req.ProxyID
+		}
+	}
+
 	if req.ProxyID != nil && *req.ProxyID > 0 {
 		if h.adminService == nil {
 			response.InternalError(c, "Admin service is not configured")
@@ -3263,6 +3288,12 @@ func (h *AccountHandler) SyncUpstreamModelsPreview(c *gin.Context) {
 		}
 		tempAccount.ProxyID = req.ProxyID
 		tempAccount.Proxy = proxy
+	}
+	if tempAccount.IsPerplexity() {
+		if _, err := tempAccount.ProxyURLForOutbound(); err != nil {
+			response.BadRequest(c, "Selected proxy is unavailable")
+			return
+		}
 	}
 
 	if h.accountTestService == nil {

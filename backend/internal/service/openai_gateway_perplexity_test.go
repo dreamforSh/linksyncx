@@ -18,11 +18,13 @@ func collectPerplexityTranslation(t *testing.T, upstreamBody string, stream bool
 	go func() {
 		defer close(done)
 		translatePerplexitySSEToCC(context.Background(), io.NopCloser(strings.NewReader(upstreamBody)), pw, perplexityTranslateParams{
-			upstreamModel: "sonar-pro",
-			promptTokens:  promptTokens,
-			stream:        stream,
-			created:       1700000000,
-			id:            "chatcmpl-test",
+			upstreamModel:         "sonar-pro",
+			promptTokens:          promptTokens,
+			stream:                stream,
+			created:               1700000000,
+			id:                    "chatcmpl-test",
+			IncludeSources:        true,
+			IncludeSearchProgress: true,
 		})
 	}()
 	out, err := io.ReadAll(pr)
@@ -112,14 +114,15 @@ func TestTranslatePerplexitySSEToCC_NonStream(t *testing.T) {
 }
 
 func TestTranslatePerplexitySSEToCC_EOFWithoutEndOfStream(t *testing.T) {
-	// 没有 end_of_stream 但已有内容：仍应补 final + usage + [DONE]。
+	// 已有部分内容也不能把截断伪装成成功。
 	upstream := "event: message\r\n" +
 		"data: {\"blocks\":[{\"intended_usage\":\"ask_text\",\"markdown_block\":{\"answer\":\"partial\"}}]}\r\n\r\n"
 
 	out, err := collectPerplexityTranslation(t, upstream, true, 2)
-	require.NoError(t, err)
+	require.Error(t, err)
 	require.Contains(t, out, "partial")
-	require.Contains(t, out, "data: [DONE]")
+	require.NotContains(t, out, "data: [DONE]")
+	require.NotContains(t, out, `"finish_reason":"stop"`)
 }
 
 func TestTranslatePerplexitySSEToCC_EmptyStream(t *testing.T) {
@@ -129,60 +132,46 @@ func TestTranslatePerplexitySSEToCC_EmptyStream(t *testing.T) {
 	require.Empty(t, strings.TrimSpace(out))
 }
 
-func TestTranslatePerplexitySSEToCC_StepsAsToolCalls(t *testing.T) {
-	// Computer/代理模式的 pro_search_steps 块 → OpenAI tool_calls，按 uuid 去重。
-	step := func(uuid, typ, query string) string {
-		return `{"intended_usage":"pro_search_steps","plan_block":{"steps":[{"step_type":"` + typ +
-			`","uuid":"` + uuid + `","search_web_content":{"query":"` + query + `"}}]}}`
+func TestTranslatePerplexitySSEToCC_StepsAsSafeProgress(t *testing.T) {
+	step := func(uuid, status string) string {
+		return `{"intended_usage":"pro_search_steps","plan_block":{"steps":[{"step_type":"SEARCH_WEB","uuid":"` + uuid +
+			`","status":"` + status + `","search_web_content":{"query":"private query","browser_key":"secret"}}]}}`
 	}
-	upstream := "event: message\r\n" +
-		"data: {\"backend_uuid\":\"t-7\",\"blocks\":[" + step("1111-aaaa", "SEARCH_WEB", "go1") + "]}\r\n\r\n" +
-		"event: message\r\n" +
-		// 同一步骤的累积更新（内容变化）不应重复下发。
-		"data: {\"backend_uuid\":\"t-7\",\"blocks\":[" + step("1111-aaaa", "SEARCH_WEB", "go1 updated") + "]}\r\n\r\n" +
-		"event: message\r\n" +
-		"data: {\"backend_uuid\":\"t-7\",\"blocks\":[" + step("2222-bbbb", "SEARCH_WEB", "go2") +
-		`,{"intended_usage":"ask_text","markdown_block":{"answer":"Answer."}}]}` + "\r\n\r\n" +
-		"event: end_of_stream\r\n\r\n"
+	upstream := "data: {\"blocks\":[" + step("s-1", "IN_PROGRESS") + "]}\n\n" +
+		"data: {\"blocks\":[" + step("s-1", "IN_PROGRESS") + "]}\n\n" +
+		"data: {\"blocks\":[" + step("s-1", "DONE") + "]}\n\n" +
+		`data: {"blocks":[{"intended_usage":"ask_text","markdown_block":{"answer":"Answer."}}]}` + "\n\n" +
+		"event: end_of_stream\n\n"
 
 	out, err := collectPerplexityTranslation(t, upstream, true, 5)
 	require.NoError(t, err)
-
-	var toolNames, toolIDs []string
+	require.NotContains(t, out, "tool_calls")
+	require.NotContains(t, out, "private query")
+	require.NotContains(t, out, "secret")
+	updates := 0
 	for _, line := range strings.Split(out, "\n") {
-		line = strings.TrimSpace(line)
-		if !strings.HasPrefix(line, "data: {") {
-			continue
+		if strings.HasPrefix(line, "data: {") && gjson.Parse(strings.TrimPrefix(line, "data: ")).Get("choices.0.delta.reasoning_content").Exists() {
+			updates++
 		}
-		tc := gjson.Parse(strings.TrimPrefix(line, "data: ")).Get("choices.0.delta.tool_calls.0")
-		if !tc.Exists() {
-			continue
-		}
-		toolNames = append(toolNames, tc.Get("function.name").String())
-		toolIDs = append(toolIDs, tc.Get("id").String())
 	}
-	require.Equal(t, []string{"pplx_search_web", "pplx_search_web"}, toolNames, "two distinct steps, deduped by uuid")
-	require.Equal(t, []string{"call_1111aaaa", "call_2222bbbb"}, toolIDs)
+	require.Equal(t, 2, updates, "重复状态去重，同 UUID 的完成状态仍应更新")
 	require.Contains(t, out, `"Answer."`)
 	require.Contains(t, out, `"finish_reason":"stop"`)
-
-	// tool_call chunk 必须在 role chunk 之后（OpenAI 顺序约束）。
-	roleIdx := strings.Index(out, `"role":"assistant"`)
-	firstTCIdx := strings.Index(out, `"tool_calls"`)
-	require.Greater(t, firstTCIdx, roleIdx)
+	require.Less(t, strings.Index(out, `"role":"assistant"`), strings.Index(out, `"reasoning_content"`))
 }
 
-func TestTranslatePerplexitySSEToCC_NonStreamToolCalls(t *testing.T) {
+func TestTranslatePerplexitySSEToCC_NonStreamSuppressesInternalSteps(t *testing.T) {
 	upstream := "event: message\r\n" +
-		"data: {\"blocks\":[{\"intended_usage\":\"pro_search_steps\",\"plan_block\":{\"steps\":[{\"step_type\":\"CODE\",\"uuid\":\"3333\",\"code_content\":{\"language\":\"go\"}}]}}," +
+		"data: {\"blocks\":[{\"intended_usage\":\"pro_search_steps\",\"plan_block\":{\"steps\":[{\"step_type\":\"CODE\",\"uuid\":\"3333\",\"code_content\":{\"language\":\"go\",\"code\":\"secret\"}}]}}," +
 		`{"intended_usage":"ask_text","markdown_block":{"answer":"done"}}]}` + "\r\n\r\n" +
 		"event: end_of_stream\r\n\r\n"
 
 	out, err := collectPerplexityTranslation(t, upstream, false, 5)
 	require.NoError(t, err)
 	root := gjson.Parse(strings.TrimSpace(out))
-	require.Equal(t, "pplx_code", root.Get("choices.0.message.tool_calls.0.function.name").String())
-	require.Contains(t, root.Get("choices.0.message.tool_calls.0.function.arguments").String(), `"language":"go"`)
+	require.False(t, root.Get("choices.0.message.tool_calls").Exists())
+	require.False(t, root.Get("choices.0.message.reasoning_content").Exists())
+	require.NotContains(t, out, "secret")
 	require.Equal(t, "stop", root.Get("choices.0.finish_reason").String())
 }
 

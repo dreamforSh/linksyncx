@@ -215,12 +215,17 @@ func (s *OpenAIGatewayService) streamChatCompletionsAsAnthropic(
 	usage := scan.Usage
 
 	if scan.Err != nil {
+		if isPerplexityCCResponse(resp) && c.Writer.Written() && !clientDisconnected &&
+			(c.Request == nil || c.Request.Context().Err() == nil) {
+			writePerplexityMessagesStreamFailure(c, "Perplexity upstream stream did not complete")
+		}
 		// Broken upstream read: skip finalization so no synthetic message_stop
 		// masks the truncation, and surface the error to flag usage incomplete
 		// (mirrors forwardResponsesViaRawChatCompletions).
 		return &OpenAIForwardResult{
 			RequestID:                   requestID,
 			UpstreamHeaders:             resp.Header,
+			UsageIncomplete:             true,
 			Usage:                       usage,
 			Model:                       originalModel,
 			BillingModel:                billingModel,

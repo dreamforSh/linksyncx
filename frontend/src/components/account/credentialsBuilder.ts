@@ -1,3 +1,4 @@
+import type { PerplexityRequestOptions, PerplexitySource } from '@/types'
 import { openAIPlanTypeLabel } from '@/utils/planType'
 
 export function applyInterceptWarmup(
@@ -258,6 +259,73 @@ export const GROK_BASE_URL_PRESETS: GrokBaseUrlPreset[] = [
 // base_url 缺省时后端回落 https://www.perplexity.ai。
 
 export const PERPLEXITY_DEFAULT_BASE_URL = 'https://www.perplexity.ai'
+
+/** Keep these defaults aligned with perplexity.DefaultRequestOptions. */
+export function defaultPerplexityOptions(): PerplexityRequestOptions {
+  return {
+    sources: ['web'],
+    language: 'en-US',
+    timezone: 'UTC',
+    is_incognito: false,
+    include_sources: true,
+    include_search_progress: true,
+    native_followups: true,
+    strict_parameters: false
+  }
+}
+
+/** Read non-sensitive account defaults without copying internal request fields. */
+export function readPerplexityOptions(credentials?: Record<string, unknown> | null): PerplexityRequestOptions {
+  const options = defaultPerplexityOptions()
+  const raw = credentials?.perplexity_options
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return options
+  const stored = raw as Record<string, unknown>
+  if (Array.isArray(stored.sources)) {
+    options.sources = stored.sources.filter((source): source is PerplexitySource =>
+      source === 'web' || source === 'scholar' || source === 'social'
+    )
+  }
+  if (typeof stored.language === 'string') options.language = stored.language
+  if (typeof stored.timezone === 'string') options.timezone = stored.timezone
+  for (const key of ['is_incognito', 'include_sources', 'include_search_progress', 'native_followups', 'strict_parameters'] as const) {
+    if (typeof stored[key] === 'boolean') options[key] = stored[key]
+  }
+  return options
+}
+
+/** Return a localized validation suffix, or null when all settings are valid. */
+export function validatePerplexityOptions(options: PerplexityRequestOptions): 'sourcesRequired' | 'invalidLanguage' | 'invalidTimezone' | null {
+  if (options.sources.length === 0 || options.sources.some(source => !['web', 'scholar', 'social'].includes(source))) {
+    return 'sourcesRequired'
+  }
+  try {
+    if (!options.language.trim() || options.language.includes('_') || options.language.trim() === 'und') return 'invalidLanguage'
+    Intl.getCanonicalLocales(options.language.trim())
+  } catch {
+    return 'invalidLanguage'
+  }
+  try {
+    if (!options.timezone.trim() || options.timezone.trim() === 'Local') return 'invalidTimezone'
+    new Intl.DateTimeFormat('en-US', { timeZone: options.timezone.trim() }).format(0)
+  } catch {
+    return 'invalidTimezone'
+  }
+  return null
+}
+
+/** Serialize an explicit public allowlist; never persist continuation/upload IDs. */
+export function applyPerplexityOptions(credentials: Record<string, unknown>, options: PerplexityRequestOptions): void {
+  credentials.perplexity_options = {
+    sources: [...new Set(options.sources)],
+    language: options.language.trim(),
+    timezone: options.timezone.trim(),
+    is_incognito: options.is_incognito,
+    include_sources: options.include_sources,
+    include_search_progress: options.include_search_progress,
+    native_followups: options.native_followups,
+    strict_parameters: options.strict_parameters
+  }
+}
 
 export interface PerplexitySessionInput {
   sessionToken: string

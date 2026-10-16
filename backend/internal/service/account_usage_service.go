@@ -127,6 +127,8 @@ type UsageCache struct {
 	antigravityFlight      singleflight.Group // 防止同一 Antigravity 账号的并发请求击穿缓存
 	openAIProbeCache       sync.Map           // accountID -> time.Time
 	grokProbeCache         sync.Map           // accountID -> last billing probe attempt
+	perplexityCache        sync.Map           // accountID -> *perplexityUsageCache
+	perplexityFlight       singleflight.Group // 同一 Perplexity 账号的画像查询合并
 }
 
 // NewUsageCache 创建 UsageCache 实例
@@ -234,6 +236,9 @@ type UsageInfo struct {
 	ThirtyDay   *UsageProgress      `json:"thirty_day,omitempty"`
 	GrokBilling *xai.BillingSummary `json:"grok_billing,omitempty"`
 
+	// Perplexity 网页会话画像；各分项的 fetched_at 才是该项 last-good 时间。
+	Perplexity *PerplexityUsage `json:"perplexity,omitempty"`
+
 	// Antigravity 账号级信息
 	SubscriptionTier    string `json:"subscription_tier,omitempty"`     // 归一化订阅等级: FREE/PRO/ULTRA/UNKNOWN
 	SubscriptionTierRaw string `json:"subscription_tier_raw,omitempty"` // 上游原始订阅等级名称
@@ -335,6 +340,8 @@ type AccountUsageService struct {
 	// claudeTokenProvider 主动用量查询取 access token（临近过期先刷新，可为 nil）。
 	// 后台刷新只覆盖活跃账号（D7），闲置账号库里的 token 可能已过期。
 	claudeTokenProvider claudeAccessTokenProvider
+	// perplexityInfoFetcher 复用账号测试的 Cookie/proxy/TLS 请求路径，未注入时不发请求。
+	perplexityInfoFetcher perplexityAccountInfoFetcher
 }
 
 // SetClaudeTokenProvider 挂载 Claude OAuth 的 token provider，主动用量查询经它取 token。
@@ -436,6 +443,10 @@ func (s *AccountUsageService) getUsageForAccount(ctx context.Context, account *A
 			s.tryClearRecoverableAccountError(ctx, account)
 		}
 		return usage, err
+	}
+
+	if account.IsPerplexity() {
+		return s.getPerplexityUsage(ctx, account, forceProbe)
 	}
 
 	// 只有oauth类型账号可以通过API获取usage（有profile scope）

@@ -130,6 +130,31 @@ describe('AccountUsageCell', () => {
     })
   })
 
+  it('renders and batch-loads Perplexity apikey snapshots and requests forced refresh', async () => {
+    const requestBatchedUsage = vi.fn()
+    const account = makeAccount({ id: 99001, platform: 'perplexity', type: 'apikey' })
+    const wrapper = mount(AccountUsageCell, {
+      props: {
+        account,
+        requestBatchedUsage,
+        batchedUsage: {
+          updated_at: null, five_hour: null, seven_day: null, seven_day_sonnet: null,
+          perplexity: { snapshot: { credits: { balance: 9 } }, sections: { credits: { status: 'stale', error: 'timeout' } } }
+        }
+      },
+      global: { stubs: {
+        PerplexityUsageDetails: { props: ['usage'], template: '<div data-testid="perplexity-details">{{ usage?.snapshot?.credits?.balance }}</div>' }
+      } }
+    })
+    await flushPromises()
+    expect(requestBatchedUsage).toHaveBeenCalledWith(account, undefined)
+    expect(wrapper.get('[data-testid="perplexity-details"]').text()).toBe('9')
+    await wrapper.get('[data-testid="perplexity-refresh-usage"]').trigger('click')
+    expect(requestBatchedUsage).toHaveBeenLastCalledWith(account, { force: true })
+    expect(getUsage).not.toHaveBeenCalled()
+    wrapper.unmount()
+  })
+
   it('renders eligible Ollama Cloud state and forwards query updates', async () => {
     const wrapper = mount(AccountUsageCell, {
       props: {

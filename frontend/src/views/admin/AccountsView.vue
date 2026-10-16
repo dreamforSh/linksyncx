@@ -805,6 +805,7 @@ const accountSupportsBatchUsage = (account: Account) => {
   if (account.platform === 'antigravity') return account.type === 'oauth'
   if (account.platform === 'openai') return account.type === 'oauth'
   if (account.platform === 'grok') return account.type === 'oauth'
+  if (account.platform === 'perplexity') return account.type === 'apikey'
   return false
 }
 

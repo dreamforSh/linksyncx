@@ -3,6 +3,7 @@ package service
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -31,6 +32,9 @@ func perplexityDefaultTLSProfile() *tlsfingerprint.Profile {
 // doPerplexityRequest 以 fetch 风格头 + Cookie 会话 + TLS 指纹发送 Perplexity
 // 网页端请求（与转发路径同一套反爬约束）。
 func (s *AccountTestService) doPerplexityRequest(ctx context.Context, account *Account, method, path string) (*http.Response, error) {
+	if s == nil || s.httpUpstream == nil || account == nil {
+		return nil, fmt.Errorf("perplexity account info sender is not configured")
+	}
 	creds := perplexityCredentialsFromAccount(account)
 	if strings.TrimSpace(creds.SessionToken) == "" {
 		return nil, fmt.Errorf("perplexity session token is missing (credentials.api_key)")
@@ -39,7 +43,11 @@ func (s *AccountTestService) doPerplexityRequest(ctx context.Context, account *A
 	if err != nil {
 		return nil, err
 	}
-	req, err := http.NewRequestWithContext(ctx, method, creds.NormalizedBaseURL()+path, nil)
+	baseURL, err := s.validateUpstreamBaseURL(creds.NormalizedBaseURL())
+	if err != nil {
+		return nil, fmt.Errorf("invalid perplexity base URL: %w", err)
+	}
+	req, err := http.NewRequestWithContext(ctx, method, strings.TrimRight(baseURL, "/")+path, nil)
 	if err != nil {
 		return nil, fmt.Errorf("build perplexity request: %w", err)
 	}
@@ -55,31 +63,84 @@ func (s *AccountTestService) doPerplexityRequest(ctx context.Context, account *A
 }
 
 // ValidatePerplexitySession 探测 Perplexity 网页会话是否存活：
-// GET /api/auth/session 返回 200 且 JSON 含非空 user 对象即为有效；
-// 401/403 表示会话 Cookie 已失效。
+// GET /api/auth/session 返回 200 且 JSON 含非空 user 对象即为有效。
+// 401 / 空 user 明确失效；403 可能是站点拒绝，不能据此捏造过期状态。
 func (s *AccountTestService) ValidatePerplexitySession(ctx context.Context, account *Account) error {
 	if s == nil || account == nil {
 		return fmt.Errorf("perplexity session validation is not available")
 	}
-	resp, err := s.doPerplexityRequest(ctx, account, http.MethodGet, perplexity.SessionPath)
+	body, status, err := s.fetchPerplexityJSON(ctx, account, perplexity.SessionPath)
 	if err != nil {
-		return fmt.Errorf("perplexity session check failed: %w", err)
+		return err
+	}
+	invalid, err := validatePerplexitySessionResponse(body, status)
+	if invalid {
+		s.updatePerplexitySessionHealth(ctx, account, false)
+	} else if err == nil {
+		s.updatePerplexitySessionHealth(ctx, account, true)
+	}
+	return err
+}
+
+func (s *AccountTestService) fetchPerplexityJSON(ctx context.Context, account *Account, path string) ([]byte, int, error) {
+	resp, err := s.doPerplexityRequest(ctx, account, http.MethodGet, path)
+	if err != nil {
+		if errors.Is(err, ErrAccountProxyUnavailable) {
+			return nil, 0, fmt.Errorf("perplexity assigned proxy is unavailable: %w", ErrAccountProxyUnavailable)
+		}
+		// Transport errors can embed proxy credentials. Keep API-facing errors
+		// deliberately generic and never include raw upstream bodies or cookies.
+		return nil, 0, fmt.Errorf("perplexity request failed")
+	}
+	if resp == nil || resp.Body == nil {
+		return nil, 0, fmt.Errorf("perplexity response is empty")
 	}
 	defer func() { _ = resp.Body.Close() }()
-	body, err := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
+	body, err := io.ReadAll(io.LimitReader(resp.Body, (1<<20)+1))
 	if err != nil {
-		return fmt.Errorf("read perplexity session response: %w", err)
+		return nil, resp.StatusCode, fmt.Errorf("read perplexity response failed")
 	}
-	if resp.StatusCode == http.StatusUnauthorized || resp.StatusCode == http.StatusForbidden {
-		return fmt.Errorf("perplexity session cookie is invalid or expired (HTTP %d)", resp.StatusCode)
+	if len(body) > 1<<20 {
+		return nil, resp.StatusCode, fmt.Errorf("perplexity response exceeds size limit")
 	}
-	if resp.StatusCode != http.StatusOK {
-		return fmt.Errorf("perplexity session check returned HTTP %d", resp.StatusCode)
+	return body, resp.StatusCode, nil
+}
+
+func validatePerplexitySessionResponse(body []byte, status int) (bool, error) {
+	if status == http.StatusUnauthorized {
+		return true, fmt.Errorf("perplexity session is unauthenticated or expired (HTTP %d)", status)
 	}
-	if user := gjson.GetBytes(body, "user"); !user.Exists() || !user.IsObject() || len(user.Map()) == 0 {
-		return fmt.Errorf("perplexity session is not authenticated (empty user object)")
+	if status == http.StatusForbidden {
+		return false, fmt.Errorf("perplexity session verification was forbidden (HTTP 403)")
 	}
-	return nil
+	if status != http.StatusOK {
+		return false, fmt.Errorf("perplexity session check returned HTTP %d", status)
+	}
+	if !gjson.ValidBytes(body) || !gjson.ParseBytes(body).IsObject() {
+		return false, fmt.Errorf("perplexity session response is not a JSON object")
+	}
+	if user := gjson.GetBytes(body, "user"); !user.IsObject() || len(user.Map()) == 0 {
+		return true, fmt.Errorf("perplexity session is unauthenticated (empty user object)")
+	}
+	return false, nil
+}
+
+func (s *AccountTestService) updatePerplexitySessionHealth(ctx context.Context, account *Account, valid bool) {
+	if s.accountRepo == nil || account.ID <= 0 {
+		return
+	}
+	const invalidSessionMessage = "perplexity session is unauthenticated or expired; update the session cookie"
+	var err error
+	if !valid {
+		err = s.accountRepo.SetError(ctx, account.ID, invalidSessionMessage)
+	} else if account.Status == StatusError && strings.HasPrefix(account.ErrorMessage, "perplexity session is unauthenticated") {
+		// A valid session only recovers this platform's own authentication error;
+		// it must not clear unrelated quota, policy, or administrator failures.
+		err = s.accountRepo.ClearError(ctx, account.ID)
+	}
+	if err != nil {
+		logger.L().Debug("perplexity: persist session health failed", zap.Int64("account_id", account.ID), zap.Error(err))
+	}
 }
 
 // perplexitySessionSummary 从 /api/auth/session 响应提取订阅挡位等账号画像。
@@ -132,48 +193,72 @@ func perplexityCreditsSummary(body []byte) map[string]any {
 	return summary
 }
 
-// FetchPerplexityAccountInfo 采集 Perplexity 账号画像：会话挡位（订阅 tier）、
-// Computer 积分余额、速率配额快照，统一写入账号 Extra（键 perplexity_quota_snapshot）。
-// 尽力而为：单项失败仅记日志并跳过，不影响其他项；返回已采集到的快照（可能为空）。
+// FetchPerplexityAccountInfo refreshes independent profile sections while retaining
+// each failed section's last-good data and timestamp. A collection attempt is not
+// a successful refresh of all sections.
 func (s *AccountTestService) FetchPerplexityAccountInfo(ctx context.Context, account *Account) map[string]any {
-	snapshot := map[string]any{"fetched_at": time.Now().UTC().Format(time.RFC3339)}
-	if s == nil || account == nil {
-		return snapshot
+	var previous any
+	if account != nil && account.Extra != nil {
+		previous = account.Extra[perplexityQuotaSnapshotExtraKey]
 	}
-
-	fetchJSON := func(path string) ([]byte, int) {
-		resp, err := s.doPerplexityRequest(ctx, account, http.MethodGet, path)
+	profile := perplexityProfileFromSnapshot(previous)
+	now := time.Now().UTC()
+	profile.AttemptedAt = &now
+	profile.SessionValid = nil
+	allSuccessful := true
+	for _, name := range perplexityInfoSections {
+		path := perplexity.SessionPath
+		switch name {
+		case "credits":
+			path = perplexity.CreditsBalancePath + "?include_credits=true"
+		case "rate_limits":
+			path = perplexity.RateLimitAllPath
+		}
+		attemptedAt := time.Now().UTC()
+		body, status, err := s.fetchPerplexityJSON(ctx, account, path)
+		var data map[string]any
+		if err == nil && name == "session" {
+			var invalid bool
+			invalid, err = validatePerplexitySessionResponse(body, status)
+			if invalid {
+				valid := false
+				profile.SessionValid = &valid
+				s.updatePerplexitySessionHealth(ctx, account, false)
+			} else if err == nil {
+				valid := true
+				profile.SessionValid = &valid
+				s.updatePerplexitySessionHealth(ctx, account, true)
+				data = perplexitySessionSummary(body)
+			}
+		} else if err == nil {
+			if status != http.StatusOK {
+				err = fmt.Errorf("perplexity %s check returned HTTP %d", name, status)
+			} else if !gjson.ValidBytes(body) || !gjson.ParseBytes(body).IsObject() {
+				err = fmt.Errorf("perplexity %s response is not a JSON object", name)
+			} else if name == "credits" {
+				data = perplexityCreditsSummary(body)
+				if data == nil {
+					err = fmt.Errorf("perplexity credits response contains no balance fields")
+				}
+			} else if json.Unmarshal(body, &data) != nil {
+				err = fmt.Errorf("perplexity rate limits response is not valid JSON")
+			}
+		}
 		if err != nil {
-			logger.L().Debug("perplexity: account info fetch failed",
-				zap.Int64("account_id", account.ID), zap.String("path", path), zap.Error(err))
-			return nil, 0
+			allSuccessful = false
+			profile.failSection(name, err.Error(), attemptedAt)
+			continue
 		}
-		defer func() { _ = resp.Body.Close() }()
-		body, readErr := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
-		if readErr != nil {
-			return nil, resp.StatusCode
-		}
-		return body, resp.StatusCode
+		fetchedAt := time.Now().UTC()
+		profile.Snapshot[name] = data
+		profile.Sections[name] = PerplexityUsageSection{Status: "success", FetchedAt: &fetchedAt, AttemptedAt: &attemptedAt}
 	}
-
-	if body, status := fetchJSON(perplexity.SessionPath); status == http.StatusOK {
-		if summary := perplexitySessionSummary(body); len(summary) > 0 {
-			snapshot["session"] = summary
-		}
+	if allSuccessful {
+		fetchedAt := time.Now().UTC()
+		profile.FetchedAt = &fetchedAt
 	}
-	if body, status := fetchJSON(perplexity.CreditsBalancePath + "?include_credits=true"); status == http.StatusOK {
-		if summary := perplexityCreditsSummary(body); len(summary) > 0 {
-			snapshot["credits"] = summary
-		}
-	}
-	if body, status := fetchJSON(perplexity.RateLimitAllPath); status == http.StatusOK && gjson.ValidBytes(body) {
-		var raw map[string]any
-		if json.Unmarshal(body, &raw) == nil {
-			snapshot["rate_limits"] = raw
-		}
-	}
-
-	if s.accountRepo != nil && account.ID > 0 {
+	snapshot := profile.persistedSnapshot()
+	if s != nil && s.accountRepo != nil && account != nil && account.ID > 0 {
 		if err := s.accountRepo.UpdateExtra(ctx, account.ID, map[string]any{
 			perplexityQuotaSnapshotExtraKey: snapshot,
 		}); err != nil {
@@ -186,6 +271,15 @@ func (s *AccountTestService) FetchPerplexityAccountInfo(ctx context.Context, acc
 // perplexityAccountInfoText 把账号画像快照压成一行测试结果文本。
 func perplexityAccountInfoText(snapshot map[string]any) string {
 	parts := []string{"Perplexity web session is valid."}
+	profile := perplexityProfileFromSnapshot(snapshot)
+	if _, hasSections := snapshot["sections"]; hasSections {
+		switch {
+		case profile.SessionValid == nil:
+			parts[0] = "Perplexity web session could not be verified."
+		case !*profile.SessionValid:
+			parts[0] = "Perplexity web session is unauthenticated or expired."
+		}
+	}
 	if sess, ok := snapshot["session"].(map[string]any); ok {
 		if tier, ok := sess["subscription_tier"].(string); ok && tier != "" {
 			parts = append(parts, "tier="+tier)
@@ -207,31 +301,39 @@ func perplexityAccountInfoText(snapshot map[string]any) string {
 		parts = append(parts, "credits{"+strings.Join(fields, ", ")+"}")
 	}
 	if _, ok := snapshot["rate_limits"]; ok {
-		parts = append(parts, "rate-limit snapshot updated")
+		if section, present := profile.Sections["rate_limits"]; snapshot["sections"] != nil && present && section.Status != "success" {
+			parts = append(parts, "rate-limit snapshot retained (last-good)")
+		} else {
+			parts = append(parts, "rate-limit snapshot updated")
+		}
+	}
+	for _, name := range perplexityInfoSections {
+		if section := profile.Sections[name]; section.Error != "" {
+			parts = append(parts, name+": "+section.Error)
+		}
 	}
 	return strings.Join(parts, " ")
 }
 
 // testPerplexityAccountConnection 是管理端账号测试入口：探测网页会话存活，
 // 并尽力刷新配额快照。
-func (s *AccountTestService) testPerplexityAccountConnection(c *gin.Context, account *Account, modelID string) error {
-	testModelID := strings.TrimSpace(modelID)
-	if testModelID == "" {
-		testModelID = "sonar"
-	}
-	testModelID = account.GetMappedModel(testModelID)
+func (s *AccountTestService) testPerplexityAccountConnection(c *gin.Context, account *Account, _ string) error {
 	c.Writer.Header().Set("Content-Type", "text/event-stream")
 	c.Writer.Header().Set("Cache-Control", "no-cache")
 	c.Writer.Header().Set("Connection", "keep-alive")
 	c.Writer.Header().Set("X-Accel-Buffering", "no")
 	c.Writer.Flush()
-	s.sendEvent(c, TestEvent{Type: "test_start", Model: testModelID})
+	s.sendEvent(c, TestEvent{Type: "test_start", Text: "Perplexity session validation only; the selected model is not invoked."})
 
-	ctx := c.Request.Context()
-	if err := s.ValidatePerplexitySession(ctx, account); err != nil {
-		return s.sendErrorAndEnd(c, err.Error())
+	snapshot := s.FetchPerplexityAccountInfo(c.Request.Context(), account)
+	profile := perplexityProfileFromSnapshot(snapshot)
+	if profile.SessionValid == nil || !*profile.SessionValid {
+		message := profile.Sections["session"].Error
+		if message == "" {
+			message = "perplexity session could not be verified"
+		}
+		return s.sendErrorAndEnd(c, message)
 	}
-	snapshot := s.FetchPerplexityAccountInfo(ctx, account)
 	s.sendEvent(c, TestEvent{Type: "content", Text: perplexityAccountInfoText(snapshot)})
 	s.sendEvent(c, TestEvent{Type: "test_complete", Success: true})
 	return nil

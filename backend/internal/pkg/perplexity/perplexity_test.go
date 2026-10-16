@@ -212,10 +212,10 @@ func TestParseEventBlocksShape(t *testing.T) {
 }
 
 func TestParseEventBlocksShapeChunksFallback(t *testing.T) {
-	// answer 缺失时拼接 chunks。
+	// answer 缺失且未标记 DONE 时，chunks 是本事件的增量。
 	event := `{"blocks": [{"intended_usage": "ask_text", "markdown_block": {"chunks": ["Hello", ", world"]}}]}`
 	ev, ok := ParseEvent([]byte(event))
-	if !ok || !ev.HasText {
+	if !ok || !ev.HasText || !ev.IsDelta {
 		t.Fatalf("ParseEvent ok=%v HasText=%v", ok, ev.HasText)
 	}
 	if ev.Text != "Hello, world" {
@@ -276,23 +276,23 @@ func TestParseEventNonAnswerEvents(t *testing.T) {
 }
 
 func TestDeltaFromSnapshot(t *testing.T) {
-	if got := DeltaFromSnapshot("Hello", "Hello, world"); got != ", world" {
-		t.Errorf("delta = %q", got)
-	}
-	if got := DeltaFromSnapshot("abc", "abc"); got != "" {
-		t.Errorf("delta = %q, want empty", got)
-	}
-	// 快照不以 prev 为前缀（上游重写）：返回整段。
-	if got := DeltaFromSnapshot("zzz", "Hello"); got != "Hello" {
-		t.Errorf("delta = %q", got)
-	}
-	// 上游重写中段：只重复分叉点之后的内容，而不是整段。
-	if got := DeltaFromSnapshot("Hello world", "Hello there"); got != "there" {
-		t.Errorf("delta = %q", got)
-	}
-	// 多字节字符：不在 rune 中间切开。
-	if got := DeltaFromSnapshot("你好，世界", "你好，朋友"); got != "朋友" {
-		t.Errorf("delta = %q", got)
+	for _, tc := range []struct {
+		prev, next, want string
+		wantError        bool
+	}{
+		{"Hello", "Hello, world", ", world", false},
+		{"abc", "abc", "", false},
+		{"", "你好", "你好", false},
+		{"你好", "你好，世界", "，世界", false},
+		{"zzz", "Hello", "", true},
+		{"Hello world", "Hello there", "", true},
+		{"你好，世界", "你好，朋友", "", true},
+		{"abc", "ab", "", true},
+	} {
+		got, err := DeltaFromSnapshot(tc.prev, tc.next)
+		if got != tc.want || (err != nil) != tc.wantError {
+			t.Errorf("DeltaFromSnapshot(%q, %q) = (%q, %v), want (%q, error=%v)", tc.prev, tc.next, got, err, tc.want, tc.wantError)
+		}
 	}
 }
 
@@ -325,19 +325,15 @@ func TestFoldMessagesToQuery(t *testing.T) {
 		}
 	})
 
-	t.Run("tool-call-only assistant stripped", func(t *testing.T) {
-		q, err := FoldMessagesToQuery(parse(`{"messages":[
+	t.Run("tool-call-only assistant rejected", func(t *testing.T) {
+		_, err := FoldMessagesToQuery(parse(`{"messages":[
 			{"role":"user","content":"Hi"},
 			{"role":"assistant","content":null,"tool_calls":[{"id":"c1","type":"function","function":{"name":"search","arguments":"{}"}}]},
 			{"role":"tool","tool_call_id":"c1","content":"result"},
 			{"role":"user","content":"And Go?"}
 		]}`))
-		if err != nil {
-			t.Fatal(err)
-		}
-		want := "User: Hi\nAnd Go?"
-		if q != want {
-			t.Errorf("q = %q, want %q", q, want)
+		if !errors.Is(err, ErrUnsupportedToolHistory) {
+			t.Fatalf("err = %v, want ErrUnsupportedToolHistory", err)
 		}
 	})
 
@@ -351,13 +347,10 @@ func TestFoldMessagesToQuery(t *testing.T) {
 		}
 	})
 
-	t.Run("images ignored when text present", func(t *testing.T) {
-		q, err := FoldMessagesToQuery(parse(`{"messages":[{"role":"user","content":[{"type":"image_url","image_url":{"url":"data:image/png;base64,xx"}},{"type":"text","text":"what is this?"}]}]}`))
-		if err != nil {
-			t.Fatal(err)
-		}
-		if q != "what is this?" {
-			t.Errorf("q = %q", q)
+	t.Run("images rejected when text present", func(t *testing.T) {
+		_, err := FoldMessagesToQuery(parse(`{"messages":[{"role":"user","content":[{"type":"image_url","image_url":{"url":"data:image/png;base64,xx"}},{"type":"text","text":"what is this?"}]}]}`))
+		if !errors.Is(err, ErrUnsupportedImageInput) {
+			t.Fatalf("err = %v, want ErrUnsupportedImageInput", err)
 		}
 	})
 

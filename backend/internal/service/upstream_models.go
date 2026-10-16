@@ -41,6 +41,9 @@ type UpstreamModelMetadata struct {
 	MaxContextWindow         int64                      `json:"max_context_window,omitempty"`
 	MaxOutputTokens          int64                      `json:"max_output_tokens,omitempty"`
 	CodexToolCapabilities    map[string]json.RawMessage `json:"codex_tool_capabilities,omitempty"`
+	// Perplexity only publishes entitlement hints, not proof of callability.
+	SubscriptionTier string          `json:"subscription_tier,omitempty"`
+	Capabilities     json.RawMessage `json:"capabilities,omitempty"`
 }
 
 type UpstreamModelMetadataSnapshot struct {
@@ -211,6 +214,12 @@ func (s *AccountTestService) FetchUpstreamSupportedModels(ctx context.Context, a
 // untouched.
 func (s *AccountTestService) SyncUpstreamModelCatalog(ctx context.Context, account *Account) (*UpstreamModelCatalog, error) {
 	models, body, err := s.fetchUpstreamModelList(ctx, account)
+	if account != nil && account.IsPerplexity() {
+		if err != nil {
+			return nil, err
+		}
+		return s.syncPerplexityModelCatalog(ctx, account, models, body)
+	}
 	liveListAvailable := err == nil
 	if err != nil {
 		configuredModels := configuredUpstreamModelsForCapabilitySync(account)
@@ -1323,7 +1332,7 @@ func (s *AccountTestService) doUpstreamModelsRequest(req *http.Request, proxyURL
 
 // buildPerplexityUpstreamModelsRequest 构造 Perplexity 模型配置请求：
 // GET {base}/rest/models/config/v2，Cookie 会话 + fetch 风格头。
-func (s *AccountTestService) buildPerplexityUpstreamModelsRequest(_ context.Context, account *Account) (*http.Request, error) {
+func (s *AccountTestService) buildPerplexityUpstreamModelsRequest(ctx context.Context, account *Account) (*http.Request, error) {
 	if account == nil {
 		return nil, newUpstreamModelSyncConfigError("Account is required", nil)
 	}
@@ -1335,7 +1344,7 @@ func (s *AccountTestService) buildPerplexityUpstreamModelsRequest(_ context.Cont
 	if err != nil {
 		return nil, newUpstreamModelSyncConfigError("Invalid Perplexity base URL", err)
 	}
-	req, err := http.NewRequest(http.MethodGet, strings.TrimRight(validatedBaseURL, "/")+perplexity.ModelsConfigPath, nil)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, strings.TrimRight(validatedBaseURL, "/")+perplexity.ModelsConfigPath, nil)
 	if err != nil {
 		return nil, newUpstreamModelSyncConfigError("Failed to build Perplexity models request", err)
 	}
@@ -1351,6 +1360,166 @@ func extractPerplexityUpstreamModelIDs(body []byte) ([]string, error) {
 		return nil, fmt.Errorf("no models in perplexity models config response")
 	}
 	return ids, nil
+}
+
+// PerplexityAccountModel is a discovered model choice, not a successful model
+// invocation or a guarantee that the session's subscription can invoke it.
+type PerplexityAccountModel struct {
+	UpstreamModelMetadata
+	Object  string `json:"object"`
+	Type    string `json:"type"`
+	OwnedBy string `json:"owned_by"`
+}
+
+func extractPerplexityModelMetadata(body []byte) (map[string]UpstreamModelMetadata, error) {
+	var response struct {
+		Models []struct {
+			upstreamModelCapabilityEntry
+			Model            string          `json:"model"`
+			Label            string          `json:"label"`
+			SubscriptionTier string          `json:"subscription_tier"`
+			Capabilities     json.RawMessage `json:"capabilities"`
+		} `json:"models"`
+	}
+	if err := json.Unmarshal(body, &response); err != nil {
+		return nil, fmt.Errorf("parse perplexity model metadata: %w", err)
+	}
+	metadata := make(map[string]UpstreamModelMetadata, len(response.Models))
+	for _, model := range response.Models {
+		id := strings.TrimSpace(model.Model)
+		if id == "" {
+			continue
+		}
+		if _, exists := metadata[id]; exists {
+			continue
+		}
+		entry := upstreamMetadataFromCapabilityEntry(id, model.upstreamModelCapabilityEntry)
+		if label := strings.TrimSpace(model.Label); label != "" {
+			entry.DisplayName = label
+		}
+		entry.SubscriptionTier = strings.TrimSpace(model.SubscriptionTier)
+		if string(model.Capabilities) != "null" {
+			entry.Capabilities = model.Capabilities
+		}
+		metadata[id] = entry
+	}
+	return metadata, nil
+}
+
+func (s *AccountTestService) syncPerplexityModelCatalog(ctx context.Context, account *Account, models []string, body []byte) (*UpstreamModelCatalog, error) {
+	metadata, err := extractPerplexityModelMetadata(body)
+	if err != nil {
+		return nil, newUpstreamModelSyncUpstreamError("Invalid Perplexity model configuration", err)
+	}
+	// The web catalog is authoritative. Never enrich it from API-product
+	// registries or fabricate context/reasoning capabilities from model names.
+	catalog := &UpstreamModelCatalog{Models: models, Metadata: metadata}
+	if account.ID > 0 && s.accountRepo != nil {
+		snapshot := UpstreamModelMetadataSnapshot{Source: "perplexity", SyncedAt: time.Now().UTC().Format(time.RFC3339), Models: metadata}
+		if err := s.accountRepo.UpdateExtra(ctx, account.ID, map[string]any{UpstreamModelMetadataExtraKey: snapshot}); err != nil {
+			return nil, newUpstreamModelSyncInternalError("Failed to save Perplexity model metadata", err)
+		}
+		account.SetUpstreamModelMetadataSnapshot(snapshot)
+	}
+	return catalog, nil
+}
+
+// FetchPerplexityAccountModels discovers web model preferences and projects only
+// matching targets through the account's public aliases. Missing targets are not
+// synthesized from subscription hints or from arbitrary configured model names.
+func (s *AccountTestService) FetchPerplexityAccountModels(ctx context.Context, account *Account) ([]PerplexityAccountModel, error) {
+	models, body, err := s.fetchUpstreamModelList(ctx, account)
+	if err != nil {
+		return nil, err
+	}
+	metadata, err := extractPerplexityModelMetadata(body)
+	if err != nil {
+		return nil, err
+	}
+	choices := make([]PerplexityAccountModel, 0, len(models))
+	for _, id := range models {
+		entry := metadata[id]
+		entry.ID = id
+		if entry.DisplayName == "" {
+			entry.DisplayName = id
+		}
+		choices = append(choices, PerplexityAccountModel{
+			UpstreamModelMetadata: entry, Object: "model", Type: "model", OwnedBy: "perplexity",
+		})
+	}
+	return projectPerplexityAccountModels(account, choices), nil
+}
+
+// DefaultPerplexityAccountModels is only a discovery-failure fallback. These are
+// local Perplexity aliases, not an entitlement assertion or a Claude catalog.
+func DefaultPerplexityAccountModels(account *Account) []PerplexityAccountModel {
+	ids := perplexity.DefaultModelIDs()
+	models := make([]PerplexityAccountModel, 0, len(ids))
+	for _, id := range ids {
+		models = append(models, PerplexityAccountModel{
+			UpstreamModelMetadata: UpstreamModelMetadata{ID: id, DisplayName: id},
+			Object:                "model", Type: "model", OwnedBy: "perplexity",
+		})
+	}
+	return projectPerplexityAccountModels(account, models)
+}
+
+func projectPerplexityAccountModels(account *Account, models []PerplexityAccountModel) []PerplexityAccountModel {
+	if account == nil || len(account.GetModelMapping()) == 0 {
+		return models
+	}
+	byID := make(map[string]PerplexityAccountModel, len(models))
+	for _, model := range models {
+		byID[model.ID] = model
+	}
+	resolveTarget := func(target string) (PerplexityAccountModel, bool) {
+		if i := strings.LastIndex(target, ":"); i >= 0 {
+			switch target[i+1:] {
+			case perplexity.ModeConcise, perplexity.ModeCopilot, perplexity.ModeComputer:
+				target = target[:i]
+			}
+		}
+		if model, exists := byID[target]; exists {
+			return model, true
+		}
+		// Only documented local aliases may be resolved. The general request
+		// resolver falls back to turbo for unknown names, which would falsely
+		// advertise arbitrary mappings as available here.
+		for _, alias := range perplexity.DefaultModelIDs() {
+			if target == alias {
+				preference, _ := perplexity.ResolveModelPreference(alias)
+				model, exists := byID[preference]
+				return model, exists
+			}
+		}
+		return PerplexityAccountModel{}, false
+	}
+	publicIDs := make(map[string]bool)
+	for id := range account.GetModelMapping() {
+		if !strings.Contains(id, "*") {
+			publicIDs[id] = true
+		}
+	}
+	for _, model := range models {
+		if account.IsModelSupported(model.ID) {
+			publicIDs[model.ID] = true
+		}
+	}
+	ids := make([]string, 0, len(publicIDs))
+	for id := range publicIDs {
+		ids = append(ids, id)
+	}
+	sort.Strings(ids)
+	result := make([]PerplexityAccountModel, 0, len(ids))
+	for _, id := range ids {
+		model, exists := resolveTarget(account.GetMappedModel(id))
+		if !exists {
+			continue
+		}
+		model.ID = id
+		result = append(result, model)
+	}
+	return result
 }
 
 // upstreamModelsProxyURL fail-closed：分配了代理但不可用时返回错误，绝不回退直连。

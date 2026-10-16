@@ -5,7 +5,6 @@
 package perplexity
 
 import (
-	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
@@ -14,7 +13,6 @@ import (
 	"time"
 	"unicode/utf8"
 
-	"github.com/google/uuid"
 	"github.com/tidwall/gjson"
 )
 
@@ -202,51 +200,32 @@ func isRawPreferenceName(name string) bool {
 
 // BuildAskBody 构造 /rest/sse/perplexity_ask 请求体。
 func BuildAskBody(query string, modelPref string, mode string) ([]byte, error) {
-	if mode == "" {
-		mode = ModeConcise
-	}
-	payload := map[string]any{
-		"query_str": query,
-		"params": map[string]any{
-			"attachments":           []any{},
-			"frontend_context_uuid": uuid.NewString(),
-			"frontend_uuid":         uuid.NewString(),
-			"is_incognito":          false,
-			"language":              "en-US",
-			"last_backend_uuid":     nil,
-			"mode":                  mode,
-			"model_preference":      modelPref,
-			"source":                "default",
-			"sources":               []string{"web"},
-			"search_focus":          "internet",
-			"version":               askVersion,
-		},
-	}
-	return json.Marshal(payload)
+	return BuildAskBodyWithOptions(query, modelPref, mode, DefaultRequestOptions())
 }
 
-// Event 是一个已解析的 SSE message 事件。
+// Event 是一个已解帧的 Perplexity 事件；内部步骤不是客户端工具调用。
 type Event struct {
-	// Text 是截至本事件的完整回答快照（累积式，非增量）。
+	// Text 在 IsDelta 为 true 时是增量，否则是权威的完整快照（可为空）。
 	Text string
-	// BackendUUID 是上游线程句柄（日志用；MVP 不做 last_backend_uuid 链式回话）。
+	// IsDelta 仅用于未完成的 markdown_block.chunks；answer 和 DONE 均为快照。
+	IsDelta bool
+	// AnswerUsage 标识已选定的 ask_text 镜像通道。
+	AnswerUsage string
 	BackendUUID string
-	// UUID 是事件自身 uuid（如有）。
-	UUID string
-	// HasText 表示本事件是否携带了回答文本。
-	HasText bool
-	// Steps 是 pro_search_steps 块里的工具执行步骤（Computer/代理模式的 tool call
-	// 轨迹：SEARCH_WEB / BROWSER_* / CODE / MCP_TOOL / THOUGHT / FINAL 等）。
-	// 事件间步骤按 UUID 累积更新，调用方按 UUID 去重。
-	Steps []Step
+	UUID        string
+	HasText     bool
+	EndOfStream bool
+	// Error 只标记上游失败，不保留可能含凭据的原始错误载荷。
+	Error   bool
+	Steps   []Step
+	Sources []Source
 }
 
-// Step 是代理执行轨迹中的一步工具调用。
+// Step 是上游内部执行步骤，Content 不可直接透传到下游。
 type Step struct {
-	UUID string
-	// Type 是原始 step_type（大写下划线，如 SEARCH_WEB）。
-	Type string
-	// Content 是与 step_type 对应的 *_content 字段（首个对象值）。
+	UUID    string
+	Type    string
+	Status  string
 	Content map[string]any
 }
 
@@ -283,208 +262,104 @@ func ParseModelsConfigIDs(body []byte) []string {
 	return ids
 }
 
-// parseStep 解析 plan_block.steps[] 的单个步骤：取首个以 _content 结尾的对象字段
-// 作为步骤载荷（search_web_content / browser_open_tab_content / code_content 等）。
-func parseStep(step gjson.Result) (Step, bool) {
-	stepType := strings.TrimSpace(step.Get("step_type").String())
-	if stepType == "" {
-		return Step{}, false
-	}
-	s := Step{
-		UUID: strings.TrimSpace(step.Get("uuid").String()),
-		Type: stepType,
-	}
-	step.ForEach(func(key, value gjson.Result) bool {
-		if s.Content == nil && strings.HasSuffix(key.String(), "_content") && value.IsObject() {
-			s.Content = map[string]any{}
-			_ = json.Unmarshal([]byte(value.Raw), &s.Content)
-		}
-		return true
-	})
-	return s, true
-}
-
-// ParseEvent 解析单个 SSE data 载荷，同时支持两种线上形态：
-//
-//  1. 现代 blocks 形态：blocks[] 中 intended_usage=="ask_text" 的块携带
-//     markdown_block.answer（累积全文）和/或 markdown_block.chunks（文本片段数组）。
-//  2. 旧形态：顶层 text 字段本身是一个 JSON 字符串，内含 steps[]；其中
-//     step_type=="FINAL" 的 step 的 content.answer 又是一个 JSON 字符串
-//     {"answer": "...", "web_results": [...]}。
+// ParseEvent 解析单个 SSE data 载荷。流式调用方应使用 Decoder，以固定选择一个
+// ask_text 镜像通道，并把 JSON 错误和缺少 end_of_stream 作为失败处理。
 func ParseEvent(data []byte) (Event, bool) {
-	trimmed := strings.TrimSpace(string(data))
-	if trimmed == "" || !gjson.Valid(trimmed) {
-		return Event{}, false
-	}
-	root := gjson.Parse(trimmed)
-	ev := Event{
-		BackendUUID: strings.TrimSpace(root.Get("backend_uuid").String()),
-		UUID:        strings.TrimSpace(root.Get("uuid").String()),
-	}
-
-	// 形态 1：blocks[]
-	if blocks := root.Get("blocks"); blocks.IsArray() {
-		for _, block := range blocks.Array() {
-			switch block.Get("intended_usage").String() {
-			case "ask_text":
-				md := block.Get("markdown_block")
-				if answer := md.Get("answer").String(); answer != "" {
-					ev.Text = answer
-					ev.HasText = true
-				} else if chunks := md.Get("chunks"); chunks.IsArray() {
-					var sb strings.Builder
-					for _, chunk := range chunks.Array() {
-						_, _ = sb.WriteString(chunk.String())
-					}
-					if sb.Len() > 0 {
-						ev.Text = sb.String()
-						ev.HasText = true
-					}
-				}
-			case "pro_search_steps":
-				// 工具执行轨迹（Computer/代理模式）：plan_block.steps[] 累积更新。
-				for _, step := range block.Get("plan_block.steps").Array() {
-					if s, ok := parseStep(step); ok {
-						ev.Steps = append(ev.Steps, s)
-					}
-				}
-			}
-		}
-		return ev, true
-	}
-
-	// 形态 2：text 为内嵌 JSON 字符串
-	rawText := root.Get("text")
-	if rawText.Type == gjson.String {
-		inner := strings.TrimSpace(rawText.String())
-		if inner != "" && gjson.Valid(inner) {
-			steps := gjson.Get(inner, "steps")
-			if steps.IsArray() {
-				for i, step := range steps.Array() {
-					stepType := step.Get("step_type").String()
-					if stepType != "FINAL" && stepType != "" {
-						// 非 FINAL 步骤是工具执行轨迹（旧形态的 content 是单对象）。
-						// 旧形态步骤可能没有 uuid：按数组序号兜底（步骤数组累积
-						// 有序，序号在事件间稳定），保证翻译器能按 uuid 去重。
-						s := Step{
-							UUID: strings.TrimSpace(step.Get("uuid").String()),
-							Type: stepType,
-						}
-						if s.UUID == "" {
-							s.UUID = "legacy-" + strconv.Itoa(i)
-						}
-						if content := step.Get("content"); content.IsObject() {
-							s.Content = map[string]any{}
-							_ = json.Unmarshal([]byte(content.Raw), &s.Content)
-						}
-						ev.Steps = append(ev.Steps, s)
-						continue
-					}
-					answerRaw := step.Get("content.answer").String()
-					if answerRaw == "" {
-						continue
-					}
-					// content.answer 是又一个 JSON 字符串：{"answer": "...", ...}
-					if gjson.Valid(answerRaw) {
-						ev.Text = gjson.Get(answerRaw, "answer").String()
-					} else {
-						ev.Text = answerRaw
-					}
-					ev.HasText = ev.Text != ""
-				}
-			}
-			return ev, true
-		}
-	}
-
-	// 其他事件（状态/心跳等）：合法 JSON 但无回答文本。
-	return ev, true
+	return parseEvent(data, "")
 }
 
-// DeltaFromSnapshot 对累积快照做最长公共前缀差分：快照通常是 prev 的前缀扩展，
-// 直接返回增量；上游偶发重写中段时（不共享前缀尾部）也只重复分叉点之后的
-// 内容，避免整段重发。返回增量按 rune 边界对齐，不切开多字节字符。
-func DeltaFromSnapshot(prev, snapshot string) string {
-	n := 0
-	maxN := min(len(prev), len(snapshot))
-	for n < maxN && prev[n] == snapshot[n] {
-		n++
+// DeltaFromSnapshot 仅接受已发送内容的前缀扩展；中段改写或截短必须显式失败，
+// 否则追加公共前缀之后的文本会产生不可恢复的混合回答。
+func DeltaFromSnapshot(prev, snapshot string) (string, error) {
+	if !strings.HasPrefix(snapshot, prev) {
+		return "", ErrAnswerRewritten
 	}
-	for n > 0 && n < len(snapshot) && !utf8.RuneStart(snapshot[n]) {
-		n--
-	}
-	return snapshot[n:]
+	return snapshot[len(prev):], nil
 }
 
-// ErrImageOnlyFinalMessage 表示最终用户消息仅包含图片——MVP 不支持上传。
-var ErrImageOnlyFinalMessage = errors.New("perplexity web subscription does not support image inputs; send text instead")
+// ErrUnsupportedImageInput 表示图片尚未由服务端上传助手替换为文本占位符。
+var ErrUnsupportedImageInput = errors.New("perplexity image inputs must be processed by the upload helper before folding")
+
+// ErrImageOnlyFinalMessage 保留旧调用方的错误判断；任何未处理图片都会报错。
+var ErrImageOnlyFinalMessage = ErrUnsupportedImageInput
+
+// ErrUnsupportedToolHistory 表示客户端工具历史无法作为普通搜索历史处理。
+var ErrUnsupportedToolHistory = errors.New("perplexity web subscription does not support client tool call or tool result history")
 
 // FoldMessagesToQuery 把 OpenAI Chat Completions messages 折叠为单个 query_str：
 //
 //   - system → 头部 "Instructions: ..." 块
 //   - 历史 user/assistant → "User: ..." / "Assistant: ..." 行
 //   - 最后一条 user 消息是实际问题（不再加前缀）
-//   - tool 角色与纯 tool_calls 消息被丢弃；多模态 content 数组拼接 text 部分、
-//     忽略 image 部分；最终 user 消息仅含图片时报错。
+//   - 未处理图片、工具历史和未知内容块明确报错，不能静默丢失请求语义。
 //   - 只有一条 user 消息且无 system 时原样发送。
 func FoldMessagesToQuery(messages gjson.Result) (string, error) {
 	if !messages.IsArray() {
 		return "", fmt.Errorf("messages is not an array")
 	}
 	type turn struct {
-		role      string
-		text      string
-		imageOnly bool
+		role string
+		text string
 	}
 	var instructions []string
 	var turns []turn
 
-	extractText := func(content gjson.Result) (text string, hasImage bool, hasText bool) {
+	extractText := func(content gjson.Result) (string, error) {
 		if content.Type == gjson.String {
-			return content.String(), false, strings.TrimSpace(content.String()) != ""
+			return content.String(), nil
 		}
-		if content.IsArray() {
-			var sb strings.Builder
-			for _, part := range content.Array() {
-				switch part.Get("type").String() {
-				case "text":
-					_, _ = sb.WriteString(part.Get("text").String())
-					hasText = true
-				case "image_url", "input_image", "image":
-					hasImage = true
+		if content.Type == gjson.Null {
+			return "", nil
+		}
+		if !content.IsArray() {
+			return "", fmt.Errorf("perplexity message content must be text or an array of text blocks")
+		}
+		var sb strings.Builder
+		for _, part := range content.Array() {
+			switch part.Get("type").String() {
+			case "text":
+				if part.Get("text").Type != gjson.String {
+					return "", fmt.Errorf("perplexity text blocks require a string text field")
 				}
+				_, _ = sb.WriteString(part.Get("text").String())
+			case "image_url", "input_image", "image":
+				return "", ErrUnsupportedImageInput
+			case "tool_use", "tool_result", "function_call", "function_call_output":
+				return "", ErrUnsupportedToolHistory
+			default:
+				return "", fmt.Errorf("perplexity does not support message content type %q", part.Get("type").String())
 			}
-			return sb.String(), hasImage, hasText
 		}
-		return "", false, false
+		return sb.String(), nil
 	}
 
 	for _, msg := range messages.Array() {
+		if calls := msg.Get("tool_calls"); calls.Exists() && (!calls.IsArray() || len(calls.Array()) > 0) {
+			return "", ErrUnsupportedToolHistory
+		}
+		if msg.Get("function_call").Exists() || msg.Get("tool_call_id").Exists() {
+			return "", ErrUnsupportedToolHistory
+		}
 		role := strings.ToLower(strings.TrimSpace(msg.Get("role").String()))
+		if role == "tool" || role == "function" {
+			return "", ErrUnsupportedToolHistory
+		}
+		text, err := extractText(msg.Get("content"))
+		if err != nil {
+			return "", err
+		}
 		switch role {
 		case "system", "developer":
-			text, _, _ := extractText(msg.Get("content"))
 			if t := strings.TrimSpace(text); t != "" {
 				instructions = append(instructions, t)
 			}
-		case "user":
-			content := msg.Get("content")
-			text, hasImage, hasText := extractText(content)
-			turns = append(turns, turn{role: "user", text: text, imageOnly: hasImage && !hasText})
-		case "assistant":
-			// 纯 tool_calls 消息（无文本内容）丢弃。
-			text, _, _ := extractText(msg.Get("content"))
-			if strings.TrimSpace(text) == "" && len(msg.Get("tool_calls").Array()) > 0 {
-				continue
-			}
-			turns = append(turns, turn{role: "assistant", text: text})
+		case "user", "assistant":
+			turns = append(turns, turn{role: role, text: text})
 		default:
-			// tool / function 等其他角色丢弃。
-			continue
+			return "", fmt.Errorf("perplexity does not support message role %q", role)
 		}
 	}
 
-	// 最终 user 消息仅含图片 → 明确报错（400）。
 	lastUser := -1
 	for i := len(turns) - 1; i >= 0; i-- {
 		if turns[i].role == "user" {
@@ -495,8 +370,8 @@ func FoldMessagesToQuery(messages gjson.Result) (string, error) {
 	if lastUser < 0 {
 		return "", fmt.Errorf("no user message found")
 	}
-	if turns[lastUser].imageOnly && strings.TrimSpace(turns[lastUser].text) == "" {
-		return "", ErrImageOnlyFinalMessage
+	if strings.TrimSpace(turns[lastUser].text) == "" {
+		return "", fmt.Errorf("empty user message")
 	}
 
 	// 单条 user 且无 system：原样发送。

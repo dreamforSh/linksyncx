@@ -414,6 +414,15 @@
       <div v-else class="text-xs text-gray-400">-</div>
     </template>
 
+    <template v-else-if="account.platform === 'perplexity' && account.type === 'apikey'">
+      <div v-if="loading" class="text-xs text-gray-400" role="status">{{ t('common.loading') }}</div>
+      <div v-if="error || usageInfo?.error" class="max-w-[260px] break-words text-xs text-amber-600 dark:text-amber-400">{{ error || usageInfo?.error }}</div>
+      <PerplexityUsageDetails :usage="usageInfo?.perplexity" :unavailable="Boolean(error)" />
+      <button type="button" class="mt-1 rounded px-1.5 py-0.5 text-[10px] text-blue-600 hover:bg-blue-50 disabled:opacity-50 dark:text-blue-400 dark:hover:bg-blue-900/30" :disabled="loading || activeQueryLoading" data-testid="perplexity-refresh-usage" @click="loadUsage({ source: 'active', bypassCache: true })">
+        {{ t('admin.accounts.perplexity.usage.refresh') }}
+      </button>
+    </template>
+
     <!-- Grok OAuth accounts: passive xAI quota headers + local Sub2API usage -->
     <template v-else-if="account.platform === 'grok' && account.type === 'oauth'">
       <div v-if="loading" class="space-y-1.5">
@@ -755,6 +764,7 @@ import type { Account, AccountUsageInfo, AntigravityQuotaGroup, GeminiCredential
 import { buildOpenAIUsageRefreshKey } from '@/utils/accountUsageRefresh'
 import { enqueueUsageRequest } from '@/utils/usageLoadQueue'
 import { formatCompactNumber } from '@/utils/format'
+import PerplexityUsageDetails from './PerplexityUsageDetails.vue'
 import UsageProgressBar from './UsageProgressBar.vue'
 import AccountQuotaInfo from './AccountQuotaInfo.vue'
 import OpenAIQuotaResetCell from './OpenAIQuotaResetCell.vue'
@@ -824,6 +834,7 @@ let visibilityObserver: IntersectionObserver | null = null
 
 // Show usage windows for OAuth and Setup Token accounts
 const showUsageWindows = computed(() => {
+  if (props.account.platform === 'perplexity') return props.account.type === 'apikey'
   // Gemini: we can always compute local usage windows from DB logs (simulated quotas).
   if (props.account.platform === 'gemini') return true
   // CN providers: apikey 账号也有滚动用量窗口（coding plan）或余额（payg），
@@ -841,6 +852,7 @@ const showUsageWindows = computed(() => {
 })
 
 const shouldFetchUsage = computed(() => {
+  if (props.account.platform === 'perplexity') return props.account.type === 'apikey'
   if (props.account.platform === 'anthropic') {
     return props.account.type === 'oauth' || props.account.type === 'setup-token'
   }

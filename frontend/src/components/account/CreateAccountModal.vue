@@ -1504,6 +1504,8 @@
           <p class="input-hint">{{ t('admin.accounts.perplexity.csrfTokenHint') }}</p>
         </div>
 
+        <PerplexityOptionsFields v-if="form.platform === 'perplexity'" v-model="perplexityOptions" />
+
         <!-- 上游倍率自动探测：全部 API-key 平台可用（所在区块已限定 apikey 类型） -->
         <div
           class="flex items-center justify-between gap-4 border-t border-gray-200 pt-4 dark:border-dark-600"
@@ -4071,6 +4073,7 @@ import Toggle from '@/components/common/Toggle.vue'
 import GrokBaseUrlPresets from '@/components/account/GrokBaseUrlPresets.vue'
 import CnBaseUrlPresets from '@/components/account/CnBaseUrlPresets.vue'
 import OpenCodeGoProtocolRulesEditor from '@/components/account/OpenCodeGoProtocolRulesEditor.vue'
+import PerplexityOptionsFields from '@/components/account/PerplexityOptionsFields.vue'
 import HeaderOverrideEditor from '@/components/account/HeaderOverrideEditor.vue'
 import DeviceProfileCreateField from '@/components/account/DeviceProfileCreateField.vue'
 import { allSelectedGroupsEnableLongContextPricing } from '@/components/account/longContextBilling'
@@ -4081,6 +4084,9 @@ import {
   applyInterceptWarmup,
   applyOpenCodeGoProtocolRules,
   applyPerplexitySession,
+  applyPerplexityOptions,
+  defaultPerplexityOptions,
+  validatePerplexityOptions,
   cloneOpenCodeGoProtocolRules,
   cnSupportsNativeResponses,
   defaultCNAdaptiveBaseUrls,
@@ -4325,6 +4331,7 @@ const addMethod = ref<AddMethod>('oauth') // For oauth-based: 'oauth' or 'setup-
 const apiKeyBaseUrl = ref('https://api.anthropic.com')
 const apiKeyValue = ref('')
 const perplexityCsrfToken = ref('')
+const perplexityOptions = ref(defaultPerplexityOptions())
 const upstreamBillingAutoProbeEnabled = ref(true)
 
 // ── 国产供应商（Kimi / Zhipu / DeepSeek）账号类型、API 协议与端点 ──
@@ -4452,6 +4459,7 @@ function selectPerplexityPlatform() {
   form.type = 'apikey'
   accountCategory.value = 'apikey'
   perplexityCsrfToken.value = ''
+  perplexityOptions.value = defaultPerplexityOptions()
   apiKeyBaseUrl.value = ''
 }
 // 账号类型 / 协议变更时同步默认 base url。
@@ -4523,6 +4531,10 @@ const syncPreviewCredentials = computed(() => {
     type: form.type,
     base_url: baseUrl || undefined,
     api_key: apiKeyValue.value,
+    ...(form.proxy_id != null ? { proxy_id: form.proxy_id } : {}),
+    ...(form.platform === 'perplexity' && perplexityCsrfToken.value.trim()
+      ? { csrf_token: perplexityCsrfToken.value.trim() }
+      : {}),
     ...(modelMapping ? { model_mapping: modelMapping } : {})
   }
 })
@@ -5124,6 +5136,7 @@ watch(
       accountCategory.value = 'apikey'
       form.type = 'apikey'
       perplexityCsrfToken.value = ''
+      perplexityOptions.value = defaultPerplexityOptions()
     }
     if (newPlatform !== 'gemini' && newPlatform !== 'anthropic' && accountCategory.value === 'service_account') {
       accountCategory.value = 'oauth-based'
@@ -5629,6 +5642,7 @@ const resetForm = () => {
   apiKeyBaseUrl.value = 'https://api.anthropic.com'
   apiKeyValue.value = ''
   perplexityCsrfToken.value = ''
+  perplexityOptions.value = defaultPerplexityOptions()
   upstreamRequestIdHeader.value = ''
   upstreamBillingAutoProbeEnabled.value = true
   editQuotaLimit.value = null
@@ -5942,6 +5956,13 @@ const validateGroupSelection = (): boolean => {
 }
 
 const handleSubmit = async () => {
+  if (form.platform === 'perplexity') {
+    const validationError = validatePerplexityOptions(perplexityOptions.value)
+    if (validationError) {
+      appStore.showError(t(`admin.accounts.perplexity.${validationError}`))
+      return
+    }
+  }
   if (!validateGroupSelection()) return
   // For OAuth-based type, handle OAuth flow (goes to step 2)
   if (isOAuthFlow.value) {
@@ -6115,6 +6136,7 @@ const handleSubmit = async () => {
       { sessionToken: apiKeyValue.value, csrfToken: perplexityCsrfToken.value, baseUrl: apiKeyBaseUrl.value },
       'create'
     )
+    applyPerplexityOptions(credentials, perplexityOptions.value)
   } else {
     credentials.base_url = apiKeyBaseUrl.value.trim() || defaultBaseUrl
     credentials.api_key = apiKeyValue.value.trim()
