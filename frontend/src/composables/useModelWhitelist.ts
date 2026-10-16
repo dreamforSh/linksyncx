@@ -212,11 +212,10 @@ const hunyuanModels = [
   'hunyuan-vision', 'hunyuan-code'
 ]
 
-// Perplexity
+// Perplexity（网页订阅会话模型，与后端 internal/pkg/perplexity 的模式表一致）
 const perplexityModels = [
-  'sonar', 'sonar-pro', 'sonar-reasoning',
-  'llama-3-sonar-small-32k-online', 'llama-3-sonar-large-32k-online',
-  'llama-3-sonar-small-32k-chat', 'llama-3-sonar-large-32k-chat'
+  'sonar', 'sonar-pro', 'sonar-reasoning', 'sonar-deep-research',
+  'sonar-computer', 'sonar-pro-computer'
 ]
 
 // 所有模型（去重）

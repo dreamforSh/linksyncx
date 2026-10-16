@@ -339,6 +339,7 @@ export default {
         gemini: 'Gemini',
         antigravity: 'Antigravity',
         grok: 'Grok',
+        perplexity: 'Perplexity',
         kimi: 'Kimi',
         zhipu: 'Zhipu GLM',
         deepseek: 'DeepSeek',
@@ -1165,6 +1166,19 @@ export default {
           cli: 'Grok Build CLI',
           official: '官方 API'
         }
+      },
+      perplexity: {
+        sessionToken: 'Session Token *',
+        sessionTokenPlaceholder: '__Secure-next-auth.session-token Cookie 值',
+        sessionTokenHint:
+          '登录 perplexity.ai 后打开浏览器开发者工具 → Application → Cookies → https://www.perplexity.ai，复制 __Secure-next-auth.session-token 的值。',
+        sessionTokenRequired: '请输入 Perplexity Session Token',
+        csrfToken: 'CSRF Token（可选）',
+        csrfTokenPlaceholder: 'next-auth.csrf-token Cookie 值',
+        csrfTokenHint:
+          '可选。从同一 Cookie 列表复制 next-auth.csrf-token 的值，与会话令牌配对可提高 CSRF 校验请求的通过率。',
+        csrfTokenEditHint: '可选。留空则保留已保存的 Token。',
+        baseUrlHint: '留空使用官网默认地址（https://www.perplexity.ai）'
       },
       grokClientToolCache: {
         title: '客户端工具缓存（可能改变自动工具选择）',

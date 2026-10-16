@@ -129,6 +129,63 @@ func TestTranslatePerplexitySSEToCC_EmptyStream(t *testing.T) {
 	require.Empty(t, strings.TrimSpace(out))
 }
 
+func TestTranslatePerplexitySSEToCC_StepsAsToolCalls(t *testing.T) {
+	// Computer/代理模式的 pro_search_steps 块 → OpenAI tool_calls，按 uuid 去重。
+	step := func(uuid, typ, query string) string {
+		return `{"intended_usage":"pro_search_steps","plan_block":{"steps":[{"step_type":"` + typ +
+			`","uuid":"` + uuid + `","search_web_content":{"query":"` + query + `"}}]}}`
+	}
+	upstream := "event: message\r\n" +
+		"data: {\"backend_uuid\":\"t-7\",\"blocks\":[" + step("1111-aaaa", "SEARCH_WEB", "go1") + "]}\r\n\r\n" +
+		"event: message\r\n" +
+		// 同一步骤的累积更新（内容变化）不应重复下发。
+		"data: {\"backend_uuid\":\"t-7\",\"blocks\":[" + step("1111-aaaa", "SEARCH_WEB", "go1 updated") + "]}\r\n\r\n" +
+		"event: message\r\n" +
+		"data: {\"backend_uuid\":\"t-7\",\"blocks\":[" + step("2222-bbbb", "SEARCH_WEB", "go2") +
+		`,{"intended_usage":"ask_text","markdown_block":{"answer":"Answer."}}]}` + "\r\n\r\n" +
+		"event: end_of_stream\r\n\r\n"
+
+	out, err := collectPerplexityTranslation(t, upstream, true, 5)
+	require.NoError(t, err)
+
+	var toolNames, toolIDs []string
+	for _, line := range strings.Split(out, "\n") {
+		line = strings.TrimSpace(line)
+		if !strings.HasPrefix(line, "data: {") {
+			continue
+		}
+		tc := gjson.Parse(strings.TrimPrefix(line, "data: ")).Get("choices.0.delta.tool_calls.0")
+		if !tc.Exists() {
+			continue
+		}
+		toolNames = append(toolNames, tc.Get("function.name").String())
+		toolIDs = append(toolIDs, tc.Get("id").String())
+	}
+	require.Equal(t, []string{"pplx_search_web", "pplx_search_web"}, toolNames, "two distinct steps, deduped by uuid")
+	require.Equal(t, []string{"call_1111aaaa", "call_2222bbbb"}, toolIDs)
+	require.Contains(t, out, `"Answer."`)
+	require.Contains(t, out, `"finish_reason":"stop"`)
+
+	// tool_call chunk 必须在 role chunk 之后（OpenAI 顺序约束）。
+	roleIdx := strings.Index(out, `"role":"assistant"`)
+	firstTCIdx := strings.Index(out, `"tool_calls"`)
+	require.Greater(t, firstTCIdx, roleIdx)
+}
+
+func TestTranslatePerplexitySSEToCC_NonStreamToolCalls(t *testing.T) {
+	upstream := "event: message\r\n" +
+		"data: {\"blocks\":[{\"intended_usage\":\"pro_search_steps\",\"plan_block\":{\"steps\":[{\"step_type\":\"CODE\",\"uuid\":\"3333\",\"code_content\":{\"language\":\"go\"}}]}}," +
+		`{"intended_usage":"ask_text","markdown_block":{"answer":"done"}}]}` + "\r\n\r\n" +
+		"event: end_of_stream\r\n\r\n"
+
+	out, err := collectPerplexityTranslation(t, upstream, false, 5)
+	require.NoError(t, err)
+	root := gjson.Parse(strings.TrimSpace(out))
+	require.Equal(t, "pplx_code", root.Get("choices.0.message.tool_calls.0.function.name").String())
+	require.Contains(t, root.Get("choices.0.message.tool_calls.0.function.arguments").String(), `"language":"go"`)
+	require.Equal(t, "stop", root.Get("choices.0.finish_reason").String())
+}
+
 // jsonQuoteForTest 把字符串编码为 JSON 字符串字面量（含引号）。
 func jsonQuoteForTest(s string) string {
 	var b strings.Builder

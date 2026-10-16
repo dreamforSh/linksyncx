@@ -432,6 +432,10 @@ func translatePerplexitySSEToCC(ctx context.Context, upstream io.ReadCloser, pw 
 	produced := false
 	roleSent := false
 	backendUUID := ""
+	// 工具执行轨迹：按 step uuid 去重，收集为 OpenAI tool_calls（上游已执行，
+	// 仅作展示/审计，finish_reason 恒为 stop，客户端无需执行）。
+	seenSteps := map[string]bool{}
+	var toolCalls []any
 
 	writeChunk := func(chunk map[string]any) error {
 		b, err := json.Marshal(chunk)
@@ -469,6 +473,10 @@ func translatePerplexitySSEToCC(ctx context.Context, upstream io.ReadCloser, pw 
 			"total_tokens":      p.promptTokens + completionTokens,
 		}
 		if !p.stream {
+			message := map[string]any{"role": "assistant", "content": full}
+			if len(toolCalls) > 0 {
+				message["tool_calls"] = toolCalls
+			}
 			resp := map[string]any{
 				"id":      p.id,
 				"object":  "chat.completion",
@@ -476,7 +484,7 @@ func translatePerplexitySSEToCC(ctx context.Context, upstream io.ReadCloser, pw 
 				"model":   p.upstreamModel,
 				"choices": []any{map[string]any{
 					"index":         0,
-					"message":       map[string]any{"role": "assistant", "content": full},
+					"message":       message,
 					"finish_reason": "stop",
 				}},
 				"usage": usage,
@@ -539,6 +547,38 @@ func translatePerplexitySSEToCC(ctx context.Context, upstream io.ReadCloser, pw 
 		}
 		if ev.BackendUUID != "" {
 			backendUUID = ev.BackendUUID
+		}
+		// 工具执行轨迹（Computer/代理模式的 pro_search_steps）：按 uuid 去重，
+		// 首次出现即作为一个完整 tool_call 下发。步骤由上游代理自主执行，
+		// 与客户端声明的 tools 无关（入站 tools 在折叠阶段已丢弃）。
+		for _, step := range ev.Steps {
+			if step.UUID == "" || seenSteps[step.UUID] {
+				continue
+			}
+			seenSteps[step.UUID] = true
+			args, _ := json.Marshal(step.Content)
+			toolCalls = append(toolCalls, map[string]any{
+				"id":   "call_" + strings.ReplaceAll(step.UUID, "-", ""),
+				"type": "function",
+				"function": map[string]any{
+					"name":      perplexity.ToolNameForStep(step.Type),
+					"arguments": string(args),
+				},
+			})
+			if p.stream {
+				if !roleSent {
+					if err := emitDelta(map[string]any{"role": "assistant"}, nil); err != nil {
+						pw.CloseWithError(err)
+						return
+					}
+					roleSent = true
+				}
+				tc := toolCalls[len(toolCalls)-1]
+				if err := emitDelta(map[string]any{"tool_calls": []any{tc}}, nil); err != nil {
+					pw.CloseWithError(err)
+					return
+				}
+			}
 		}
 		if !ev.HasText {
 			continue

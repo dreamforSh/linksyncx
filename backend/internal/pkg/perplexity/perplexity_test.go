@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -66,7 +67,19 @@ func TestResolveModelPreference(t *testing.T) {
 		{"claude46sonnetthinking", "claude46sonnetthinking", ModeCopilot},
 		// 大小写不敏感。
 		{"SONAR-PRO", "pplx_pro", ModeCopilot},
-		// 未知模型回落 auto。
+		// Computer 代理模式别名。
+		{"sonar-computer", "turbo", ModeComputer},
+		{"sonar-pro-computer", "pplx_pro", ModeComputer},
+		// ":模式" 后缀覆盖（model_mapping 值里可用）。
+		{"gpt54:computer", "gpt54", ModeComputer},
+		{"pplx_pro:concise", "pplx_pro", ModeConcise},
+		{"sonar-pro:computer", "pplx_pro", ModeComputer},
+		// 未知后缀不当作模式，整体按未知模型回落。
+		{"gpt54:banana", "turbo", ModeConcise},
+		// 裸 preference 透传（上游新模型免发版，如 Opus 5.5 时代的 claude55opus）。
+		{"claude55opus", "claude55opus", ModeCopilot},
+		{"claude55opus:computer", "claude55opus", ModeComputer},
+		// 带连字符的客户端拼写不透传，回落 auto。
 		{"gpt-5", "turbo", ModeConcise},
 		{"", "turbo", ModeConcise},
 	}
@@ -75,6 +88,98 @@ func TestResolveModelPreference(t *testing.T) {
 		if pref != tc.wantPref || mode != tc.wantMode {
 			t.Errorf("ResolveModelPreference(%q) = (%q, %q), want (%q, %q)", tc.in, pref, mode, tc.wantPref, tc.wantMode)
 		}
+	}
+}
+
+func TestParseEventSteps(t *testing.T) {
+	event := `{
+	  "uuid": "evt-2",
+	  "blocks": [
+	    {"intended_usage": "pro_search_steps", "plan_block": {"steps": [
+	      {"step_type": "INITIAL_QUERY", "uuid": "s0", "initial_query_content": {"query": "q0"}},
+	      {"step_type": "SEARCH_WEB", "uuid": "s1", "search_web_content": {"query": "golang news"}},
+	      {"step_type": "BROWSER_OPEN_TAB", "uuid": "s2", "browser_open_tab_content": {"url": "https://example.com"}}
+	    ]}},
+	    {"intended_usage": "ask_text", "markdown_block": {"answer": "a"}}
+	  ]
+	}`
+	ev, ok := ParseEvent([]byte(event))
+	if !ok {
+		t.Fatal("ParseEvent returned !ok")
+	}
+	if !ev.HasText || ev.Text != "a" {
+		t.Errorf("text parse broken: %+v", ev)
+	}
+	if len(ev.Steps) != 3 {
+		t.Fatalf("steps = %d, want 3", len(ev.Steps))
+	}
+	if ev.Steps[1].Type != "SEARCH_WEB" || ev.Steps[1].UUID != "s1" {
+		t.Errorf("step[1] = %+v", ev.Steps[1])
+	}
+	if ev.Steps[1].Content["query"] != "golang news" {
+		t.Errorf("step[1] content = %v", ev.Steps[1].Content)
+	}
+	if ToolNameForStep(ev.Steps[2].Type) != "pplx_browser_open_tab" {
+		t.Errorf("tool name = %q", ToolNameForStep(ev.Steps[2].Type))
+	}
+	// 无 step_type 的步骤被跳过，无 _content 字段时 Content 为 nil 也合法。
+}
+
+func TestToolNameForStep(t *testing.T) {
+	if got := ToolNameForStep("SEARCH_WEB"); got != "pplx_search_web" {
+		t.Errorf("got %q", got)
+	}
+	if got := ToolNameForStep(""); got != "pplx_step" {
+		t.Errorf("got %q", got)
+	}
+}
+
+func TestParseModelsConfigIDs(t *testing.T) {
+	body := `{"models":[
+	  {"model":"turbo","label":"Auto","subscription_tier":"free"},
+	  {"model":"pplx_pro","label":"Pro","subscription_tier":"pro"},
+	  {"model":"claude55opus","label":"Claude Opus 5.5","subscription_tier":"max"},
+	  {"model":"","label":"broken"},
+	  {"model":"turbo","label":"dup"}
+	]}`
+	ids := ParseModelsConfigIDs([]byte(body))
+	want := []string{"turbo", "pplx_pro", "claude55opus"}
+	if len(ids) != len(want) {
+		t.Fatalf("ids = %v", ids)
+	}
+	for i := range want {
+		if ids[i] != want[i] {
+			t.Fatalf("ids = %v, want %v", ids, want)
+		}
+	}
+	if got := ParseModelsConfigIDs([]byte(`{"nope":true}`)); got != nil {
+		t.Errorf("expected nil, got %v", got)
+	}
+	if got := ParseModelsConfigIDs([]byte(`not json`)); got != nil {
+		t.Errorf("expected nil, got %v", got)
+	}
+}
+
+func TestParseEventLegacyStepsExtracted(t *testing.T) {
+	// 旧形态：FINAL 之前的步骤也应作为工具轨迹提取（uuid 缺失时按序号兜底）。
+	inner := `{"steps":[
+	  {"step_type":"INITIAL_QUERY","content":{"query":"q"}},
+	  {"step_type":"SEARCH_WEB","uuid":"sw-1","content":{"query":"golang"}},
+	  {"step_type":"FINAL","content":{"answer":"{\"answer\":\"A\",\"web_results\":[]}"}}
+	]}`
+	outer := `{"backend_uuid":"t-1","text":` + strconv.Quote(inner) + `}`
+	ev, ok := ParseEvent([]byte(outer))
+	if !ok || !ev.HasText || ev.Text != "A" {
+		t.Fatalf("text broken: ok=%v text=%q", ok, ev.Text)
+	}
+	if len(ev.Steps) != 2 {
+		t.Fatalf("steps = %d, want 2: %+v", len(ev.Steps), ev.Steps)
+	}
+	if ev.Steps[0].UUID != "legacy-0" || ev.Steps[0].Type != "INITIAL_QUERY" {
+		t.Errorf("step[0] = %+v", ev.Steps[0])
+	}
+	if ev.Steps[1].UUID != "sw-1" || ev.Steps[1].Content["query"] != "golang" {
+		t.Errorf("step[1] = %+v", ev.Steps[1])
 	}
 }
 
@@ -368,7 +473,7 @@ func TestCredentialsCookieHeaderAndHeaders(t *testing.T) {
 
 func TestDefaultModelIDs(t *testing.T) {
 	ids := DefaultModelIDs()
-	want := []string{"sonar", "sonar-pro", "sonar-reasoning", "sonar-deep-research"}
+	want := []string{"sonar", "sonar-pro", "sonar-reasoning", "sonar-deep-research", "sonar-computer", "sonar-pro-computer"}
 	if len(ids) != len(want) {
 		t.Fatalf("DefaultModelIDs = %v", ids)
 	}

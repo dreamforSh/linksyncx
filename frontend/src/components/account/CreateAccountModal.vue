@@ -190,6 +190,20 @@
             <PlatformIcon platform="grok" size="sm" />
             Grok
           </button>
+          <button
+            type="button"
+            data-testid="platform-perplexity"
+            @click="selectPerplexityPlatform()"
+            :class="[
+              'flex flex-1 items-center justify-center gap-2 rounded-md px-4 py-2.5 text-sm font-medium transition-all',
+              form.platform === 'perplexity'
+                ? 'bg-white text-sky-600 shadow-sm dark:bg-dark-600 dark:text-sky-400'
+                : 'text-gray-600 hover:text-gray-900 dark:text-gray-400 dark:hover:text-gray-200'
+            ]"
+          >
+            <PlatformIcon platform="perplexity" size="sm" />
+            Perplexity
+          </button>
         </div>
         <!-- Multi-protocol API-key providers: Kimi / Zhipu GLM / DeepSeek / OpenCode -->
         <div class="mt-2 flex flex-wrap rounded-lg bg-gray-100 p-1 dark:bg-dark-700">
@@ -1465,15 +1479,29 @@
           :plan="openCodeAccountMode"
         />
         <div>
-          <label class="input-label">{{ t('admin.accounts.apiKeyRequired') }}</label>
+          <label class="input-label">{{ apiKeyLabel }}</label>
           <input
             v-model="apiKeyValue"
             type="password"
             required
             class="input font-mono"
             :placeholder="apiKeyValuePlaceholder"
+            :data-testid="form.platform === 'perplexity' ? 'perplexity-session-token-input' : undefined"
           />
           <p v-if="apiKeyHint" class="input-hint">{{ apiKeyHint }}</p>
+        </div>
+
+        <!-- Perplexity 网页会话：CSRF Token（可选，与 session cookie 配对） -->
+        <div v-if="form.platform === 'perplexity'">
+          <label class="input-label">{{ t('admin.accounts.perplexity.csrfToken') }}</label>
+          <input
+            v-model="perplexityCsrfToken"
+            type="password"
+            class="input font-mono"
+            data-testid="perplexity-csrf-token-input"
+            :placeholder="t('admin.accounts.perplexity.csrfTokenPlaceholder')"
+          />
+          <p class="input-hint">{{ t('admin.accounts.perplexity.csrfTokenHint') }}</p>
         </div>
 
         <!-- 上游倍率自动探测：全部 API-key 平台可用（所在区块已限定 apikey 类型） -->
@@ -4052,6 +4080,7 @@ import {
   applyHeaderOverride,
   applyInterceptWarmup,
   applyOpenCodeGoProtocolRules,
+  applyPerplexitySession,
   cloneOpenCodeGoProtocolRules,
   cnSupportsNativeResponses,
   defaultCNAdaptiveBaseUrls,
@@ -4061,6 +4090,7 @@ import {
   isCNProviderPlatform,
   isHeaderOverrideCapable,
   validateHeaderOverrideRows,
+  PERPLEXITY_DEFAULT_BASE_URL,
   type CnAccountMode,
   type CnApiProtocol,
   type CnNativeApiProtocol,
@@ -4132,6 +4162,7 @@ const baseUrlHint = computed(() => {
   if (form.platform === 'openai') return t('admin.accounts.openai.baseUrlHint')
   if (form.platform === 'gemini') return t('admin.accounts.gemini.baseUrlHint')
   if (form.platform === 'grok') return ''
+  if (form.platform === 'perplexity') return t('admin.accounts.perplexity.baseUrlHint')
   return t('admin.accounts.baseUrlHint')
 })
 
@@ -4139,8 +4170,16 @@ const apiKeyHint = computed(() => {
   if (form.platform === 'openai') return t('admin.accounts.openai.apiKeyHint')
   if (form.platform === 'gemini') return t('admin.accounts.gemini.apiKeyHint')
   if (form.platform === 'grok') return ''
+  if (form.platform === 'perplexity') return t('admin.accounts.perplexity.sessionTokenHint')
   return t('admin.accounts.apiKeyHint')
 })
+
+// Perplexity 的 api_key 字段承载网页会话令牌，标签随之切换
+const apiKeyLabel = computed(() =>
+  form.platform === 'perplexity'
+    ? t('admin.accounts.perplexity.sessionToken')
+    : t('admin.accounts.apiKeyRequired')
+)
 
 // Base URL / API Key 占位符：国产供应商随账号类型变化。
 const apiKeyBaseUrlPlaceholder = computed(() => {
@@ -4155,6 +4194,8 @@ const apiKeyBaseUrlPlaceholder = computed(() => {
       return 'https://generativelanguage.googleapis.com'
     case 'grok':
       return 'https://api.x.ai/v1'
+    case 'perplexity':
+      return PERPLEXITY_DEFAULT_BASE_URL
     default:
       return 'https://api.anthropic.com'
   }
@@ -4168,6 +4209,8 @@ const apiKeyValuePlaceholder = computed(() => {
       return 'AIza...'
     case 'grok':
       return 'xai-...'
+    case 'perplexity':
+      return t('admin.accounts.perplexity.sessionTokenPlaceholder')
     case 'kimi':
       return 'sk-...'
     case 'zhipu':
@@ -4281,6 +4324,7 @@ const accountCategory = ref<'oauth-based' | 'apikey' | 'bedrock' | 'service_acco
 const addMethod = ref<AddMethod>('oauth') // For oauth-based: 'oauth' or 'setup-token'
 const apiKeyBaseUrl = ref('https://api.anthropic.com')
 const apiKeyValue = ref('')
+const perplexityCsrfToken = ref('')
 const upstreamBillingAutoProbeEnabled = ref(true)
 
 // ── 国产供应商（Kimi / Zhipu / DeepSeek）账号类型、API 协议与端点 ──
@@ -4400,6 +4444,15 @@ function selectOpenCodeGoPlatform() {
   apiKeyBaseUrl.value = defaultCNBaseUrl('opencode_go', openCodeAccountMode.value, 'adaptive')
   resetAdaptiveBaseUrls('opencode_go', openCodeAccountMode.value)
   openCodeGoProtocolRules.value = cloneOpenCodeGoProtocolRules(defaultOpenCodeProtocolRules(openCodeAccountMode.value))
+}
+// Perplexity 只有网页会话（apikey）一种账号形态：选中即锁定 apikey 类型，
+// base url 留空由后端回落 https://www.perplexity.ai。
+function selectPerplexityPlatform() {
+  form.platform = 'perplexity'
+  form.type = 'apikey'
+  accountCategory.value = 'apikey'
+  perplexityCsrfToken.value = ''
+  apiKeyBaseUrl.value = ''
 }
 // 账号类型 / 协议变更时同步默认 base url。
 watch(openCodeAccountMode, (mode, previousMode) => {
@@ -4936,6 +4989,7 @@ const canExchangeCode = computed(() => {
 function selectPlatformForGroup(platform: string) {
   if (isCNProviderPlatform(platform)) selectCNPlatform(platform)
   else if (platform === 'opencode_go') selectOpenCodeGoPlatform()
+  else if (platform === 'perplexity') selectPerplexityPlatform()
   else form.platform = platform as AccountPlatform
 }
 
@@ -5034,7 +5088,9 @@ watch(
             ? 'https://generativelanguage.googleapis.com'
             : newPlatform === 'grok'
               ? 'https://api.x.ai/v1'
-              : 'https://api.anthropic.com'
+              : newPlatform === 'perplexity'
+                ? ''
+                : 'https://api.anthropic.com'
     }
     // Clear model-related settings
     allowedModels.value = []
@@ -5062,6 +5118,12 @@ watch(
       modelRestrictionMode.value = 'mapping'
       form.concurrency = 1
       form.load_factor = null
+    }
+    if (newPlatform === 'perplexity') {
+      // 仅支持网页会话（apikey）账号，防止分组预选等路径绕过 selectPerplexityPlatform
+      accountCategory.value = 'apikey'
+      form.type = 'apikey'
+      perplexityCsrfToken.value = ''
     }
     if (newPlatform !== 'gemini' && newPlatform !== 'anthropic' && accountCategory.value === 'service_account') {
       accountCategory.value = 'oauth-based'
@@ -5566,6 +5628,7 @@ const resetForm = () => {
   adaptiveBaseUrls.value = { chat_completions: '', anthropic: '', responses: '' }
   apiKeyBaseUrl.value = 'https://api.anthropic.com'
   apiKeyValue.value = ''
+  perplexityCsrfToken.value = ''
   upstreamRequestIdHeader.value = ''
   upstreamBillingAutoProbeEnabled.value = true
   editQuotaLimit.value = null
@@ -6024,7 +6087,11 @@ const handleSubmit = async () => {
 
   // For apikey type, create directly
   if (!apiKeyValue.value.trim()) {
-    appStore.showError(t('admin.accounts.pleaseEnterApiKey'))
+    appStore.showError(
+      form.platform === 'perplexity'
+        ? t('admin.accounts.perplexity.sessionTokenRequired')
+        : t('admin.accounts.pleaseEnterApiKey')
+    )
     return
   }
 
@@ -6039,9 +6106,18 @@ const handleSubmit = async () => {
           : 'https://api.anthropic.com'
 
   // Build credentials with optional model mapping
-  const credentials: Record<string, unknown> = {
-    base_url: apiKeyBaseUrl.value.trim() || defaultBaseUrl,
-    api_key: apiKeyValue.value.trim()
+  const credentials: Record<string, unknown> = {}
+  if (form.platform === 'perplexity') {
+    // Perplexity 网页会话：api_key 承载 session token；csrf/base_url 留空不写入，
+    // 由后端回落默认端点 https://www.perplexity.ai。
+    applyPerplexitySession(
+      credentials,
+      { sessionToken: apiKeyValue.value, csrfToken: perplexityCsrfToken.value, baseUrl: apiKeyBaseUrl.value },
+      'create'
+    )
+  } else {
+    credentials.base_url = apiKeyBaseUrl.value.trim() || defaultBaseUrl
+    credentials.api_key = apiKeyValue.value.trim()
   }
   if (form.platform === 'gemini') {
     credentials.tier_id = geminiTierAIStudio.value

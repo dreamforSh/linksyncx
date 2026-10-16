@@ -16,6 +16,8 @@ import (
 	"github.com/Wei-Shaw/sub2api/internal/pkg/antigravity"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/claude"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/geminicli"
+	"github.com/Wei-Shaw/sub2api/internal/pkg/perplexity"
+	"github.com/Wei-Shaw/sub2api/internal/pkg/tlsfingerprint"
 )
 
 const (
@@ -781,6 +783,9 @@ func (s *AccountTestService) fetchUpstreamModelList(ctx context.Context, account
 	if account.IsGrok() {
 		extractModels = extractGrokUpstreamModelIDs
 	}
+	if account.IsPerplexity() {
+		extractModels = extractPerplexityUpstreamModelIDs
+	}
 	models, err := extractModels(body)
 	if err != nil {
 		return nil, nil, newUpstreamModelSyncUpstreamError("Upstream model list response was not valid JSON", err)
@@ -796,6 +801,8 @@ func (s *AccountTestService) buildUpstreamModelsRequest(ctx context.Context, acc
 	switch {
 	case account.Platform == PlatformAntigravity:
 		return s.buildAntigravityAPIKeyModelsRequest(ctx, account)
+	case account.IsPerplexity():
+		return s.buildPerplexityUpstreamModelsRequest(ctx, account)
 	case account.IsGrok():
 		return s.buildGrokUpstreamModelsRequest(ctx, account)
 	case account.IsOpenAI() || account.IsCNProvider() || account.IsOpenCodeGo():
@@ -1303,10 +1310,47 @@ func synthesizeAntigravityCatalogBody(resp *antigravity.FetchAvailableModelsResp
 }
 
 func (s *AccountTestService) doUpstreamModelsRequest(req *http.Request, proxyURL string, account *Account) (*http.Response, error) {
-	if s.tlsFPProfileService == nil {
-		return s.httpUpstream.DoWithTLS(req, proxyURL, account.ID, account.Concurrency, nil)
+	profile := (*tlsfingerprint.Profile)(nil)
+	if s.tlsFPProfileService != nil {
+		profile = s.tlsFPProfileService.ResolveTLSProfile(account)
 	}
-	return s.httpUpstream.DoWithTLS(req, proxyURL, account.ID, account.Concurrency, s.tlsFPProfileService.ResolveTLSProfile(account))
+	// Perplexity 网页端有反爬：纯 Go TLS 是强 bot 信号，未配置指纹时用内置默认。
+	if profile == nil && account.IsPerplexity() {
+		profile = perplexityDefaultTLSProfile()
+	}
+	return s.httpUpstream.DoWithTLS(req, proxyURL, account.ID, account.Concurrency, profile)
+}
+
+// buildPerplexityUpstreamModelsRequest 构造 Perplexity 模型配置请求：
+// GET {base}/rest/models/config/v2，Cookie 会话 + fetch 风格头。
+func (s *AccountTestService) buildPerplexityUpstreamModelsRequest(_ context.Context, account *Account) (*http.Request, error) {
+	if account == nil {
+		return nil, newUpstreamModelSyncConfigError("Account is required", nil)
+	}
+	creds := perplexityCredentialsFromAccount(account)
+	if strings.TrimSpace(creds.SessionToken) == "" {
+		return nil, newUpstreamModelSyncConfigError("No Perplexity session token is available (credentials.api_key)", nil)
+	}
+	validatedBaseURL, err := s.validateUpstreamBaseURL(creds.NormalizedBaseURL())
+	if err != nil {
+		return nil, newUpstreamModelSyncConfigError("Invalid Perplexity base URL", err)
+	}
+	req, err := http.NewRequest(http.MethodGet, strings.TrimRight(validatedBaseURL, "/")+perplexity.ModelsConfigPath, nil)
+	if err != nil {
+		return nil, newUpstreamModelSyncConfigError("Failed to build Perplexity models request", err)
+	}
+	creds.SetFetchStyleHeaders(req.Header, "application/json")
+	return req, nil
+}
+
+// extractPerplexityUpstreamModelIDs 从 /rest/models/config/v2 响应提取裸
+// model_preference 列表（作为 model_mapping 的映射目标展示）。
+func extractPerplexityUpstreamModelIDs(body []byte) ([]string, error) {
+	ids := perplexity.ParseModelsConfigIDs(body)
+	if len(ids) == 0 {
+		return nil, fmt.Errorf("no models in perplexity models config response")
+	}
+	return ids, nil
 }
 
 // upstreamModelsProxyURL fail-closed：分配了代理但不可用时返回错误，绝不回退直连。

@@ -42,6 +42,7 @@ export function isHeaderOverrideCapable(platform: string, type: string): boolean
   if (
     platform === 'anthropic' ||
     platform === 'openai' ||
+    platform === 'perplexity' ||
     platform === 'kimi' ||
     platform === 'zhipu' ||
     platform === 'deepseek' ||
@@ -251,6 +252,50 @@ export const GROK_BASE_URL_PRESETS: GrokBaseUrlPreset[] = [
   { label: 'us-west-2', url: 'https://us-west-2.api.x.ai/v1' },
   { label: 'eu-west-1', url: 'https://eu-west-1.api.x.ai/v1' }
 ]
+
+// ========== Perplexity 网页会话（NextAuth cookie） ==========
+// api_key 存放 __Secure-next-auth.session-token 的值；csrf_token 可选配对；
+// base_url 缺省时后端回落 https://www.perplexity.ai。
+
+export const PERPLEXITY_DEFAULT_BASE_URL = 'https://www.perplexity.ai'
+
+export interface PerplexitySessionInput {
+  sessionToken: string
+  csrfToken: string
+  baseUrl: string
+}
+
+/**
+ * 把 Perplexity 网页会话写入凭据（值一律 trim）。
+ * api_key：非空才写入；create 模式绝不删除（新建必须带会话令牌），
+ * edit 模式留空即删除该键——后端对敏感键采用"未提供则保留"合并语义，等同保持不变。
+ * csrf_token / base_url：非空写入；edit 模式留空删除该键（csrf 同样走保留语义，
+ * base_url 为非敏感键，删除后后端回落默认端点）。
+ */
+export function applyPerplexitySession(
+  credentials: Record<string, unknown>,
+  input: PerplexitySessionInput,
+  mode: 'create' | 'edit'
+): void {
+  const sessionToken = input.sessionToken.trim()
+  if (sessionToken) {
+    credentials.api_key = sessionToken
+  } else if (mode === 'edit') {
+    delete credentials.api_key
+  }
+  const csrfToken = input.csrfToken.trim()
+  if (csrfToken) {
+    credentials.csrf_token = csrfToken
+  } else if (mode === 'edit') {
+    delete credentials.csrf_token
+  }
+  const baseUrl = input.baseUrl.trim()
+  if (baseUrl) {
+    credentials.base_url = baseUrl
+  } else if (mode === 'edit') {
+    delete credentials.base_url
+  }
+}
 
 // ========== 国产供应商（Kimi / Zhipu / DeepSeek）base_url 预设 ==========
 // 与后端 service/domain_constants.go 的默认 base url 保持一致。

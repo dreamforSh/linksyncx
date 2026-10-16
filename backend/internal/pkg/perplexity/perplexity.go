@@ -26,10 +26,13 @@ const AskPath = "/rest/sse/perplexity_ask"
 
 // SessionPath / RateLimitAllPath 是会话探测与配额快照端点。
 // CreditsBalancePath 是 Computer 积分余额端点（include_credits=true 返回积分明细）。
+// ModelsConfigPath 是模型配置端点：服务端下发当前账号可见的模型列表
+// （含 label/subscription_tier），模型清单随上游版本漂移，以此为准。
 const (
 	SessionPath        = "/api/auth/session"
 	RateLimitAllPath   = "/rest/rate-limit/all"
 	CreditsBalancePath = "/rest/billing/credits/balance"
+	ModelsConfigPath   = "/rest/models/config/v2"
 )
 
 // DefaultUserAgent 是固定的桌面 Chrome UA。绝不能透传下游客户端 UA——
@@ -89,10 +92,12 @@ func (c Credentials) SetFetchStyleHeaders(h http.Header, accept string) {
 	h.Set("Cookie", c.CookieHeader())
 }
 
-// 模式常量：concise 用于 auto/turbo，copilot 用于 pro/reasoning/research。
+// 模式常量：concise 用于 auto/turbo，copilot 用于 pro/reasoning/research，
+// computer 用于 Computer 代理任务（流里携带 pro_search_steps 工具步骤块）。
 const (
-	ModeConcise = "concise"
-	ModeCopilot = "copilot"
+	ModeConcise  = "concise"
+	ModeCopilot  = "copilot"
+	ModeComputer = "computer"
 )
 
 // askVersion 是网页端协议版本号，随官方前端升级需要跟进。
@@ -107,12 +112,17 @@ type modelPreferenceEntry struct {
 // aliasToPreference 是面向客户端的模型别名 → 上游 model_preference 映射。
 // 上游取值会随官方前端迭代而漂移，运营可通过账号 model_mapping 把任意
 // 客户端模型名映射到裸 model_preference（见 rawPreferences）以绕过本表。
+// -computer 后缀别名走 Computer 代理端点（同一 perplexity_ask，mode=computer）。
 var aliasToPreference = map[string]modelPreferenceEntry{
 	"sonar":               {pref: "turbo", mode: ModeConcise},
 	"sonar-pro":           {pref: "pplx_pro", mode: ModeCopilot},
 	"sonar-reasoning":     {pref: "pplx_reasoning", mode: ModeCopilot},
 	"sonar-deep-research": {pref: "pplx_alpha", mode: ModeCopilot},
 	"turbo":               {pref: "turbo", mode: ModeConcise},
+	// Computer 代理模式（消耗 Computer 积分/代理配额，配额池与搜索不同）。
+	"sonar-computer":           {pref: "turbo", mode: ModeComputer},
+	"sonar-pro-computer":       {pref: "pplx_pro", mode: ModeComputer},
+	"sonar-reasoning-computer": {pref: "pplx_reasoning", mode: ModeComputer},
 }
 
 // rawPreferences 是当前已知的裸 model_preference 值（直接透传，mode 按类推断）。
@@ -132,24 +142,62 @@ var rawPreferences = map[string]string{
 
 // DefaultModelIDs 是分组默认模型列表（客户端可见别名）。
 func DefaultModelIDs() []string {
-	return []string{"sonar", "sonar-pro", "sonar-reasoning", "sonar-deep-research"}
+	return []string{"sonar", "sonar-pro", "sonar-reasoning", "sonar-deep-research", "sonar-computer", "sonar-pro-computer"}
 }
 
 // ResolveModelPreference 把（可能已被 model_mapping 改写过的）模型名解析为
 // 上游 model_preference + mode。未知模型回落 turbo/concise（auto）。
+// 支持 "模型名:模式" 后缀覆盖（如 "gpt54:computer"），模式取 knownModes 之一。
 func ResolveModelPreference(mappedModel string) (pref string, mode string) {
 	name := strings.ToLower(strings.TrimSpace(mappedModel))
 	if name == "" {
 		return "turbo", ModeConcise
 	}
-	// 允许 model_mapping 直接给出裸 model_preference，便于上游 churn 时免发版跟进。
-	if entry, ok := aliasToPreference[name]; ok {
-		return entry.pref, entry.mode
+	// 冒号后缀显式指定模式（model_mapping 值里可用，如 "pplx_pro:computer"）。
+	explicitMode := ""
+	if i := strings.LastIndex(name, ":"); i >= 0 {
+		suffix := name[i+1:]
+		if suffix == ModeConcise || suffix == ModeCopilot || suffix == ModeComputer {
+			explicitMode = suffix
+			name = name[:i]
+		}
 	}
-	if m, ok := rawPreferences[name]; ok {
-		return name, m
+	resolve := func(n string) (string, string) {
+		if entry, ok := aliasToPreference[n]; ok {
+			return entry.pref, entry.mode
+		}
+		if m, ok := rawPreferences[n]; ok {
+			return n, m
+		}
+		// 裸 model_preference 透传：上游模型列表由服务端驱动、频繁上新
+		// （如 claude55opus 这类新值），运营用 model_mapping 直达，无需发版。
+		// 只接受形如裸 preference 的名字（小写字母/数字/下划线，无连字符），
+		// 避免把 "gpt-5" 这类客户端随意拼写原样打到上游。
+		if isRawPreferenceName(n) {
+			return n, ModeCopilot
+		}
+		return "turbo", ModeConcise
 	}
-	return "turbo", ModeConcise
+	pref, m := resolve(name)
+	if explicitMode != "" {
+		m = explicitMode
+	}
+	return pref, m
+}
+
+// isRawPreferenceName 报告 name 是否形如裸 model_preference（小写字母开头的
+// 字母/数字/下划线，无连字符/空格），如 "claude55opus"、"gpt54_thinking"。
+func isRawPreferenceName(name string) bool {
+	if name == "" || name[0] < 'a' || name[0] > 'z' {
+		return false
+	}
+	for _, r := range name {
+		if (r >= 'a' && r <= 'z') || (r >= '0' && r <= '9') || r == '_' {
+			continue
+		}
+		return false
+	}
+	return true
 }
 
 // BuildAskBody 构造 /rest/sse/perplexity_ask 请求体。
@@ -187,6 +235,73 @@ type Event struct {
 	UUID string
 	// HasText 表示本事件是否携带了回答文本。
 	HasText bool
+	// Steps 是 pro_search_steps 块里的工具执行步骤（Computer/代理模式的 tool call
+	// 轨迹：SEARCH_WEB / BROWSER_* / CODE / MCP_TOOL / THOUGHT / FINAL 等）。
+	// 事件间步骤按 UUID 累积更新，调用方按 UUID 去重。
+	Steps []Step
+}
+
+// Step 是代理执行轨迹中的一步工具调用。
+type Step struct {
+	UUID string
+	// Type 是原始 step_type（大写下划线，如 SEARCH_WEB）。
+	Type string
+	// Content 是与 step_type 对应的 *_content 字段（首个对象值）。
+	Content map[string]any
+}
+
+// ToolNameForStep 把 step_type 映射为面向客户端的工具名（pplx_ 前缀小写），
+// 与客户端自带工具命名空间隔离，避免被当作客户端声明的 function 执行。
+func ToolNameForStep(stepType string) string {
+	t := strings.ToLower(strings.TrimSpace(stepType))
+	if t == "" {
+		return "pplx_step"
+	}
+	return "pplx_" + t
+}
+
+// ParseModelsConfigIDs 解析 /rest/models/config/v2 响应，返回 models[].model
+// 裸 model_preference 列表（去重、保序）。这些值是 model_mapping 的映射目标。
+func ParseModelsConfigIDs(body []byte) []string {
+	if !gjson.ValidBytes(body) {
+		return nil
+	}
+	models := gjson.GetBytes(body, "models")
+	if !models.IsArray() {
+		return nil
+	}
+	seen := map[string]bool{}
+	var ids []string
+	for _, m := range models.Array() {
+		id := strings.TrimSpace(m.Get("model").String())
+		if id == "" || seen[id] {
+			continue
+		}
+		seen[id] = true
+		ids = append(ids, id)
+	}
+	return ids
+}
+
+// parseStep 解析 plan_block.steps[] 的单个步骤：取首个以 _content 结尾的对象字段
+// 作为步骤载荷（search_web_content / browser_open_tab_content / code_content 等）。
+func parseStep(step gjson.Result) (Step, bool) {
+	stepType := strings.TrimSpace(step.Get("step_type").String())
+	if stepType == "" {
+		return Step{}, false
+	}
+	s := Step{
+		UUID: strings.TrimSpace(step.Get("uuid").String()),
+		Type: stepType,
+	}
+	step.ForEach(func(key, value gjson.Result) bool {
+		if s.Content == nil && strings.HasSuffix(key.String(), "_content") && value.IsObject() {
+			s.Content = map[string]any{}
+			_ = json.Unmarshal([]byte(value.Raw), &s.Content)
+		}
+		return true
+	})
+	return s, true
 }
 
 // ParseEvent 解析单个 SSE data 载荷，同时支持两种线上形态：
@@ -210,25 +325,29 @@ func ParseEvent(data []byte) (Event, bool) {
 	// 形态 1：blocks[]
 	if blocks := root.Get("blocks"); blocks.IsArray() {
 		for _, block := range blocks.Array() {
-			if block.Get("intended_usage").String() != "ask_text" {
-				continue
-			}
-			md := block.Get("markdown_block")
-			if answer := md.Get("answer").String(); answer != "" {
-				ev.Text = answer
-				ev.HasText = true
-			} else if chunks := md.Get("chunks"); chunks.IsArray() {
-				var sb strings.Builder
-				for _, chunk := range chunks.Array() {
-					sb.WriteString(chunk.String())
-				}
-				if sb.Len() > 0 {
-					ev.Text = sb.String()
+			switch block.Get("intended_usage").String() {
+			case "ask_text":
+				md := block.Get("markdown_block")
+				if answer := md.Get("answer").String(); answer != "" {
+					ev.Text = answer
 					ev.HasText = true
+				} else if chunks := md.Get("chunks"); chunks.IsArray() {
+					var sb strings.Builder
+					for _, chunk := range chunks.Array() {
+						sb.WriteString(chunk.String())
+					}
+					if sb.Len() > 0 {
+						ev.Text = sb.String()
+						ev.HasText = true
+					}
 				}
-			}
-			if ev.HasText {
-				break
+			case "pro_search_steps":
+				// 工具执行轨迹（Computer/代理模式）：plan_block.steps[] 累积更新。
+				for _, step := range block.Get("plan_block.steps").Array() {
+					if s, ok := parseStep(step); ok {
+						ev.Steps = append(ev.Steps, s)
+					}
+				}
 			}
 		}
 		return ev, true
@@ -241,8 +360,24 @@ func ParseEvent(data []byte) (Event, bool) {
 		if inner != "" && gjson.Valid(inner) {
 			steps := gjson.Get(inner, "steps")
 			if steps.IsArray() {
-				for _, step := range steps.Array() {
-					if step.Get("step_type").String() != "FINAL" {
+				for i, step := range steps.Array() {
+					stepType := step.Get("step_type").String()
+					if stepType != "FINAL" && stepType != "" {
+						// 非 FINAL 步骤是工具执行轨迹（旧形态的 content 是单对象）。
+						// 旧形态步骤可能没有 uuid：按数组序号兜底（步骤数组累积
+						// 有序，序号在事件间稳定），保证翻译器能按 uuid 去重。
+						s := Step{
+							UUID: strings.TrimSpace(step.Get("uuid").String()),
+							Type: stepType,
+						}
+						if s.UUID == "" {
+							s.UUID = "legacy-" + strconv.Itoa(i)
+						}
+						if content := step.Get("content"); content.IsObject() {
+							s.Content = map[string]any{}
+							_ = json.Unmarshal([]byte(content.Raw), &s.Content)
+						}
+						ev.Steps = append(ev.Steps, s)
 						continue
 					}
 					answerRaw := step.Get("content.answer").String()
@@ -256,7 +391,6 @@ func ParseEvent(data []byte) (Event, bool) {
 						ev.Text = answerRaw
 					}
 					ev.HasText = ev.Text != ""
-					break
 				}
 			}
 			return ev, true

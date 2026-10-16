@@ -134,6 +134,7 @@ export default {
         gemini: 'Gemini',
         antigravity: 'Antigravity',
         grok: 'Grok',
+        perplexity: 'Perplexity',
         kimi: 'Kimi',
         zhipu: 'Zhipu GLM',
         deepseek: 'DeepSeek',
@@ -988,6 +989,19 @@ export default {
           cli: 'Grok Build CLI',
           official: 'Official API'
         }
+      },
+      perplexity: {
+        sessionToken: 'Session Token *',
+        sessionTokenPlaceholder: '__Secure-next-auth.session-token cookie value',
+        sessionTokenHint:
+          'Sign in to perplexity.ai, then open browser DevTools → Application → Cookies → https://www.perplexity.ai and copy the value of __Secure-next-auth.session-token.',
+        sessionTokenRequired: 'Please enter the Perplexity session token',
+        csrfToken: 'CSRF Token (optional)',
+        csrfTokenPlaceholder: 'next-auth.csrf-token cookie value',
+        csrfTokenHint:
+          'Optional. Copy the value of the next-auth.csrf-token cookie from the same jar; pairing it with the session token improves CSRF-protected request success.',
+        csrfTokenEditHint: 'Optional. Leave empty to keep the stored token.',
+        baseUrlHint: 'Leave empty for the official site (https://www.perplexity.ai)'
       },
       grokClientToolCache: {
         title: 'Client Tool Cache (May Change Automatic Tool Selection)',

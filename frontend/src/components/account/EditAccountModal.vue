@@ -43,7 +43,9 @@
                     ? 'https://cloudcode-pa.googleapis.com'
                     : account.platform === 'grok'
                       ? 'https://api.x.ai/v1'
-                      : 'https://api.anthropic.com'
+                      : account.platform === 'perplexity'
+                        ? 'https://www.perplexity.ai'
+                        : 'https://api.anthropic.com'
             "
           />
           <p v-if="baseUrlHint" class="input-hint">{{ baseUrlHint }}</p>
@@ -205,7 +207,11 @@
           <p class="input-hint mt-2">{{ t('admin.accounts.cnProviders.zhipuTeam.hint') }}</p>
         </div>
         <div>
-          <label class="input-label">{{ t('admin.accounts.apiKey') }}</label>
+          <label class="input-label">{{
+            account.platform === 'perplexity'
+              ? t('admin.accounts.perplexity.sessionToken')
+              : t('admin.accounts.apiKey')
+          }}</label>
           <input
             v-model="editApiKey"
             type="password"
@@ -214,6 +220,7 @@
             data-1p-ignore
             data-lpignore="true"
             data-bwignore="true"
+            :data-testid="account.platform === 'perplexity' ? 'perplexity-session-token-input' : undefined"
             :placeholder="
               account.platform === 'openai'
                 ? 'sk-proj-...'
@@ -223,10 +230,32 @@
                     ? 'sk-...'
                     : account.platform === 'grok'
                       ? 'xai-...'
-                      : 'sk-ant-...'
+                      : account.platform === 'perplexity'
+                        ? t('admin.accounts.perplexity.sessionTokenPlaceholder')
+                        : 'sk-ant-...'
             "
           />
           <p class="input-hint">{{ t('admin.accounts.leaveEmptyToKeep') }}</p>
+          <p v-if="account.platform === 'perplexity'" class="input-hint">
+            {{ t('admin.accounts.perplexity.sessionTokenHint') }}
+          </p>
+        </div>
+
+        <!-- Perplexity 网页会话：CSRF Token（可选；留空保持不变，不会清空已存值） -->
+        <div v-if="account.platform === 'perplexity'">
+          <label class="input-label">{{ t('admin.accounts.perplexity.csrfToken') }}</label>
+          <input
+            v-model="editPerplexityCsrfToken"
+            type="password"
+            class="input font-mono"
+            autocomplete="new-password"
+            data-1p-ignore
+            data-lpignore="true"
+            data-bwignore="true"
+            data-testid="perplexity-csrf-token-input"
+            :placeholder="t('admin.accounts.perplexity.csrfTokenPlaceholder')"
+          />
+          <p class="input-hint">{{ t('admin.accounts.perplexity.csrfTokenEditHint') }}</p>
         </div>
 
         <!-- Model Restriction Section (不适用于 Antigravity) -->
@@ -3221,6 +3250,7 @@ import {
   applyHeaderOverride,
   applyInterceptWarmup,
   applyOpenCodeGoProtocolRules,
+  applyPerplexitySession,
   applyPlanType,
   buildPlanTypeOptions,
   cloneOpenCodeGoProtocolRules,
@@ -3240,6 +3270,7 @@ import {
   defaultCNAdaptiveBaseUrls,
   defaultCNBaseUrl,
   isCNProviderPlatform,
+  PERPLEXITY_DEFAULT_BASE_URL,
   HEADER_OVERRIDE_ENABLED_CREDENTIAL_KEY,
   HEADER_OVERRIDES_CREDENTIAL_KEY,
   type CnAccountMode,
@@ -3410,6 +3441,7 @@ const baseUrlHint = computed(() => {
   if (props.account.platform === 'openai') return t('admin.accounts.openai.baseUrlHint')
   if (props.account.platform === 'gemini') return t('admin.accounts.gemini.baseUrlHint')
   if (props.account.platform === 'grok') return ''
+  if (props.account.platform === 'perplexity') return t('admin.accounts.perplexity.baseUrlHint')
   return t('admin.accounts.baseUrlHint')
 })
 
@@ -3433,6 +3465,8 @@ interface TempUnschedRuleForm {
 const submitting = ref(false)
 const editBaseUrl = ref('https://api.anthropic.com')
 const editApiKey = ref('')
+// Perplexity 网页会话的 CSRF token（可选；脱敏字段不回显，留空=保留已存值）
+const editPerplexityCsrfToken = ref('')
 
 // ── 国产供应商（Kimi / Zhipu / DeepSeek）account_mode / api_protocol 编辑 ──
 // account_mode 决定额度/余额监控路径，api_protocol 决定转发端点与格式；
@@ -4088,6 +4122,7 @@ const defaultBaseUrl = computed(() => {
   if (props.account?.platform === 'openai') return 'https://api.openai.com'
   if (props.account?.platform === 'gemini') return 'https://generativelanguage.googleapis.com'
   if (props.account?.platform === 'grok') return 'https://api.x.ai/v1'
+  if (props.account?.platform === 'perplexity') return PERPLEXITY_DEFAULT_BASE_URL
   // CN 供应商：按当前模式/协议回落到官方预设（清空输入框提交时使用），
   // 不能落到 anthropic 默认值（会被当 CC base 拼出错误端点）。
   if (
@@ -4548,12 +4583,14 @@ const syncFormFromAccount = (newAccount: Account | null) => {
           ? 'https://generativelanguage.googleapis.com'
           : newAccount.platform === 'grok'
             ? 'https://api.x.ai/v1'
-            : newAccount.platform === 'kimi' ||
-                newAccount.platform === 'zhipu' ||
-                newAccount.platform === 'deepseek' ||
-                newAccount.platform === 'opencode_go'
-              ? defaultCNBaseUrl(newAccount.platform, currentOpenCodeOrCNMode(), editApiProtocol.value)
-              : 'https://api.anthropic.com'
+            : newAccount.platform === 'perplexity'
+              ? '' // 留空即回落后端默认 https://www.perplexity.ai，允许清空删除自定义端点
+              : newAccount.platform === 'kimi' ||
+                  newAccount.platform === 'zhipu' ||
+                  newAccount.platform === 'deepseek' ||
+                  newAccount.platform === 'opencode_go'
+                ? defaultCNBaseUrl(newAccount.platform, currentOpenCodeOrCNMode(), editApiProtocol.value)
+                : 'https://api.anthropic.com'
     editBaseUrl.value = isCNApiKeyAccount.value && editApiProtocol.value === 'adaptive'
       ? editAdaptiveBaseUrls.value.chat_completions
       : (credentials.base_url as string) || platformDefaultUrl
@@ -4645,6 +4682,7 @@ const syncFormFromAccount = (newAccount: Account | null) => {
     selectedErrorCodes.value = []
   }
   editApiKey.value = ''
+  editPerplexityCsrfToken.value = ''
 }
 
 async function loadTLSProfiles() {
@@ -5350,8 +5388,26 @@ const handleSubmit = async () => {
       if (editApiKey.value.trim()) {
         newCredentials.api_key = editApiKey.value.trim()
       } else if (!hasExistingApiKey) {
-        appStore.showError(t('admin.accounts.apiKeyIsRequired'))
+        appStore.showError(
+          props.account.platform === 'perplexity'
+            ? t('admin.accounts.perplexity.sessionTokenRequired')
+            : t('admin.accounts.apiKeyIsRequired')
+        )
         return
+      }
+
+      // Perplexity 网页会话：session token 即 api_key；csrf/base_url 留空删除该键
+      //（敏感键由后端合并保留，base_url 删除后回落默认端点）。
+      if (props.account.platform === 'perplexity') {
+        applyPerplexitySession(
+          newCredentials,
+          {
+            sessionToken: editApiKey.value,
+            csrfToken: editPerplexityCsrfToken.value,
+            baseUrl: editBaseUrl.value
+          },
+          'edit'
+        )
       }
 
       // Add model mapping if configured（OpenAI 开启自动透传时保留现有映射，不再编辑）
