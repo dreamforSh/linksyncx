@@ -25,9 +25,11 @@ const DefaultBaseURL = "https://www.perplexity.ai"
 const AskPath = "/rest/sse/perplexity_ask"
 
 // SessionPath / RateLimitAllPath 是会话探测与配额快照端点。
+// CreditsBalancePath 是 Computer 积分余额端点（include_credits=true 返回积分明细）。
 const (
-	SessionPath      = "/api/auth/session"
-	RateLimitAllPath = "/rest/rate-limit/all"
+	SessionPath        = "/api/auth/session"
+	RateLimitAllPath   = "/rest/rate-limit/all"
+	CreditsBalancePath = "/rest/billing/credits/balance"
 )
 
 // DefaultUserAgent 是固定的桌面 Chrome UA。绝不能透传下游客户端 UA——
