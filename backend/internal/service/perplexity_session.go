@@ -39,8 +39,7 @@ func (s *AccountTestService) doPerplexityRequest(ctx context.Context, account *A
 	if strings.TrimSpace(creds.SessionToken) == "" {
 		return nil, fmt.Errorf("perplexity session token is missing (credentials.api_key)")
 	}
-	proxyURL, err := account.ProxyURLForOutbound()
-	if err != nil {
+	if _, err := account.ProxyURLForOutbound(); err != nil {
 		return nil, err
 	}
 	baseURL, err := s.validateUpstreamBaseURL(creds.NormalizedBaseURL())
@@ -59,7 +58,7 @@ func (s *AccountTestService) doPerplexityRequest(ctx context.Context, account *A
 			profile = p
 		}
 	}
-	return s.httpUpstream.DoWithTLS(req, proxyURL, account.ID, account.Concurrency, profile)
+	return sendPerplexityAuthenticated(s.httpUpstream, s.accountRepo, account, req, profile)
 }
 
 // ValidatePerplexitySession 探测 Perplexity 网页会话是否存活：
@@ -69,17 +68,14 @@ func (s *AccountTestService) ValidatePerplexitySession(ctx context.Context, acco
 	if s == nil || account == nil {
 		return fmt.Errorf("perplexity session validation is not available")
 	}
-	body, status, err := s.fetchPerplexityJSON(ctx, account, perplexity.SessionPath)
-	if err != nil {
-		return err
+	profile := perplexityProfileFromSnapshot(s.refreshPerplexityAccountInfo(ctx, account, []string{"session"}))
+	if profile.SessionValid != nil && *profile.SessionValid {
+		return nil
 	}
-	invalid, err := validatePerplexitySessionResponse(body, status)
-	if invalid {
-		s.updatePerplexitySessionHealth(ctx, account, false)
-	} else if err == nil {
-		s.updatePerplexitySessionHealth(ctx, account, true)
+	if message := profile.Sections["session"].Error; message != "" {
+		return errors.New(message)
 	}
-	return err
+	return fmt.Errorf("perplexity session could not be verified")
 }
 
 func (s *AccountTestService) fetchPerplexityJSON(ctx context.Context, account *Account, path string) ([]byte, int, error) {
@@ -129,10 +125,9 @@ func (s *AccountTestService) updatePerplexitySessionHealth(ctx context.Context, 
 	if s.accountRepo == nil || account.ID <= 0 {
 		return
 	}
-	const invalidSessionMessage = "perplexity session is unauthenticated or expired; update the session cookie"
 	var err error
 	if !valid {
-		err = s.accountRepo.SetError(ctx, account.ID, invalidSessionMessage)
+		err = s.accountRepo.SetError(ctx, account.ID, PerplexityInvalidSessionMessage)
 	} else if account.Status == StatusError && strings.HasPrefix(account.ErrorMessage, "perplexity session is unauthenticated") {
 		// A valid session only recovers this platform's own authentication error;
 		// it must not clear unrelated quota, policy, or administrator failures.
@@ -197,22 +192,63 @@ func perplexityCreditsSummary(body []byte) map[string]any {
 // each failed section's last-good data and timestamp. A collection attempt is not
 // a successful refresh of all sections.
 func (s *AccountTestService) FetchPerplexityAccountInfo(ctx context.Context, account *Account) map[string]any {
+	return s.refreshPerplexityAccountInfo(ctx, account, perplexityInfoSections[:])
+}
+
+func (s *AccountTestService) refreshPerplexityAccountInfo(ctx context.Context, account *Account, sections []string) map[string]any {
+	started := time.Now().UTC()
 	var previous any
-	if account != nil && account.Extra != nil {
+	if account != nil {
+		previous = account.Extra[perplexityQuotaSnapshotExtraKey]
+	}
+	if s == nil {
+		profile := perplexityProfileFromSnapshot(previous)
+		profile.SessionValid = nil
+		for _, name := range sections {
+			profile.failSection(name, "perplexity account info sender is not configured", started)
+		}
+		return profile.persistedSnapshot()
+	}
+	fresh, loadErr := freshPerplexityAccount(ctx, s.accountRepo, account)
+	if loadErr == nil {
+		account = fresh
 		previous = account.Extra[perplexityQuotaSnapshotExtraKey]
 	}
 	profile := perplexityProfileFromSnapshot(previous)
-	now := time.Now().UTC()
-	profile.AttemptedAt = &now
-	profile.SessionValid = nil
+	fingerprint := perplexityAccountFingerprint(account)
+	if profile.IdentityFingerprint != "" && profile.IdentityFingerprint != fingerprint {
+		profile = perplexityProfileFromSnapshot(nil)
+	} else if profile.IdentityFingerprint == "" {
+		// Old observations have no credential generation. Keep them visible as
+		// last-good data, but do not promote them to fresh scheduling evidence.
+		for name, section := range profile.Sections {
+			section.Status = "stale"
+			profile.Sections[name] = section
+		}
+	}
+	profile.AttemptedAt = &started
+	profile.ObservedAtMs = started.UnixMilli()
+	if loadErr != nil {
+		profile.SessionValid = nil
+		for _, name := range sections {
+			profile.failSection(name, "current perplexity account could not be loaded", started)
+		}
+		return profile.persistedSnapshot()
+	}
+	_, conditional := s.accountRepo.(PerplexityAccountStateRepository)
+	var observedSessionValid *bool
 	allSuccessful := true
-	for _, name := range perplexityInfoSections {
+	for _, name := range sections {
 		path := perplexity.SessionPath
 		switch name {
+		case "session":
+			profile.SessionValid = nil
 		case "credits":
 			path = perplexity.CreditsBalancePath + "?include_credits=true"
 		case "rate_limits":
 			path = perplexity.RateLimitAllPath
+		default:
+			continue
 		}
 		attemptedAt := time.Now().UTC()
 		body, status, err := s.fetchPerplexityJSON(ctx, account, path)
@@ -222,12 +258,16 @@ func (s *AccountTestService) FetchPerplexityAccountInfo(ctx context.Context, acc
 			invalid, err = validatePerplexitySessionResponse(body, status)
 			if invalid {
 				valid := false
-				profile.SessionValid = &valid
-				s.updatePerplexitySessionHealth(ctx, account, false)
+				profile.SessionValid, observedSessionValid = &valid, &valid
+				if !conditional {
+					s.updatePerplexitySessionHealth(ctx, account, false)
+				}
 			} else if err == nil {
 				valid := true
-				profile.SessionValid = &valid
-				s.updatePerplexitySessionHealth(ctx, account, true)
+				profile.SessionValid, observedSessionValid = &valid, &valid
+				if !conditional {
+					s.updatePerplexitySessionHealth(ctx, account, true)
+				}
 				data = perplexitySessionSummary(body)
 			}
 		} else if err == nil {
@@ -253,17 +293,39 @@ func (s *AccountTestService) FetchPerplexityAccountInfo(ctx context.Context, acc
 		profile.Snapshot[name] = data
 		profile.Sections[name] = PerplexityUsageSection{Status: "success", FetchedAt: &fetchedAt, AttemptedAt: &attemptedAt}
 	}
-	if allSuccessful {
+	if allSuccessful && len(sections) == len(perplexityInfoSections) {
 		fetchedAt := time.Now().UTC()
 		profile.FetchedAt = &fetchedAt
 	}
+	profile.IdentityFingerprint = perplexityAccountFingerprint(account)
 	snapshot := profile.persistedSnapshot()
-	if s != nil && s.accountRepo != nil && account != nil && account.ID > 0 {
-		if err := s.accountRepo.UpdateExtra(ctx, account.ID, map[string]any{
-			perplexityQuotaSnapshotExtraKey: snapshot,
-		}); err != nil {
-			logger.L().Debug("perplexity: persist account info snapshot failed", zap.Int64("account_id", account.ID), zap.Error(err))
+	if s.accountRepo == nil || account.ID <= 0 {
+		return snapshot
+	}
+	if repo, ok := s.accountRepo.(PerplexityAccountStateRepository); ok {
+		applied, err := repo.ApplyPerplexityProfileIfUnchanged(ctx, account.ID, account.Credentials, account.ProxyID, PerplexityProfileUpdate{
+			Snapshot: snapshot, SessionValid: observedSessionValid, ObservedAtMs: started.UnixMilli(),
+		})
+		if err != nil {
+			logger.L().Warn("perplexity: persist account info snapshot failed", zap.Int64("account_id", account.ID))
+		} else if !applied {
+			// A newer observation or an administrator edit won the race. Return
+			// that identity's data rather than labeling the old response current.
+			latest, readErr := s.accountRepo.GetByID(ctx, account.ID)
+			if readErr == nil && latest != nil {
+				current := perplexityProfileFromSnapshot(latest.Extra[perplexityQuotaSnapshotExtraKey])
+				if current.IdentityFingerprint == perplexityAccountFingerprint(latest) {
+					return current.persistedSnapshot()
+				}
+			}
+			unknown := perplexityProfileFromSnapshot(nil)
+			for _, name := range perplexityInfoSections {
+				unknown.failSection(name, "perplexity account changed during refresh", started)
+			}
+			return unknown.persistedSnapshot()
 		}
+	} else if err := s.accountRepo.UpdateExtra(ctx, account.ID, map[string]any{perplexityQuotaSnapshotExtraKey: snapshot}); err != nil {
+		logger.L().Debug("perplexity: persist account info snapshot failed", zap.Int64("account_id", account.ID))
 	}
 	return snapshot
 }

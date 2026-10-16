@@ -21,6 +21,8 @@ type perplexityTranslateParams struct {
 	IncludeSources        bool
 	IncludeSearchProgress bool
 	onComplete            func(perplexityCompletion)
+	requestedPreference   string
+	identity              *perplexityResponseIdentity
 }
 
 // perplexityCompletion 仅在明确 EOS、非空回答且成功写出之后发布。
@@ -53,6 +55,16 @@ func writePerplexityTranslation(ctx context.Context, upstream io.Reader, pw io.W
 	backendUUID := ""
 	roleSent := false
 	sentBytes := 0
+	preference := p.requestedPreference
+	if preference == "" {
+		preference, _ = perplexity.ResolveModelPreference(p.upstreamModel)
+	}
+	identity := perplexity.NewModelIdentityTracker(preference)
+	defer func() {
+		if p.identity != nil {
+			p.identity.store(identity.Identity())
+		}
+	}()
 
 	baseChunk := func() map[string]any {
 		return map[string]any{
@@ -111,8 +123,17 @@ func writePerplexityTranslation(ctx context.Context, upstream io.Reader, pw io.W
 		if len(ev.Sources) > 0 {
 			sources = perplexity.MergeSources(sources, ev.Sources)
 		}
-		if _, err := answer.Apply(ev, !p.stream || sentBytes == 0); err != nil {
+		rewritten := ev.HasText && !ev.IsDelta && !strings.HasPrefix(ev.Text, answer.Content())
+		newText, err := answer.Apply(ev, !p.stream || sentBytes == 0)
+		if err != nil {
 			return err
+		}
+		if rewritten {
+			identity.ResetAnswer()
+		}
+		identity.Observe(ev, newText)
+		if p.identity != nil {
+			p.identity.store(identity.Identity())
 		}
 		if p.IncludeSearchProgress {
 			for _, step := range ev.Steps {
@@ -173,6 +194,8 @@ func writePerplexityTranslation(ctx context.Context, upstream io.Reader, pw io.W
 	if p.IncludeSources {
 		footer = perplexity.SourcesFooter(sources)
 	}
+	modelIdentity := identity.Identity()
+	footer += modelIdentity.Notice()
 	full := rawAnswer + footer
 	// These are local billing estimates, not upstream-reported token usage.
 	// The footer and search progress are local presentation, not model output.
@@ -182,7 +205,7 @@ func writePerplexityTranslation(ctx context.Context, upstream io.Reader, pw io.W
 		"completion_tokens": completionTokens,
 		"total_tokens":      p.promptTokens + completionTokens,
 	}
-	metadata := map[string]any{"usage_estimated": true, "usage_source": "local_estimate"}
+	metadata := map[string]any{"usage_estimated": true, "usage_source": "local_estimate", "model_identity": modelIdentity}
 	if len(progress) > 0 {
 		metadata["search_progress"] = progress
 	}

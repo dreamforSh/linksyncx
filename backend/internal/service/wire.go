@@ -394,6 +394,13 @@ func ProvideCNProviderBalanceCheckService(
 	return svc
 }
 
+// ProvidePerplexityMaintenanceService starts periodic cookie/session and quota checks.
+func ProvidePerplexityMaintenanceService(accountRepo AccountRepository, accountTestService *AccountTestService, locks LeaderLockCache, cfg *config.Config) *PerplexityMaintenanceService {
+	svc := NewPerplexityMaintenanceService(accountRepo, accountTestService, locks, cfg)
+	svc.Start()
+	return svc
+}
+
 // ProvideGeminiTokenProvider creates GeminiTokenProvider with OAuthRefreshAPI injection
 func ProvideGeminiTokenProvider(
 	accountRepo AccountRepository,
@@ -967,6 +974,7 @@ var ProviderSet = wire.NewSet(
 	ProvideCNProviderQuotaService,
 	ProvideCNProviderBalanceService,
 	ProvideCNProviderBalanceCheckService,
+	ProvidePerplexityMaintenanceService,
 	ProvideClaudeTokenProvider,
 	NewAntigravityGatewayService,
 	ProvideRateLimitService,

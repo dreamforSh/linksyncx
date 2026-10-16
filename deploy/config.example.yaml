@@ -463,6 +463,12 @@ gateway:
     # Stats cache for free-tier soft gate. Hot path never waits on DB: misses
     # fail open and refresh in the background. Prefer >= 60s in production.
     free_quota_stats_cache_seconds: 60
+  # Perplexity 会话保活和配额采集：仅访问会话/画像端点，不发送模型测试请求。
+  # 配额调度只信任十五分钟内的新鲜计数；维护请求沿用账号代理。
+  perplexity:
+    maintenance_enabled: true
+    session_keepalive_hours: 6
+    quota_refresh_minutes: 5
   # HTTP upstream connection pool settings (HTTP/2 + multi-proxy scenario defaults)
   # HTTP 上游连接池配置（HTTP/2 + 多代理场景默认值）
   # Max idle connections across all hosts

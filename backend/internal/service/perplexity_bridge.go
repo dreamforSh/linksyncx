@@ -27,15 +27,41 @@ func (b *perplexityUpstreamBody) Close() error {
 	return b.err
 }
 
+type perplexityResponseIdentity struct {
+	mu    sync.Mutex
+	value perplexity.ModelIdentity
+}
+
+func (s *perplexityResponseIdentity) store(value perplexity.ModelIdentity) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.value = value
+}
+
+func (s *perplexityResponseIdentity) snapshot() perplexity.ModelIdentity {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.value
+}
+
 type perplexityCCBody struct {
 	reader   *io.PipeReader
 	upstream io.Closer
 	cancel   context.CancelFunc
+	onRead   func()
+	readOnce sync.Once
+	identity *perplexityResponseIdentity
 	once     sync.Once
 	err      error
 }
 
-func (b *perplexityCCBody) Read(p []byte) (int, error) { return b.reader.Read(p) }
+func (b *perplexityCCBody) Read(p []byte) (int, error) {
+	n, err := b.reader.Read(p)
+	if n > 0 && b.onRead != nil {
+		b.readOnce.Do(b.onRead)
+	}
+	return n, err
+}
 
 func (b *perplexityCCBody) Close() error {
 	b.once.Do(func() {
@@ -72,11 +98,21 @@ func perplexityOptionsForIngress(c *gin.Context, account *Account, body []byte, 
 	return opts, nil
 }
 
-func markPerplexityResult(result *OpenAIForwardResult, err error) (*OpenAIForwardResult, error) {
+func markPerplexityResult(result *OpenAIForwardResult, err error, resp *http.Response) (*OpenAIForwardResult, error) {
 	if result != nil {
 		result.UpstreamEndpoint = perplexityUpstreamEndpoint
 		result.UsageEstimated = true
 		result.UsageIncomplete = result.UsageIncomplete || err != nil
+		// The Chat Completions body is synthetic. Never audit its requested model
+		// as an upstream declaration when Perplexity did not report one.
+		result.UpstreamResponseModel = ""
+		result.UpstreamResponseModelConflict = false
+		if body, ok := resp.Body.(*perplexityCCBody); ok && body.identity != nil {
+			identity := body.identity.snapshot()
+			result.UpstreamModel = identity.RequestedPreference
+			result.UpstreamResponseModel = identity.ActualModel
+			result.UpstreamResponseModelConflict = identity.Conflict
+		}
 	}
 	return result, err
 }

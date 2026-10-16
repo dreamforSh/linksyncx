@@ -1176,6 +1176,9 @@ type GatewayConfig struct {
 	// Grok: Grok/xAI gateway scheduling and free-tier soft-gate settings.
 	Grok GatewayGrokConfig `mapstructure:"grok"`
 
+	// Perplexity: cookie keep-alive and independent quota collection intervals.
+	Perplexity GatewayPerplexityConfig `mapstructure:"perplexity"`
+
 	// CNProviders: 国产 OpenAI 兼容供应商（kimi/zhipu/deepseek）的余额检测配置。
 	// 仅作用于 payg（按量付费）账号：周期探测余额，低于阈值则临时停调。
 	CNProviders GatewayCNProvidersConfig `mapstructure:"cn_providers"`
@@ -1209,6 +1212,14 @@ type GatewayGrokConfig struct {
 	// FreeQuotaStatsCacheSeconds is the soft-gate stats cache TTL. Hot path never
 	// waits on usage_logs; misses fail open and refresh asynchronously.
 	FreeQuotaStatsCacheSeconds int `mapstructure:"free_quota_stats_cache_seconds"`
+}
+
+// GatewayPerplexityConfig controls bounded background session/quota probes.
+// The data-plane quota guard accepts observations at most fifteen minutes old.
+type GatewayPerplexityConfig struct {
+	MaintenanceEnabled    bool `mapstructure:"maintenance_enabled"`
+	SessionKeepaliveHours int  `mapstructure:"session_keepalive_hours"`
+	QuotaRefreshMinutes   int  `mapstructure:"quota_refresh_minutes"`
 }
 
 // GatewayCNProvidersConfig 国产 OpenAI 兼容供应商（kimi/zhipu/deepseek）的余额检测配置。
@@ -2569,6 +2580,9 @@ func setDefaults() {
 	viper.SetDefault("gateway.grok.free_quota_soft_gate_percent", 95)
 	viper.SetDefault("gateway.grok.free_quota_window_hours", 24)
 	viper.SetDefault("gateway.grok.free_quota_stats_cache_seconds", 60)
+	viper.SetDefault("gateway.perplexity.maintenance_enabled", true)
+	viper.SetDefault("gateway.perplexity.session_keepalive_hours", 6)
+	viper.SetDefault("gateway.perplexity.quota_refresh_minutes", 5)
 	// 国产供应商余额检测（kimi/deepseek payg；zhipu 无余额端点，仅靠响应式 429/402）。
 	viper.SetDefault("gateway.cn_providers.balance_check_enabled", true)
 	viper.SetDefault("gateway.cn_providers.balance_threshold", 0.5)
@@ -3835,6 +3849,12 @@ func (c *Config) Validate() error {
 	}
 	if c.Gateway.Grok.FreeQuotaStatsCacheSeconds < 0 {
 		return fmt.Errorf("gateway.grok.free_quota_stats_cache_seconds must be non-negative")
+	}
+	if c.Gateway.Perplexity.SessionKeepaliveHours < 0 || c.Gateway.Perplexity.SessionKeepaliveHours > 168 {
+		return fmt.Errorf("gateway.perplexity.session_keepalive_hours must be between 0 and 168 (0 uses 6)")
+	}
+	if c.Gateway.Perplexity.QuotaRefreshMinutes < 0 || c.Gateway.Perplexity.QuotaRefreshMinutes > 15 {
+		return fmt.Errorf("gateway.perplexity.quota_refresh_minutes must be between 0 and 15 (0 uses 5)")
 	}
 	if err := ValidateDingTalkConfig(c.DingTalk); err != nil {
 		return fmt.Errorf("dingtalk_connect: %w", err)

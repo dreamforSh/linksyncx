@@ -750,6 +750,13 @@ func (s *AccountTestService) fetchUpstreamModelList(ctx context.Context, account
 	if account.Platform == PlatformAntigravity && !antigravityUsesRelayModelList(account) {
 		return s.fetchAntigravityOAuthUpstreamModels(ctx, account)
 	}
+	if account.IsPerplexity() {
+		fresh, err := freshPerplexityAccount(ctx, s.accountRepo, account)
+		if err != nil {
+			return nil, nil, err
+		}
+		account = fresh
+	}
 
 	if s.httpUpstream == nil {
 		return nil, nil, newUpstreamModelSyncConfigError("Upstream HTTP client is not configured", nil)
@@ -1324,8 +1331,11 @@ func (s *AccountTestService) doUpstreamModelsRequest(req *http.Request, proxyURL
 		profile = s.tlsFPProfileService.ResolveTLSProfile(account)
 	}
 	// Perplexity 网页端有反爬：纯 Go TLS 是强 bot 信号，未配置指纹时用内置默认。
-	if profile == nil && account.IsPerplexity() {
-		profile = perplexityDefaultTLSProfile()
+	if account.IsPerplexity() {
+		if profile == nil {
+			profile = perplexityDefaultTLSProfile()
+		}
+		return sendPerplexityAuthenticated(s.httpUpstream, s.accountRepo, account, req, profile)
 	}
 	return s.httpUpstream.DoWithTLS(req, proxyURL, account.ID, account.Concurrency, profile)
 }

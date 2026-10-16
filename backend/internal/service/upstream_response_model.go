@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"strings"
 
+	"github.com/Wei-Shaw/sub2api/internal/pkg/perplexity"
 	"github.com/gin-gonic/gin"
 	"github.com/tidwall/gjson"
 )
@@ -313,6 +314,11 @@ func upstreamModelsMatchForAudit(sentModel, responseModel string) bool {
 		return true
 	}
 
+	// Perplexity uses bare preferences and can report a verified display alias
+	// (pplx_pro -> turbo, or a thinking preference's base name).
+	if !strings.Contains(sentModel, "-") && perplexity.ModelsMatch(sentModel, responseModel) {
+		return true
+	}
 	// xAI reports the runtime build ID for these supported public aliases.
 	// Canonicalize only for mismatch auditing; keep the raw response model for
 	// observability and for the separate response-model billing safeguards.

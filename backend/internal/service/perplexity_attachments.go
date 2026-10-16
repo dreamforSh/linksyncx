@@ -49,7 +49,7 @@ func (s *OpenAIGatewayService) preparePerplexityImageAttachments(ctx context.Con
 	}
 	urls := make([]string, 0, len(images))
 	for _, image := range images {
-		metadata, err := s.authorizePerplexityImageUpload(ctx, account, creds, proxyURL, image)
+		metadata, err := s.authorizePerplexityImageUpload(ctx, account, perplexityCredentialsFromAccount(account), image)
 		if err != nil {
 			return nil, nil, err
 		}
@@ -61,7 +61,7 @@ func (s *OpenAIGatewayService) preparePerplexityImageAttachments(ctx context.Con
 	return sanitized, urls, nil
 }
 
-func (s *OpenAIGatewayService) authorizePerplexityImageUpload(ctx context.Context, account *Account, creds perplexity.Credentials, proxyURL string, image perplexity.ImageAttachment) (perplexity.ImageUploadMetadata, error) {
+func (s *OpenAIGatewayService) authorizePerplexityImageUpload(ctx context.Context, account *Account, creds perplexity.Credentials, image perplexity.ImageAttachment) (perplexity.ImageUploadMetadata, error) {
 	body, err := perplexity.BuildImageUploadAuthorization(image)
 	if err != nil {
 		return perplexity.ImageUploadMetadata{}, fmt.Errorf("build Perplexity image authorization: %w", err)
@@ -78,7 +78,7 @@ func (s *OpenAIGatewayService) authorizePerplexityImageUpload(ctx context.Contex
 	creds.SetFetchStyleHeaders(req.Header, "application/json")
 	// Only the authenticated Perplexity request may inherit account overrides.
 	account.ApplyHeaderOverrides(req.Header)
-	resp, err := s.httpUpstream.DoWithTLS(req, proxyURL, account.ID, account.Concurrency, s.resolvePerplexityTLSProfile(account))
+	resp, err := sendPerplexityAuthenticated(s.httpUpstream, s.accountRepo, account, req, s.resolvePerplexityTLSProfile(account))
 	if err != nil {
 		if resp != nil && resp.Body != nil {
 			_ = resp.Body.Close()

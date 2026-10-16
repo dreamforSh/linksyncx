@@ -50,6 +50,10 @@ func (s *OpenAIGatewayService) forwardPerplexityChatCompletions(
 	promptCacheKey string,
 	defaultMappedModel string,
 ) (*OpenAIForwardResult, error) {
+	account, err := freshPerplexityForwardAccount(ctx, s.accountRepo, account)
+	if err != nil {
+		return nil, err
+	}
 	_ = promptCacheKey // Continuation uses isolated visible-history keys, not a cache hint alone.
 	startTime := time.Now()
 
@@ -101,7 +105,7 @@ func (s *OpenAIGatewayService) forwardPerplexityChatCompletions(
 	} else {
 		result, forwardErr = s.bufferRawChatCompletions(c, resp, account, originalModel, billingModel, upstreamModel, reasoningEffort, serviceTier, startTime)
 	}
-	return markPerplexityResult(result, forwardErr)
+	return markPerplexityResult(result, forwardErr, resp)
 }
 
 // forwardPerplexityResponses 处理 /v1/responses 入站：Responses → CC 折叠后
@@ -116,6 +120,10 @@ func (s *OpenAIGatewayService) forwardPerplexityResponses(
 	reqStream bool,
 	startTime time.Time,
 ) (*OpenAIForwardResult, error) {
+	account, err := freshPerplexityForwardAccount(ctx, s.accountRepo, account)
+	if err != nil {
+		return nil, err
+	}
 	opts, optionErr := perplexityOptionsForIngress(c, account, body, "responses")
 	if optionErr != nil {
 		writePerplexityIngressError(c, "responses", optionErr.Error())
@@ -198,7 +206,7 @@ func (s *OpenAIGatewayService) forwardPerplexityResponses(
 	} else {
 		result, forwardErr = s.bufferChatCompletionsAsResponses(c, resp, originalModel, nil, nil, false, nil, billingModel, upstreamModel, reasoningEffort, serviceTier, startTime)
 	}
-	return markPerplexityResult(result, forwardErr)
+	return markPerplexityResult(result, forwardErr, resp)
 }
 
 // forwardPerplexityMessages 处理 /v1/messages 入站：Anthropic Messages → CC
@@ -211,6 +219,10 @@ func (s *OpenAIGatewayService) forwardPerplexityMessages(
 	body []byte,
 	defaultMappedModel string,
 ) (*OpenAIForwardResult, error) {
+	account, err := freshPerplexityForwardAccount(ctx, s.accountRepo, account)
+	if err != nil {
+		return nil, err
+	}
 	startTime := time.Now()
 
 	opts, optionErr := perplexityOptionsForIngress(c, account, body, "messages")
@@ -283,7 +295,7 @@ func (s *OpenAIGatewayService) forwardPerplexityMessages(
 	} else {
 		result, forwardErr = s.bufferChatCompletionsAsAnthropic(c, resp, originalModel, billingModel, upstreamModel, reasoningEffort, serviceTier, startTime)
 	}
-	return markPerplexityResult(result, forwardErr)
+	return markPerplexityResult(result, forwardErr, resp)
 }
 
 // perplexityCredentialsFromAccount 提取账号的 Perplexity 网页会话凭证。
@@ -338,11 +350,13 @@ func (s *OpenAIGatewayService) sendPerplexityCCUpstreamRequest(
 	if strings.TrimSpace(creds.SessionToken) == "" {
 		return nil, fmt.Errorf("account %d missing perplexity session token (credentials.api_key)", account.ID)
 	}
-	proxyURL, err := account.ProxyURLForOutbound()
-	if err != nil {
+	if _, err := account.ProxyURLForOutbound(); err != nil {
 		return nil, err
 	}
 	modelPref, mode := perplexity.ResolveModelPreference(upstreamModel)
+	if bucket := perplexityExhaustedQuotaBucket(account, modelPref, mode, time.Now()); bucket != "" {
+		return nil, perplexityQuotaFailover(bucket)
+	}
 	c.Header("X-Perplexity-Model-Preference", modelPref)
 	c.Header("X-Perplexity-Mode", mode)
 	upstreamCtx, cancelUpstream := context.WithTimeout(ctx, perplexityRequestMaxDuration)
@@ -381,9 +395,9 @@ func (s *OpenAIGatewayService) sendPerplexityCCUpstreamRequest(
 			cancelUpstream()
 			return nil, fmt.Errorf("build upstream request: %w", buildErr)
 		}
-		creds.SetFetchStyleHeaders(upstreamReq.Header, "text/event-stream")
+		perplexityCredentialsFromAccount(account).SetFetchStyleHeaders(upstreamReq.Header, "text/event-stream")
 		account.ApplyHeaderOverrides(upstreamReq.Header)
-		resp, err = s.httpUpstream.DoWithTLS(upstreamReq, proxyURL, account.ID, account.Concurrency, s.resolvePerplexityTLSProfile(account))
+		resp, err = sendPerplexityAuthenticated(s.httpUpstream, s.accountRepo, account, upstreamReq, s.resolvePerplexityTLSProfile(account))
 		if err == nil && resp == nil {
 			err = errors.New("perplexity upstream returned no response")
 		}
@@ -436,10 +450,12 @@ func (s *OpenAIGatewayService) sendPerplexityCCUpstreamRequest(
 	}
 	upstreamBody := &perplexityUpstreamBody{ReadCloser: resp.Body}
 	reader, writer := io.Pipe()
+	identity := &perplexityResponseIdentity{}
+	identity.store(perplexity.ModelIdentity{RequestedPreference: modelPref, Status: "unknown"})
 	params := perplexityTranslateParams{
-		upstreamModel: upstreamModel,
-		promptTokens:  perplexity.EstimateTokens(fullQuery),
-		stream:        stream, created: time.Now().Unix(),
+		upstreamModel: upstreamModel, requestedPreference: modelPref, identity: identity,
+		promptTokens: perplexity.EstimateTokens(fullQuery),
+		stream:       stream, created: time.Now().Unix(),
 		id:             "chatcmpl-" + strings.ReplaceAll(uuid.NewString(), "-", "")[:24],
 		IncludeSources: opts.Local.IncludeSources, IncludeSearchProgress: opts.Local.IncludeSearchProgress,
 	}
@@ -455,9 +471,19 @@ func (s *OpenAIGatewayService) sendPerplexityCCUpstreamRequest(
 	}
 	header.Del("Content-Length")
 	header.Del("Transfer-Encoding")
+	var onRead func()
+	if !stream {
+		onRead = func() {
+			observed := identity.snapshot()
+			c.Header("X-Perplexity-Model-Status", observed.Status)
+			if observed.ActualModel != "" {
+				c.Header("X-Perplexity-Actual-Model", observed.ActualModel)
+			}
+		}
+	}
 	return &http.Response{
 		StatusCode: http.StatusOK, Header: header,
-		Body: &perplexityCCBody{reader: reader, upstream: upstreamBody, cancel: cancelUpstream},
+		Body: &perplexityCCBody{reader: reader, upstream: upstreamBody, cancel: cancelUpstream, identity: identity, onRead: onRead},
 	}, nil
 }
 

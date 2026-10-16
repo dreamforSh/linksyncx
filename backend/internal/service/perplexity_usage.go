@@ -23,11 +23,13 @@ type PerplexityUsageSection struct {
 // FetchedAt is the last completely successful collection; each section carries
 // its own last-good timestamp. AttemptedAt does not imply freshness or success.
 type PerplexityUsage struct {
-	Snapshot     map[string]any                    `json:"snapshot"`
-	Sections     map[string]PerplexityUsageSection `json:"sections"`
-	FetchedAt    *time.Time                        `json:"fetched_at,omitempty"`
-	AttemptedAt  *time.Time                        `json:"attempted_at,omitempty"`
-	SessionValid *bool                             `json:"session_valid,omitempty"`
+	Snapshot            map[string]any                    `json:"snapshot"`
+	Sections            map[string]PerplexityUsageSection `json:"sections"`
+	FetchedAt           *time.Time                        `json:"fetched_at,omitempty"`
+	AttemptedAt         *time.Time                        `json:"attempted_at,omitempty"`
+	SessionValid        *bool                             `json:"session_valid,omitempty"`
+	IdentityFingerprint string                            `json:"-"`
+	ObservedAtMs        int64                             `json:"-"`
 }
 
 type perplexityAccountInfoFetcher interface {
@@ -50,6 +52,29 @@ func (s *AccountUsageService) SetPerplexityAccountInfoFetcher(fetcher perplexity
 
 var perplexityInfoSections = [...]string{"session", "credits", "rate_limits"}
 
+func perplexityIdentityFingerprint(account *Account, proxyURL string) string {
+	if account == nil {
+		return ""
+	}
+	identity, err := json.Marshal([]any{account.ID, account.GetCredential("api_key"), account.GetCredential("csrf_token"), account.GetPerplexityBaseURL(), proxyURL})
+	if err != nil {
+		return ""
+	}
+	digest := sha256.Sum256(identity)
+	return hex.EncodeToString(digest[:])
+}
+
+func perplexityAccountFingerprint(account *Account) string {
+	if account == nil {
+		return ""
+	}
+	proxyURL, err := account.ProxyURLForOutbound()
+	if err != nil {
+		return ""
+	}
+	return perplexityIdentityFingerprint(account, proxyURL)
+}
+
 func perplexityProfileFromSnapshot(raw any) *PerplexityUsage {
 	profile := &PerplexityUsage{
 		Snapshot: make(map[string]any),
@@ -67,6 +92,8 @@ func perplexityProfileFromSnapshot(raw any) *PerplexityUsage {
 	_ = json.Unmarshal(snapshot["attempted_at"], &profile.AttemptedAt)
 	_ = json.Unmarshal(snapshot["session_valid"], &profile.SessionValid)
 	_ = json.Unmarshal(snapshot["sections"], &profile.Sections)
+	_ = json.Unmarshal(snapshot["identity_fingerprint"], &profile.IdentityFingerprint)
+	_ = json.Unmarshal(snapshot["observed_at_ms"], &profile.ObservedAtMs)
 	if profile.Sections == nil {
 		profile.Sections = make(map[string]PerplexityUsageSection)
 	}
@@ -99,6 +126,12 @@ func (p *PerplexityUsage) persistedSnapshot() map[string]any {
 	}
 	if p.SessionValid != nil {
 		snapshot["session_valid"] = *p.SessionValid
+	}
+	if p.IdentityFingerprint != "" {
+		snapshot["identity_fingerprint"] = p.IdentityFingerprint
+	}
+	if p.ObservedAtMs > 0 {
+		snapshot["observed_at_ms"] = p.ObservedAtMs
 	}
 	return snapshot
 }
@@ -147,9 +180,7 @@ func (s *AccountUsageService) getPerplexityUsage(ctx context.Context, account *A
 		return nil, fmt.Errorf("perplexity usage cache is not configured")
 	}
 	// Credentials and egress changes must not hit a previous identity's cache.
-	identity, _ := json.Marshal([]any{account.ID, account.GetCredential("api_key"), account.GetCredential("csrf_token"), account.GetCredential("base_url"), proxyURL})
-	digest := sha256.Sum256(identity)
-	fingerprint := hex.EncodeToString(digest[:])
+	fingerprint := perplexityIdentityFingerprint(account, proxyURL)
 	load := func() *perplexityUsageCache {
 		raw, ok := s.cache.perplexityCache.Load(account.ID)
 		if !ok {

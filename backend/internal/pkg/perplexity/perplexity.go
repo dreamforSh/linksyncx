@@ -64,7 +64,7 @@ func (c Credentials) NormalizedBaseURL() string {
 
 // CookieHeader 构造请求用 Cookie 头。
 func (c Credentials) CookieHeader() string {
-	parts := []string{"__Secure-next-auth.session-token=" + strings.TrimSpace(c.SessionToken)}
+	parts := []string{SessionCookieHeader(c.SessionToken)}
 	if csrf := strings.TrimSpace(c.CSRFToken); csrf != "" {
 		parts = append(parts, "next-auth.csrf-token="+csrf)
 	}
@@ -210,11 +210,13 @@ type Event struct {
 	// IsDelta 仅用于未完成的 markdown_block.chunks；answer 和 DONE 均为快照。
 	IsDelta bool
 	// AnswerUsage 标识已选定的 ask_text 镜像通道。
-	AnswerUsage string
-	BackendUUID string
-	UUID        string
-	HasText     bool
-	EndOfStream bool
+	AnswerUsage       string
+	BackendUUID       string
+	UUID              string
+	DisplayModel      string
+	UserSelectedModel string
+	HasText           bool
+	EndOfStream       bool
 	// Error 只标记上游失败，不保留可能含凭据的原始错误载荷。
 	Error   bool
 	Steps   []Step

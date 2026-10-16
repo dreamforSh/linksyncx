@@ -170,9 +170,11 @@ func parseEvent(data []byte, answerUsage string) (Event, bool) {
 		return Event{}, false
 	}
 	ev := Event{
-		BackendUUID: strings.TrimSpace(root.Get("backend_uuid").String()),
-		UUID:        strings.TrimSpace(root.Get("uuid").String()),
-		Error:       hasEventError(root),
+		BackendUUID:       strings.TrimSpace(root.Get("backend_uuid").String()),
+		UUID:              strings.TrimSpace(root.Get("uuid").String()),
+		DisplayModel:      reportedEventModel(root.Get("display_model")),
+		UserSelectedModel: reportedEventModel(root.Get("user_selected_model")),
+		Error:             hasEventError(root),
 	}
 	ev.Sources = sourcesFromResults(root.Get("web_results"))
 	var selected gjson.Result
@@ -265,6 +267,13 @@ func parseEvent(data []byte, answerUsage string) (Event, bool) {
 	}
 	ev.Sources = MergeSources(nil, ev.Sources)
 	return ev, true
+}
+
+func reportedEventModel(value gjson.Result) string {
+	if value.Type != gjson.String {
+		return ""
+	}
+	return NormalizeReportedModel(value.String())
 }
 
 func hasEventError(root gjson.Result) bool {

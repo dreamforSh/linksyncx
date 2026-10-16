@@ -103,6 +103,7 @@ func provideCleanup(
 	tokenRefresh *service.TokenRefreshService,
 	accountExpiry *service.AccountExpiryService,
 	cnProviderBalanceCheck *service.CNProviderBalanceCheckService,
+	perplexityMaintenance *service.PerplexityMaintenanceService,
 	codexVersionSync *service.OpenAICodexVersionSyncService,
 	claudeCodeVersionSync *service.ClaudeCodeVersionSyncService,
 	proxyExpiry *service.ProxyExpiryService,
@@ -274,6 +275,12 @@ func provideCleanup(
 			}},
 			{"AccountExpiryService", func() error {
 				accountExpiry.Stop()
+				return nil
+			}},
+			{"PerplexityMaintenanceService", func() error {
+				if perplexityMaintenance != nil {
+					perplexityMaintenance.Stop()
+				}
 				return nil
 			}},
 			{"CNProviderBalanceCheckService", func() error {

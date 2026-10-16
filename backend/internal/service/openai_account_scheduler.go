@@ -1799,6 +1799,9 @@ func (s *defaultOpenAIAccountScheduler) isAccountRequestCompatibleReason(ctx con
 		}
 		return false, reason
 	}
+	if reason := perplexityQuotaPauseReason(account, req.RequestedModel); reason != "" {
+		return false, reason
+	}
 	// 母账号健康联动：影子账号的凭据来自母账号，母账号不可调度时影子也不应被选中。
 	// Parent-health gate: shadow borrows the parent's credentials; an unschedulable
 	// parent must block the shadow across all scheduler paths.
