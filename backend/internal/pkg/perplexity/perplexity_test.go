@@ -8,6 +8,7 @@ import (
 	"strings"
 	"testing"
 	"time"
+	"unicode/utf8"
 
 	"github.com/tidwall/gjson"
 )
@@ -475,4 +476,115 @@ func TestDefaultModelIDs(t *testing.T) {
 			t.Fatalf("DefaultModelIDs = %v, want %v", ids, want)
 		}
 	}
+}
+
+func TestFoldMessagesToQueryWithOptions(t *testing.T) {
+	parse := func(s string) gjson.Result { return gjson.Parse(s).Get("messages") }
+
+	t.Run("strip system removes instructions", func(t *testing.T) {
+		q, err := FoldMessagesToQueryWithOptions(parse(`{"messages":[
+			{"role":"system","content":"You are a helpful assistant."},
+			{"role":"user","content":"Hi"},
+			{"role":"assistant","content":"Hello!"},
+			{"role":"user","content":"What is Go?"}
+		]}`), FoldOptions{StripSystem: true})
+		if err != nil {
+			t.Fatal(err)
+		}
+		want := "User: Hi\nAssistant: Hello!\nWhat is Go?"
+		if q != want {
+			t.Errorf("q = %q, want %q", q, want)
+		}
+	})
+
+	t.Run("keep system preserves instructions", func(t *testing.T) {
+		q, err := FoldMessagesToQueryWithOptions(parse(`{"messages":[
+			{"role":"system","content":"Be terse."},
+			{"role":"user","content":"What is Go?"}
+		]}`), FoldOptions{StripSystem: false})
+		if err != nil {
+			t.Fatal(err)
+		}
+		want := "Instructions: Be terse.\n\nWhat is Go?"
+		if q != want {
+			t.Errorf("q = %q, want %q", q, want)
+		}
+	})
+
+	t.Run("single user verbatim under strip", func(t *testing.T) {
+		q, err := FoldMessagesToQueryWithOptions(parse(`{"messages":[
+			{"role":"system","content":"noise"},
+			{"role":"user","content":"  just this  "}
+		]}`), FoldOptions{StripSystem: true})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if q != "just this" {
+			t.Errorf("q = %q", q)
+		}
+	})
+
+	t.Run("cap drops oldest history turns first", func(t *testing.T) {
+		long := strings.Repeat("旧轮次内容。", 100)
+		msgs := `{"messages":[
+			{"role":"user","content":"` + long + `"},
+			{"role":"assistant","content":"` + long + `"},
+			{"role":"user","content":"recent"},
+			{"role":"assistant","content":"answer"},
+			{"role":"user","content":"final question"}
+		]}`
+		q, err := FoldMessagesToQueryWithOptions(parse(msgs), FoldOptions{MaxChars: 1000})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !strings.Contains(q, "final question") {
+			t.Errorf("final question lost: %q", q)
+		}
+		if !strings.Contains(q, "[Earlier conversation omitted for length]") {
+			t.Errorf("omission marker missing: %q", q)
+		}
+		if utf8.RuneCountInString(q) > 1000 {
+			t.Errorf("over cap: %d runes", utf8.RuneCountInString(q))
+		}
+		// 最老的 user 轮被丢弃，次老的 assistant 轮保留（丢一轮即满足上限）。
+		if n := strings.Count(q, "旧轮次内容。"); n != 100 {
+			t.Errorf("expected only the assistant copy (100) to remain, got %d", n)
+		}
+	})
+
+	t.Run("cap keeps multiline final message intact", func(t *testing.T) {
+		final := "line1\nline2\nline3"
+		msgs := `{"messages":[
+			{"role":"user","content":"old"},
+			{"role":"assistant","content":"older"},
+			{"role":"user","content":"` + final + `"}
+		]}`
+		q, err := FoldMessagesToQueryWithOptions(parse(msgs), FoldOptions{MaxChars: 40})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !strings.Contains(q, "line1\nline2\nline3") {
+			t.Errorf("multiline final message mangled: %q", q)
+		}
+	})
+
+	t.Run("final message alone over cap errors", func(t *testing.T) {
+		msgs := `{"messages":[{"role":"user","content":"` + strings.Repeat("x", 50) + `"}]}`
+		_, err := FoldMessagesToQueryWithOptions(parse(msgs), FoldOptions{MaxChars: 20})
+		if err == nil {
+			t.Fatal("expected error")
+		}
+	})
+
+	t.Run("no cap passes through", func(t *testing.T) {
+		big := strings.Repeat("y", 200000)
+		msgs := `{"messages":[{"role":"user","content":"` + big + `"}]}`
+		q, err := FoldMessagesToQueryWithOptions(parse(msgs), FoldOptions{MaxChars: 0})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if q != big {
+			t.Errorf("len = %d", len(q))
+		}
+	})
 }

@@ -232,3 +232,48 @@ func TestValidatePerplexityAcceptsEmptySearchControlDefaults(t *testing.T) {
 		})
 	}
 }
+
+func TestResolvePerplexityRequestOptionsPromptAndCap(t *testing.T) {
+	// 默认：剥离 system（KeepSystemPrompt=false）+ 90k 折叠上限。
+	opts, err := resolvePerplexityRequestOptions(nil, []byte(`{"messages":[{"role":"user","content":"hi"}]}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if opts.Local.KeepSystemPrompt {
+		t.Fatal("default must strip system prompt (search pollution)")
+	}
+	if opts.Local.MaxQueryChars != perplexity.DefaultMaxQueryChars {
+		t.Fatalf("default MaxQueryChars = %d", opts.Local.MaxQueryChars)
+	}
+
+	// 请求级覆盖。
+	opts, err = resolvePerplexityRequestOptions(nil, []byte(`{"perplexity":{"keep_system_prompt":true,"max_query_chars":5000}}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !opts.Local.KeepSystemPrompt || opts.Local.MaxQueryChars != 5000 {
+		t.Fatalf("bad overrides: %+v", opts.Local)
+	}
+
+	// 账号级覆盖（优先级低于请求级）。
+	account := &Account{Credentials: map[string]any{"perplexity_options": map[string]any{"keep_system_prompt": true, "max_query_chars": 8000}}}
+	opts, err = resolvePerplexityRequestOptions(account, []byte(`{"perplexity":{"max_query_chars":60000}}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !opts.Local.KeepSystemPrompt || opts.Local.MaxQueryChars != 60000 {
+		t.Fatalf("bad precedence: %+v", opts.Local)
+	}
+
+	// 非法值：低于下限 / 超过硬上限 / 类型错误。
+	for _, body := range []string{
+		`{"perplexity":{"max_query_chars":500}}`,
+		`{"perplexity":{"max_query_chars":96001}}`,
+		`{"perplexity":{"max_query_chars":"90000"}}`,
+		`{"perplexity":{"keep_system_prompt":"yes"}}`,
+	} {
+		if _, err := resolvePerplexityRequestOptions(nil, []byte(body)); err == nil {
+			t.Fatalf("body %s should be rejected", body)
+		}
+	}
+}

@@ -366,7 +366,10 @@ func (s *OpenAIGatewayService) sendPerplexityCCUpstreamRequest(
 		return nil, err
 	}
 	opts.Internal.Attachments = attachments
-	fullQuery, err := perplexity.FoldMessagesToQuery(gjson.GetBytes(chatBody, "messages"))
+	fullQuery, err := perplexity.FoldMessagesToQueryWithOptions(gjson.GetBytes(chatBody, "messages"), perplexity.FoldOptions{
+		StripSystem: !opts.Local.KeepSystemPrompt,
+		MaxChars:    opts.Local.MaxQueryChars,
+	})
 	if err != nil {
 		cancelUpstream()
 		return nil, &perplexityBadRequestError{msg: err.Error()}

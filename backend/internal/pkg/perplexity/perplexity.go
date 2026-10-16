@@ -288,6 +288,32 @@ var ErrImageOnlyFinalMessage = ErrUnsupportedImageInput
 // ErrUnsupportedToolHistory 表示客户端工具历史无法作为普通搜索历史处理。
 var ErrUnsupportedToolHistory = errors.New("perplexity web subscription does not support client tool call or tool result history")
 
+// foldTurn 是折叠中的一个对话轮次。
+type foldTurn struct {
+	role string
+	text string
+}
+
+// 折叠长度限制常量：网页端 query_str 实测上限约 96000 字符。
+const (
+	// HardMaxQueryChars 是上游硬上限，超过会被直接拒绝。
+	HardMaxQueryChars = 96000
+	// DefaultMaxQueryChars 是默认折叠上限（留出安全余量）。
+	DefaultMaxQueryChars = 90000
+	// MinMaxQueryChars 是允许配置的最小上限（小于它没有实用意义）。
+	MinMaxQueryChars = 1000
+)
+
+// FoldOptions 控制折叠行为。
+type FoldOptions struct {
+	// StripSystem 为 true 时剥离 system/developer 消息（Perplexity 对 query 全文
+	// 做检索，样板 system prompt 会污染搜索结果——实测会召回聊天机器人教程）。
+	StripSystem bool
+	// MaxChars 是折叠结果的 rune 上限：超限时从最老历史轮次开始丢弃（最终用户
+	// 问题始终完整保留），有丢弃时在头部插入省略标记。0 表示不限制。
+	MaxChars int
+}
+
 // FoldMessagesToQuery 把 OpenAI Chat Completions messages 折叠为单个 query_str：
 //
 //   - system → 头部 "Instructions: ..." 块
@@ -295,16 +321,84 @@ var ErrUnsupportedToolHistory = errors.New("perplexity web subscription does not
 //   - 最后一条 user 消息是实际问题（不再加前缀）
 //   - 未处理图片、工具历史和未知内容块明确报错，不能静默丢失请求语义。
 //   - 只有一条 user 消息且无 system 时原样发送。
+//
+// 注意：本函数保留 system 且不限长。转发路径应使用 FoldMessagesToQueryWithOptions
+// （默认剥离 system + 90k 上限）；本函数仍服务于上传前的请求校验等兼容场景。
 func FoldMessagesToQuery(messages gjson.Result) (string, error) {
-	if !messages.IsArray() {
-		return "", fmt.Errorf("messages is not an array")
+	instructions, turns, lastUser, err := collectFoldTurns(messages)
+	if err != nil {
+		return "", err
 	}
-	type turn struct {
-		role string
-		text string
+	return renderFoldedQuery(instructions, turns, lastUser, false)
+}
+
+// FoldMessagesToQueryWithOptions 是 FoldMessagesToQuery 的选项化版本：
+// 先按 StripSystem 剥离 system/developer，再按 MaxChars 从最老历史轮次开始丢弃
+// （历史丢光后仍超限则丢弃 instructions，最终用户问题始终完整保留，仍超限报错）。
+func FoldMessagesToQueryWithOptions(messages gjson.Result, fo FoldOptions) (string, error) {
+	instructions, turns, lastUser, err := collectFoldTurns(messages)
+	if err != nil {
+		return "", err
+	}
+	if fo.StripSystem {
+		instructions = nil
+	}
+	query, err := renderFoldedQuery(instructions, turns, lastUser, false)
+	if err != nil {
+		return "", err
+	}
+	if fo.MaxChars <= 0 || utf8.RuneCountInString(query) <= fo.MaxChars {
+		return query, nil
+	}
+
+	turnsDropped := false
+	for {
+		// 最老的可丢轮次（最终用户问题不可丢）。
+		idx := -1
+		for i := range turns {
+			if i != lastUser {
+				idx = i
+				break
+			}
+		}
+		switch {
+		case idx >= 0:
+			turns = append(turns[:idx], turns[idx+1:]...)
+			if idx < lastUser {
+				lastUser--
+			}
+			turnsDropped = true
+		case len(instructions) > 0:
+			instructions = nil
+		default:
+			// 只剩最终问题：省略标记本身也占预算，去掉标记再试；仍超限才报错。
+			finalOnly, rErr := renderFoldedQuery(nil, []foldTurn{turns[lastUser]}, 0, false)
+			if rErr != nil {
+				return "", rErr
+			}
+			if utf8.RuneCountInString(finalOnly) > fo.MaxChars {
+				return "", fmt.Errorf("the final user message alone exceeds the %d char query limit", fo.MaxChars)
+			}
+			return finalOnly, nil
+		}
+		query, err = renderFoldedQuery(instructions, turns, lastUser, turnsDropped)
+		if err != nil {
+			return "", err
+		}
+		if utf8.RuneCountInString(query) <= fo.MaxChars {
+			return query, nil
+		}
+	}
+}
+
+// collectFoldTurns 解析并校验消息数组，产出 instructions、对话轮次与最终用户
+// 消息下标。所有内容/角色/工具历史的严格校验都在此处完成。
+func collectFoldTurns(messages gjson.Result) ([]string, []foldTurn, int, error) {
+	if !messages.IsArray() {
+		return nil, nil, -1, fmt.Errorf("messages is not an array")
 	}
 	var instructions []string
-	var turns []turn
+	var turns []foldTurn
 
 	extractText := func(content gjson.Result) (string, error) {
 		if content.Type == gjson.String {
@@ -337,18 +431,18 @@ func FoldMessagesToQuery(messages gjson.Result) (string, error) {
 
 	for _, msg := range messages.Array() {
 		if calls := msg.Get("tool_calls"); calls.Exists() && (!calls.IsArray() || len(calls.Array()) > 0) {
-			return "", ErrUnsupportedToolHistory
+			return nil, nil, -1, ErrUnsupportedToolHistory
 		}
 		if msg.Get("function_call").Exists() || msg.Get("tool_call_id").Exists() {
-			return "", ErrUnsupportedToolHistory
+			return nil, nil, -1, ErrUnsupportedToolHistory
 		}
 		role := strings.ToLower(strings.TrimSpace(msg.Get("role").String()))
 		if role == "tool" || role == "function" {
-			return "", ErrUnsupportedToolHistory
+			return nil, nil, -1, ErrUnsupportedToolHistory
 		}
 		text, err := extractText(msg.Get("content"))
 		if err != nil {
-			return "", err
+			return nil, nil, -1, err
 		}
 		switch role {
 		case "system", "developer":
@@ -356,9 +450,9 @@ func FoldMessagesToQuery(messages gjson.Result) (string, error) {
 				instructions = append(instructions, t)
 			}
 		case "user", "assistant":
-			turns = append(turns, turn{role: role, text: text})
+			turns = append(turns, foldTurn{role: role, text: text})
 		default:
-			return "", fmt.Errorf("perplexity does not support message role %q", role)
+			return nil, nil, -1, fmt.Errorf("perplexity does not support message role %q", role)
 		}
 	}
 
@@ -370,14 +464,19 @@ func FoldMessagesToQuery(messages gjson.Result) (string, error) {
 		}
 	}
 	if lastUser < 0 {
-		return "", fmt.Errorf("no user message found")
+		return nil, nil, -1, fmt.Errorf("no user message found")
 	}
 	if strings.TrimSpace(turns[lastUser].text) == "" {
-		return "", fmt.Errorf("empty user message")
+		return nil, nil, -1, fmt.Errorf("empty user message")
 	}
+	return instructions, turns, lastUser, nil
+}
 
+// renderFoldedQuery 渲染折叠结果。omittedTurns 为 true 时在头部插入省略标记
+// （标记会一并被上游检索，保持短而中性）。
+func renderFoldedQuery(instructions []string, turns []foldTurn, lastUser int, omittedTurns bool) (string, error) {
 	// 单条 user 且无 system：原样发送。
-	if len(turns) == 1 && len(instructions) == 0 && turns[0].role == "user" {
+	if len(turns) == 1 && len(instructions) == 0 && turns[0].role == "user" && !omittedTurns {
 		q := strings.TrimSpace(turns[0].text)
 		if q == "" {
 			return "", fmt.Errorf("empty user message")
@@ -386,6 +485,9 @@ func FoldMessagesToQuery(messages gjson.Result) (string, error) {
 	}
 
 	var sb strings.Builder
+	if omittedTurns {
+		_, _ = sb.WriteString("[Earlier conversation omitted for length]\n\n")
+	}
 	if len(instructions) > 0 {
 		_, _ = sb.WriteString("Instructions: ")
 		_, _ = sb.WriteString(strings.Join(instructions, "\n"))

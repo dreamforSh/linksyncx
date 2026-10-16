@@ -487,6 +487,12 @@ func RegisterGatewayRoutes(
 		h.Gateway.XSearch(c)
 	})
 
+	// MCP (Model Context Protocol)：把 Perplexity 平台能力暴露为 MCP tools。
+	// 与 /chat/completions 根路径别名共用同一条网关中间件链（apiKeyAuth +
+	// RequireGroupAssignment 等），鉴权/分组语义完全一致；handler 内部再做
+	// perplexity 平台门禁并回环到 /v1/chat/completions。
+	rootRoute(http.MethodPost, "/mcp", bodyLimit, h.MCP.HandleMCP)
+
 	// Antigravity 模型列表
 	r.GET("/antigravity/models", gin.HandlerFunc(apiKeyAuth), requireGroupAnthropic, h.GroupManagement.GatewayGuard(middleware.AnthropicErrorWriter), h.Gateway.AntigravityModels)
 

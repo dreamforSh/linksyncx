@@ -33,6 +33,14 @@ type LocalOptions struct {
 	IncludeSearchProgress bool
 	NativeFollowups       bool
 	StrictParameters      bool
+	// KeepSystemPrompt 为 true 时把 system/developer 消息折叠进 query 头部
+	// "Instructions:" 块。默认 false（剥离）：Perplexity 会对 query 全文做检索，
+	// "You are an AI assistant" 这类样板文本会污染搜索结果（召回聊天机器人教程）。
+	KeepSystemPrompt bool
+	// MaxQueryChars 是折叠后 query_str 的字符上限（按 rune 计）。网页端实测上限
+	// 约 96000 字符；超过时从最老的历史轮次开始丢弃，最终用户问题始终完整保留。
+	// 0 表示不限制（不推荐）。
+	MaxQueryChars int
 }
 
 // InternalOptions carries server-generated continuation and upload references.
@@ -57,6 +65,7 @@ func DefaultRequestOptions() RequestOptions {
 			IncludeSources:        true,
 			IncludeSearchProgress: true,
 			NativeFollowups:       true,
+			MaxQueryChars:         DefaultMaxQueryChars,
 		},
 	}
 }
@@ -97,6 +106,9 @@ func (o *RequestOptions) Normalize() error {
 	}
 	if _, err := time.LoadLocation(o.Timezone); err != nil {
 		return fmt.Errorf("perplexity.timezone must be a valid IANA timezone")
+	}
+	if o.Local.MaxQueryChars < 0 || (o.Local.MaxQueryChars > 0 && o.Local.MaxQueryChars < MinMaxQueryChars) || o.Local.MaxQueryChars > HardMaxQueryChars {
+		return fmt.Errorf("perplexity.max_query_chars must be 0 (unlimited) or between %d and %d", MinMaxQueryChars, HardMaxQueryChars)
 	}
 	return nil
 }
