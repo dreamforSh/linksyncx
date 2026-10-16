@@ -20,9 +20,13 @@ type perplexityTranslateParams struct {
 	id                    string
 	IncludeSources        bool
 	IncludeSearchProgress bool
-	onComplete            func(perplexityCompletion)
-	requestedPreference   string
-	identity              *perplexityResponseIdentity
+	// StripCitations 剥离答案正文里的引用角标（[1][2]…）；来源 footer 不受影响。
+	StripCitations      bool
+	onComplete          func(perplexityCompletion)
+	requestedPreference string
+	identity            *perplexityResponseIdentity
+	// metrics 在翻译完成后携带真实指标（搜索引用数）回转发层，供计费使用。
+	metrics *perplexityResponseMetrics
 }
 
 // perplexityCompletion 仅在明确 EOS、非空回答且成功写出之后发布。
@@ -107,6 +111,30 @@ func writePerplexityTranslation(ctx context.Context, upstream io.Reader, pw io.W
 		roleSent = true
 		return nil
 	}
+	// 引用角标清洗（流式安全）：完整角标立即清洗，结尾处可能未完成的角标
+	// 前缀（"["、"[1"）暂存到下一段；收尾时按普通文本下发残余。
+	var citePending strings.Builder
+	emitContent := func(text string) error {
+		if !p.StripCitations {
+			return emitDelta(map[string]any{"content": text}, nil, nil)
+		}
+		citePending.WriteString(text)
+		emit, rest := perplexity.StripCitationMarkersStreaming(citePending.String())
+		citePending.Reset()
+		citePending.WriteString(rest)
+		if emit == "" {
+			return nil
+		}
+		return emitDelta(map[string]any{"content": emit}, nil, nil)
+	}
+	flushCitations := func() error {
+		if !p.StripCitations || citePending.Len() == 0 {
+			return nil
+		}
+		rest := citePending.String()
+		citePending.Reset()
+		return emitDelta(map[string]any{"content": perplexity.StripCitationMarkers(rest)}, nil, nil)
+	}
 
 	decoder := perplexity.NewDecoder(upstream)
 	for {
@@ -173,7 +201,7 @@ func writePerplexityTranslation(ctx context.Context, upstream io.Reader, pw io.W
 				if err := ensureRole(); err != nil {
 					return err
 				}
-				if err := emitDelta(map[string]any{"content": delta}, nil, nil); err != nil {
+				if err := emitContent(delta); err != nil {
 					return err
 				}
 				sentBytes = len(answer.Content())
@@ -190,16 +218,21 @@ func writePerplexityTranslation(ctx context.Context, upstream io.Reader, pw io.W
 	if strings.TrimSpace(rawAnswer) == "" {
 		return perplexity.ErrEmptyAnswer
 	}
+	// 引用清洗只作用于答案正文；来源 footer 与代模型提示保持原样。
+	answerText := rawAnswer
+	if p.StripCitations {
+		answerText = perplexity.StripCitationMarkers(rawAnswer)
+	}
 	footer := ""
 	if p.IncludeSources {
 		footer = perplexity.SourcesFooter(sources)
 	}
 	modelIdentity := identity.Identity()
 	footer += modelIdentity.Notice()
-	full := rawAnswer + footer
+	full := answerText + footer
 	// These are local billing estimates, not upstream-reported token usage.
 	// The footer and search progress are local presentation, not model output.
-	completionTokens := perplexity.EstimateTokens(rawAnswer)
+	completionTokens := perplexity.EstimateTokens(answerText)
 	usage := map[string]any{
 		"prompt_tokens":     p.promptTokens,
 		"completion_tokens": completionTokens,
@@ -221,6 +254,9 @@ func writePerplexityTranslation(ctx context.Context, upstream io.Reader, pw io.W
 		result["search_results"] = sources
 	}
 	if p.stream {
+		if err := flushCitations(); err != nil {
+			return err
+		}
 		if footer != "" {
 			if err := emitDelta(map[string]any{"content": footer}, nil, nil); err != nil {
 				return err
@@ -273,6 +309,10 @@ func writePerplexityTranslation(ctx context.Context, upstream io.Reader, pw io.W
 	}
 	if err := ctx.Err(); err != nil {
 		return err
+	}
+	// 真实搜索引用数（上游可观测的最贴近 search 计费维度的指标）回传转发层。
+	if p.metrics != nil {
+		p.metrics.storeSearchCount(len(sources))
 	}
 	if p.onComplete != nil {
 		p.onComplete(perplexityCompletion{Content: full, BackendUUID: backendUUID, Sources: sources})

@@ -64,7 +64,7 @@ const props = defineProps<{ modelValue: PerplexityRequestOptions }>()
 const emit = defineEmits<{ 'update:modelValue': [value: PerplexityRequestOptions] }>()
 const { t } = useI18n()
 const sources: PerplexitySource[] = ['web', 'scholar', 'social']
-const localOptions = ['include_sources', 'include_search_progress', 'native_followups', 'strict_parameters', 'keep_system_prompt'] as const
+const localOptions = ['include_sources', 'include_search_progress', 'native_followups', 'strict_parameters', 'keep_system_prompt', 'strip_citations'] as const
 const validationError = computed(() => validatePerplexityOptions(props.modelValue))
 
 function update<K extends keyof PerplexityRequestOptions>(key: K, value: PerplexityRequestOptions[K]): void {

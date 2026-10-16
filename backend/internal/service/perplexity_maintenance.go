@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"errors"
 	"strconv"
 	"sync"
 	"time"
@@ -15,10 +16,20 @@ import (
 const (
 	perplexityMaintenanceConcurrency = 4
 	perplexityMaintenanceTimeout     = 45 * time.Second
+	// perplexityCatalogRefreshInterval is the successful catalog refresh cadence.
+	// Request-time thinking/dead-model resolution trusts snapshots younger than
+	// 24h; refreshing every 6h keeps ample margin below that window.
+	perplexityCatalogRefreshInterval = 6 * time.Hour
+	// perplexityCatalogRetryInterval is the per-account backoff after a catalog
+	// fetch attempt, so a persistently failing endpoint is not hit every pass.
+	perplexityCatalogRetryInterval = 30 * time.Minute
 )
 
 // PerplexityMaintenanceService refreshes independently due profile sections,
 // including quota-paused accounts. It never invokes a billable model request.
+// Each pass also best-effort refreshes the account model catalog
+// (GET /rest/models/config/v2, non-billable) so request-time dead-model
+// upgrades and thinking-variant resolution track upstream removals.
 type PerplexityMaintenanceService struct {
 	repo     AccountRepository
 	tests    *AccountTestService
@@ -30,6 +41,10 @@ type PerplexityMaintenanceService struct {
 	stopped  bool
 	cancel   context.CancelFunc
 	wg       sync.WaitGroup
+	// catalogMu guards catalogAttempts, the process-local per-account catalog
+	// fetch backoff (a failed fetch leaves no persisted trace to throttle on).
+	catalogMu       sync.Mutex
+	catalogAttempts map[int64]time.Time
 }
 
 func NewPerplexityMaintenanceService(repo AccountRepository, tests *AccountTestService, locks LeaderLockCache, cfg *config.Config) *PerplexityMaintenanceService {
@@ -43,7 +58,7 @@ func NewPerplexityMaintenanceService(repo AccountRepository, tests *AccountTestS
 	if settings.QuotaRefreshMinutes <= 0 {
 		settings.QuotaRefreshMinutes = 5
 	}
-	return &PerplexityMaintenanceService{repo: repo, tests: tests, locks: locks, settings: settings, owner: uuid.NewString()}
+	return &PerplexityMaintenanceService{repo: repo, tests: tests, locks: locks, settings: settings, owner: uuid.NewString(), catalogAttempts: make(map[int64]time.Time)}
 }
 
 func (s *PerplexityMaintenanceService) Start() {
@@ -143,17 +158,71 @@ func (s *PerplexityMaintenanceService) maintainAccount(ctx context.Context, acco
 	if err != nil || !perplexityMaintenanceEligible(fresh) {
 		return
 	}
-	sections := s.dueSections(fresh, time.Now())
-	if len(sections) == 0 {
-		return
-	}
-	snapshot := s.tests.refreshPerplexityAccountInfo(ctx, fresh, sections)
-	profile := perplexityProfileFromSnapshot(snapshot)
-	for _, name := range sections {
-		if profile.Sections[name].Status != "success" {
-			logger.L().Debug("perplexity: maintenance section unavailable", zap.Int64("account_id", account.ID), zap.String("section", name))
+	now := time.Now()
+	sections := s.dueSections(fresh, now)
+	if len(sections) > 0 {
+		snapshot := s.tests.refreshPerplexityAccountInfo(ctx, fresh, sections)
+		profile := perplexityProfileFromSnapshot(snapshot)
+		for _, name := range sections {
+			if profile.Sections[name].Status != "success" {
+				logger.L().Debug("perplexity: maintenance section unavailable", zap.Int64("account_id", account.ID), zap.String("section", name))
+			}
 		}
 	}
+	s.refreshAccountCatalog(ctx, fresh, now)
+}
+
+// refreshAccountCatalog best-effort refreshes the account's model catalog via
+// the same fetch/parse/persist path as the manual admin sync. Failures
+// (403/429/Cloudflare/transport) never mark the account and stay at Debug
+// level: the catalog is an optimization for request-time self-healing, not a
+// health signal.
+func (s *PerplexityMaintenanceService) refreshAccountCatalog(ctx context.Context, account *Account, now time.Time) {
+	if !s.catalogRefreshDue(account, now) {
+		return
+	}
+	s.catalogMu.Lock()
+	s.catalogAttempts[account.ID] = now
+	s.catalogMu.Unlock()
+	if _, err := s.tests.SyncUpstreamModelCatalog(ctx, account); err != nil {
+		// Transport errors can embed proxy credentials; log only the
+		// classified kind and status code, never the raw error.
+		kind, status := "internal", 0
+		var syncErr *UpstreamModelSyncError
+		if errors.As(err, &syncErr) {
+			kind, status = string(syncErr.Kind), syncErr.StatusCode
+		}
+		logger.L().Debug("perplexity: catalog refresh failed",
+			zap.Int64("account_id", account.ID),
+			zap.String("kind", kind),
+			zap.Int("status_code", status),
+		)
+	}
+}
+
+// catalogRefreshDue reports whether the account's catalog snapshot is missing,
+// stale, or from another credential/proxy generation, throttled by the
+// process-local attempt backoff. Refresh follows maintenance_enabled and can be
+// turned off with catalog_refresh_disabled.
+func (s *PerplexityMaintenanceService) catalogRefreshDue(account *Account, now time.Time) bool {
+	if s.tests == nil || s.settings.CatalogRefreshDisabled || account == nil {
+		return false
+	}
+	s.catalogMu.Lock()
+	last, attempted := s.catalogAttempts[account.ID]
+	s.catalogMu.Unlock()
+	if attempted && now.Sub(last) < perplexityCatalogRetryInterval {
+		return false
+	}
+	snapshot := account.GetUpstreamModelMetadataSnapshot()
+	if snapshot == nil || snapshot.Source != "perplexity" || snapshot.IdentityFingerprint == "" || snapshot.IdentityFingerprint != perplexityAccountFingerprint(account) {
+		return true
+	}
+	syncedAt, err := time.Parse(time.RFC3339, snapshot.SyncedAt)
+	if err != nil || syncedAt.After(now) {
+		return true
+	}
+	return now.Sub(syncedAt) >= perplexityCatalogRefreshInterval
 }
 
 func (s *PerplexityMaintenanceService) dueSections(account *Account, now time.Time) []string {

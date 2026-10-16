@@ -44,6 +44,28 @@ func (s *perplexityResponseIdentity) snapshot() perplexity.ModelIdentity {
 	return s.value
 }
 
+// perplexityResponseMetrics 是翻译协程产出、转发收尾消费的指标细胞：
+// 上游不返回 token 用量，搜索引用数等真实指标经此通道带出（线程安全）。
+type perplexityResponseMetrics struct {
+	mu          sync.Mutex
+	searchCount int
+}
+
+func (m *perplexityResponseMetrics) storeSearchCount(n int) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.searchCount = n
+}
+
+func (m *perplexityResponseMetrics) snapshot() int {
+	if m == nil {
+		return 0
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.searchCount
+}
+
 type perplexityCCBody struct {
 	reader   *io.PipeReader
 	upstream io.Closer
@@ -51,6 +73,7 @@ type perplexityCCBody struct {
 	onRead   func()
 	readOnce sync.Once
 	identity *perplexityResponseIdentity
+	metrics  *perplexityResponseMetrics
 	once     sync.Once
 	err      error
 }
@@ -107,11 +130,18 @@ func markPerplexityResult(result *OpenAIForwardResult, err error, resp *http.Res
 		// as an upstream declaration when Perplexity did not report one.
 		result.UpstreamResponseModel = ""
 		result.UpstreamResponseModelConflict = false
-		if body, ok := resp.Body.(*perplexityCCBody); ok && body.identity != nil {
-			identity := body.identity.snapshot()
-			result.UpstreamModel = identity.RequestedPreference
-			result.UpstreamResponseModel = identity.ActualModel
-			result.UpstreamResponseModelConflict = identity.Conflict
+		if body, ok := resp.Body.(*perplexityCCBody); ok {
+			if body.metrics != nil {
+				if n := body.metrics.snapshot(); n > 0 && result.SearchCount == 0 {
+					result.SearchCount = n
+				}
+			}
+			if body.identity != nil {
+				identity := body.identity.snapshot()
+				result.UpstreamModel = identity.RequestedPreference
+				result.UpstreamResponseModel = identity.ActualModel
+				result.UpstreamResponseModelConflict = identity.Conflict
+			}
 		}
 	}
 	return result, err

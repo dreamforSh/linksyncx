@@ -100,7 +100,7 @@ func applyPerplexityPublicOptions(opts *perplexity.RequestOptions, extension gjs
 			} else {
 				opts.Timezone = value.String()
 			}
-		case "is_incognito", "include_sources", "include_search_progress", "native_followups", "strict_parameters", "keep_system_prompt":
+		case "is_incognito", "include_sources", "include_search_progress", "native_followups", "strict_parameters", "keep_system_prompt", "strip_citations":
 			if value.Type != gjson.True && value.Type != gjson.False {
 				optionErr = perplexityOptionError("perplexity.%s must be a boolean", name)
 				break
@@ -118,6 +118,8 @@ func applyPerplexityPublicOptions(opts *perplexity.RequestOptions, extension gjs
 				opts.Local.StrictParameters = value.Bool()
 			case "keep_system_prompt":
 				opts.Local.KeepSystemPrompt = value.Bool()
+			case "strip_citations":
+				opts.Local.StripCitations = value.Bool()
 			}
 		case "max_query_chars":
 			if value.Type != gjson.Number || value.Float() != float64(value.Int()) {

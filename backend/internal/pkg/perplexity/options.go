@@ -41,6 +41,9 @@ type LocalOptions struct {
 	// 约 96000 字符；超过时从最老的历史轮次开始丢弃，最终用户问题始终完整保留。
 	// 0 表示不限制（不推荐）。
 	MaxQueryChars int
+	// StripCitations 为 true 时剥离答案正文中的引用角标（[1][2]…）。
+	// 默认 false（忠实原文）；来源列表由 IncludeSources 独立控制，不受影响。
+	StripCitations bool
 }
 
 // InternalOptions carries server-generated continuation and upload references.

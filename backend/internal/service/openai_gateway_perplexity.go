@@ -354,6 +354,9 @@ func (s *OpenAIGatewayService) sendPerplexityCCUpstreamRequest(
 		return nil, err
 	}
 	modelPref, mode := perplexity.ResolveModelPreference(upstreamModel)
+	// 死模型自愈：目录快照显示该 preference 已下线且存在同族更新版本时自动升级
+	// （须在思考链变体解析之前，使变体选择基于升级后的基座）。
+	modelPref = upgradePerplexityDeadModelPreference(account, upstreamModel, modelPref)
 	selectedPreference, selectionErr := resolvePerplexityThinkingPreference(account, modelPref, opts)
 	if selectionErr != nil {
 		return nil, selectionErr
@@ -474,12 +477,14 @@ func (s *OpenAIGatewayService) sendPerplexityCCUpstreamRequest(
 	reader, writer := io.Pipe()
 	identity := &perplexityResponseIdentity{}
 	identity.store(perplexity.ModelIdentity{RequestedPreference: modelPref, Status: "unknown"})
+	metrics := &perplexityResponseMetrics{}
 	params := perplexityTranslateParams{
-		upstreamModel: upstreamModel, requestedPreference: modelPref, identity: identity,
+		upstreamModel: upstreamModel, requestedPreference: modelPref, identity: identity, metrics: metrics,
 		promptTokens: perplexity.EstimateTokens(fullQuery),
 		stream:       stream, created: time.Now().Unix(),
 		id:             "chatcmpl-" + strings.ReplaceAll(uuid.NewString(), "-", "")[:24],
 		IncludeSources: opts.Local.IncludeSources, IncludeSearchProgress: opts.Local.IncludeSearchProgress,
+		StripCitations: opts.Local.StripCitations,
 	}
 	if continuation != nil {
 		params.onComplete = continuation.complete
@@ -505,7 +510,7 @@ func (s *OpenAIGatewayService) sendPerplexityCCUpstreamRequest(
 	}
 	return &http.Response{
 		StatusCode: http.StatusOK, Header: header,
-		Body: &perplexityCCBody{reader: reader, upstream: upstreamBody, cancel: cancelUpstream, identity: identity, onRead: onRead},
+		Body: &perplexityCCBody{reader: reader, upstream: upstreamBody, cancel: cancelUpstream, identity: identity, metrics: metrics, onRead: onRead},
 	}, nil
 }
 
@@ -516,6 +521,29 @@ func perplexityShouldFailover(statusCode int) bool {
 		statusCode == http.StatusForbidden ||
 		statusCode == http.StatusTooManyRequests ||
 		statusCode >= 500
+}
+
+// perplexityThinkingRequested 检测客户端是否显式请求思考链：
+// thinking:true/{type:"enabled"}、reasoning_effort（非 none）、reasoning.effort（非 none）。
+func perplexityThinkingRequested(chatBody []byte) bool {
+	if !gjson.ValidBytes(chatBody) {
+		return false
+	}
+	if thinking := gjson.GetBytes(chatBody, "thinking"); thinking.Exists() {
+		if thinking.Type == gjson.True {
+			return true
+		}
+		if thinking.IsObject() && thinking.Get("type").String() == "enabled" {
+			return true
+		}
+	}
+	for _, path := range []string{"reasoning_effort", "reasoning.effort"} {
+		effort := strings.ToLower(strings.TrimSpace(gjson.GetBytes(chatBody, path).String()))
+		if effort != "" && effort != "none" {
+			return true
+		}
+	}
+	return false
 }
 
 // handlePerplexityAccountUpstreamError 对 >=400 的上游响应做账号级副作用：

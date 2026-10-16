@@ -1220,6 +1220,10 @@ type GatewayPerplexityConfig struct {
 	MaintenanceEnabled    bool `mapstructure:"maintenance_enabled"`
 	SessionKeepaliveHours int  `mapstructure:"session_keepalive_hours"`
 	QuotaRefreshMinutes   int  `mapstructure:"quota_refresh_minutes"`
+	// CatalogRefreshDisabled turns off the per-pass model catalog refresh.
+	// Negative naming keeps the zero value safe: catalog refresh follows
+	// maintenance_enabled unless explicitly disabled.
+	CatalogRefreshDisabled bool `mapstructure:"catalog_refresh_disabled"`
 }
 
 // GatewayCNProvidersConfig 国产 OpenAI 兼容供应商（kimi/zhipu/deepseek）的余额检测配置。
@@ -2583,6 +2587,7 @@ func setDefaults() {
 	viper.SetDefault("gateway.perplexity.maintenance_enabled", true)
 	viper.SetDefault("gateway.perplexity.session_keepalive_hours", 6)
 	viper.SetDefault("gateway.perplexity.quota_refresh_minutes", 5)
+	viper.SetDefault("gateway.perplexity.catalog_refresh_disabled", false)
 	// 国产供应商余额检测（kimi/deepseek payg；zhipu 无余额端点，仅靠响应式 429/402）。
 	viper.SetDefault("gateway.cn_providers.balance_check_enabled", true)
 	viper.SetDefault("gateway.cn_providers.balance_threshold", 0.5)

@@ -471,6 +471,9 @@ gateway:
     maintenance_enabled: true
     session_keepalive_hours: 6
     quota_refresh_minutes: 5
+    # 模型目录刷新（GET /rest/models/config/v2，非计费端点）：随维护周期执行，
+    # 供请求路径把上游已下线的版本化模型自动升级到同族最新版。置 true 关闭。
+    catalog_refresh_disabled: false
   # HTTP upstream connection pool settings (HTTP/2 + multi-proxy scenario defaults)
   # HTTP 上游连接池配置（HTTP/2 + 多代理场景默认值）
   # Max idle connections across all hosts

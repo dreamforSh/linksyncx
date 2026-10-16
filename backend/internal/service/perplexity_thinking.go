@@ -2,8 +2,6 @@ package service
 
 import (
 	"context"
-	"strings"
-	"time"
 
 	"github.com/Wei-Shaw/sub2api/internal/pkg/perplexity"
 	"github.com/tidwall/gjson"
@@ -121,18 +119,7 @@ func resolvePerplexityThinkingPreference(account *Account, preference string, op
 	if opts.Internal.ThinkingEnabled == nil {
 		return preference, nil
 	}
-	var catalog []string
-	if account != nil {
-		snapshot := account.GetUpstreamModelMetadataSnapshot()
-		if snapshot != nil && snapshot.Source == "perplexity" && snapshot.IdentityFingerprint != "" && snapshot.IdentityFingerprint == perplexityAccountFingerprint(account) {
-			if syncedAt, err := time.Parse(time.RFC3339, snapshot.SyncedAt); err == nil && !syncedAt.After(time.Now()) && time.Since(syncedAt) < 24*time.Hour {
-				for id := range snapshot.Models {
-					catalog = append(catalog, strings.ToLower(id))
-				}
-			}
-		}
-	}
-	selected, err := perplexity.ResolveThinkingPreference(preference, *opts.Internal.ThinkingEnabled, catalog)
+	selected, err := perplexity.ResolveThinkingPreference(preference, *opts.Internal.ThinkingEnabled, freshPerplexityCatalog(account))
 	if err != nil {
 		return "", perplexityOptionError("%s", err.Error())
 	}

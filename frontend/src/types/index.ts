@@ -856,6 +856,7 @@ export interface PerplexityRequestOptions {
   native_followups: boolean
   strict_parameters: boolean
   keep_system_prompt: boolean
+  strip_citations: boolean
   max_query_chars: number
 }
 

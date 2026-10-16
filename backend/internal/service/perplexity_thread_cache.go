@@ -102,7 +102,8 @@ func (p *perplexityContinuation) complete(completion perplexityCompletion) {
 }
 
 func (s *OpenAIGatewayService) preparePerplexityContinuation(account *Account, apiKeyID int64, sessionHint, modelPref, mode string, body []byte, opts perplexity.RequestOptions) *perplexityContinuation {
-	if !opts.Local.NativeFollowups || mode == perplexity.ModeComputer || apiKeyID <= 0 || account == nil || account.ID <= 0 || len(body) > perplexityThreadBodyLimit || len(opts.Internal.Attachments) != 0 {
+	// 无痕会话（is_incognito）不读不写续链缓存：隐私会话的内容绝不落本地缓存。
+	if !opts.Local.NativeFollowups || opts.Incognito || mode == perplexity.ModeComputer || apiKeyID <= 0 || account == nil || account.ID <= 0 || len(body) > perplexityThreadBodyLimit || len(opts.Internal.Attachments) != 0 {
 		return nil
 	}
 	if len(gjson.GetBytes(body, "tools").Array()) > 0 || len(gjson.GetBytes(body, "functions").Array()) > 0 {

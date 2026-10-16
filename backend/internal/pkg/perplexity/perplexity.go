@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"regexp"
 	"strconv"
 	"strings"
 	"time"
@@ -624,4 +625,27 @@ func parseRetryAfter(v string) time.Duration {
 		return d
 	}
 	return 0
+}
+
+// citationMarkerPattern 匹配 Perplexity 答案里的引用角标（[1]、[2]...），
+// 连同角标前的一个空格一起移除（"text [1]." → "text."）。不动换行与缩进。
+var citationMarkerPattern = regexp.MustCompile(`[ \t]?\[\d+\]`)
+
+// citationTailPattern 匹配结尾处可能未完成的角标前缀（"["、"[1"、"[12"），
+// 连同其前一个空格一起暂存（"See [2" 的空格不能先下发，否则清洗后残留双空格）。
+var citationTailPattern = regexp.MustCompile(`[ \t]?\[\d*$`)
+
+// StripCitationMarkers 移除文本里的完整引用角标。
+func StripCitationMarkers(s string) string {
+	return citationMarkerPattern.ReplaceAllString(s, "")
+}
+
+// StripCitationMarkersStreaming 是 StripCitationMarkers 的流式变体：完整角标
+// 立即清洗，结尾处可能未完成的角标前缀（"["、"[1"）留待下一段。返回可安全
+// 下发的部分与需要暂存的尾巴；流结束时对尾巴再调用一次 StripCitationMarkers
+// 并按原样下发残余（未完成的角标按普通文本处理）。
+func StripCitationMarkersStreaming(s string) (emit string, pending string) {
+	tail := citationTailPattern.FindString(s)
+	body := strings.TrimSuffix(s, tail)
+	return StripCitationMarkers(body), tail
 }

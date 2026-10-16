@@ -1192,6 +1192,7 @@ export default {
         native_followups: '启用服务端原生追问',
         strict_parameters: '严格参数校验',
         keep_system_prompt: '保留 system / developer 指令',
+        strip_citations: '剥离回答中的引用角标（[1][2]…）',
         keepSystemHint: '指令会一并交给上游检索，样板提示词可能影响搜索结果。',
         maxQueryChars: '查询字符上限',
         queryLimitHint: '默认 90,000。允许 1,000–96,000 的整数；超限会丢弃较老历史，最终问题不会被截断。',

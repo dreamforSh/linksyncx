@@ -6,6 +6,7 @@ import (
 	"context"
 	"errors"
 	"net/http"
+	"strconv"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -62,7 +63,7 @@ func TestPerplexityMaintenanceQuotaRecoveryDoesNotUnpauseManualAccounts(t *testi
 			require.NoError(t, err)
 			require.Empty(t, perplexityQuotaPauseReason(current, "paid"))
 			require.Equal(t, !manuallyPaused, current.Schedulable)
-			require.Equal(t, 3, upstream.count())
+			require.Equal(t, 4, upstream.count(), "3 profile sections + 1 catalog fetch per pass")
 			for _, req := range upstream.requests {
 				require.NotEqual(t, perplexity.AskPath, req.URL.Path)
 			}
@@ -182,5 +183,90 @@ func TestPerplexityMaintenanceConcurrencyIsBounded(t *testing.T) {
 		t.Fatal("maintenance did not finish")
 	}
 	require.LessOrEqual(t, peak.Load(), int32(perplexityMaintenanceConcurrency))
-	require.Equal(t, 18, upstream.count())
+	require.Equal(t, 24, upstream.count(), "6 accounts * (3 profile sections + 1 catalog fetch)")
+}
+
+func perplexityCatalogRequestCount(upstream *perplexityInfoHTTP) int {
+	count := 0
+	for _, req := range upstream.requests {
+		if req.URL.Path == perplexity.ModelsConfigPath {
+			count++
+		}
+	}
+	return count
+}
+
+func TestPerplexityMaintenanceRefreshesModelCatalog(t *testing.T) {
+	tests, upstream, account := newPerplexityInfoTestService(func(w http.ResponseWriter, req *http.Request) {
+		if req.URL.Path == perplexity.ModelsConfigPath {
+			_, _ = w.Write([]byte(`{"models":[{"model":"gpt55","label":"GPT-5.5"},{"model":"gpt55_thinking","label":"GPT-5.5 Thinking"},{"model":"turbo","label":"Auto"}]}`))
+			return
+		}
+		servePerplexityGoodProfile(w, req)
+	})
+	account.Status, account.Schedulable = StatusActive, true
+	repo := &perplexityModelRepoStub{perplexityStateRepoStub: newPerplexityStateRepo(account)}
+	tests.accountRepo = repo
+	svc := NewPerplexityMaintenanceService(repo, tests, nil, perplexityMaintenanceConfig())
+	svc.runOnce(context.Background())
+	current, err := repo.GetByID(context.Background(), account.ID)
+	require.NoError(t, err)
+	snapshot := current.GetUpstreamModelMetadataSnapshot()
+	require.NotNil(t, snapshot)
+	require.Equal(t, "perplexity", snapshot.Source)
+	require.Equal(t, perplexityAccountFingerprint(current), snapshot.IdentityFingerprint)
+	require.Contains(t, snapshot.Models, "gpt55")
+	require.Contains(t, snapshot.Models, "gpt55_thinking")
+	require.Contains(t, snapshot.Models, "turbo")
+	require.Equal(t, StatusActive, current.Status)
+	require.Empty(t, current.ErrorMessage)
+	require.Equal(t, 1, perplexityCatalogRequestCount(upstream))
+
+	// A fresh snapshot is not refetched on the next pass.
+	svc.runOnce(context.Background())
+	require.Equal(t, 1, perplexityCatalogRequestCount(upstream))
+}
+
+func TestPerplexityMaintenanceCatalogRefreshFailureIsBestEffort(t *testing.T) {
+	for _, status := range []int{http.StatusForbidden, http.StatusTooManyRequests, http.StatusServiceUnavailable} {
+		t.Run(strconv.Itoa(status), func(t *testing.T) {
+			tests, upstream, account := newPerplexityInfoTestService(func(w http.ResponseWriter, req *http.Request) {
+				if req.URL.Path == perplexity.ModelsConfigPath {
+					w.WriteHeader(status)
+					return
+				}
+				servePerplexityGoodProfile(w, req)
+			})
+			account.Status, account.Schedulable = StatusActive, true
+			repo := &perplexityModelRepoStub{perplexityStateRepoStub: newPerplexityStateRepo(account)}
+			tests.accountRepo = repo
+			svc := NewPerplexityMaintenanceService(repo, tests, nil, perplexityMaintenanceConfig())
+			svc.runOnce(context.Background())
+			require.Equal(t, 1, perplexityCatalogRequestCount(upstream))
+			current, err := repo.GetByID(context.Background(), account.ID)
+			require.NoError(t, err)
+			require.Equal(t, StatusActive, current.Status, "catalog failures must never mark the account")
+			require.Empty(t, current.ErrorMessage)
+			require.True(t, current.Schedulable)
+			require.Nil(t, current.TempUnschedulableUntil)
+			require.Nil(t, current.GetUpstreamModelMetadataSnapshot())
+
+			// The per-attempt backoff keeps a failing endpoint from being hit every pass.
+			svc.runOnce(context.Background())
+			require.Equal(t, 1, perplexityCatalogRequestCount(upstream))
+		})
+	}
+}
+
+func TestPerplexityMaintenanceCatalogRefreshCanBeDisabled(t *testing.T) {
+	tests, upstream, account := newPerplexityInfoTestService(servePerplexityGoodProfile)
+	account.Status = StatusActive
+	repo := &perplexityModelRepoStub{perplexityStateRepoStub: newPerplexityStateRepo(account)}
+	tests.accountRepo = repo
+	cfg := perplexityMaintenanceConfig()
+	cfg.Gateway.Perplexity.CatalogRefreshDisabled = true
+	svc := NewPerplexityMaintenanceService(repo, tests, nil, cfg)
+	svc.runOnce(context.Background())
+	require.Zero(t, perplexityCatalogRequestCount(upstream))
+	require.Equal(t, 3, upstream.count(), "profile sections still refresh when the catalog is disabled")
 }

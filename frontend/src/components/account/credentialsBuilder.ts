@@ -272,6 +272,7 @@ export function defaultPerplexityOptions(): PerplexityRequestOptions {
     native_followups: true,
     strict_parameters: false,
     keep_system_prompt: false,
+    strip_citations: false,
     max_query_chars: 90000
   }
 }
@@ -289,7 +290,7 @@ export function readPerplexityOptions(credentials?: Record<string, unknown> | nu
   }
   if (typeof stored.language === 'string') options.language = stored.language
   if (typeof stored.timezone === 'string') options.timezone = stored.timezone
-  for (const key of ['is_incognito', 'include_sources', 'include_search_progress', 'native_followups', 'strict_parameters', 'keep_system_prompt'] as const) {
+  for (const key of ['is_incognito', 'include_sources', 'include_search_progress', 'native_followups', 'strict_parameters', 'keep_system_prompt', 'strip_citations'] as const) {
     if (typeof stored[key] === 'boolean') options[key] = stored[key]
   }
   if ('max_query_chars' in stored) {
@@ -333,6 +334,7 @@ export function applyPerplexityOptions(credentials: Record<string, unknown>, opt
     native_followups: options.native_followups,
     strict_parameters: options.strict_parameters,
     keep_system_prompt: options.keep_system_prompt,
+    strip_citations: options.strip_citations,
     max_query_chars: options.max_query_chars
   }
 }

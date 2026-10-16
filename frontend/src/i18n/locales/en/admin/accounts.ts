@@ -1015,6 +1015,7 @@ export default {
         native_followups: 'Enable server-managed native follow-ups',
         strict_parameters: 'Strict parameter validation',
         keep_system_prompt: 'Preserve system / developer instructions',
+        strip_citations: 'Strip citation markers ([1][2]…) from answers',
         keepSystemHint: 'Instructions are included in upstream search text; boilerplate prompts may affect search results.',
         maxQueryChars: 'Query character limit',
         queryLimitHint: 'Default: 90,000. Enter an integer from 1,000 to 96,000. Older history is dropped when needed; the final question is never cut.',

@@ -308,3 +308,58 @@ func BenchmarkPerplexityTranslationSmallDeltas(b *testing.B) {
 		})
 	}
 }
+
+func TestPerplexityTranslationStripCitations(t *testing.T) {
+	// 完整角标立即清洗；跨快照拆开的角标（"[2" + "]"）经暂存后同样被清洗。
+	mk := func(answer string) string {
+		payload, _ := json.Marshal(map[string]any{"blocks": []any{map[string]any{
+			"intended_usage": "ask_text", "markdown_block": map[string]any{"answer": answer},
+		}}})
+		return "data: " + string(payload) + "\n\n"
+	}
+	body := mk("Go is fast [1].") + mk("Go is fast [1]. See [2") + mk("Go is fast [1]. See [2] now.") + "event: end_of_stream\n\n"
+
+	out, err := translatePerplexityFixture(t, body, perplexityTranslateParams{
+		upstreamModel: "sonar", stream: true, created: 1700000000, id: "chatcmpl-x",
+		IncludeSources: false, StripCitations: true,
+	})
+	require.NoError(t, err)
+	content := perplexityCCContent(t, out)
+	require.Equal(t, "Go is fast. See now.", content)
+
+	// 非流式同样清洗。
+	out, err = translatePerplexityFixture(t, body, perplexityTranslateParams{
+		upstreamModel: "sonar", stream: false, created: 1700000000, id: "chatcmpl-x",
+		IncludeSources: false, StripCitations: true,
+	})
+	require.NoError(t, err)
+	require.Equal(t, "Go is fast. See now.", gjson.Get(strings.TrimSpace(out), "choices.0.message.content").String())
+
+	// 默认关闭：角标原样透传。
+	out, err = translatePerplexityFixture(t, body, perplexityTranslateParams{
+		upstreamModel: "sonar", stream: true, created: 1700000000, id: "chatcmpl-x",
+	})
+	require.NoError(t, err)
+	require.Equal(t, "Go is fast [1]. See [2] now.", perplexityCCContent(t, out))
+}
+
+func TestPerplexityTranslationSearchCountMetrics(t *testing.T) {
+	mk := func(answer string) string {
+		payload, _ := json.Marshal(map[string]any{"blocks": []any{map[string]any{
+			"intended_usage": "ask_text", "markdown_block": map[string]any{"answer": answer},
+		}}})
+		return "data: " + string(payload) + "\n\n"
+	}
+	sourcesEvent := `data: {"blocks":[{"intended_usage":"web_results","web_result_block":{"web_results":[{"url":"https://a.com","title":"A"},{"url":"https://b.com","name":"B"}]}}]}` + "\n\n"
+	// 同一 URL 重复出现应按 URL 去重。
+	dupEvent := `data: {"blocks":[{"intended_usage":"web_results","web_result_block":{"web_results":[{"url":"https://a.com","title":"A2"}]}}]}` + "\n\n"
+	body := mk("answer") + sourcesEvent + dupEvent + "event: end_of_stream\n\n"
+
+	metrics := &perplexityResponseMetrics{}
+	_, err := translatePerplexityFixture(t, body, perplexityTranslateParams{
+		upstreamModel: "sonar", stream: true, created: 1700000000, id: "chatcmpl-x",
+		IncludeSources: false, metrics: metrics,
+	})
+	require.NoError(t, err)
+	require.Equal(t, 2, metrics.snapshot())
+}

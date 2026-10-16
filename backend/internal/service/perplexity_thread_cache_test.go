@@ -209,6 +209,11 @@ func TestPerplexityThreadScopeIsolation(t *testing.T) {
 			test.change(&in)
 			body := perplexityThreadTestFollowup(t, perplexityThreadTestAnswer, "fake second question")
 			miss := svc.preparePerplexityContinuation(in.account, in.apiKey, in.session, in.model, in.mode, body, in.opts)
+			if in.opts.Incognito {
+				// 无痕会话绝不落本地缓存：不产生续链计划，也不消费他人句柄。
+				require.Nil(t, miss, "incognito conversations must never be cached or chained")
+				return
+			}
 			require.NotNil(t, miss)
 			require.Empty(t, miss.backendUUID, "changed scope must replay full history")
 			require.NotEqual(t, first.contextUUID, miss.contextUUID)
@@ -579,4 +584,28 @@ func TestPerplexityThreadStoreInitializationIsConcurrentAndServiceLocal(t *testi
 	require.Zero(t, different.Load())
 	other := (&OpenAIGatewayService{}).perplexityThreadStore()
 	require.NotSame(t, first.Load(), other, "handles must not be process-global across service instances")
+}
+
+func TestPerplexityThreadIncognitoNeverCached(t *testing.T) {
+	svc := &OpenAIGatewayService{}
+	account := perplexityThreadTestAccount()
+	opts := perplexity.DefaultRequestOptions()
+	opts.Incognito = true
+
+	// 无痕会话：不生成续链计划（不读缓存）。
+	plan := svc.preparePerplexityContinuation(account, 41, "fake-session", "pplx_pro", perplexity.ModeCopilot,
+		perplexityThreadTestBody(t, perplexityThreadTestTurn("user", "private question")), opts)
+	require.Nil(t, plan, "incognito requests must never touch the thread cache")
+
+	// 即使有可命中的既有线程，无痕请求也不许接续它。
+	normalOpts := perplexity.DefaultRequestOptions()
+	seed := perplexityThreadTestSeed(t, svc, account, normalOpts)
+	followup := perplexityThreadTestFollowup(t, perplexityThreadTestAnswer, "private followup")
+	plan = svc.preparePerplexityContinuation(account, 41, "fake-session", "pplx_pro", perplexity.ModeCopilot, followup, opts)
+	require.Nil(t, plan, "incognito followup must not chain onto a cached thread")
+	// 既有线程句柄未被消费（仍可供非无痕请求使用）。
+	hit := svc.preparePerplexityContinuation(account, 41, "fake-session", "pplx_pro", perplexity.ModeCopilot, followup, normalOpts)
+	require.NotNil(t, hit)
+	require.Equal(t, perplexityThreadTestBackend, hit.backendUUID)
+	_ = seed
 }
