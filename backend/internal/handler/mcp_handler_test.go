@@ -83,7 +83,7 @@ func TestMCPHandlerInitialize(t *testing.T) {
 	require.NoError(t, json.Unmarshal(resp.Result, &result))
 	require.Equal(t, "2025-03-26", result.ProtocolVersion)
 	require.NotNil(t, result.Capabilities.Tools)
-	require.Equal(t, "sub2api-perplexity", result.ServerInfo.Name)
+	require.Equal(t, "linksyncx-perplexity", result.ServerInfo.Name)
 	require.Equal(t, "test", result.ServerInfo.Version)
 }
 
@@ -101,14 +101,14 @@ func TestMCPHandlerToolsList(t *testing.T) {
 		} `json:"tools"`
 	}
 	require.NoError(t, json.Unmarshal(resp.Result, &result))
-	require.Len(t, result.Tools, 4)
+	require.Len(t, result.Tools, 5)
 	names := make([]string, 0, len(result.Tools))
 	for _, tool := range result.Tools {
 		names = append(names, tool.Name)
 		require.NotEmpty(t, tool.Description)
 		require.Equal(t, "object", tool.InputSchema["type"])
 	}
-	require.Equal(t, []string{"perplexity_ask", "perplexity_search", "perplexity_research", "perplexity_models"}, names)
+	require.Equal(t, []string{"perplexity_ask", "perplexity_search", "perplexity_reason", "perplexity_research", "perplexity_models"}, names)
 }
 
 func TestMCPHandlerUnknownMethod(t *testing.T) {
@@ -116,7 +116,7 @@ func TestMCPHandlerUnknownMethod(t *testing.T) {
 	require.Equal(t, http.StatusOK, rec.Code)
 	require.NotNil(t, resp.Error)
 	require.Equal(t, -32601, resp.Error.Code)
-	require.Contains(t, resp.Error.Message, "resources/list")
+	require.Equal(t, "Method not found", resp.Error.Message)
 	require.JSONEq(t, `9`, string(resp.ID))
 }
 
@@ -130,10 +130,7 @@ func TestMCPHandlerNonPerplexityGroupRejected(t *testing.T) {
 
 func TestMCPHandlerNotificationAccepted(t *testing.T) {
 	// notifications/initialized（无 id）→ 202 空响应
-	rec := httptest.NewRecorder()
-	gin.SetMode(gin.TestMode)
-	c, _ := gin.CreateTestContext(rec)
-	c.Request = httptest.NewRequest(http.MethodPost, "/mcp", strings.NewReader(`{"jsonrpc":"2.0","method":"notifications/initialized"}`))
+	c, rec := newMCPTestContext(`{"jsonrpc":"2.0","method":"notifications/initialized"}`, service.PlatformPerplexity)
 	h := newMCPTestHandler()
 	h.HandleMCP(c)
 	require.Equal(t, http.StatusAccepted, rec.Code)
@@ -154,24 +151,26 @@ func TestMCPHandlerPing(t *testing.T) {
 	require.JSONEq(t, `{}`, string(resp.Result))
 }
 
-func TestMCPHandlerModelsToolStatic(t *testing.T) {
+func TestMCPHandlerModelsToolDynamic(t *testing.T) {
 	h := newMCPTestHandler()
 	h.loopbackCC = func(context.Context, string, string, []byte) (int, []byte, error) {
-		t.Fatal("perplexity_models must not hit the chat completions loopback")
+		t.Fatal("perplexity_models must not invoke a model")
 		return 0, nil, nil
+	}
+	h.loopbackModels = func(_ context.Context, target, key string) (int, []byte, error) {
+		require.Contains(t, target, "/v1/models")
+		require.Equal(t, "sk-test-mcp", key)
+		return 200, []byte(`{"data":[{"id":"private-gpt","display_name":"Configured model"}]}`), nil
 	}
 	rec, resp := serveMCP(t, h, `{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"perplexity_models","arguments":{}}}`, service.PlatformPerplexity)
 	require.Equal(t, http.StatusOK, rec.Code)
 	require.Nil(t, resp.Error)
-
 	var result mcpCallToolResult
 	require.NoError(t, json.Unmarshal(resp.Result, &result))
 	require.False(t, result.IsError)
 	require.Len(t, result.Content, 1)
-	require.Equal(t, "text", result.Content[0].Type)
-	for _, model := range []string{"sonar", "sonar-pro", "sonar-reasoning", "sonar-deep-research", "sonar-computer", "sonar-pro-computer"} {
-		require.Contains(t, result.Content[0].Text, model)
-	}
+	require.Contains(t, result.Content[0].Text, "private-gpt")
+	require.NotContains(t, result.Content[0].Text, "sonar-computer")
 }
 
 func TestMCPHandlerToolCallAskLoopback(t *testing.T) {
@@ -180,7 +179,7 @@ func TestMCPHandlerToolCallAskLoopback(t *testing.T) {
 	var gotBody []byte
 	h.loopbackCC = func(_ context.Context, url, apiKey string, body []byte) (int, []byte, error) {
 		gotURL, gotKey, gotBody = url, apiKey, body
-		return http.StatusOK, []byte(`{"choices":[{"message":{"role":"assistant","content":"Answer text","tool_calls":[{"function":{"name":"search","arguments":"{\"q\":\"x\"}"}}]}}]}`), nil
+		return http.StatusOK, []byte(`{"choices":[{"message":{"role":"assistant","content":"Answer text"}}]}`), nil
 	}
 	rec, resp := serveMCP(t, h, `{"jsonrpc":"2.0","id":4,"method":"tools/call","params":{"name":"perplexity_ask","arguments":{"query":"hello world"}}}`, service.PlatformPerplexity)
 	require.Equal(t, http.StatusOK, rec.Code)
@@ -207,7 +206,7 @@ func TestMCPHandlerToolCallAskLoopback(t *testing.T) {
 	require.NoError(t, json.Unmarshal(resp.Result, &result))
 	require.False(t, result.IsError)
 	require.Len(t, result.Content, 1)
-	require.Equal(t, "Answer text\n🔧 search {\"q\":\"x\"}", result.Content[0].Text)
+	require.Equal(t, "Answer text", result.Content[0].Text)
 }
 
 func TestMCPHandlerToolCallSearchModelOverride(t *testing.T) {
@@ -240,7 +239,7 @@ func TestMCPHandlerToolCallUpstreamError(t *testing.T) {
 	require.NoError(t, json.Unmarshal(resp.Result, &result))
 	require.True(t, result.IsError)
 	require.Len(t, result.Content, 1)
-	require.Contains(t, result.Content[0].Text, "no accounts available")
+	require.NotContains(t, result.Content[0].Text, "no accounts available")
 	require.Contains(t, result.Content[0].Text, "500")
 }
 

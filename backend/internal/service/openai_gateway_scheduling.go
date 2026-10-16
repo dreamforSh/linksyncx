@@ -420,6 +420,9 @@ func openAICompatibleAccountEligibilityFailureReasonBeforeProfit(ctx context.Con
 	if reason := perplexityQuotaPauseReason(account, requestedModel); reason != "" {
 		return reason
 	}
+	if reason := perplexityModelHealthPauseReason(ctx, account, requestedModel); reason != "" {
+		return reason
+	}
 	if account.IsGrok() {
 		if paused, reason := shouldAutoPauseGrokAccountByQuota(account); paused {
 			slog.Debug("grok_account_auto_paused_by_quota",

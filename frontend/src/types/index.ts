@@ -855,6 +855,38 @@ export interface PerplexityRequestOptions {
   include_search_progress: boolean
   native_followups: boolean
   strict_parameters: boolean
+  keep_system_prompt: boolean
+  max_query_chars: number
+}
+
+export interface PerplexityModelIdentity {
+  requested_preference: string
+  actual_model?: string
+  user_selected_model?: string
+  observed_models?: string[]
+  status: 'unknown' | 'matched' | 'substituted' | 'mixed'
+  conflict: boolean
+}
+
+export interface PerplexityModelProbeResult {
+  requested_model: string
+  preference: string
+  mode: string
+  status: 'verified' | 'substituted' | 'mixed' | 'unknown' | 'failed' | 'unavailable' | 'stale'
+  success: boolean
+  verified: boolean
+  identity: PerplexityModelIdentity
+  error_code?: string
+  error_message?: string
+  http_status?: number
+  duration_ms: number
+  observed_at_ms: number
+  finished_at: string
+  identity_fingerprint: string
+  unavailable_until?: string
+  last_verified_at?: string
+  source: string
+  persistence: 'stored' | 'stale' | 'failed' | 'unavailable'
 }
 
 export type AccountPlatform = 'anthropic' | 'openai' | 'gemini' | 'antigravity' | 'grok' | 'perplexity' | 'kimi' | 'zhipu' | 'deepseek' | 'minimax' | 'opencode_go'
@@ -874,6 +906,7 @@ export interface ClaudeModel {
   type: string
   display_name: string
   created_at: string
+  perplexity_probe?: PerplexityModelProbeResult
 }
 
 export interface Proxy {
@@ -2868,10 +2901,13 @@ export interface TotpLogin2FARequest {
 
 // ==================== Scheduled Test Types ====================
 
+export type ScheduledTestMode = 'default' | 'perplexity_model'
+
 export interface ScheduledTestPlan {
   id: number
   account_id: number
   model_id: string
+  test_mode?: ScheduledTestMode
   cron_expression: string
   enabled: boolean
   max_results: number
@@ -2883,6 +2919,7 @@ export interface ScheduledTestPlan {
 }
 
 export interface ScheduledTestResult {
+  metadata?: { platform?: string; perplexity_probe?: PerplexityModelProbeResult }
   id: number
   plan_id: number
   status: string
@@ -2895,6 +2932,7 @@ export interface ScheduledTestResult {
 }
 
 export interface CreateScheduledTestPlanRequest {
+  test_mode?: ScheduledTestMode
   account_id: number
   model_id: string
   cron_expression: string
@@ -2904,6 +2942,7 @@ export interface CreateScheduledTestPlanRequest {
 }
 
 export interface UpdateScheduledTestPlanRequest {
+  test_mode?: ScheduledTestMode
   model_id?: string
   cron_expression?: string
   enabled?: boolean

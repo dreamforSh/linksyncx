@@ -10,6 +10,7 @@ type ScheduledTestPlan struct {
 	ID             int64      `json:"id"`
 	AccountID      int64      `json:"account_id"`
 	ModelID        string     `json:"model_id"`
+	TestMode       string     `json:"test_mode"`
 	CronExpression string     `json:"cron_expression"`
 	Enabled        bool       `json:"enabled"`
 	MaxResults     int        `json:"max_results"`
@@ -22,15 +23,16 @@ type ScheduledTestPlan struct {
 
 // ScheduledTestResult represents a single test execution result.
 type ScheduledTestResult struct {
-	ID           int64     `json:"id"`
-	PlanID       int64     `json:"plan_id"`
-	Status       string    `json:"status"`
-	ResponseText string    `json:"response_text"`
-	ErrorMessage string    `json:"error_message"`
-	LatencyMs    int64     `json:"latency_ms"`
-	StartedAt    time.Time `json:"started_at"`
-	FinishedAt   time.Time `json:"finished_at"`
-	CreatedAt    time.Time `json:"created_at"`
+	ID           int64          `json:"id"`
+	PlanID       int64          `json:"plan_id"`
+	Status       string         `json:"status"`
+	ResponseText string         `json:"response_text"`
+	ErrorMessage string         `json:"error_message"`
+	LatencyMs    int64          `json:"latency_ms"`
+	StartedAt    time.Time      `json:"started_at"`
+	FinishedAt   time.Time      `json:"finished_at"`
+	CreatedAt    time.Time      `json:"created_at"`
+	Metadata     map[string]any `json:"metadata,omitempty"`
 }
 
 // ScheduledTestPlanRepository defines the data access interface for test plans.
@@ -42,6 +44,7 @@ type ScheduledTestPlanRepository interface {
 	Update(ctx context.Context, plan *ScheduledTestPlan) (*ScheduledTestPlan, error)
 	Delete(ctx context.Context, id int64) error
 	UpdateAfterRun(ctx context.Context, id int64, lastRunAt time.Time, nextRunAt time.Time) error
+	UpdateAfterRunIfUnchanged(ctx context.Context, id int64, expectedUpdatedAt, lastRunAt, nextRunAt time.Time) (bool, error)
 }
 
 // ScheduledTestResultRepository defines the data access interface for test results.

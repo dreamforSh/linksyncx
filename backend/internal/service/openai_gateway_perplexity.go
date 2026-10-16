@@ -354,6 +354,25 @@ func (s *OpenAIGatewayService) sendPerplexityCCUpstreamRequest(
 		return nil, err
 	}
 	modelPref, mode := perplexity.ResolveModelPreference(upstreamModel)
+	selectedPreference, selectionErr := resolvePerplexityThinkingPreference(account, modelPref, opts)
+	if selectionErr != nil {
+		return nil, selectionErr
+	}
+	modelPref = selectedPreference
+	SetOpsUpstreamModel(c, modelPref)
+	if reason := perplexityPreferenceHealthPauseReason(account, modelPref, mode); reason != "" {
+		return nil, &UpstreamFailoverError{
+			StatusCode:   http.StatusServiceUnavailable,
+			ResponseBody: []byte(`{"error":{"type":"api_error","message":"the selected Perplexity model is temporarily unavailable"}}`),
+		}
+	}
+	if opts.Internal.ThinkingEnabled != nil {
+		selection := "disabled"
+		if *opts.Internal.ThinkingEnabled {
+			selection = "enabled"
+		}
+		c.Header("X-Perplexity-Thinking-Selection", selection)
+	}
 	if bucket := perplexityExhaustedQuotaBucket(account, modelPref, mode, time.Now()); bucket != "" {
 		return nil, perplexityQuotaFailover(bucket)
 	}

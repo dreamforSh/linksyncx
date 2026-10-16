@@ -492,6 +492,8 @@ func RegisterGatewayRoutes(
 	// RequireGroupAssignment 等），鉴权/分组语义完全一致；handler 内部再做
 	// perplexity 平台门禁并回环到 /v1/chat/completions。
 	rootRoute(http.MethodPost, "/mcp", bodyLimit, h.MCP.HandleMCP)
+	rootRoute(http.MethodGet, "/mcp", bodyLimit, h.MCP.HandleMCPUnsupported)
+	rootRoute(http.MethodDelete, "/mcp", bodyLimit, h.MCP.HandleMCPUnsupported)
 
 	// Antigravity 模型列表
 	r.GET("/antigravity/models", gin.HandlerFunc(apiKeyAuth), requireGroupAnthropic, h.GroupManagement.GatewayGuard(middleware.AnthropicErrorWriter), h.Gateway.AntigravityModels)

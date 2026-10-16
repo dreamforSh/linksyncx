@@ -6,32 +6,25 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"mime"
 	"net/http"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/Wei-Shaw/sub2api/internal/config"
-	"github.com/Wei-Shaw/sub2api/internal/pkg/logger"
+	"github.com/Wei-Shaw/sub2api/internal/pkg/perplexity"
 	"github.com/Wei-Shaw/sub2api/internal/server/middleware"
 	"github.com/Wei-Shaw/sub2api/internal/service"
-
 	"github.com/gin-gonic/gin"
-	"go.uber.org/zap"
 )
 
-// 本文件实现一个极简 MCP（Model Context Protocol）服务端，挂在 POST /mcp，
-// 走 Streamable HTTP 的「单 POST 端点 + 纯 JSON 响应」子集（无 SSE）。
-//
-// 它把 Perplexity 平台能力暴露为 MCP tools；tools/call 不做任何自有调度，
-// 而是把请求折叠成 OpenAI Chat Completions 后回环 POST 到本机的
-// /v1/chat/completions（携带客户端同一把 API Key），完整复用鉴权、计费、
-// 账号池调度与故障转移链路。
 const (
-	mcpProtocolVersion = "2025-03-26"
-	mcpServerName      = "sub2api-perplexity"
-
-	mcpLoopbackTimeout      = 5 * time.Minute
-	mcpLoopbackMaxBodyBytes = 32 << 20 // 回环响应体读取上限（32MB），防内存放大
+	mcpProtocolVersion      = "2025-03-26"
+	mcpServerName           = "linksyncx-perplexity"
+	mcpLoopbackTimeout      = 30 * time.Minute
+	mcpLoopbackMaxBodyBytes = 32 << 20
+	mcpMaxRequestBytes      = 1 << 20
 	mcpErrParseError        = -32700
 	mcpErrInvalidRequest    = -32600
 	mcpErrMethodNotFound    = -32601
@@ -76,23 +69,33 @@ type mcpCallToolResult struct {
 type mcpCallToolParams struct {
 	Name      string          `json:"name"`
 	Arguments json.RawMessage `json:"arguments"`
+	Meta      struct {
+		ProgressToken json.RawMessage `json:"progressToken"`
+	} `json:"_meta"`
 }
 
 type mcpToolArguments struct {
-	Query string `json:"query"`
-	Model string `json:"model"`
+	Query     string   `json:"query"`
+	Model     string   `json:"model"`
+	Sources   []string `json:"sources"`
+	Language  *string  `json:"language"`
+	Timezone  *string  `json:"timezone"`
+	Incognito *bool    `json:"is_incognito"`
 }
 
-// mcpLoopbackCall 执行到本机 /v1/chat/completions 的回环 POST。
-// 独立成字段是为了让单测可以打桩，不必真的起 HTTP 服务。
-type mcpLoopbackCall func(ctx context.Context, url, apiKey string, body []byte) (status int, respBody []byte, err error)
+type mcpLoopbackCall func(context.Context, string, string, []byte) (int, []byte, error)
 
-// MCPHandler 服务 POST /mcp。
+// MCPHandler keeps the authenticated gateway as its only execution and billing
+// path. In-flight cancellation is identity-scoped and local to this instance.
 type MCPHandler struct {
-	cfg        *config.Config
-	version    string
-	httpClient *http.Client
-	loopbackCC mcpLoopbackCall
+	cfg            *config.Config
+	version        string
+	httpClient     *http.Client
+	loopbackCC     mcpLoopbackCall
+	loopbackModels func(context.Context, string, string) (int, []byte, error)
+	loopbackStream func(context.Context, string, string, []byte) (*http.Response, error)
+	mu             sync.Mutex
+	inflight       map[mcpRequestKey]*mcpInFlight
 }
 
 func NewMCPHandler(cfg *config.Config, buildInfo BuildInfo) *MCPHandler {
@@ -100,61 +103,102 @@ func NewMCPHandler(cfg *config.Config, buildInfo BuildInfo) *MCPHandler {
 	if version == "" {
 		version = "1"
 	}
+	transport := &http.Transport{}
+	if base, ok := http.DefaultTransport.(*http.Transport); ok {
+		transport = base.Clone()
+	}
+	transport.Proxy = nil
 	h := &MCPHandler{
-		cfg:        cfg,
-		version:    version,
-		httpClient: &http.Client{Timeout: mcpLoopbackTimeout},
+		cfg: cfg, version: version, inflight: make(map[mcpRequestKey]*mcpInFlight),
+		httpClient: &http.Client{Transport: transport, Timeout: mcpLoopbackTimeout,
+			CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }},
 	}
 	h.loopbackCC = h.postChatCompletions
+	h.loopbackModels = h.getModels
+	h.loopbackStream = h.postStreamingChatCompletions
 	return h
 }
 
-// HandleMCP 处理 POST /mcp 的 JSON-RPC 2.0 请求。
 func (h *MCPHandler) HandleMCP(c *gin.Context) {
-	body, err := io.ReadAll(c.Request.Body)
-	if err != nil {
-		h.writeError(c, json.RawMessage("null"), mcpErrInvalidRequest, "Failed to read request body")
+	if !h.allowMCPOrigin(c) {
+		c.AbortWithStatus(http.StatusForbidden)
 		return
 	}
-	trimmed := bytes.TrimSpace(body)
-	if len(trimmed) == 0 {
-		h.writeError(c, json.RawMessage("null"), mcpErrInvalidRequest, "Empty request body")
+	apiKey, ok := middleware.GetAPIKeyFromContext(c)
+	if !ok || apiKey == nil {
+		c.AbortWithStatus(http.StatusUnauthorized)
 		return
 	}
-	// MVP：批量请求（数组）整体拒绝。
-	if trimmed[0] == '[' {
-		h.writeError(c, json.RawMessage("null"), mcpErrInvalidRequest, "Batch requests are not supported")
+	if header := c.GetHeader("MCP-Protocol-Version"); header != "" && header != mcpProtocolVersion {
+		c.AbortWithStatusJSON(http.StatusBadRequest, gin.H{"error": "Unsupported MCP protocol version"})
 		return
 	}
-
+	if contentType := c.GetHeader("Content-Type"); contentType != "" {
+		mediaType, _, parseErr := mime.ParseMediaType(contentType)
+		if parseErr != nil || mediaType != "application/json" {
+			c.AbortWithStatus(http.StatusUnsupportedMediaType)
+			return
+		}
+	}
+	accept := strings.ToLower(c.GetHeader("Accept"))
+	if accept != "" && !strings.Contains(accept, "application/json") && !strings.Contains(accept, "text/event-stream") && !strings.Contains(accept, "*/*") {
+		c.AbortWithStatus(http.StatusNotAcceptable)
+		return
+	}
+	body, err := io.ReadAll(io.LimitReader(c.Request.Body, mcpMaxRequestBytes+1))
+	if err != nil || len(body) > mcpMaxRequestBytes {
+		c.AbortWithStatus(http.StatusRequestEntityTooLarge)
+		return
+	}
 	var req mcpJSONRPCRequest
-	if err := json.Unmarshal(trimmed, &req); err != nil {
+	trimmed := bytes.TrimSpace(body)
+	if len(trimmed) == 0 || trimmed[0] != '{' {
+		h.writeError(c, json.RawMessage("null"), mcpErrInvalidRequest, "Expected one JSON-RPC object")
+		return
+	}
+	if json.Unmarshal(trimmed, &req) != nil {
 		h.writeError(c, json.RawMessage("null"), mcpErrParseError, "Failed to parse JSON-RPC request")
 		return
 	}
-
-	// MCP notifications（notifications/* 或无 id）→ 202，无响应体。
-	// gin 的 c.Status 只记录状态码，不写底层 header；无响应体时必须显式 flush。
-	if len(req.ID) == 0 || string(req.ID) == "null" || strings.HasPrefix(req.Method, "notifications/") {
+	if req.JSONRPC != "2.0" || req.Method == "" || req.Params != nil && !mcpJSONObject(req.Params) {
+		h.writeError(c, json.RawMessage("null"), mcpErrInvalidRequest, "Invalid JSON-RPC request")
+		return
+	}
+	if apiKey.Group == nil || apiKey.Group.Platform != service.PlatformPerplexity {
+		h.writeError(c, mcpResponseID(req.ID), mcpErrMethodNotFound, "MCP requires an API key bound to a perplexity group")
+		return
+	}
+	if strings.HasPrefix(req.Method, "notifications/") {
+		if len(req.ID) != 0 {
+			h.writeError(c, mcpResponseID(req.ID), mcpErrInvalidRequest, "Notifications must not have an id")
+			return
+		}
+		if req.Method == "notifications/cancelled" {
+			h.cancelMCPRequest(apiKey, req.Params)
+		}
 		c.Status(http.StatusAccepted)
 		c.Writer.WriteHeaderNow()
 		return
 	}
-
-	// 平台门禁：本端点只服务绑定 perplexity 平台分组的 Key。
-	apiKey, ok := middleware.GetAPIKeyFromContext(c)
-	if !ok || apiKey == nil || apiKey.Group == nil || apiKey.Group.Platform != service.PlatformPerplexity {
-		h.writeError(c, req.ID, mcpErrMethodNotFound,
-			"MCP endpoint requires an API key whose group belongs to the perplexity platform")
+	if _, valid := mcpCanonicalID(req.ID); !valid {
+		h.writeError(c, json.RawMessage("null"), mcpErrInvalidRequest, "Request id must be a bounded string or safe integer")
 		return
 	}
-
+	c.Set("mcp_sse", strings.Contains(accept, "text/event-stream"))
 	switch req.Method {
 	case "initialize":
+		if len(req.Params) != 0 {
+			var initialize struct {
+				ProtocolVersion *string `json:"protocolVersion"`
+			}
+			if json.Unmarshal(req.Params, &initialize) != nil || initialize.ProtocolVersion != nil && (*initialize.ProtocolVersion == "" || len(*initialize.ProtocolVersion) > 64) {
+				h.writeError(c, req.ID, mcpErrInvalidParams, "Invalid initialize protocol version")
+				return
+			}
+		}
 		h.writeResult(c, req.ID, map[string]any{
-			"protocolVersion": mcpProtocolVersion,
-			"capabilities":    map[string]any{"tools": map[string]any{}},
-			"serverInfo":      map[string]any{"name": mcpServerName, "version": h.version},
+			"protocolVersion": mcpProtocolVersion, "capabilities": map[string]any{"tools": map[string]any{}},
+			"serverInfo": map[string]any{"name": mcpServerName, "version": h.version},
 		})
 	case "ping":
 		h.writeResult(c, req.ID, map[string]any{})
@@ -163,44 +207,66 @@ func (h *MCPHandler) HandleMCP(c *gin.Context) {
 	case "tools/call":
 		h.handleToolsCall(c, req, apiKey)
 	default:
-		h.writeError(c, req.ID, mcpErrMethodNotFound, fmt.Sprintf("Method not found: %s", req.Method))
+		h.writeError(c, req.ID, mcpErrMethodNotFound, "Method not found")
 	}
+}
+
+func (h *MCPHandler) HandleMCPUnsupported(c *gin.Context) {
+	if !h.allowMCPOrigin(c) {
+		c.AbortWithStatus(http.StatusForbidden)
+		return
+	}
+	c.Header("Allow", "POST")
+	c.Status(http.StatusMethodNotAllowed)
+	c.Writer.WriteHeaderNow()
 }
 
 func (h *MCPHandler) handleToolsCall(c *gin.Context, req mcpJSONRPCRequest, apiKey *service.APIKey) {
 	var params mcpCallToolParams
-	if len(req.Params) > 0 {
-		if err := json.Unmarshal(req.Params, &params); err != nil {
-			h.writeError(c, req.ID, mcpErrInvalidParams, "Invalid tools/call params")
+	if json.Unmarshal(req.Params, &params) != nil || params.Name == "" {
+		h.writeError(c, req.ID, mcpErrInvalidParams, "Invalid tools/call params")
+		return
+	}
+	if len(params.Meta.ProgressToken) != 0 {
+		if _, valid := mcpCanonicalID(params.Meta.ProgressToken); !valid {
+			h.writeError(c, req.ID, mcpErrInvalidParams, "Invalid progress token")
 			return
 		}
 	}
+	ctx, cancel, release, err := h.registerMCPRequest(c.Request.Context(), apiKey, req.ID, params.Meta.ProgressToken)
+	if err != nil {
+		h.writeError(c, req.ID, mcpErrInvalidRequest, err.Error())
+		return
+	}
+	defer cancel()
+	defer release()
 	switch params.Name {
 	case "perplexity_models":
-		h.writeResult(c, req.ID, &mcpCallToolResult{
-			Content: []mcpToolContent{{Type: "text", Text: mcpPerplexityModelsText()}},
-		})
-	case "perplexity_ask":
-		h.callPerplexityTool(c, req, apiKey, params.Name, params.Arguments, "sonar", false)
-	case "perplexity_search":
-		h.callPerplexityTool(c, req, apiKey, params.Name, params.Arguments, "sonar-pro", true)
-	case "perplexity_research":
-		h.callPerplexityTool(c, req, apiKey, params.Name, params.Arguments, "sonar-deep-research", false)
+		if params.Arguments != nil && !mcpEmptyObject(params.Arguments) {
+			h.writeToolError(c, req.ID, "perplexity_models accepts no arguments")
+			return
+		}
+		h.callModelsTool(c, req.ID, ctx, apiKey)
+	case "perplexity_ask", "perplexity_search", "perplexity_reason", "perplexity_research":
+		h.callPerplexityTool(c, req, apiKey, params, ctx)
 	default:
-		h.writeResult(c, req.ID, &mcpCallToolResult{
-			Content: []mcpToolContent{{Type: "text", Text: fmt.Sprintf("Unknown tool: %s", params.Name)}},
-			IsError: true,
-		})
+		h.writeToolError(c, req.ID, "Unknown tool")
 	}
 }
 
-// callPerplexityTool 把工具调用折叠为 CC 请求并回环到 /v1/chat/completions。
-// allowModelOverride 仅 perplexity_search 为 true：arguments.model 非空时透传为 CC model。
-func (h *MCPHandler) callPerplexityTool(c *gin.Context, req mcpJSONRPCRequest, apiKey *service.APIKey, toolName string, rawArgs json.RawMessage, defaultModel string, allowModelOverride bool) {
+func (h *MCPHandler) callPerplexityTool(c *gin.Context, req mcpJSONRPCRequest, apiKey *service.APIKey, params mcpCallToolParams, ctx context.Context) {
 	var args mcpToolArguments
-	if len(rawArgs) > 0 {
-		if err := json.Unmarshal(rawArgs, &args); err != nil {
-			h.writeToolError(c, req.ID, "Invalid tool arguments: "+err.Error())
+	decoder := json.NewDecoder(bytes.NewReader(params.Arguments))
+	decoder.DisallowUnknownFields()
+	if !mcpJSONObject(params.Arguments) || decoder.Decode(&args) != nil {
+		h.writeToolError(c, req.ID, "Invalid or unsupported tool arguments")
+		return
+	}
+	var rawArguments map[string]json.RawMessage
+	_ = json.Unmarshal(params.Arguments, &rawArguments)
+	for _, value := range rawArguments {
+		if string(bytes.TrimSpace(value)) == "null" {
+			h.writeToolError(c, req.ID, "Tool arguments must not be null")
 			return
 		}
 	}
@@ -209,164 +275,140 @@ func (h *MCPHandler) callPerplexityTool(c *gin.Context, req mcpJSONRPCRequest, a
 		h.writeToolError(c, req.ID, "Missing required argument: query")
 		return
 	}
-	model := defaultModel
-	if allowModelOverride {
-		if override := strings.TrimSpace(args.Model); override != "" {
-			model = override
+	model := "sonar"
+	switch params.Name {
+	case "perplexity_search":
+		model = "sonar-pro"
+	case "perplexity_reason":
+		model = "sonar-reasoning"
+	case "perplexity_research":
+		model = "sonar-deep-research"
+	}
+	if args.Model != "" {
+		if params.Name != "perplexity_search" && params.Name != "perplexity_reason" {
+			h.writeToolError(c, req.ID, "Only search and reason support model overrides")
+			return
 		}
+		if len(args.Model) > 200 || strings.TrimSpace(args.Model) == "" {
+			h.writeToolError(c, req.ID, "Invalid model")
+			return
+		}
+		model = strings.TrimSpace(args.Model)
 	}
-
-	ccBody, err := json.Marshal(map[string]any{
-		"model":    model,
-		"messages": []map[string]any{{"role": "user", "content": query}},
-		"stream":   false,
-	})
+	opts := perplexity.DefaultRequestOptions()
+	extension := map[string]any{}
+	if args.Sources != nil {
+		opts.Sources, extension["sources"] = args.Sources, args.Sources
+	}
+	if args.Language != nil {
+		opts.Language, extension["language"] = *args.Language, *args.Language
+	}
+	if args.Timezone != nil {
+		opts.Timezone, extension["timezone"] = *args.Timezone, *args.Timezone
+	}
+	if args.Incognito != nil {
+		extension["is_incognito"] = *args.Incognito
+	}
+	if err := opts.Normalize(); err != nil {
+		h.writeToolError(c, req.ID, err.Error())
+		return
+	}
+	stream, _ := c.Get("mcp_sse")
+	ccRequest := map[string]any{"model": model, "messages": []map[string]any{{"role": "user", "content": query}}, "stream": stream == true}
+	if params.Name == "perplexity_reason" {
+		ccRequest["thinking"] = true
+	}
+	if len(extension) > 0 {
+		ccRequest["perplexity"] = extension
+	}
+	body, _ := json.Marshal(ccRequest)
+	if stream == true {
+		h.streamMCPTool(c, req.ID, ctx, apiKey.Key, body, params.Meta.ProgressToken)
+		return
+	}
+	status, data, err := h.loopbackCC(ctx, h.loopbackURL(), apiKey.Key, body)
 	if err != nil {
-		h.writeToolError(c, req.ID, "Failed to build chat completions request")
+		h.writeToolError(c, req.ID, "Gateway tool request failed or was cancelled")
 		return
 	}
-
-	ctx, cancel := context.WithTimeout(c.Request.Context(), mcpLoopbackTimeout)
-	defer cancel()
-	status, respBody, err := h.loopbackCC(ctx, h.loopbackURL(), apiKey.Key, ccBody)
-	if err != nil {
-		logger.L().Warn("mcp: loopback chat completions request failed",
-			zap.String("tool", toolName), zap.String("model", model), zap.Error(err))
-		h.writeToolError(c, req.ID, "Loopback chat completions request failed: "+err.Error())
+	if status < 200 || status >= 300 {
+		h.writeToolError(c, req.ID, mcpGatewayError(status, data))
 		return
 	}
-	if status < http.StatusOK || status >= http.StatusMultipleChoices {
-		h.writeToolError(c, req.ID,
-			fmt.Sprintf("Upstream chat completions failed (HTTP %d): %s", status, strings.TrimSpace(string(respBody))))
-		return
-	}
-
-	var ccResp struct {
+	var response struct {
 		Choices []struct {
 			Message struct {
-				Content   string `json:"content"`
-				ToolCalls []struct {
-					Function struct {
-						Name      string `json:"name"`
-						Arguments string `json:"arguments"`
-					} `json:"function"`
-				} `json:"tool_calls"`
+				Content string            `json:"content"`
+				Calls   []json.RawMessage `json:"tool_calls"`
 			} `json:"message"`
 		} `json:"choices"`
 	}
-	if err := json.Unmarshal(respBody, &ccResp); err != nil || len(ccResp.Choices) == 0 {
-		h.writeToolError(c, req.ID, "Invalid chat completions response from upstream")
+	if json.Unmarshal(data, &response) != nil || len(response.Choices) != 1 || strings.TrimSpace(response.Choices[0].Message.Content) == "" || len(response.Choices[0].Message.Calls) != 0 {
+		h.writeToolError(c, req.ID, "Gateway did not return a valid text answer")
 		return
 	}
-
-	text := ccResp.Choices[0].Message.Content
-	// 上游 agent 的步骤轨迹（若存在）以 tool_calls 形式返回，追加为 🔧 前缀的文本行。
-	for _, call := range ccResp.Choices[0].Message.ToolCalls {
-		if text != "" {
-			text += "\n"
-		}
-		text += fmt.Sprintf("🔧 %s %s", call.Function.Name, call.Function.Arguments)
-	}
-	h.writeResult(c, req.ID, &mcpCallToolResult{
-		Content: []mcpToolContent{{Type: "text", Text: text}},
-	})
-}
-
-// postChatCompletions 是回环调用的默认实现：POST CC 请求到本机网关，
-// 以客户端同一把 API Key 鉴权，从而复用鉴权/计费/调度/换号全链路。
-func (h *MCPHandler) postChatCompletions(ctx context.Context, url, apiKey string, body []byte) (int, []byte, error) {
-	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(body))
-	if err != nil {
-		return 0, nil, err
-	}
-	httpReq.Header.Set("Content-Type", "application/json")
-	httpReq.Header.Set("Authorization", "Bearer "+apiKey)
-	resp, err := h.httpClient.Do(httpReq)
-	if err != nil {
-		return 0, nil, err
-	}
-	defer func() { _ = resp.Body.Close() }()
-	respBody, err := io.ReadAll(io.LimitReader(resp.Body, mcpLoopbackMaxBodyBytes))
-	if err != nil {
-		return resp.StatusCode, nil, err
-	}
-	return resp.StatusCode, respBody, nil
-}
-
-func (h *MCPHandler) loopbackURL() string {
-	port := 8080
-	if h.cfg != nil && h.cfg.Server.Port > 0 {
-		port = h.cfg.Server.Port
-	}
-	return fmt.Sprintf("http://127.0.0.1:%d/v1/chat/completions", port)
+	h.writeResult(c, req.ID, &mcpCallToolResult{Content: []mcpToolContent{{Type: "text", Text: response.Choices[0].Message.Content}}})
 }
 
 func (h *MCPHandler) writeResult(c *gin.Context, id json.RawMessage, result any) {
-	c.JSON(http.StatusOK, mcpJSONRPCResponse{JSONRPC: "2.0", ID: id, Result: result})
+	_ = h.writeMCPEnvelope(c, mcpJSONRPCResponse{JSONRPC: "2.0", ID: id, Result: result})
 }
 
 func (h *MCPHandler) writeError(c *gin.Context, id json.RawMessage, code int, message string) {
-	c.JSON(http.StatusOK, mcpJSONRPCResponse{
-		JSONRPC: "2.0",
-		ID:      id,
-		Error:   &mcpJSONRPCError{Code: code, Message: message},
-	})
+	_ = h.writeMCPEnvelope(c, mcpJSONRPCResponse{JSONRPC: "2.0", ID: id, Error: &mcpJSONRPCError{Code: code, Message: message}})
 }
 
 func (h *MCPHandler) writeToolError(c *gin.Context, id json.RawMessage, message string) {
-	h.writeResult(c, id, &mcpCallToolResult{
-		Content: []mcpToolContent{{Type: "text", Text: message}},
-		IsError: true,
-	})
+	h.writeResult(c, id, &mcpCallToolResult{Content: []mcpToolContent{{Type: "text", Text: message}}, IsError: true})
 }
 
 func mcpPerplexityTools() []mcpTool {
-	queryProperty := map[string]any{"type": "string", "description": "The question or research topic"}
-	return []mcpTool{
-		{
-			Name:        "perplexity_ask",
-			Description: "Quick answer with Perplexity auto search",
-			InputSchema: map[string]any{
-				"type":       "object",
-				"properties": map[string]any{"query": queryProperty},
-				"required":   []string{"query"},
-			},
-		},
-		{
-			Name:        "perplexity_search",
-			Description: "Pro Search: multi-step web research with citations",
-			InputSchema: map[string]any{
-				"type": "object",
-				"properties": map[string]any{
-					"query": queryProperty,
-					"model": map[string]any{"type": "string", "description": "Optional model override (default: sonar-pro), e.g. sonar-reasoning, sonar-computer"},
-				},
-				"required": []string{"query"},
-			},
-		},
-		{
-			Name:        "perplexity_research",
-			Description: "Deep Research report",
-			InputSchema: map[string]any{
-				"type":       "object",
-				"properties": map[string]any{"query": queryProperty},
-				"required":   []string{"query"},
-			},
-		},
-		{
-			Name:        "perplexity_models",
-			Description: "List the available Perplexity model aliases",
-			InputSchema: map[string]any{"type": "object", "properties": map[string]any{}},
-		},
+	tools := make([]mcpTool, 0, 5)
+	for _, spec := range []struct{ name, description string }{
+		{"perplexity_ask", "Quick Perplexity search answer"},
+		{"perplexity_search", "Perplexity Pro Search with citations"},
+		{"perplexity_reason", "Perplexity reasoning-model search; search progress is not private chain of thought"},
+		{"perplexity_research", "Perplexity Deep Research report"},
+		{"perplexity_models", "List model names allowed by the current API key and group; this is not an entitlement test"},
+	} {
+		properties := map[string]any{}
+		schema := map[string]any{"type": "object", "properties": properties, "additionalProperties": false}
+		if spec.name != "perplexity_models" {
+			properties["query"] = map[string]any{"type": "string", "minLength": 1}
+			properties["sources"] = map[string]any{"type": "array", "minItems": 1, "items": map[string]any{"type": "string", "enum": []string{"web", "scholar", "social"}}}
+			properties["language"] = map[string]any{"type": "string", "description": "BCP 47 language tag"}
+			properties["timezone"] = map[string]any{"type": "string", "description": "IANA timezone"}
+			properties["is_incognito"] = map[string]any{"type": "boolean"}
+			schema["required"] = []string{"query"}
+			if spec.name == "perplexity_search" || spec.name == "perplexity_reason" {
+				properties["model"] = map[string]any{"type": "string", "description": "An allowed model name from perplexity_models"}
+			}
+		}
+		tools = append(tools, mcpTool{Name: spec.name, Description: spec.description, InputSchema: schema})
 	}
+	return tools
 }
 
-func mcpPerplexityModelsText() string {
-	return `Available Perplexity model aliases (usable as "model" on /v1/chat/completions, and as the optional "model" argument of perplexity_search):
-- sonar — Quick answers with automatic search (fast default)
-- sonar-pro — Pro Search: multi-step web research with citations
-- sonar-reasoning — Reasoning-focused answers with visible reasoning
-- sonar-deep-research — Deep Research: long-form report generation
-- sonar-computer — Computer-use agent tasks
-- sonar-pro-computer — Pro-tier computer-use agent tasks`
+func mcpEmptyObject(raw []byte) bool {
+	if !mcpJSONObject(raw) {
+		return false
+	}
+	var object map[string]json.RawMessage
+	return json.Unmarshal(raw, &object) == nil && len(object) == 0
+}
+
+func mcpJSONObject(raw []byte) bool {
+	trimmed := bytes.TrimSpace(raw)
+	return len(trimmed) > 0 && trimmed[0] == '{' && json.Valid(trimmed)
+}
+
+func mcpResponseID(id json.RawMessage) json.RawMessage {
+	if _, ok := mcpCanonicalID(id); !ok {
+		return json.RawMessage("null")
+	}
+	return id
+}
+
+func mcpGatewayError(status int, _ []byte) string {
+	return fmt.Sprintf("Gateway tool request failed (HTTP %d); inspect gateway diagnostics for details", status)
 }

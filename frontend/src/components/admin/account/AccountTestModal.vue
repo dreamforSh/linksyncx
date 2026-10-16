@@ -41,6 +41,8 @@
         </span>
       </div>
 
+      <PerplexityTestControls v-if="isPerplexityAccount" v-model="perplexityTestMode" :disabled="status === 'connecting'" :probe="visiblePerplexityProbe" :current="Boolean(perplexityProbe)" />
+
       <!-- Grok: mode first, then optional model / mode params -->
       <div v-if="isGrokAccount" class="space-y-1.5">
         <label class="text-sm font-medium text-gray-700 dark:text-gray-300">
@@ -206,6 +208,9 @@
           >
             <Icon name="check" size="sm" :stroke-width="2" />
             <span>{{ t('admin.accounts.testCompleted') }}</span>
+          </div>
+          <div v-else-if="status === 'warning'" class="mt-3 border-t border-gray-700 pt-3 text-amber-400" data-testid="perplexity-probe-warning">
+            {{ t(`admin.accounts.perplexity.probe.${perplexityProbe?.verified ? 'notPersisted' : 'unverified'}`) }}
           </div>
           <div
             v-else-if="status === 'error'"
@@ -373,12 +378,13 @@ import { useI18n } from 'vue-i18n'
 import BaseDialog from '@/components/common/BaseDialog.vue'
 import Select from '@/components/common/Select.vue'
 import TextArea from '@/components/common/TextArea.vue'
+import PerplexityTestControls from '@/components/account/PerplexityTestControls.vue'
 import { Icon } from '@/components/icons'
 import { useClipboard } from '@/composables/useClipboard'
 import { buildApiUrl } from '@/api/client'
 import { ADMIN_UI_REQUEST_HEADER } from '@/api/adminUIRequest'
 import { adminAPI } from '@/api/admin'
-import type { Account, ClaudeModel } from '@/types'
+import type { Account, ClaudeModel, PerplexityModelProbeResult } from '@/types'
 
 const { t } = useI18n()
 const { copyToClipboard } = useClipboard()
@@ -403,7 +409,7 @@ const emit = defineEmits<{
 }>()
 
 const terminalRef = ref<HTMLElement | null>(null)
-const status = ref<'idle' | 'connecting' | 'success' | 'error'>('idle')
+const status = ref<'idle' | 'connecting' | 'success' | 'warning' | 'error'>('idle')
 const outputLines = ref<OutputLine[]>([])
 const streamingContent = ref('')
 const errorMessage = ref('')
@@ -413,6 +419,7 @@ const testPrompt = ref('')
 const loadingModels = ref(false)
 const modelsLoadError = ref(false)
 let abortController: AbortController | null = null
+let testGeneration = 0
 const generatedImages = ref<PreviewMedia[]>([])
 const generatedAudios = ref<PreviewMedia[]>([])
 const generatedVideos = ref<PreviewMedia[]>([])
@@ -427,6 +434,14 @@ const uploadAudioName = ref('')
 const imageFileInput = ref<HTMLInputElement | null>(null)
 const audioFileInput = ref<HTMLInputElement | null>(null)
 const isOpenAIAccount = computed(() => props.account?.platform === 'openai')
+const isPerplexityAccount = computed(() => props.account?.platform === 'perplexity')
+const perplexityTestMode = ref<'default' | 'perplexity_model'>('default')
+const perplexityProbe = ref<PerplexityModelProbeResult | null>(null)
+const visiblePerplexityProbe = computed(() => perplexityProbe.value || availableModels.value.find(model => model.id === selectedModelId.value)?.perplexity_probe)
+watch([perplexityTestMode, selectedModelId], () => {
+  perplexityProbe.value = null
+  if (isPerplexityAccount.value && status.value !== 'connecting') resetState()
+})
 const isGrokAccount = computed(() => props.account?.platform === 'grok')
 const openAITestModeOptions = computed(() => [
   { value: 'default', label: t('admin.accounts.openai.testModeDefault') },
@@ -482,6 +497,7 @@ const supportsImageTest = computed(
 
 // Model select only when the mode needs a model.
 const showModelSelect = computed(() => {
+  if (isPerplexityAccount.value) return perplexityTestMode.value === 'perplexity_model'
   if (!isGrokAccount.value) return true
   return grokTestMode.value === 'text' || grokTestMode.value === 'image' || grokTestMode.value === 'video'
 })
@@ -655,6 +671,7 @@ const promptInputHint = computed(() => {
 })
 
 const testModeSummary = computed(() => {
+  if (isPerplexityAccount.value) return t(`admin.accounts.perplexity.probe.${perplexityTestMode.value === 'perplexity_model' ? 'modelMode' : 'sessionMode'}`)
   if (isGrokAccount.value) {
     switch (grokTestMode.value) {
       case 'video':
@@ -679,6 +696,7 @@ const testModeSummary = computed(() => {
 
 const canStartTest = computed(() => {
   if (status.value === 'connecting') return false
+  if (isPerplexityAccount.value && perplexityTestMode.value === 'default') return true
   if (isGrokAccount.value) {
     if (
       grokTestMode.value === 'search' ||
@@ -743,6 +761,7 @@ watch(
     if (newVal && props.account) {
       testPrompt.value = ''
       testMode.value = 'default'
+      perplexityTestMode.value = 'default'
       grokTestMode.value = 'text'
       resetState()
       await loadAvailableModels()
@@ -777,7 +796,10 @@ const loadAvailableModels = async () => {
       : models
     // Default selection by platform
     if (availableModels.value.length > 0) {
-      if (props.account.platform === 'gemini') {
+      if (props.account.platform === 'perplexity') {
+        const automatic = availableModels.value.find(model => model.id === 'sonar' || model.id === 'turbo')
+        selectedModelId.value = automatic?.id || availableModels.value[0].id
+      } else if (props.account.platform === 'gemini') {
         selectedModelId.value = availableModels.value[0].id
       } else {
         // Try to select Sonnet as default, otherwise use first model
@@ -797,6 +819,7 @@ const loadAvailableModels = async () => {
 }
 
 const resetState = () => {
+  perplexityProbe.value = null
   status.value = 'idle'
   outputLines.value = []
   streamingContent.value = ''
@@ -813,6 +836,7 @@ const handleClose = () => {
 }
 
 const abortStream = () => {
+  testGeneration++
   if (abortController) {
     abortController.abort()
     abortController = null
@@ -846,6 +870,7 @@ const startTest = async () => {
   addLine('', 'text-gray-300')
 
   abortStream()
+  const generation = testGeneration
 
   abortController = new AbortController()
 
@@ -859,6 +884,9 @@ const startTest = async () => {
     } = {
       model_id: showModelSelect.value ? selectedModelId.value : '',
       prompt: supportsPromptInput.value ? testPrompt.value.trim() : ''
+    }
+    if (isPerplexityAccount.value) {
+      requestBody.mode = perplexityTestMode.value
     }
     if (isOpenAIAccount.value) {
       requestBody.mode = testMode.value
@@ -912,7 +940,14 @@ const startTest = async () => {
 
     while (true) {
       const { done, value } = await reader.read()
-      if (done) break
+      if (generation !== testGeneration) {
+        await reader.cancel()
+        return
+      }
+      if (done) {
+        if (isPerplexityAccount.value && status.value === 'connecting') throw new Error(t('admin.accounts.perplexity.probe.incompleteStream'))
+        break
+      }
 
       buffer += decoder.decode(value, { stream: true })
       const lines = buffer.split('\n')
@@ -933,6 +968,7 @@ const startTest = async () => {
       }
     }
   } catch (error: unknown) {
+    if (generation !== testGeneration) return
     if (error instanceof DOMException && error.name === 'AbortError') {
       status.value = 'idle'
       return
@@ -945,6 +981,8 @@ const startTest = async () => {
 }
 
 const handleEvent = (event: {
+  data?: PerplexityModelProbeResult
+  code?: string
   type: string
   text?: string
   model?: string
@@ -958,11 +996,17 @@ const handleEvent = (event: {
   switch (event.type) {
     case 'test_start':
       addLine(t('admin.accounts.connectedToApi'), 'text-green-400')
+      if (isPerplexityAccount.value && perplexityTestMode.value === 'default') {
+        addLine(t('admin.accounts.perplexity.probe.sessionHint'), 'text-gray-400')
+        break
+      }
       if (event.model) {
         addLine(t('admin.accounts.usingModel', { model: event.model }), 'text-cyan-400')
       }
       addLine(
-        isGrokAccount.value
+        isPerplexityAccount.value
+          ? t('admin.accounts.perplexity.probe.sendingProbe')
+          : isGrokAccount.value
           ? grokTestMode.value === 'video'
             ? t('admin.accounts.sendingVideoRequest')
             : grokTestMode.value === 'image'
@@ -983,6 +1027,12 @@ const handleEvent = (event: {
       )
       addLine('', 'text-gray-300')
       addLine(t('admin.accounts.response'), 'text-yellow-400')
+      break
+
+    case 'perplexity_probe':
+      if (isPerplexityAccount.value && event.data?.identity && typeof event.data.verified === 'boolean') {
+        perplexityProbe.value = event.data
+      }
       break
 
     case 'content':
@@ -1024,7 +1074,7 @@ const handleEvent = (event: {
 
     case 'status':
       if (event.text) {
-        addLine(event.text, 'text-cyan-300')
+        addLine(event.code === 'perplexity_model_unverified' ? t('admin.accounts.perplexity.probe.unverified') : event.text, 'text-cyan-300')
       }
       break
 
@@ -1035,7 +1085,7 @@ const handleEvent = (event: {
         streamingContent.value = ''
       }
       if (event.success) {
-        status.value = 'success'
+        status.value = isPerplexityAccount.value && perplexityTestMode.value === 'perplexity_model' && (!perplexityProbe.value?.verified || perplexityProbe.value.persistence !== 'stored') ? 'warning' : 'success'
       } else {
         status.value = 'error'
         errorMessage.value = event.error || t('admin.accounts.testFailed')

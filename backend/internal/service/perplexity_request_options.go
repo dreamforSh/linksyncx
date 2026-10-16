@@ -120,8 +120,8 @@ func applyPerplexityPublicOptions(opts *perplexity.RequestOptions, extension gjs
 				opts.Local.KeepSystemPrompt = value.Bool()
 			}
 		case "max_query_chars":
-			if value.Type != gjson.Number {
-				optionErr = perplexityOptionError("perplexity.max_query_chars must be a number")
+			if value.Type != gjson.Number || value.Float() != float64(value.Int()) {
+				optionErr = perplexityOptionError("perplexity.max_query_chars must be an integer")
 				break
 			}
 			opts.Local.MaxQueryChars = int(value.Int())
@@ -239,10 +239,14 @@ func validatePerplexityRequest(body []byte, protocol string, opts *perplexity.Re
 	}
 
 	ignored := append([]string(nil), opts.IgnoredParameters...)
+	thinkingIgnored, err := parsePerplexityThinkingIntent(root, opts)
+	if err != nil {
+		return err
+	}
+	ignored = append(ignored, thinkingIgnored...)
 	for _, path := range []string{
 		"max_tokens", "max_completion_tokens", "max_output_tokens", "temperature", "top_p", "top_k",
-		"presence_penalty", "frequency_penalty", "seed", "logprobs", "top_logprobs", "logit_bias",
-		"reasoning_effort", "reasoning", "thinking", "output_config.effort", "service_tier",
+		"presence_penalty", "frequency_penalty", "seed", "logprobs", "top_logprobs", "logit_bias", "service_tier",
 	} {
 		if value := root.Get(path); value.Raw != "" && value.Type != gjson.Null {
 			ignored = append(ignored, path)

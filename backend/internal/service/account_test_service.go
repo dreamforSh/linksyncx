@@ -371,6 +371,10 @@ func (s *AccountTestService) TestAccountConnection(c *gin.Context, accountID int
 		return s.sendErrorAndEnd(c, "Account not found")
 	}
 
+	c.Set("test_account_platform", account.Platform)
+	if mode == AccountTestModePerplexityModel && !account.IsPerplexity() {
+		return s.sendErrorAndEnd(c, "Perplexity model probe mode requires a Perplexity account")
+	}
 	// Synthetic UI load-test accounts exercise the real SSE parsing and modal
 	// interactions, but intentionally do not send their placeholder credentials
 	// to an upstream provider.
@@ -418,6 +422,12 @@ func (s *AccountTestService) TestAccountConnection(c *gin.Context, accountID int
 	}
 
 	if account.IsPerplexity() {
+		if mode == AccountTestModePerplexityModel {
+			return s.testPerplexityModelConnection(c, account, modelID, prompt)
+		}
+		if mode != "" && mode != AccountTestModeDefault {
+			return s.sendErrorAndEnd(c, "unsupported Perplexity test mode")
+		}
 		return s.testPerplexityAccountConnection(c, account, modelID)
 	}
 
@@ -3346,34 +3356,50 @@ func (s *AccountTestService) sendErrorAndEnd(c *gin.Context, errorMsg string) er
 
 // RunTestBackground executes an account test in-memory (no real HTTP client),
 // capturing SSE output via httptest.NewRecorder, then parses the result.
-func (s *AccountTestService) RunTestBackground(ctx context.Context, accountID int64, modelID string) (*ScheduledTestResult, error) {
+func (s *AccountTestService) RunTestBackground(ctx context.Context, accountID int64, modelID string, modes ...string) (*ScheduledTestResult, error) {
 	startedAt := time.Now()
-
+	mode := AccountTestModeDefault
+	if len(modes) > 0 && modes[0] != "" {
+		mode = modes[0]
+	}
 	w := httptest.NewRecorder()
 	ginCtx, _ := gin.CreateTestContext(w)
 	ginCtx.Request = (&http.Request{}).WithContext(ctx)
-
-	testErr := s.TestAccountConnection(ginCtx, accountID, modelID, "", AccountTestModeDefault)
-
+	ginCtx.Set("scheduled_test", true)
+	testErr := s.TestAccountConnection(ginCtx, accountID, modelID, "", mode)
 	finishedAt := time.Now()
 	body := w.Body.String()
 	responseText, errMsg := parseTestSSEOutput(body)
-
+	metadata := map[string]any{"platform": ginCtx.GetString("test_account_platform")}
+	var probe *PerplexityModelProbeResult
+	for _, line := range strings.Split(body, "\n") {
+		if !strings.HasPrefix(line, "data: ") {
+			continue
+		}
+		var event TestEvent
+		if json.Unmarshal([]byte(strings.TrimPrefix(line, "data: ")), &event) != nil || event.Type != "perplexity_probe" || event.Data == nil {
+			continue
+		}
+		encoded, err := json.Marshal(event.Data)
+		if err == nil {
+			_ = json.Unmarshal(encoded, &probe)
+		}
+	}
 	status := "success"
 	if testErr != nil || errMsg != "" {
 		status = "failed"
 		if errMsg == "" && testErr != nil {
 			errMsg = testErr.Error()
 		}
+	} else if probe != nil && !probe.Verified {
+		status = "warning"
 	}
-
+	if probe != nil {
+		metadata["perplexity_probe"] = probe
+	}
 	return &ScheduledTestResult{
-		Status:       status,
-		ResponseText: responseText,
-		ErrorMessage: errMsg,
-		LatencyMs:    finishedAt.Sub(startedAt).Milliseconds(),
-		StartedAt:    startedAt,
-		FinishedAt:   finishedAt,
+		Status: status, ResponseText: responseText, ErrorMessage: errMsg, Metadata: metadata,
+		LatencyMs: finishedAt.Sub(startedAt).Milliseconds(), StartedAt: startedAt, FinishedAt: finishedAt,
 	}, nil
 }
 

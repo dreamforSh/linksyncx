@@ -270,7 +270,9 @@ export function defaultPerplexityOptions(): PerplexityRequestOptions {
     include_sources: true,
     include_search_progress: true,
     native_followups: true,
-    strict_parameters: false
+    strict_parameters: false,
+    keep_system_prompt: false,
+    max_query_chars: 90000
   }
 }
 
@@ -287,14 +289,20 @@ export function readPerplexityOptions(credentials?: Record<string, unknown> | nu
   }
   if (typeof stored.language === 'string') options.language = stored.language
   if (typeof stored.timezone === 'string') options.timezone = stored.timezone
-  for (const key of ['is_incognito', 'include_sources', 'include_search_progress', 'native_followups', 'strict_parameters'] as const) {
+  for (const key of ['is_incognito', 'include_sources', 'include_search_progress', 'native_followups', 'strict_parameters', 'keep_system_prompt'] as const) {
     if (typeof stored[key] === 'boolean') options[key] = stored[key]
+  }
+  if ('max_query_chars' in stored) {
+    options.max_query_chars = typeof stored.max_query_chars === 'number' ? stored.max_query_chars : Number.NaN
   }
   return options
 }
 
 /** Return a localized validation suffix, or null when all settings are valid. */
-export function validatePerplexityOptions(options: PerplexityRequestOptions): 'sourcesRequired' | 'invalidLanguage' | 'invalidTimezone' | null {
+export function validatePerplexityOptions(options: PerplexityRequestOptions): 'sourcesRequired' | 'invalidLanguage' | 'invalidTimezone' | 'invalidQueryChars' | null {
+  if (!Number.isSafeInteger(options.max_query_chars) || options.max_query_chars < 0 || options.max_query_chars > 96000 || options.max_query_chars > 0 && options.max_query_chars < 1000) {
+    return 'invalidQueryChars'
+  }
   if (options.sources.length === 0 || options.sources.some(source => !['web', 'scholar', 'social'].includes(source))) {
     return 'sourcesRequired'
   }
@@ -323,7 +331,9 @@ export function applyPerplexityOptions(credentials: Record<string, unknown>, opt
     include_sources: options.include_sources,
     include_search_progress: options.include_search_progress,
     native_followups: options.native_followups,
-    strict_parameters: options.strict_parameters
+    strict_parameters: options.strict_parameters,
+    keep_system_prompt: options.keep_system_prompt,
+    max_query_chars: options.max_query_chars
   }
 }
 

@@ -40,6 +40,13 @@
           <input type="checkbox" class="mt-0.5 h-4 w-4 shrink-0 rounded border-gray-300 text-primary-600 focus:ring-primary-500" :data-testid="`perplexity-${option}`" :checked="modelValue[option]" @change="update(option, ($event.target as HTMLInputElement).checked)" />
           <span>{{ t(`admin.accounts.perplexity.${option}`) }}</span>
         </label>
+        <p v-if="modelValue.keep_system_prompt" class="input-hint">{{ t('admin.accounts.perplexity.keepSystemHint') }}</p>
+        <label class="block">
+          <span class="input-label">{{ t('admin.accounts.perplexity.maxQueryChars') }}</span>
+          <input class="input" type="number" min="0" max="96000" step="1" data-testid="perplexity-max-query-chars" :aria-invalid="validationError === 'invalidQueryChars'" :value="Number.isFinite(modelValue.max_query_chars) ? modelValue.max_query_chars : ''" @input="updateQueryLimit(($event.target as HTMLInputElement).value)" />
+        </label>
+        <p class="input-hint">{{ t('admin.accounts.perplexity.queryLimitHint') }}</p>
+        <p v-if="modelValue.max_query_chars === 0" class="text-xs text-amber-600 dark:text-amber-400" role="note" data-testid="perplexity-unlimited-warning">{{ t('admin.accounts.perplexity.unlimitedWarning') }}</p>
         <p class="input-hint">{{ t('admin.accounts.perplexity.strictHint') }}</p>
       </div>
     </details>
@@ -57,11 +64,15 @@ const props = defineProps<{ modelValue: PerplexityRequestOptions }>()
 const emit = defineEmits<{ 'update:modelValue': [value: PerplexityRequestOptions] }>()
 const { t } = useI18n()
 const sources: PerplexitySource[] = ['web', 'scholar', 'social']
-const localOptions = ['include_sources', 'include_search_progress', 'native_followups', 'strict_parameters'] as const
+const localOptions = ['include_sources', 'include_search_progress', 'native_followups', 'strict_parameters', 'keep_system_prompt'] as const
 const validationError = computed(() => validatePerplexityOptions(props.modelValue))
 
 function update<K extends keyof PerplexityRequestOptions>(key: K, value: PerplexityRequestOptions[K]): void {
   emit('update:modelValue', { ...props.modelValue, [key]: value })
+}
+
+function updateQueryLimit(value: string): void {
+  update('max_query_chars', value === '' ? Number.NaN : Number(value))
 }
 
 function toggleSource(source: PerplexitySource, checked: boolean): void {

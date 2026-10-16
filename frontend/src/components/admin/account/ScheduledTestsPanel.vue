@@ -28,8 +28,9 @@
         <div class="mb-3 text-sm font-medium text-gray-700 dark:text-gray-300">
           {{ t('admin.scheduledTests.addPlan') }}
         </div>
+        <PerplexityTestControls v-if="isPerplexityAccount" v-model="newPlan.test_mode" :disabled="creating" scheduled class="mb-3" />
         <div class="grid grid-cols-1 gap-3 sm:grid-cols-2">
-          <div>
+          <div v-if="requiresModel(newPlan.test_mode)">
             <label class="mb-1 block text-xs font-medium text-gray-600 dark:text-gray-400">
               {{ t('admin.scheduledTests.model') }}
             </label>
@@ -96,7 +97,7 @@
               {{ t('admin.scheduledTests.enabled') }}
             </label>
           </div>
-          <div class="flex items-end">
+          <div v-if="!isPerplexityAccount" class="flex items-end">
             <div>
               <label class="flex items-center gap-2 text-sm text-gray-700 dark:text-gray-300">
                 <Toggle v-model="newPlan.auto_recover" />
@@ -108,6 +109,7 @@
             </div>
           </div>
         </div>
+        <p v-if="isPerplexityAccount" class="mt-3 text-xs text-gray-500 dark:text-gray-400">{{ t('admin.accounts.perplexity.probe.recoveryHint') }}</p>
         <div class="mt-3 flex justify-end gap-2">
           <button
             @click="showAddForm = false; resetNewPlan()"
@@ -117,7 +119,7 @@
           </button>
           <button
             @click="handleCreate"
-            :disabled="!newPlan.model_id || !newPlan.cron_expression || creating"
+            :disabled="!newPlan.cron_expression || (requiresModel(newPlan.test_mode) && !newPlan.model_id) || creating"
             class="flex items-center gap-1.5 rounded-lg bg-primary-500 px-3 py-1.5 text-sm font-medium text-white transition-colors hover:bg-primary-600 disabled:cursor-not-allowed disabled:opacity-50"
           >
             <Icon v-if="creating" name="refresh" size="sm" class="animate-spin" :stroke-width="2" />
@@ -159,8 +161,9 @@
               <!-- Model -->
               <div class="min-w-0">
                 <div class="text-sm font-medium text-gray-900 dark:text-gray-100">
-                  {{ plan.model_id }}
+                  {{ plan.model_id || (isPerplexityAccount ? t('admin.accounts.perplexity.probe.sessionMode') : '—') }}
                 </div>
+                <div v-if="isPerplexityAccount" class="mt-0.5 text-[10px] text-amber-700 dark:text-amber-400">{{ t(`admin.accounts.perplexity.probe.${plan.test_mode === 'perplexity_model' ? 'modelMode' : 'sessionMode'}`) }}</div>
                 <div class="mt-0.5 font-mono text-xs text-gray-500 dark:text-gray-400">
                   {{ plan.cron_expression }}
                 </div>
@@ -179,7 +182,7 @@
 
               <!-- Auto Recover Badge -->
               <span
-                v-if="plan.auto_recover"
+                v-if="plan.auto_recover && !isPerplexityAccount"
                 class="inline-flex items-center rounded-full bg-emerald-100 px-2 py-0.5 text-xs font-medium text-emerald-700 dark:bg-emerald-500/20 dark:text-emerald-400"
               >
                 {{ t('admin.scheduledTests.autoRecover') }}
@@ -238,8 +241,9 @@
             <div class="mb-2 text-xs font-medium text-gray-600 dark:text-gray-400">
               {{ t('admin.scheduledTests.editPlan') }}
             </div>
+            <PerplexityTestControls v-if="isPerplexityAccount" v-model="editForm.test_mode" :disabled="updating" scheduled class="mb-3" />
             <div class="grid grid-cols-1 gap-3 sm:grid-cols-2">
-              <div>
+              <div v-if="requiresModel(editForm.test_mode)">
                 <label class="mb-1 block text-xs font-medium text-gray-600 dark:text-gray-400">
                   {{ t('admin.scheduledTests.model') }}
                 </label>
@@ -306,7 +310,7 @@
                   {{ t('admin.scheduledTests.enabled') }}
                 </label>
               </div>
-              <div class="flex items-end">
+              <div v-if="!isPerplexityAccount" class="flex items-end">
                 <div>
                   <label class="flex items-center gap-2 text-sm text-gray-700 dark:text-gray-300">
                     <Toggle v-model="editForm.auto_recover" />
@@ -318,7 +322,8 @@
                 </div>
               </div>
             </div>
-            <div class="mt-3 flex justify-end gap-2">
+            <p v-if="isPerplexityAccount" class="mt-3 text-xs text-gray-500 dark:text-gray-400">{{ t('admin.accounts.perplexity.probe.recoveryHint') }}</p>
+        <div class="mt-3 flex justify-end gap-2">
               <button
                 @click="cancelEdit"
                 class="rounded-lg bg-gray-100 px-3 py-1.5 text-sm font-medium text-gray-700 transition-colors hover:bg-gray-200 dark:bg-dark-600 dark:text-gray-300 dark:hover:bg-dark-500"
@@ -327,7 +332,7 @@
               </button>
               <button
                 @click="handleEdit"
-                :disabled="!editForm.model_id || !editForm.cron_expression || updating"
+                :disabled="!editForm.cron_expression || (requiresModel(editForm.test_mode) && !editForm.model_id) || updating"
                 class="flex items-center gap-1.5 rounded-lg bg-primary-500 px-3 py-1.5 text-sm font-medium text-white transition-colors hover:bg-primary-600 disabled:cursor-not-allowed disabled:opacity-50"
               >
                 <Icon v-if="updating" name="refresh" size="sm" class="animate-spin" :stroke-width="2" />
@@ -374,17 +379,21 @@
                         'inline-flex items-center rounded-full px-2 py-0.5 text-xs font-medium',
                         result.status === 'success'
                           ? 'bg-green-100 text-green-700 dark:bg-green-500/20 dark:text-green-400'
-                          : result.status === 'running'
-                            ? 'bg-blue-100 text-blue-700 dark:bg-blue-500/20 dark:text-blue-400'
-                            : 'bg-red-100 text-red-700 dark:bg-red-500/20 dark:text-red-400'
+                          : result.status === 'warning'
+                            ? 'bg-amber-100 text-amber-700 dark:bg-amber-500/20 dark:text-amber-400'
+                            : result.status === 'running'
+                              ? 'bg-blue-100 text-blue-700 dark:bg-blue-500/20 dark:text-blue-400'
+                              : 'bg-red-100 text-red-700 dark:bg-red-500/20 dark:text-red-400'
                       ]"
                     >
                       {{
                         result.status === 'success'
                           ? t('admin.scheduledTests.success')
-                          : result.status === 'running'
-                            ? t('admin.scheduledTests.running')
-                            : t('admin.scheduledTests.failed')
+                          : result.status === 'warning'
+                            ? t('admin.accounts.perplexity.probe.warningStatus')
+                            : result.status === 'running'
+                              ? t('admin.scheduledTests.running')
+                              : t('admin.scheduledTests.failed')
                       }}
                     </span>
 
@@ -399,6 +408,8 @@
                     {{ formatDateTime(result.started_at) }}
                   </span>
                 </div>
+
+                <PerplexityProbeResult v-if="result.metadata?.perplexity_probe" :probe="result.metadata.perplexity_probe" class="mt-3" />
 
                 <!-- Response / Error (collapsible) -->
                 <div v-if="result.error_message" class="mt-2">
@@ -463,7 +474,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, reactive, watch } from 'vue'
+import { computed, ref, reactive, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import BaseDialog from '@/components/common/BaseDialog.vue'
 import ConfirmDialog from '@/components/common/ConfirmDialog.vue'
@@ -471,11 +482,13 @@ import HelpTooltip from '@/components/common/HelpTooltip.vue'
 import Select, { type SelectOption } from '@/components/common/Select.vue'
 import Input from '@/components/common/Input.vue'
 import Toggle from '@/components/common/Toggle.vue'
+import PerplexityTestControls from '@/components/account/PerplexityTestControls.vue'
+import PerplexityProbeResult from '@/components/account/PerplexityProbeResult.vue'
 import { Icon } from '@/components/icons'
 import { adminAPI } from '@/api/admin'
 import { useAppStore } from '@/stores/app'
 import { formatDateTime } from '@/utils/format'
-import type { ScheduledTestPlan, ScheduledTestResult } from '@/types'
+import type { AccountPlatform, ScheduledTestMode, ScheduledTestPlan, ScheduledTestResult } from '@/types'
 
 const { t } = useI18n()
 const appStore = useAppStore()
@@ -483,12 +496,16 @@ const appStore = useAppStore()
 const props = defineProps<{
   show: boolean
   accountId: number | null
+  accountPlatform?: AccountPlatform
   modelOptions: SelectOption[]
 }>()
 
 const emit = defineEmits<{
   (e: 'close'): void
 }>()
+
+const isPerplexityAccount = computed(() => props.accountPlatform === 'perplexity')
+const requiresModel = (mode: ScheduledTestMode) => !isPerplexityAccount.value || mode === 'perplexity_model'
 
 // State
 const loading = ref(false)
@@ -505,6 +522,7 @@ const editingPlanId = ref<number | null>(null)
 const updating = ref(false)
 const editForm = reactive({
   model_id: '' as string,
+  test_mode: 'default' as ScheduledTestMode,
   cron_expression: '' as string,
   max_results: '100' as string,
   enabled: true,
@@ -513,6 +531,7 @@ const editForm = reactive({
 
 const newPlan = reactive({
   model_id: '' as string,
+  test_mode: 'default' as ScheduledTestMode,
   cron_expression: '' as string,
   max_results: '100' as string,
   enabled: true,
@@ -521,6 +540,7 @@ const newPlan = reactive({
 
 const resetNewPlan = () => {
   newPlan.model_id = ''
+  newPlan.test_mode = 'default'
   newPlan.cron_expression = ''
   newPlan.max_results = '100'
   newPlan.enabled = true
@@ -532,6 +552,8 @@ watch(
   () => props.show,
   async (visible) => {
     if (visible && props.accountId) {
+      resetNewPlan()
+      editingPlanId.value = null
       await loadPlans()
     } else {
       plans.value = []
@@ -557,17 +579,18 @@ const loadPlans = async () => {
 }
 
 const handleCreate = async () => {
-  if (!props.accountId || !newPlan.model_id || !newPlan.cron_expression) return
+  if (!props.accountId || !newPlan.cron_expression || requiresModel(newPlan.test_mode) && !newPlan.model_id) return
   creating.value = true
   try {
     const maxResults = Number(newPlan.max_results) || 100
     await adminAPI.scheduledTests.create({
       account_id: props.accountId,
       model_id: newPlan.model_id,
+      ...(isPerplexityAccount.value ? { test_mode: newPlan.test_mode } : {}),
       cron_expression: newPlan.cron_expression,
       enabled: newPlan.enabled,
       max_results: maxResults,
-      auto_recover: newPlan.auto_recover
+      auto_recover: isPerplexityAccount.value ? false : newPlan.auto_recover
     })
     appStore.showSuccess(t('admin.scheduledTests.createSuccess'))
     showAddForm.value = false
@@ -596,6 +619,7 @@ const handleToggleEnabled = async (plan: ScheduledTestPlan, enabled: boolean) =>
 const startEdit = (plan: ScheduledTestPlan) => {
   editingPlanId.value = plan.id
   editForm.model_id = plan.model_id
+  editForm.test_mode = plan.test_mode || 'default'
   editForm.cron_expression = plan.cron_expression
   editForm.max_results = String(plan.max_results)
   editForm.enabled = plan.enabled
@@ -607,15 +631,16 @@ const cancelEdit = () => {
 }
 
 const handleEdit = async () => {
-  if (!editingPlanId.value || !editForm.model_id || !editForm.cron_expression) return
+  if (!editingPlanId.value || !editForm.cron_expression || requiresModel(editForm.test_mode) && !editForm.model_id) return
   updating.value = true
   try {
     const updated = await adminAPI.scheduledTests.update(editingPlanId.value, {
       model_id: editForm.model_id,
+      ...(isPerplexityAccount.value ? { test_mode: editForm.test_mode } : {}),
       cron_expression: editForm.cron_expression,
       max_results: Number(editForm.max_results) || 100,
       enabled: editForm.enabled,
-      auto_recover: editForm.auto_recover
+      auto_recover: isPerplexityAccount.value ? false : editForm.auto_recover
     })
     const index = plans.value.findIndex((p) => p.id === editingPlanId.value)
     if (index !== -1) {

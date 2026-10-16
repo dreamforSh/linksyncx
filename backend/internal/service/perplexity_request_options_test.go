@@ -64,8 +64,8 @@ func TestValidatePerplexityRequestGenericCompatibility(t *testing.T) {
 	}{
 		{"messages", `{"max_tokens":1024,"temperature":0.3}`, []string{"max_tokens", "temperature"}},
 		{"chat_completions", `{"max_completion_tokens":256,"top_p":0.9,"presence_penalty":0}`, []string{"max_completion_tokens", "presence_penalty", "top_p"}},
-		{"responses", `{"max_output_tokens":256,"reasoning":{"effort":"high"}}`, []string{"max_output_tokens", "reasoning"}},
-		{"messages", `{"output_config":{"effort":"high"}}`, []string{"output_config.effort"}},
+		{"responses", `{"max_output_tokens":256,"reasoning":{"effort":"high"}}`, []string{"max_output_tokens", "reasoning.effort.strength"}},
+		{"messages", `{"output_config":{"effort":"high"}}`, []string{"output_config.effort.strength"}},
 	} {
 		t.Run(test.protocol+test.body, func(t *testing.T) {
 			opts := perplexity.DefaultRequestOptions()

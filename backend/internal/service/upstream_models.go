@@ -47,9 +47,11 @@ type UpstreamModelMetadata struct {
 }
 
 type UpstreamModelMetadataSnapshot struct {
-	Source   string                           `json:"source"`
-	SyncedAt string                           `json:"synced_at"`
-	Models   map[string]UpstreamModelMetadata `json:"models"`
+	Source              string                           `json:"source"`
+	SyncedAt            string                           `json:"synced_at"`
+	Models              map[string]UpstreamModelMetadata `json:"models"`
+	IdentityFingerprint string                           `json:"identity_fingerprint,omitempty"`
+	ObservedAtMs        int64                            `json:"observed_at_ms,omitempty"`
 }
 
 type UpstreamModelCatalog struct {
@@ -213,12 +215,13 @@ func (s *AccountTestService) FetchUpstreamSupportedModels(ctx context.Context, a
 // snapshot. When no model is complete, the existing account snapshot is left
 // untouched.
 func (s *AccountTestService) SyncUpstreamModelCatalog(ctx context.Context, account *Account) (*UpstreamModelCatalog, error) {
+	observedAt := time.Now().UTC()
 	models, body, err := s.fetchUpstreamModelList(ctx, account)
 	if account != nil && account.IsPerplexity() {
 		if err != nil {
 			return nil, err
 		}
-		return s.syncPerplexityModelCatalog(ctx, account, models, body)
+		return s.syncPerplexityModelCatalog(ctx, account, models, body, observedAt)
 	}
 	liveListAvailable := err == nil
 	if err != nil {
@@ -1376,9 +1379,10 @@ func extractPerplexityUpstreamModelIDs(body []byte) ([]string, error) {
 // invocation or a guarantee that the session's subscription can invoke it.
 type PerplexityAccountModel struct {
 	UpstreamModelMetadata
-	Object  string `json:"object"`
-	Type    string `json:"type"`
-	OwnedBy string `json:"owned_by"`
+	Object  string                      `json:"object"`
+	Type    string                      `json:"type"`
+	OwnedBy string                      `json:"owned_by"`
+	Probe   *PerplexityModelProbeResult `json:"perplexity_probe,omitempty"`
 }
 
 func extractPerplexityModelMetadata(body []byte) (map[string]UpstreamModelMetadata, error) {
@@ -1416,7 +1420,7 @@ func extractPerplexityModelMetadata(body []byte) (map[string]UpstreamModelMetada
 	return metadata, nil
 }
 
-func (s *AccountTestService) syncPerplexityModelCatalog(ctx context.Context, account *Account, models []string, body []byte) (*UpstreamModelCatalog, error) {
+func (s *AccountTestService) syncPerplexityModelCatalog(ctx context.Context, account *Account, models []string, body []byte, observedAt time.Time) (*UpstreamModelCatalog, error) {
 	metadata, err := extractPerplexityModelMetadata(body)
 	if err != nil {
 		return nil, newUpstreamModelSyncUpstreamError("Invalid Perplexity model configuration", err)
@@ -1425,11 +1429,24 @@ func (s *AccountTestService) syncPerplexityModelCatalog(ctx context.Context, acc
 	// registries or fabricate context/reasoning capabilities from model names.
 	catalog := &UpstreamModelCatalog{Models: models, Metadata: metadata}
 	if account.ID > 0 && s.accountRepo != nil {
-		snapshot := UpstreamModelMetadataSnapshot{Source: "perplexity", SyncedAt: time.Now().UTC().Format(time.RFC3339), Models: metadata}
-		if err := s.accountRepo.UpdateExtra(ctx, account.ID, map[string]any{UpstreamModelMetadataExtraKey: snapshot}); err != nil {
-			return nil, newUpstreamModelSyncInternalError("Failed to save Perplexity model metadata", err)
+		snapshot := UpstreamModelMetadataSnapshot{
+			Source: "perplexity", SyncedAt: observedAt.Format(time.RFC3339), Models: metadata,
+			IdentityFingerprint: perplexityAccountFingerprint(account), ObservedAtMs: observedAt.UnixMilli(),
 		}
-		account.SetUpstreamModelMetadataSnapshot(snapshot)
+		repo, ok := s.accountRepo.(PerplexityModelStateRepository)
+		if !ok {
+			catalog.Warnings = append(catalog.Warnings, UpstreamModelSyncWarning{Code: "catalog_not_persisted", Message: "Conditional Perplexity catalog persistence is unavailable"})
+			return catalog, nil
+		}
+		applied, err := repo.StorePerplexityCatalogIfUnchanged(ctx, account.ID, account.Credentials, account.ProxyID, snapshot)
+		if err != nil {
+			return nil, newUpstreamModelSyncInternalError("Failed to save Perplexity model metadata", nil)
+		}
+		if !applied {
+			catalog.Warnings = append(catalog.Warnings, UpstreamModelSyncWarning{Code: "catalog_stale", Message: "The account or model catalog changed during discovery; this result was not persisted"})
+		} else {
+			account.SetUpstreamModelMetadataSnapshot(snapshot)
+		}
 	}
 	return catalog, nil
 }
@@ -1457,7 +1474,7 @@ func (s *AccountTestService) FetchPerplexityAccountModels(ctx context.Context, a
 			UpstreamModelMetadata: entry, Object: "model", Type: "model", OwnedBy: "perplexity",
 		})
 	}
-	return projectPerplexityAccountModels(account, choices), nil
+	return annotatePerplexityModelHealth(account, projectPerplexityAccountModels(account, choices)), nil
 }
 
 // DefaultPerplexityAccountModels is only a discovery-failure fallback. These are
@@ -1471,7 +1488,18 @@ func DefaultPerplexityAccountModels(account *Account) []PerplexityAccountModel {
 			Object:                "model", Type: "model", OwnedBy: "perplexity",
 		})
 	}
-	return projectPerplexityAccountModels(account, models)
+	return annotatePerplexityModelHealth(account, projectPerplexityAccountModels(account, models))
+}
+
+func annotatePerplexityModelHealth(account *Account, models []PerplexityAccountModel) []PerplexityAccountModel {
+	if account == nil {
+		return models
+	}
+	for index := range models {
+		preference, mode := perplexity.ResolveModelPreference(account.GetMappedModel(models[index].ID))
+		models[index].Probe = getPerplexityModelHealth(account, preference, mode)
+	}
+	return models
 }
 
 func projectPerplexityAccountModels(account *Account, models []PerplexityAccountModel) []PerplexityAccountModel {

@@ -41,7 +41,9 @@
         </span>
       </div>
 
-      <div class="space-y-1.5">
+      <PerplexityTestControls v-if="isPerplexityAccount" v-model="perplexityTestMode" :disabled="status === 'connecting'" :probe="visiblePerplexityProbe" :current="Boolean(perplexityProbe)" />
+
+      <div v-if="!isPerplexityAccount || perplexityTestMode === 'perplexity_model'" class="space-y-1.5">
         <label class="text-sm font-medium text-gray-700 dark:text-gray-300">
           {{ t('admin.accounts.selectTestModel') }}
         </label>
@@ -113,6 +115,9 @@
           >
             <Icon name="check" size="sm" :stroke-width="2" />
             <span>{{ t('admin.accounts.testCompleted') }}</span>
+          </div>
+          <div v-else-if="status === 'warning'" class="mt-3 border-t border-gray-700 pt-3 text-amber-400" data-testid="perplexity-probe-warning">
+            {{ t(`admin.accounts.perplexity.probe.${perplexityProbe?.verified ? 'notPersisted' : 'unverified'}`) }}
           </div>
           <div
             v-else-if="status === 'error'"
@@ -190,9 +195,11 @@
         <span class="flex items-center gap-1">
           <Icon name="chat" size="sm" :stroke-width="2" />
           {{
-            supportsImageTest
-              ? t('admin.accounts.imageTestMode')
-              : t('admin.accounts.testPrompt')
+            isPerplexityAccount
+              ? t(`admin.accounts.perplexity.probe.${perplexityTestMode === 'perplexity_model' ? 'modelMode' : 'sessionMode'}`)
+              : supportsImageTest
+                ? t('admin.accounts.imageTestMode')
+                : t('admin.accounts.testPrompt')
           }}
         </span>
       </div>
@@ -208,10 +215,10 @@
         </button>
         <button
           @click="startTest"
-          :disabled="status === 'connecting' || !selectedModelId"
+          :disabled="!canStartTest"
           :class="[
             'flex items-center gap-2 rounded-lg px-4 py-2 text-sm font-medium transition-all',
-            status === 'connecting' || !selectedModelId
+            !canStartTest
               ? 'cursor-not-allowed bg-primary-400 text-white'
               : status === 'success'
                 ? 'bg-green-500 text-white hover:bg-green-600'
@@ -250,11 +257,12 @@ import { useI18n } from 'vue-i18n'
 import BaseDialog from '@/components/common/BaseDialog.vue'
 import Select from '@/components/common/Select.vue'
 import TextArea from '@/components/common/TextArea.vue'
+import PerplexityTestControls from './PerplexityTestControls.vue'
 import { Icon } from '@/components/icons'
 import { useClipboard } from '@/composables/useClipboard'
 import { buildApiUrl } from '@/api/client'
 import { adminAPI } from '@/api/admin'
-import type { Account, ClaudeModel } from '@/types'
+import type { Account, ClaudeModel, PerplexityModelProbeResult } from '@/types'
 
 const { t } = useI18n()
 const { copyToClipboard } = useClipboard()
@@ -279,7 +287,7 @@ const emit = defineEmits<{
 }>()
 
 const terminalRef = ref<HTMLElement | null>(null)
-const status = ref<'idle' | 'connecting' | 'success' | 'error'>('idle')
+const status = ref<'idle' | 'connecting' | 'success' | 'warning' | 'error'>('idle')
 const outputLines = ref<OutputLine[]>([])
 const streamingContent = ref('')
 const errorMessage = ref('')
@@ -289,9 +297,19 @@ const testPrompt = ref('')
 const loadingModels = ref(false)
 const modelsLoadError = ref(false)
 let abortController: AbortController | null = null
+let testGeneration = 0
 const generatedImages = ref<PreviewImage[]>([])
 const testMode = ref<'default' | 'compact'>('default')
 const isOpenAIAccount = computed(() => props.account?.platform === 'openai')
+const isPerplexityAccount = computed(() => props.account?.platform === 'perplexity')
+const perplexityTestMode = ref<'default' | 'perplexity_model'>('default')
+const perplexityProbe = ref<PerplexityModelProbeResult | null>(null)
+const visiblePerplexityProbe = computed(() => perplexityProbe.value || availableModels.value.find(model => model.id === selectedModelId.value)?.perplexity_probe)
+const canStartTest = computed(() => status.value !== 'connecting' && (isPerplexityAccount.value && perplexityTestMode.value === 'default' || Boolean(selectedModelId.value)))
+watch([perplexityTestMode, selectedModelId], () => {
+  perplexityProbe.value = null
+  if (isPerplexityAccount.value && status.value !== 'connecting') resetState()
+})
 const openAITestModeOptions = computed(() => [
   { value: 'default', label: t('admin.accounts.openai.testModeDefault') },
   { value: 'compact', label: t('admin.accounts.openai.testModeCompact') }
@@ -331,6 +349,7 @@ watch(
     if (newVal && props.account) {
       testPrompt.value = ''
       testMode.value = 'default'
+      perplexityTestMode.value = 'default'
       resetState()
       await loadAvailableModels()
     } else {
@@ -358,7 +377,10 @@ const loadAvailableModels = async () => {
       : models
     // Default selection by platform
     if (availableModels.value.length > 0) {
-      if (props.account.platform === 'gemini') {
+      if (props.account.platform === 'perplexity') {
+        const automatic = availableModels.value.find(model => model.id === 'sonar' || model.id === 'turbo')
+        selectedModelId.value = automatic?.id || availableModels.value[0].id
+      } else if (props.account.platform === 'gemini') {
         selectedModelId.value = availableModels.value[0].id
       } else {
         // Try to select Sonnet as default, otherwise use first model
@@ -378,6 +400,7 @@ const loadAvailableModels = async () => {
 }
 
 const resetState = () => {
+  perplexityProbe.value = null
   status.value = 'idle'
   outputLines.value = []
   streamingContent.value = ''
@@ -392,6 +415,7 @@ const handleClose = () => {
 }
 
 const abortStream = () => {
+  testGeneration++
   if (abortController) {
     abortController.abort()
     abortController = null
@@ -411,7 +435,7 @@ const scrollToBottom = async () => {
 }
 
 const startTest = async () => {
-  if (!props.account || !selectedModelId.value) return
+  if (!props.account || !canStartTest.value) return
 
   resetState()
   status.value = 'connecting'
@@ -420,6 +444,7 @@ const startTest = async () => {
   addLine('', 'text-gray-300')
 
   abortStream()
+  const generation = testGeneration
 
   abortController = new AbortController()
 
@@ -435,9 +460,9 @@ const startTest = async () => {
         'Content-Type': 'application/json'
       },
       body: JSON.stringify({
-        model_id: selectedModelId.value,
+        model_id: isPerplexityAccount.value && perplexityTestMode.value === 'default' ? '' : selectedModelId.value,
         prompt: supportsImageTest.value ? testPrompt.value.trim() : '',
-        mode: isOpenAIAccount.value ? testMode.value : 'default'
+        mode: isPerplexityAccount.value ? perplexityTestMode.value : isOpenAIAccount.value ? testMode.value : 'default'
       }),
       signal: abortController.signal
     })
@@ -456,7 +481,14 @@ const startTest = async () => {
 
     while (true) {
       const { done, value } = await reader.read()
-      if (done) break
+      if (generation !== testGeneration) {
+        await reader.cancel()
+        return
+      }
+      if (done) {
+        if (isPerplexityAccount.value && status.value === 'connecting') throw new Error(t('admin.accounts.perplexity.probe.incompleteStream'))
+        break
+      }
 
       buffer += decoder.decode(value, { stream: true })
       const lines = buffer.split('\n')
@@ -477,6 +509,7 @@ const startTest = async () => {
       }
     }
   } catch (error: unknown) {
+    if (generation !== testGeneration) return
     if (error instanceof DOMException && error.name === 'AbortError') {
       status.value = 'idle'
       return
@@ -489,6 +522,8 @@ const startTest = async () => {
 }
 
 const handleEvent = (event: {
+  data?: PerplexityModelProbeResult
+  code?: string
   type: string
   text?: string
   model?: string
@@ -500,17 +535,27 @@ const handleEvent = (event: {
   switch (event.type) {
     case 'test_start':
       addLine(t('admin.accounts.connectedToApi'), 'text-green-400')
+      if (isPerplexityAccount.value && perplexityTestMode.value === 'default') {
+        addLine(t('admin.accounts.perplexity.probe.sessionHint'), 'text-gray-400')
+        break
+      }
       if (event.model) {
         addLine(t('admin.accounts.usingModel', { model: event.model }), 'text-cyan-400')
       }
       addLine(
-        supportsImageTest.value
+        isPerplexityAccount.value ? t('admin.accounts.perplexity.probe.sendingProbe') : supportsImageTest.value
             ? t('admin.accounts.sendingImageRequest')
             : t('admin.accounts.sendingTestMessage'),
         'text-gray-400'
       )
       addLine('', 'text-gray-300')
       addLine(t('admin.accounts.response'), 'text-yellow-400')
+      break
+
+    case 'perplexity_probe':
+      if (isPerplexityAccount.value && event.data?.identity && typeof event.data.verified === 'boolean') {
+        perplexityProbe.value = event.data
+      }
       break
 
     case 'content':
@@ -522,7 +567,7 @@ const handleEvent = (event: {
 
     case 'status':
       if (event.text) {
-        addLine(event.text, 'text-cyan-300')
+        addLine(event.code === 'perplexity_model_unverified' ? t('admin.accounts.perplexity.probe.unverified') : event.text, 'text-cyan-300')
       }
       break
 
@@ -543,7 +588,7 @@ const handleEvent = (event: {
         streamingContent.value = ''
       }
       if (event.success) {
-        status.value = 'success'
+        status.value = isPerplexityAccount.value && perplexityTestMode.value === 'perplexity_model' && (!perplexityProbe.value?.verified || perplexityProbe.value.persistence !== 'stored') ? 'warning' : 'success'
       } else {
         status.value = 'error'
         errorMessage.value = event.error || 'Test failed'

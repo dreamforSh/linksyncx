@@ -51,6 +51,7 @@ type InternalOptions struct {
 	LastBackendUUID     string
 	FrontendContextUUID string
 	Attachments         []string
+	ThinkingEnabled     *bool
 }
 
 // DefaultRequestOptions preserves ordinary cross-protocol clients. In

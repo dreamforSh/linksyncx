@@ -465,6 +465,8 @@ gateway:
     free_quota_stats_cache_seconds: 60
   # Perplexity 会话保活和配额采集：仅访问会话/画像端点，不发送模型测试请求。
   # 配额调度只信任十五分钟内的新鲜计数；维护请求沿用账号代理。
+  # 真实模型巡检另在账号“定时测试计划”显式选择 perplexity_model，会消耗上游额度。
+  # 旧计划仍为 default（仅会话校验），不自动升级为真实调用。
   perplexity:
     maintenance_enabled: true
     session_keepalive_hours: 6
