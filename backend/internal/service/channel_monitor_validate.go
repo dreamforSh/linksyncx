@@ -18,6 +18,7 @@ var monitorProviders = map[string]struct{}{
 	MonitorProviderAnthropic:   {},
 	MonitorProviderGemini:      {},
 	MonitorProviderGrok:        {},
+	MonitorProviderPerplexity:  {},
 	MonitorProviderAntigravity: {},
 	MonitorProviderKimi:        {},
 	MonitorProviderZhipu:       {},
@@ -25,19 +26,20 @@ var monitorProviders = map[string]struct{}{
 	MonitorProviderMiniMax:     {},
 }
 
-// probeCapableProviders 支持探活（probe / quota_probe）的 provider。
+// probeCapableProviders 支持通用 adapter 或账号原生探活（probe / quota_probe）的 provider。
 // antigravity 上游无 Chat/Responses 可打（仅 IDE 代理形态），只允许配额模式。
 //
 //nolint:gochecknoglobals // 静态查表，初始化后不变。
 var probeCapableProviders = map[string]struct{}{
-	MonitorProviderOpenAI:    {},
-	MonitorProviderAnthropic: {},
-	MonitorProviderGemini:    {},
-	MonitorProviderGrok:      {},
-	MonitorProviderKimi:      {},
-	MonitorProviderZhipu:     {},
-	MonitorProviderDeepseek:  {},
-	MonitorProviderMiniMax:   {},
+	MonitorProviderOpenAI:     {},
+	MonitorProviderAnthropic:  {},
+	MonitorProviderGemini:     {},
+	MonitorProviderGrok:       {},
+	MonitorProviderPerplexity: {},
+	MonitorProviderKimi:       {},
+	MonitorProviderZhipu:      {},
+	MonitorProviderDeepseek:   {},
+	MonitorProviderMiniMax:    {},
 }
 
 // validateProvider 校验 provider 字符串。
@@ -217,6 +219,11 @@ func normalizeMonitorPrimaryModel(provider, checkMode, model string) string {
 //   - gemini/grok/antigravity：本地统计/值通道降级，不会永久 error，放行
 func monitorAccountQuotaCapability(account *Account) error {
 	switch account.Platform {
+	case PlatformPerplexity:
+		if account.Type != AccountTypeAPIKey || account.GetPerplexitySessionToken() == "" {
+			return ErrChannelMonitorAccountNotSupportable
+		}
+		return nil
 	case PlatformOpenCodeGo:
 		return nil
 	case PlatformKimi, PlatformZhipu, PlatformDeepseek, PlatformMiniMax:

@@ -9,7 +9,7 @@ vi.mock('vue-i18n', async () => {
   return {
     ...actual,
     // te() 恒真：已知 token 直接返回 i18n key，便于断言 window/label 映射。
-    useI18n: () => ({ t: (key: string) => key, te: () => true }),
+    useI18n: () => ({ t: (key: string, params?: Record<string, unknown>) => params ? `${key} ${params.label} ${params.n}` : key, te: () => true }),
   }
 })
 
@@ -23,6 +23,23 @@ function makeSnapshot(overrides: Partial<MonitorQuotaSnapshot> = {}): MonitorQuo
 }
 
 describe('MonitorQuotaView', () => {
+  it('shows verified absolute remaining counters without invented percentages', () => {
+    const wrapper = mount(MonitorQuotaView, { props: { snapshot: makeSnapshot({ source: 'perplexity', remaining: [{ label: 'pro', remaining: 40 }, { label: 'research', remaining: 0 }] }) } })
+    const rows = wrapper.findAll('[data-testid="monitor-quota-remaining"]')
+    expect(rows).toHaveLength(2)
+    expect(rows[0].text()).toContain('Pro 40')
+    expect(rows[1].text()).toContain('Research 0')
+    expect(rows[1].classes()).toContain('text-amber-600')
+    expect(wrapper.text()).not.toContain('%')
+    expect(wrapper.find('[data-testid="monitor-quota-tier"]').exists()).toBe(false)
+  })
+
+  it('does not present retained counters as current when the profile failed', () => {
+    const wrapper = mount(MonitorQuotaView, { props: { snapshot: makeSnapshot({ source: 'perplexity', success: false, error: 'unknown quota', remaining: [{ label: 'pro', remaining: 40 }] }) } })
+    expect(wrapper.find('[data-testid="monitor-quota-remaining"]').exists()).toBe(false)
+    expect(wrapper.get('[data-testid="monitor-quota-error"]').text()).toBe('unknown quota')
+  })
+
   it('renders nothing without a snapshot', () => {
     const wrapper = mount(MonitorQuotaView, { props: { snapshot: null } })
     expect(wrapper.find('[data-testid="monitor-quota-view"]').exists()).toBe(false)

@@ -17,6 +17,7 @@ import {
   PROVIDER_ANTHROPIC,
   PROVIDER_GEMINI,
   PROVIDER_GROK,
+  PROVIDER_PERPLEXITY,
   PROVIDER_ANTIGRAVITY,
   PROVIDER_KIMI,
   PROVIDER_ZHIPU,
@@ -114,6 +115,7 @@ export function useChannelMonitorFormat() {
         return 'bg-pink-100 text-pink-700 dark:bg-pink-500/15 dark:text-pink-300'
       case PROVIDER_ZHIPU:
         return 'bg-indigo-100 text-indigo-700 dark:bg-indigo-500/15 dark:text-indigo-300'
+      case PROVIDER_PERPLEXITY:
       case PROVIDER_DEEPSEEK:
         return 'bg-teal-100 text-teal-700 dark:bg-teal-500/15 dark:text-teal-300'
       case PROVIDER_MINIMAX:
@@ -176,6 +178,7 @@ export function useChannelMonitorFormat() {
         return active
           ? 'border-indigo-500 bg-indigo-50 text-indigo-700 dark:bg-indigo-500/15 dark:text-indigo-300 dark:border-indigo-400'
           : 'border-gray-200 bg-white text-gray-600 hover:border-indigo-300 hover:text-indigo-700 dark:border-dark-700 dark:bg-dark-800 dark:text-gray-400 dark:hover:border-indigo-500/50'
+      case PROVIDER_PERPLEXITY:
       case PROVIDER_DEEPSEEK:
         return active
           ? 'border-teal-500 bg-teal-50 text-teal-700 dark:bg-teal-500/15 dark:text-teal-300 dark:border-teal-400'
@@ -270,6 +273,7 @@ export function providerGradient(provider: string): string {
       return 'bg-gradient-to-br from-pink-50 to-pink-100 dark:from-pink-500/10 dark:to-pink-500/20'
     case PROVIDER_ZHIPU:
       return 'bg-gradient-to-br from-indigo-50 to-indigo-100 dark:from-indigo-500/10 dark:to-indigo-500/20'
+    case PROVIDER_PERPLEXITY:
     case PROVIDER_DEEPSEEK:
       return 'bg-gradient-to-br from-teal-50 to-teal-100 dark:from-teal-500/10 dark:to-teal-500/20'
     case PROVIDER_MINIMAX:

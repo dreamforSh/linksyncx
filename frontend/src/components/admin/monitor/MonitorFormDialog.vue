@@ -52,7 +52,7 @@
       </div>
 
       <!-- 配额模式数据源：关联账号（复用账号侧用量/余额服务） -->
-      <div v-if="usesQuotaMode">
+      <div v-if="needsLinkedAccount">
         <label class="input-label">
           {{ t('admin.channelMonitor.form.linkedAccount') }} <span class="text-red-500">*</span>
         </label>
@@ -69,6 +69,9 @@
         <p class="mt-1 text-xs text-gray-400">{{ t('admin.channelMonitor.form.linkedAccountHint') }}</p>
         <p v-if="form.provider === PROVIDER_OPENAI" class="mt-1 text-xs text-amber-600 dark:text-amber-400">
           {{ t('admin.channelMonitor.form.openAIQuotaProbeHint') }}
+        </p>
+        <p v-if="isPerplexity" class="mt-1 text-xs text-amber-600 dark:text-amber-400" data-testid="monitor-perplexity-hint">
+          {{ t(usesProbePart ? 'admin.channelMonitor.form.perplexityProbeHint' : 'admin.channelMonitor.form.perplexityQuotaHint') }}
         </p>
         <p v-if="accountHydrationFailed" class="mt-1 text-xs text-amber-600 dark:text-amber-400">
           {{ t('admin.channelMonitor.form.linkedAccountMissing') }}
@@ -96,7 +99,7 @@
         </div>
       </div>
 
-      <div v-if="usesProbePart">
+      <div v-if="usesProbePart && !isPerplexity">
         <label class="input-label">{{ t('admin.channelMonitor.form.endpoint') }} <span class="text-red-500">*</span></label>
         <div class="flex gap-2">
           <input v-model="form.endpoint" data-testid="monitor-endpoint" type="text" required class="input flex-1" :placeholder="t('admin.channelMonitor.form.endpointPlaceholder')" />
@@ -106,7 +109,7 @@
         </div>
       </div>
 
-      <div v-if="usesProbePart">
+      <div v-if="usesProbePart && !isPerplexity">
         <label class="input-label">
           {{ t('admin.channelMonitor.form.apiKey') }}<span v-if="!editing" class="text-red-500"> *</span>
         </label>
@@ -171,7 +174,7 @@
       </div>
 
       <!-- 高级设置区：请求模板 + 自定义 headers/body（仅探活模式有意义） -->
-      <details v-if="usesProbePart" class="rounded-lg border border-gray-200 bg-gray-50/50 p-3 dark:border-dark-700 dark:bg-dark-900/30">
+      <details v-if="usesProbePart && !isPerplexity" class="rounded-lg border border-gray-200 bg-gray-50/50 p-3 dark:border-dark-700 dark:bg-dark-900/30">
         <summary class="cursor-pointer text-sm font-medium text-gray-700 dark:text-gray-300">
           {{ t('admin.channelMonitor.advanced.section') }}
         </summary>
@@ -265,6 +268,7 @@ import {
   PROVIDER_ANTHROPIC,
   PROVIDER_GEMINI,
   PROVIDER_GROK,
+  PROVIDER_PERPLEXITY,
   PROVIDER_ANTIGRAVITY,
   PROVIDER_KIMI,
   PROVIDER_ZHIPU,
@@ -360,7 +364,9 @@ const form = reactive<MonitorForm>({
 })
 
 // quota / quota_probe 需要关联账号；probe / quota_probe 需要探活字段。
+const isPerplexity = computed(() => form.provider === PROVIDER_PERPLEXITY)
 const usesQuotaMode = computed(() => form.check_mode !== CHECK_MODE_PROBE)
+const needsLinkedAccount = computed(() => usesQuotaMode.value || isPerplexity.value)
 const usesProbePart = computed(() => form.check_mode !== CHECK_MODE_QUOTA)
 
 // jitter 上限与后端校验一致：interval - jitter 不得低于最小检测间隔 15 秒。
@@ -473,6 +479,7 @@ const providerOptions = computed<ProviderOption[]>(() => [
   { value: PROVIDER_OPENAI, label: t('monitorCommon.providers.openai') },
   { value: PROVIDER_GEMINI, label: t('monitorCommon.providers.gemini') },
   { value: PROVIDER_GROK, label: t('monitorCommon.providers.grok') },
+  { value: PROVIDER_PERPLEXITY, label: t('monitorCommon.providers.perplexity') },
   { value: PROVIDER_ANTIGRAVITY, label: t('monitorCommon.providers.antigravity') },
   { value: PROVIDER_KIMI, label: t('monitorCommon.providers.kimi') },
   { value: PROVIDER_ZHIPU, label: t('monitorCommon.providers.zhipu') },
@@ -531,7 +538,8 @@ function checkModeButtonClass(mode: CheckMode): string {
 function selectCheckMode(mode: CheckMode) {
   if (checkModeOptions.value.find((opt) => opt.value === mode)?.disabled) return
   form.check_mode = mode
-  if (!usesQuotaMode.value) form.account_id = null
+  if (isPerplexity.value && mode !== CHECK_MODE_QUOTA && form.primary_model === 'quota') form.primary_model = ''
+  if (!needsLinkedAccount.value) form.account_id = null
 }
 
 // --- 关联账号选择器 ---
@@ -587,7 +595,7 @@ const accountSelectValue = computed<string>({
 // seq + abort 防止快速切换 provider / 连续输入时乱序响应覆盖新结果。
 // 失败不阻塞表单：下拉为空 + 空态提示。
 async function loadLinkedAccounts(search = '') {
-  if (!usesQuotaMode.value || !props.show) return
+  if (!needsLinkedAccount.value || !props.show) return
   accountSearchQuery.value = search
   const seq = ++accountSearchSeq
   accountSearchAbort?.abort()
@@ -598,7 +606,7 @@ async function loadLinkedAccounts(search = '') {
     const res = await adminAPI.accounts.list(
       1,
       50,
-      { platform: form.provider, ...(search ? { search } : {}) },
+      { platform: form.provider, ...(isPerplexity.value ? { type: 'apikey' } : {}), ...(search ? { search } : {}) },
       { signal: controller.signal },
     )
     if (seq !== accountSearchSeq) return
@@ -618,7 +626,7 @@ async function loadLinkedAccounts(search = '') {
 // 失配时才清空绑定（带可见提示），否则绑定只在用户显式切换 provider 时清空。
 async function ensureSelectedAccountHydrated() {
   const id = form.account_id
-  if (id == null || !usesQuotaMode.value) return
+  if (id == null || !needsLinkedAccount.value) return
   if (linkedAccounts.value.some((a) => a.id === id) || pinnedAccount.value?.id === id) return
   if (hydrationAttempted.has(id)) return
   hydrationAttempted.add(id)
@@ -690,6 +698,18 @@ function selectProvider(provider: Provider) {
   if (previousProvider === PROVIDER_ANTIGRAVITY && form.check_mode === CHECK_MODE_QUOTA) {
     form.check_mode = CHECK_MODE_PROBE
     if (form.primary_model.trim() === 'quota') form.primary_model = ''
+  }
+  if (provider === PROVIDER_PERPLEXITY) {
+    form.check_mode = CHECK_MODE_QUOTA
+    form.endpoint = ''
+    form.primary_model = ''
+    form.extra_models = []
+    return
+  }
+  if (previousProvider === PROVIDER_PERPLEXITY) {
+    form.check_mode = provider === PROVIDER_ANTIGRAVITY ? CHECK_MODE_QUOTA : CHECK_MODE_PROBE
+    form.primary_model = ''
+    form.extra_models = []
   }
   if (provider === PROVIDER_GROK) {
     if (!form.endpoint.trim()) form.endpoint = DEFAULT_GROK_ENDPOINT
@@ -821,19 +841,19 @@ function buildPayload(): CreateParams {
     provider: form.provider,
     api_mode: form.provider === PROVIDER_OPENAI ? form.api_mode : API_MODE_CHAT_COMPLETIONS,
     check_mode: form.check_mode,
-    account_id: usesQuotaMode.value ? form.account_id : null,
-    endpoint: usesProbePart.value ? form.endpoint.trim() : '',
-    api_key: usesProbePart.value ? form.api_key.trim() : '',
+    account_id: needsLinkedAccount.value ? form.account_id : null,
+    endpoint: usesProbePart.value && !isPerplexity.value ? form.endpoint.trim() : '',
+    api_key: usesProbePart.value && !isPerplexity.value ? form.api_key.trim() : '',
     primary_model: usesProbePart.value ? form.primary_model.trim() : 'quota',
     extra_models: usesProbePart.value ? form.extra_models : [],
     group_name: form.group_name.trim(),
     enabled: form.enabled,
     interval_seconds: form.interval_seconds,
     jitter_seconds: form.jitter_seconds || 0,
-    template_id: usesProbePart.value ? form.template_id : null,
-    extra_headers: form.extra_headers,
-    body_override_mode: form.body_override_mode,
-    body_override: form.body_override,
+    template_id: usesProbePart.value && !isPerplexity.value ? form.template_id : null,
+    extra_headers: isPerplexity.value ? {} : form.extra_headers,
+    body_override_mode: isPerplexity.value ? 'off' : form.body_override_mode,
+    body_override: isPerplexity.value ? null : form.body_override,
   }
 }
 
@@ -843,7 +863,7 @@ async function handleSubmit() {
     appStore.showError(t('admin.channelMonitor.nameRequired'))
     return
   }
-  if (usesQuotaMode.value && form.account_id == null) {
+  if (needsLinkedAccount.value && form.account_id == null) {
     appStore.showError(t('admin.channelMonitor.linkedAccountRequired'))
     return
   }
@@ -861,13 +881,13 @@ async function handleSubmit() {
       // Only send api_key if user typed a new value
       if (api_key) req.api_key = api_key
       // template_id=null 用 clear_template=true 明确告诉后端清空（pointer 语义）
-      if (usesProbePart.value && form.template_id == null) {
+      if ((usesProbePart.value && form.template_id == null) || isPerplexity.value) {
         req.clear_template = true
         delete req.template_id
       }
       // account_id 同理：probe 模式不带账号，update 发 0 显式解绑存量关联
       // （后端 0=清空、null=不动）。仅 update——create 发 0 会落 &0 触发 FK 违约。
-      if (!usesQuotaMode.value) req.account_id = 0
+      if (!needsLinkedAccount.value) req.account_id = 0
       await adminAPI.channelMonitor.update(target.id, req)
       appStore.showSuccess(t('admin.channelMonitor.updateSuccess'))
     } else {

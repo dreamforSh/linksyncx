@@ -44,13 +44,15 @@ type MonitorQuotaTier struct {
 //   - "cn_quota"   国产 Coding Plan（CNProviderQuotaService.QueryUsage）
 //   - "cn_balance" 国产按量付费余额（CNProviderBalanceService.QueryBalance）
 type MonitorQuotaSnapshot struct {
-	Source    string             `json:"source"`
-	Success   bool               `json:"success"`
-	Tiers     []MonitorQuotaTier `json:"tiers,omitempty"`
-	Balance   *float64           `json:"balance,omitempty"`    // cn_balance 主余额
-	Balances  []MonitorBalance   `json:"balances,omitempty"`   // 多币种余额（如 DeepSeek CNY+USD）
-	Currency  string             `json:"currency,omitempty"`   // 主余额币种
-	PlanLevel string             `json:"plan_level,omitempty"` // 套餐等级（如智谱 level）
+	Source  string             `json:"source"`
+	Success bool               `json:"success"`
+	Tiers   []MonitorQuotaTier `json:"tiers,omitempty"`
+	// Remaining is an absolute counter, not a percentage or an invented limit.
+	Remaining []MonitorQuotaRemaining `json:"remaining,omitempty"`
+	Balance   *float64                `json:"balance,omitempty"`    // cn_balance 主余额
+	Balances  []MonitorBalance        `json:"balances,omitempty"`   // 多币种余额（如 DeepSeek CNY+USD）
+	Currency  string                  `json:"currency,omitempty"`   // 主余额币种
+	PlanLevel string                  `json:"plan_level,omitempty"` // 套餐等级（如智谱 level）
 	// BalanceLow 余额低于阈值或账号被上游标记不可用（仅 cn_balance 来源）。
 	// 抓取器按 Gateway.CNProviders.BalanceThreshold 判定，口径与账号停调
 	// （CNProviderBalanceCheckService.checkOne）一致：任一币种达标即健康。
@@ -60,6 +62,12 @@ type MonitorQuotaSnapshot struct {
 	CredentialInvalid bool      `json:"credential_invalid,omitempty"`
 	Error             string    `json:"error,omitempty"` // Success=false 时的错误摘要
 	FetchedAt         time.Time `json:"fetched_at"`
+}
+
+// MonitorQuotaRemaining is a provider-reported remaining count with no known total.
+type MonitorQuotaRemaining struct {
+	Label     string  `json:"label"`
+	Remaining float64 `json:"remaining"`
 }
 
 // MonitorBalance 单币种余额条目。

@@ -512,6 +512,7 @@ export default {
       anthropic: 'Anthropic',
       gemini: 'Gemini',
       grok: 'Grok',
+      perplexity: 'Perplexity',
       antigravity: 'Antigravity',
       kimi: 'Kimi',
       zhipu: '智谱 GLM',
@@ -528,6 +529,7 @@ export default {
     // 配额快照展示（MonitorQuotaView，管理端与用户端共用）
     quota: {
       unavailable: '配额信息不可用',
+      remaining: '{label} 剩余 {n} 次',
       windows: {
         '5h': '5 小时',
         '7d': '7 天',

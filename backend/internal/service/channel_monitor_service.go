@@ -81,7 +81,9 @@ type ChannelMonitorService struct {
 	// quotaFetcher 由 wire 通过 SetQuotaFetcher 注入（accountUsage/CN 服务在本服务
 	// 之后构造，构造参数注入会破坏既有依赖顺序）。nil 时 fail-closed：
 	// 配额模式的检测产出「未配置」错误快照，Create/Update 关联账号直接报错。
-	quotaFetcher *ChannelMonitorQuotaFetcher
+	quotaFetcher     *ChannelMonitorQuotaFetcher
+	perplexityProber monitorPerplexityProber
+	perplexityLocks  LeaderLockCache
 }
 
 const maxChannelMonitorNameRunes = 100
@@ -155,10 +157,14 @@ func (s *ChannelMonitorService) Create(ctx context.Context, p ChannelMonitorCrea
 	if err := validateExtraHeaders(p.ExtraHeaders); err != nil {
 		return nil, err
 	}
-	if err := s.validateLinkedAccount(ctx, p.Provider, p.AccountID); err != nil {
+	if p.Provider == MonitorProviderPerplexity {
+		if err := s.validatePerplexityMonitorAccount(ctx, defaultMonitorCreateCheckMode(p.Provider, p.CheckMode), p.AccountID, p.PrimaryModel, p.ExtraModels); err != nil {
+			return nil, err
+		}
+	} else if err := s.validateLinkedAccount(ctx, p.Provider, p.AccountID); err != nil {
 		return nil, err
 	}
-	checkMode := defaultCheckMode(p.CheckMode)
+	checkMode := defaultMonitorCreateCheckMode(p.Provider, p.CheckMode)
 	encrypted, err := s.encryptor.Encrypt(p.APIKey)
 	if err != nil {
 		return nil, fmt.Errorf("encrypt api key: %w", err)
@@ -373,7 +379,7 @@ func validateCreateParams(p ChannelMonitorCreateParams) error {
 	if err := validateProvider(p.Provider); err != nil {
 		return err
 	}
-	checkMode := defaultCheckMode(p.CheckMode)
+	checkMode := defaultMonitorCreateCheckMode(p.Provider, p.CheckMode)
 	if err := validateCheckMode(p.Provider, checkMode); err != nil {
 		return err
 	}
@@ -389,7 +395,15 @@ func validateCreateParams(p ChannelMonitorCreateParams) error {
 	usesQuota := monitorCheckModeUsesQuota(checkMode)
 	// probe 分支（含 quota_probe 的探活部分）仍需 endpoint + api_key；
 	// quota 模式 endpoint/api_key 留空，避免要求用户填无意义的占位值。
-	if checkMode != MonitorCheckModeQuota {
+	if p.Provider == MonitorProviderPerplexity {
+		if err := validatePerplexityRequestConfig(p.Endpoint, p.APIKey, p.TemplateID, p.ExtraHeaders, p.BodyOverrideMode, p.BodyOverride); err != nil {
+			return err
+		}
+		if p.AccountID == nil || *p.AccountID <= 0 {
+			return ErrChannelMonitorAccountRequired
+		}
+	}
+	if checkMode != MonitorCheckModeQuota && p.Provider != MonitorProviderPerplexity {
 		if err := validateEndpoint(p.Endpoint); err != nil {
 			return err
 		}
@@ -435,6 +449,20 @@ func (s *ChannelMonitorService) Update(ctx context.Context, id int64, p ChannelM
 	if err := applyMonitorUpdate(existing, p); err != nil {
 		return nil, err
 	}
+	if existing.Provider == MonitorProviderPerplexity {
+		if p.APIKey != nil && strings.TrimSpace(*p.APIKey) != "" {
+			return nil, ErrChannelMonitorPerplexityConfig
+		}
+		if err := s.validatePerplexityMonitorAccount(ctx, defaultCheckMode(existing.CheckMode), existing.AccountID, existing.PrimaryModel, existing.ExtraModels); err != nil {
+			return nil, err
+		}
+		// A native monitor never retains another provider's stored credentials.
+		encrypted, err := s.encryptor.Encrypt("")
+		if err != nil {
+			return nil, fmt.Errorf("encrypt empty monitor key: %w", err)
+		}
+		existing.APIKey = encrypted
+	}
 
 	newPlainAPIKey, apiKeyUpdated, err := s.applyAPIKeyUpdate(existing, p.APIKey)
 	if err != nil {
@@ -443,7 +471,7 @@ func (s *ChannelMonitorService) Update(ctx context.Context, id int64, p ChannelM
 	if err := s.validateProbeAPIKey(existing, newPlainAPIKey); err != nil {
 		return nil, err
 	}
-	if p.Provider != nil || p.CheckMode != nil || p.AccountID != nil {
+	if existing.Provider != MonitorProviderPerplexity && (p.Provider != nil || p.CheckMode != nil || p.AccountID != nil) {
 		if err := s.revalidateLinkedAccount(ctx, existing); err != nil {
 			return nil, err
 		}
@@ -473,6 +501,12 @@ func (s *ChannelMonitorService) Update(ctx context.Context, id int64, p ChannelM
 //   - probe / quota_probe 必须持有 endpoint（探活目标）
 func validateMonitorModeFields(m *ChannelMonitor) error {
 	checkMode := defaultCheckMode(m.CheckMode)
+	if m.Provider == MonitorProviderPerplexity {
+		if m.AccountID == nil || *m.AccountID <= 0 {
+			return ErrChannelMonitorAccountRequired
+		}
+		return nil
+	}
 	if monitorCheckModeUsesQuota(checkMode) && m.AccountID == nil {
 		return ErrChannelMonitorAccountRequired
 	}
@@ -486,7 +520,7 @@ func validateMonitorModeFields(m *ChannelMonitor) error {
 // 存量密文解密为空串（quota 监控切回探活但未重填 key）时拒绝。
 // 密文损坏的情况交给既有 APIKeyDecryptFailed 链路（Get/RunCheck 会显式报错）。
 func (s *ChannelMonitorService) validateProbeAPIKey(m *ChannelMonitor, newPlainKey string) error {
-	if defaultCheckMode(m.CheckMode) == MonitorCheckModeQuota {
+	if m.Provider == MonitorProviderPerplexity || defaultCheckMode(m.CheckMode) == MonitorCheckModeQuota {
 		return nil
 	}
 	if strings.TrimSpace(newPlainKey) != "" {
@@ -615,6 +649,9 @@ func (s *ChannelMonitorService) RunCheck(ctx context.Context, id int64) ([]*Chec
 		return nil, err
 	}
 	checkMode := defaultCheckMode(m.CheckMode)
+	if m.Provider == MonitorProviderPerplexity && checkMode != MonitorCheckModeQuota {
+		return s.runPerplexityCheck(ctx, id)
+	}
 	if checkMode != MonitorCheckModeQuota && m.APIKeyDecryptFailed {
 		return nil, ErrChannelMonitorAPIKeyDecryptFailed
 	}
@@ -650,6 +687,9 @@ func (s *ChannelMonitorService) fetchQuotaSnapshot(ctx context.Context, m *Chann
 	}
 	if s.quotaFetcher == nil {
 		return quotaErrorSnapshot("usage", "quota fetcher is not configured", time.Now())
+	}
+	if m.Provider == MonitorProviderPerplexity {
+		return s.quotaFetcher.fetchPerplexity(ctx, *m.AccountID)
 	}
 	return s.quotaFetcher.Fetch(ctx, *m.AccountID)
 }
@@ -864,6 +904,10 @@ func (s *ChannelMonitorService) cleanupOldRollups(ctx context.Context, today tim
 // 解密失败时把字段清空 + 设置 APIKeyDecryptFailed=true（不返回错误，避免阻断列表渲染）。
 // runner / RunCheck 必须读取该标志位并拒绝执行检测。
 func (s *ChannelMonitorService) decryptInPlace(m *ChannelMonitor) {
+	if m != nil && m.Provider == MonitorProviderPerplexity {
+		m.APIKey, m.APIKeyDecryptFailed = "", false
+		return
+	}
 	if m == nil || m.APIKey == "" {
 		return
 	}
@@ -915,6 +959,9 @@ func applyMonitorUpdate(existing *ChannelMonitor, p ChannelMonitorUpdateParams) 
 			existing.AccountID = nil // 0 = 清空关联
 		}
 	}
+	if providerChanged && existing.Provider == MonitorProviderPerplexity && p.Endpoint == nil {
+		existing.Endpoint = ""
+	}
 	if p.Endpoint != nil {
 		// quota 模式允许清空 endpoint（校验由 validateMonitorModeFields 兜底）。
 		if strings.TrimSpace(*p.Endpoint) != "" {
@@ -961,11 +1008,23 @@ func applyMonitorUpdate(existing *ChannelMonitor, p ChannelMonitorUpdateParams) 
 			return err
 		}
 	}
-	return applyMonitorAdvancedUpdate(existing, p, providerChanged)
+	if err := applyMonitorAdvancedUpdate(existing, p, providerChanged); err != nil {
+		return err
+	}
+	if existing.Provider == MonitorProviderPerplexity {
+		return validatePerplexityRequestConfig(existing.Endpoint, "", existing.TemplateID, existing.ExtraHeaders, existing.BodyOverrideMode, existing.BodyOverride)
+	}
+	return nil
 }
 
 // applyMonitorAdvancedUpdate 处理自定义请求快照相关字段，从 applyMonitorUpdate 拆出避免过长。
 func applyMonitorAdvancedUpdate(existing *ChannelMonitor, p ChannelMonitorUpdateParams, providerChanged bool) error {
+	if providerChanged && existing.Provider == MonitorProviderPerplexity {
+		existing.TemplateID = nil
+		existing.ExtraHeaders = map[string]string{}
+		existing.BodyOverrideMode = MonitorBodyOverrideModeOff
+		existing.BodyOverride = nil
+	}
 	if p.ClearTemplate {
 		existing.TemplateID = nil
 	} else if p.TemplateID != nil {

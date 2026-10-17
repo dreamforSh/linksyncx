@@ -11,7 +11,6 @@ import (
 	"strings"
 	"testing"
 
-	infraerrors "github.com/Wei-Shaw/sub2api/internal/pkg/errors"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/response"
 	middleware2 "github.com/Wei-Shaw/sub2api/internal/server/middleware"
 	"github.com/Wei-Shaw/sub2api/internal/service"
@@ -107,11 +106,36 @@ func TestChannelMonitorProviderBinding_RequiredAndOptional(t *testing.T) {
 type channelMonitorProviderRepoStub struct {
 	service.ChannelMonitorRepository
 	getCalls int
+	writes   int
+	stored   *service.ChannelMonitor
 }
 
 func (r *channelMonitorProviderRepoStub) GetByID(_ context.Context, id int64) (*service.ChannelMonitor, error) {
 	r.getCalls++
-	return &service.ChannelMonitor{ID: id, Provider: service.MonitorProviderOpenAI}, nil
+	if r.stored != nil {
+		copy := *r.stored
+		return &copy, nil
+	}
+	return &service.ChannelMonitor{
+		ID: id, Provider: service.MonitorProviderOpenAI, APIMode: service.MonitorAPIModeChatCompletions,
+		Endpoint: "https://api.openai.com", APIKey: "ENC:sk-openai", PrimaryModel: "gpt-5",
+		IntervalSeconds: 60, CheckMode: service.MonitorCheckModeProbe,
+	}, nil
+}
+
+func (r *channelMonitorProviderRepoStub) Create(_ context.Context, monitor *service.ChannelMonitor) error {
+	r.writes++
+	monitor.ID = 42
+	stored := *monitor
+	r.stored = &stored
+	return nil
+}
+
+func (r *channelMonitorProviderRepoStub) Update(_ context.Context, monitor *service.ChannelMonitor) error {
+	r.writes++
+	stored := *monitor
+	r.stored = &stored
+	return nil
 }
 
 func TestChannelMonitorProviderHTTP_BindingBoundary(t *testing.T) {
@@ -126,38 +150,67 @@ func TestChannelMonitorProviderHTTP_BindingBoundary(t *testing.T) {
 	} {
 		for _, provider := range []string{"perplexity", "bogus", "pplx", "Perplexity", "perplexity ", "composite"} {
 			t.Run(endpoint.name+"_"+provider, func(t *testing.T) {
+				if provider == "perplexity" {
+					assertPerplexityMonitorProviderPersists(t, endpoint.method, endpoint.path)
+					return
+				}
 				repo := &channelMonitorProviderRepoStub{}
 				handler := NewChannelMonitorHandler(service.NewChannelMonitorService(repo, nil))
-				router := gin.New()
-				router.Use(func(c *gin.Context) {
-					c.Set(string(middleware2.ContextKeyUser), middleware2.AuthSubject{UserID: 77})
-					c.Next()
-				})
-				router.POST("/api/v1/admin/channel-monitors", handler.Create)
-				router.PUT("/api/v1/admin/channel-monitors/:id", handler.Update)
-
+				router := newChannelMonitorProviderRouter(handler)
 				body := fmt.Sprintf(`{"name":"monitor","provider":%q,"interval_seconds":60}`, provider)
-				request := httptest.NewRequest(endpoint.method, endpoint.path, strings.NewReader(body))
-				request.Header.Set("Content-Type", "application/json")
-				recorder := httptest.NewRecorder()
-				router.ServeHTTP(recorder, request)
+				recorder := serveChannelMonitorProvider(router, endpoint.method, endpoint.path, body)
 
 				require.Equal(t, http.StatusBadRequest, recorder.Code, recorder.Body.String())
 				var result response.Response
 				require.NoError(t, json.Unmarshal(recorder.Body.Bytes(), &result))
-				if provider == "perplexity" {
-					// 仅回归绑定入口：服务层尚未注册 perplexity，业务 400 不能误当成绑定 400。
-					require.Equal(t, infraerrors.Reason(service.ErrChannelMonitorInvalidProvider), result.Reason)
-					if endpoint.method == http.MethodPut {
-						require.Equal(t, 1, repo.getCalls)
-					}
-					return
-				}
 				require.Equal(t, "VALIDATION_ERROR", result.Reason)
 				require.Contains(t, result.Message, "Provider")
 				require.Contains(t, result.Message, "oneof")
 				require.Zero(t, repo.getCalls)
+				require.Zero(t, repo.writes)
 			})
 		}
 	}
+}
+
+func assertPerplexityMonitorProviderPersists(t *testing.T, method, path string) {
+	t.Helper()
+	repo := &channelMonitorProviderRepoStub{}
+	monitorService := service.NewChannelMonitorService(repo, duplicateChannelMonitorHandlerEncryptor{})
+	monitorService.SetQuotaFetcher(service.NewChannelMonitorQuotaFetcher(nil, nil, nil, &perplexityMonitorHTTPAccounts{}, nil))
+	router := newChannelMonitorProviderRouter(NewChannelMonitorHandler(monitorService))
+	body := `{"name":"monitor","provider":"perplexity","interval_seconds":60,"account_id":72,"check_mode":"quota"}`
+	if method == http.MethodPut {
+		body = `{"provider":"perplexity","check_mode":"quota","account_id":72}`
+	}
+	recorder := serveChannelMonitorProvider(router, method, path, body)
+
+	require.Contains(t, []int{http.StatusCreated, http.StatusOK}, recorder.Code, recorder.Body.String())
+	require.Equal(t, 1, repo.writes)
+	require.Equal(t, service.MonitorProviderPerplexity, repo.stored.Provider)
+	require.Equal(t, service.MonitorCheckModeQuota, repo.stored.CheckMode)
+	require.Equal(t, "ENC:", repo.stored.APIKey)
+	require.NotContains(t, recorder.Body.String(), "private-cookie")
+	if method == http.MethodPut {
+		require.Equal(t, 1, repo.getCalls)
+	}
+}
+
+func newChannelMonitorProviderRouter(handler *ChannelMonitorHandler) *gin.Engine {
+	router := gin.New()
+	router.Use(func(c *gin.Context) {
+		c.Set(string(middleware2.ContextKeyUser), middleware2.AuthSubject{UserID: 77})
+		c.Next()
+	})
+	router.POST("/api/v1/admin/channel-monitors", handler.Create)
+	router.PUT("/api/v1/admin/channel-monitors/:id", handler.Update)
+	return router
+}
+
+func serveChannelMonitorProvider(router *gin.Engine, method, path, body string) *httptest.ResponseRecorder {
+	request := httptest.NewRequest(method, path, strings.NewReader(body))
+	request.Header.Set("Content-Type", "application/json")
+	recorder := httptest.NewRecorder()
+	router.ServeHTTP(recorder, request)
+	return recorder
 }

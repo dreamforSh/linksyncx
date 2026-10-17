@@ -12,6 +12,7 @@ import type { APIMode, CheckMode, Provider, MonitorStatus } from '@/api/admin/ch
 export const PROVIDER_OPENAI: Provider = 'openai'
 export const PROVIDER_ANTHROPIC: Provider = 'anthropic'
 export const PROVIDER_GEMINI: Provider = 'gemini'
+export const PROVIDER_PERPLEXITY: Provider = 'perplexity'
 export const PROVIDER_GROK: Provider = 'grok'
 export const PROVIDER_ANTIGRAVITY: Provider = 'antigravity'
 export const PROVIDER_KIMI: Provider = 'kimi'
@@ -42,6 +43,7 @@ export const PROVIDERS: readonly Provider[] = [
   PROVIDER_ANTHROPIC,
   PROVIDER_GEMINI,
   PROVIDER_GROK,
+  PROVIDER_PERPLEXITY,
   PROVIDER_ANTIGRAVITY,
   PROVIDER_KIMI,
   PROVIDER_ZHIPU,

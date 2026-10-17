@@ -507,6 +507,7 @@ export default {
       anthropic: 'Anthropic',
       gemini: 'Gemini',
       grok: 'Grok',
+      perplexity: 'Perplexity',
       antigravity: 'Antigravity',
       kimi: 'Kimi',
       zhipu: 'Zhipu GLM',
@@ -523,6 +524,7 @@ export default {
     // Quota snapshot rendering (MonitorQuotaView, shared by admin + user views)
     quota: {
       unavailable: 'Quota unavailable',
+      remaining: '{label}: {n} remaining',
       windows: {
         '5h': '5h',
         '7d': '7d',

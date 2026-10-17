@@ -105,6 +105,18 @@ HTTP 断开也会停止本次网关连接，但不承诺上游任务停止计费
 协议依据：[Streamable HTTP](https://modelcontextprotocol.io/specification/2025-03-26/basic/transports)、
 [进度通知](https://modelcontextprotocol.io/specification/2025-03-26/basic/utilities/progress)。
 
+## 渠道监控
+
+原生 Perplexity 监控关联一个 cookie 账号，不接受 endpoint、API key、通用请求模板、
+自定义头或 body。三种模式都复用账号的 Cookie、代理和 TLS 配置：
+
+- `quota`：默认。只读取会话、credits 与 rate limits，不调用模型。
+- `probe` / `quota_probe`：必须显式选择。对账号支持的模型发送算术探活，消耗订阅额度。
+  回答正确但上游型号声明未匹配，或结果未能按当前凭据保存时，状态为降级而不是正常。
+
+配额只展示已验证的 Pro / Research 绝对余量。未知结构、过期或失败分段不会显示为健康，
+也不编造总额度或百分比。兼容网关的 API key 探活仍使用 OpenAI provider。
+
 ## 验证边界
 
 本轮使用假上游、内存 HTTP、竞态检测和 PGlite PostgreSQL 语义检查。

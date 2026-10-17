@@ -65,6 +65,7 @@ const (
 	MonitorProviderAnthropic   = "anthropic"
 	MonitorProviderGemini      = "gemini"
 	MonitorProviderGrok        = "grok"
+	MonitorProviderPerplexity  = "perplexity"
 	MonitorProviderAntigravity = "antigravity"
 	MonitorProviderKimi        = "kimi"
 	MonitorProviderZhipu       = "zhipu"
@@ -148,11 +149,20 @@ const (
 
 // 业务错误（统一在此声明，避免散落）。
 var (
+	ErrChannelMonitorPerplexityConfig = infraerrors.BadRequest(
+		"CHANNEL_MONITOR_PERPLEXITY_CONFIG", "perplexity monitors use linked account credentials and do not support endpoint, api_key, request templates, extra headers or body overrides",
+	)
+	ErrChannelMonitorPerplexityModel = infraerrors.BadRequest(
+		"CHANNEL_MONITOR_PERPLEXITY_MODEL", "select models supported by the linked perplexity account",
+	)
+	ErrChannelMonitorPerplexityUnavailable = infraerrors.Conflict(
+		"CHANNEL_MONITOR_PERPLEXITY_UNAVAILABLE", "perplexity model probe is unavailable or already running",
+	)
 	ErrChannelMonitorNotFound = infraerrors.NotFound(
 		"CHANNEL_MONITOR_NOT_FOUND", "channel monitor not found",
 	)
 	ErrChannelMonitorInvalidProvider = infraerrors.BadRequest(
-		"CHANNEL_MONITOR_INVALID_PROVIDER", "provider must be one of openai/anthropic/gemini/grok/antigravity/kimi/zhipu/deepseek/minimax",
+		"CHANNEL_MONITOR_INVALID_PROVIDER", "provider must be one of openai/anthropic/gemini/grok/perplexity/antigravity/kimi/zhipu/deepseek/minimax",
 	)
 	ErrChannelMonitorInvalidCheckMode = infraerrors.BadRequest(
 		"CHANNEL_MONITOR_INVALID_CHECK_MODE", "check_mode must be one of probe/quota/quota_probe; antigravity only supports quota",

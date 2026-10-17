@@ -29,10 +29,13 @@
       </div>
     </div>
 
+    <p v-if="activeProvider === PROVIDER_PERPLEXITY" class="mb-4 text-sm text-amber-600 dark:text-amber-400" data-testid="monitor-template-unsupported">
+      {{ t('admin.channelMonitor.form.perplexityTemplateHint') }}
+    </p>
     <!-- active provider list -->
     <div v-if="!editing" class="space-y-2">
       <div class="flex justify-end">
-        <button class="btn btn-primary btn-sm" @click="openCreateForm">
+        <button class="btn btn-primary btn-sm" :disabled="activeProvider === PROVIDER_PERPLEXITY" @click="openCreateForm">
           <Icon name="plus" size="sm" class="mr-1" />
           {{ t('admin.channelMonitor.template.createButton') }}
         </button>
@@ -91,14 +94,14 @@
           <div class="flex flex-shrink-0 gap-2">
             <button
               class="btn btn-secondary btn-sm"
-              :disabled="tpl.associated_monitors === 0"
+              :disabled="tpl.associated_monitors === 0 || tpl.provider === PROVIDER_PERPLEXITY"
               :title="t('admin.channelMonitor.template.applyTooltip')"
               @click="confirmApply(tpl)"
             >
               <Icon name="refresh" size="sm" class="mr-1" />
               {{ t('admin.channelMonitor.template.applyButton') }}
             </button>
-            <button class="btn btn-secondary btn-sm" @click="openEditForm(tpl)">
+            <button class="btn btn-secondary btn-sm" :disabled="tpl.provider === PROVIDER_PERPLEXITY" @click="openEditForm(tpl)">
               {{ t('common.edit') }}
             </button>
             <button class="btn btn-secondary btn-sm text-red-600" @click="handleDelete(tpl)">
@@ -132,7 +135,7 @@
         </label>
         <div class="grid grid-cols-2 gap-3 sm:grid-cols-4">
           <button
-            v-for="opt in providerTabs"
+            v-for="opt in providerTabs.filter(tab => tab.value !== PROVIDER_PERPLEXITY)"
             :key="opt.value"
             type="button"
             class="rounded-lg border-2 px-3 py-2 text-sm font-medium transition-colors"
@@ -249,6 +252,7 @@ import {
   PROVIDER_OPENAI,
   PROVIDER_GEMINI,
   PROVIDER_GROK,
+  PROVIDER_PERPLEXITY,
   PROVIDER_ANTIGRAVITY,
   PROVIDER_KIMI,
   PROVIDER_ZHIPU,
@@ -276,6 +280,7 @@ const providerTabs = computed<{ value: Provider; label: string }[]>(() => [
   { value: PROVIDER_OPENAI, label: t('monitorCommon.providers.openai') },
   { value: PROVIDER_GEMINI, label: t('monitorCommon.providers.gemini') },
   { value: PROVIDER_GROK, label: t('monitorCommon.providers.grok') },
+  { value: PROVIDER_PERPLEXITY, label: t('monitorCommon.providers.perplexity') },
   { value: PROVIDER_ANTIGRAVITY, label: t('monitorCommon.providers.antigravity') },
   { value: PROVIDER_KIMI, label: t('monitorCommon.providers.kimi') },
   { value: PROVIDER_ZHIPU, label: t('monitorCommon.providers.zhipu') },

@@ -234,6 +234,12 @@ func (f *ChannelMonitorQuotaFetcher) fetchUsage(ctx context.Context, account *Ac
 		return quotaErrorSnapshot("usage", "usage service is not configured", now)
 	}
 	usage, err := f.usage.GetUsageForAccount(ctx, account)
+	if account.Platform == PlatformPerplexity {
+		if err != nil {
+			return quotaErrorSnapshot("perplexity", "perplexity quota request failed", now)
+		}
+		return perplexityMonitorQuota(usage, time.Now())
+	}
 	if err != nil {
 		msg := truncateMessage(sanitizeErrorMessage(err.Error()))
 		return &domain.MonitorQuotaSnapshot{
@@ -541,6 +547,11 @@ func deriveQuotaCheckResult(snapshot *domain.MonitorQuotaSnapshot, model string,
 // quotaDegradedHint 生成 degraded 的 message（指出触发告警的窗口/余额）；
 // 空串表示无告警。
 func quotaDegradedHint(snapshot *domain.MonitorQuotaSnapshot) string {
+	for _, counter := range snapshot.Remaining {
+		if counter.Remaining == 0 {
+			return "quota exhausted: " + counter.Label
+		}
+	}
 	for _, tier := range snapshot.Tiers {
 		if tier.UsedPercent >= monitorQuotaDegradedUsedPercent {
 			name := tier.Window

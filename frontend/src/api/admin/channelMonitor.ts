@@ -10,6 +10,7 @@ export type Provider =
   | 'anthropic'
   | 'gemini'
   | 'grok'
+  | 'perplexity'
   | 'antigravity'
   | 'kimi'
   | 'zhipu'
@@ -49,6 +50,8 @@ export interface MonitorQuotaSnapshot {
   source: string
   success: boolean
   tiers?: MonitorQuotaTier[]
+  /** Provider-reported counts; no implied total or utilization percentage. */
+  remaining?: { label: string; remaining: number }[]
   balance?: number | null
   balances?: MonitorBalance[]
   currency?: string

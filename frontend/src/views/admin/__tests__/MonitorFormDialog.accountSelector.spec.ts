@@ -170,6 +170,70 @@ describe('MonitorFormDialog linked account selector', () => {
     monitorUpdate.mockReset().mockResolvedValue({})
   })
 
+  it('defaults Perplexity to quota and never asks the browser for its Cookie', async () => {
+    accountsList.mockResolvedValue({ items: [{ id: 72, name: 'web-session', platform: 'perplexity' }] })
+    const wrapper = mountDialog()
+    await wrapper.get('[data-testid="monitor-provider-perplexity"]').trigger('click')
+    await flushPromises()
+    expect(wrapper.get('[data-testid="monitor-check-mode-quota"]').attributes('aria-pressed')).toBe('true')
+    expect(wrapper.find('[data-testid="monitor-endpoint"]').exists()).toBe(false)
+    expect(wrapper.find('input[type="password"]').exists()).toBe(false)
+    expect(wrapper.find('details').exists()).toBe(false)
+    expect(wrapper.get('[data-testid="monitor-perplexity-hint"]').text()).toContain('perplexityQuotaHint')
+    expect(accountsList).toHaveBeenLastCalledWith(1, 50, { platform: 'perplexity', type: 'apikey' }, { signal: expect.any(AbortSignal) })
+    clickOption(await openAccountDropdown(wrapper), 'web-session (#72)')
+    await wrapper.findAll('input[type="text"]')[0].setValue('web monitor')
+    await wrapper.get('#channel-monitor-form').trigger('submit')
+    await flushPromises()
+    expect(monitorCreate).toHaveBeenCalledWith(expect.objectContaining({
+      provider: 'perplexity', check_mode: 'quota', account_id: 72,
+      endpoint: '', api_key: '', primary_model: 'quota', template_id: null,
+      extra_headers: {}, body_override_mode: 'off', body_override: null,
+    }))
+  })
+
+  it('keeps the Perplexity account in explicitly selected native probe mode', async () => {
+    accountsList.mockResolvedValue({ items: [{ id: 72, name: 'web-session', platform: 'perplexity' }] })
+    const wrapper = mountDialog()
+    await wrapper.get('[data-testid="monitor-provider-perplexity"]').trigger('click')
+    await flushPromises()
+    clickOption(await openAccountDropdown(wrapper), 'web-session (#72)')
+    await wrapper.get('[data-testid="monitor-check-mode-probe"]').trigger('click')
+    await flushPromises()
+    expect(accountTrigger(wrapper).text()).toContain('web-session')
+    expect(wrapper.get('[data-testid="monitor-perplexity-hint"]').text()).toContain('perplexityProbeHint')
+    expect(wrapper.find('input[type="password"]').exists()).toBe(false)
+    await wrapper.get('[data-testid="monitor-primary-model"]').setValue('public')
+    await wrapper.findAll('input[type="text"]')[0].setValue('native model probe')
+    await wrapper.get('#channel-monitor-form').trigger('submit')
+    await flushPromises()
+    expect(monitorCreate).toHaveBeenCalledWith(expect.objectContaining({ check_mode: 'probe', account_id: 72, primary_model: 'public', endpoint: '', api_key: '' }))
+  })
+
+  it('hydrates native probe accounts and clears hidden request snapshots on edit', async () => {
+    accountsGetById.mockResolvedValue({ id: 72, name: 'web-session', platform: 'perplexity' })
+    const wrapper = mountDialog(makeMonitor({
+      provider: 'perplexity', check_mode: 'probe', account_id: 72, primary_model: 'public',
+      endpoint: '', extra_headers: { Cookie: 'stale-do-not-forward' },
+      body_override_mode: 'replace', body_override: { query_str: 'stale' }, template_id: 5,
+    }))
+    await flushPromises()
+    expect(accountTrigger(wrapper).text()).toContain('web-session')
+    await wrapper.get('#channel-monitor-form').trigger('submit')
+    await flushPromises()
+    expect(monitorUpdate).toHaveBeenCalledWith(42, expect.objectContaining({ account_id: 72, clear_template: true, extra_headers: {}, body_override_mode: 'off', body_override: null }))
+    expect(monitorUpdate.mock.calls[0][1]).not.toHaveProperty('api_key')
+  })
+
+  it('requires reselecting an account when leaving Perplexity', async () => {
+    const wrapper = mountDialog(makeMonitor({ provider: 'perplexity', check_mode: 'quota', account_id: 72, endpoint: '', primary_model: 'quota' }))
+    await flushPromises()
+    await wrapper.get('[data-testid="monitor-provider-openai"]').trigger('click')
+    expect(wrapper.get('[data-testid="monitor-check-mode-probe"]').attributes('aria-pressed')).toBe('true')
+    expect(wrapper.find('[data-testid="monitor-linked-account"]').exists()).toBe(false)
+    expect((wrapper.get('[data-testid="monitor-primary-model"]').element as HTMLInputElement).value).toBe('')
+  })
+
   it('loads the first page of provider accounts when quota mode is enabled', async () => {
     accountsList.mockResolvedValue({ items: [{ id: 1, name: 'a', platform: 'anthropic' }] })
     const wrapper = mountDialog()

@@ -155,7 +155,7 @@ func pingEndpointOrigin(ctx context.Context, endpoint string) *int {
 //   - 构造鉴权头
 //   - 从响应 JSON 中提取文本（默认按 gjson path；需要时可自定义）
 //
-// 加新 provider 只需要在 providerAdapters 里增加一个条目，无需触碰 callProvider / validateProvider。
+// 通用 API-key adapter 表；Perplexity 的账号原生 Cookie 探活在 channel_monitor_perplexity.go 分派。
 type providerAdapter struct {
 	buildPath    func(model string) string
 	buildBody    func(model, prompt string) ([]byte, error)

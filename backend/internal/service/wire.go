@@ -1120,6 +1120,8 @@ func ProvideChannelMonitorRunner(
 	svc *ChannelMonitorService,
 	settingService *SettingService,
 	quotaFetcher *ChannelMonitorQuotaFetcher,
+	accountTestService *AccountTestService,
+	locks LeaderLockCache,
 ) *ChannelMonitorRunner {
 	r := NewChannelMonitorRunner(svc, settingService)
 	if svc != nil {
@@ -1128,6 +1130,7 @@ func ProvideChannelMonitorRunner(
 		svc.SetRuntimeReader(settingService)
 		svc.SetScheduler(r)
 		svc.SetQuotaFetcher(quotaFetcher)
+		svc.SetPerplexityProbe(accountTestService, locks)
 	}
 	r.Start()
 	return r

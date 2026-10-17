@@ -7,6 +7,12 @@
       </span>
     </div>
 
+    <div v-if="snapshot.success && snapshot.remaining?.length" class="flex flex-wrap gap-x-3 gap-y-1 text-xs">
+      <span v-for="counter in snapshot.remaining" :key="counter.label" data-testid="monitor-quota-remaining" :class="counter.remaining === 0 ? 'text-amber-600 dark:text-amber-400' : 'text-gray-600 dark:text-gray-300'">
+        {{ t('monitorCommon.quota.remaining', { label: counter.label === 'research' ? 'Research' : 'Pro', n: counter.remaining }) }}
+      </span>
+    </div>
+
     <!-- 用量窗口条形图（复用账号页 UsageProgressBar：同阈值配色、同倒计时格式） -->
     <div v-if="snapshot.success && tierRows.length" class="space-y-1">
       <UsageProgressBar

@@ -118,8 +118,10 @@ func (s *ChannelMonitorRequestTemplateService) Delete(ctx context.Context, id in
 // monitorIDs 必须非空且每个 id 都必须当前 template_id = id；不满足条件的会被 SQL WHERE 过滤掉。
 // 返回实际被覆盖的监控数。
 func (s *ChannelMonitorRequestTemplateService) ApplyToMonitors(ctx context.Context, id int64, monitorIDs []int64) (int64, error) {
-	if _, err := s.repo.GetByID(ctx, id); err != nil {
+	if template, err := s.repo.GetByID(ctx, id); err != nil {
 		return 0, err
+	} else if template.Provider == MonitorProviderPerplexity {
+		return 0, ErrChannelMonitorPerplexityConfig
 	}
 	if len(monitorIDs) == 0 {
 		return 0, ErrChannelMonitorTemplateApplyEmpty
@@ -155,6 +157,9 @@ func validateTemplateCreateParams(p ChannelMonitorRequestTemplateCreateParams) e
 	if err := validateProvider(p.Provider); err != nil {
 		return ErrChannelMonitorTemplateInvalidProvider
 	}
+	if p.Provider == MonitorProviderPerplexity {
+		return ErrChannelMonitorPerplexityConfig
+	}
 	if err := validateAPIMode(p.Provider, p.APIMode); err != nil {
 		return ErrChannelMonitorTemplateInvalidAPIMode
 	}
@@ -169,6 +174,9 @@ func validateTemplateCreateParams(p ChannelMonitorRequestTemplateCreateParams) e
 
 // applyTemplateUpdate 把 update params 中非 nil 字段应用到 existing 上。
 func applyTemplateUpdate(existing *ChannelMonitorRequestTemplate, p ChannelMonitorRequestTemplateUpdateParams) error {
+	if existing.Provider == MonitorProviderPerplexity {
+		return ErrChannelMonitorPerplexityConfig
+	}
 	if p.Name != nil {
 		name := strings.TrimSpace(*p.Name)
 		if name == "" {
