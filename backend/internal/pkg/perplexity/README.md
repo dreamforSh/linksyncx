@@ -71,6 +71,21 @@ Perplexity 会话/模型恢复均不使用其他平台的泛化账号恢复逻�
 单独的 Thinking 开关可生效，明确的 token 预算仍拒绝。
 最终选择用于发送、模型健康终检、续聊隔离和实际型号观测。
 
+### 思考内容（reasoning_content）
+
+推理模型（`pplx_reasoning`、`*_thinking` 等）会下发计划块 `plan_block.goals`，其
+`description` 是模型自述的思考目标。网关把这些目标（去重、清洗、限长）作为
+`reasoning_content` 下发，先于最终答案：流式按出现顺序增量发送，非流式聚合到
+`message.reasoning_content`。这是"思考"的呈现，不是答案正文，也不是客户端可执行工具；
+由 `include_search_progress` 一并控制（与检索进度同一开关），结构载荷/代码不外泄。
+
+### 推理模型的流式终止
+
+推理模型不发独立的 `end_of_stream` 事件，而用 `final_sse_message: true` 标记最终消息；
+其遗留 `text` 字段是步骤【数组】而非对象。网关把 `final_sse_message` 视为等价终态，并
+接受数组/不可解析的遗留 `text`（跳过而非整条判错），因此推理模型的流不再被误判为
+`malformed`/`incomplete`，答案也不会在最终事件处被截断。
+
 ## 查询配置
 
 创建/编辑表单和 API 支持：
@@ -117,8 +132,38 @@ HTTP 断开也会停止本次网关连接，但不承诺上游任务停止计费
 配额只展示已验证的 Pro / Research 绝对余量。未知结构、过期或失败分段不会显示为健康，
 也不编造总额度或百分比。兼容网关的 API key 探活仍使用 OpenAI provider。
 
+## 函数工具模拟（function tool call）
+
+网页 Ask 端点**没有原生函数调用**，网关用提示词协议模拟客户端 function 工具：
+
+- 把客户端 `tools`（function 型）渲染为 `query_str` 头部的文本协议说明，要求模型以
+  `<tool_call>{"name":...,"arguments":{...}}</tool_call>` 作答；`assistant.tool_calls` /
+  `role=tool` 历史折叠为 `<tool_call>`/`<tool_result>` 文本（见 `tools.go`）。
+- 存在可调用工具时，请求强制 `search_focus=writing`**关闭联网搜索**，让 `query_str`
+  退化为纯 prompt（否则工具协议会被当成检索查询）。因此**同一请求里函数工具与原生
+  联网搜索互斥**，工具优先。
+- 上游回答开头出现 `<tool_call>` 才按工具解析，还原为 Chat Completions `tool_calls`
+  （`finish_reason=tool_calls`），再由既有 lifter 自动转为 Responses `function_call` /
+  Anthropic `tool_use`。**解析失败整段按普通文本下发，绝不伪造调用。**
+- 三条入站协议（CC / Responses / Messages）到上游发送汇聚点已归一为 CC 形态，工具解析
+  统一在此完成；入站校验层只做放行，不再拒绝 function 工具与工具历史。
+- 启用模拟的响应带 `X-Perplexity-Tool-Emulation: active` 头。
+
+能力边界（实测）：**遵从率由底座模型主导。** 强指令模型（如 `claude55opus`、`gpt54`、
+`claude46sonnet`）下 auto / required / 多工具 / 嵌套参数均可用；较弱模型（如 `pplx_pro`）
+只有 auto 稳定，`tool_choice=required`/具名可能不兑现。故 function 工具场景建议映射到强
+底座模型。
+
+- `tool_choice=auto`：模型可自行决定；不调用时按普通文本 + `finish_reason=stop` 返回。
+- `tool_choice=required`/具名：要求必须调用（指定）工具。网关同步判定满足性——**模型
+  未产出满足约束的调用时返回 400**（三协议、流式/非流式统一，在任何响应提交前返回），
+  绝不伪造调用、也不把无关文本当成功。
+- 旧式 `functions`/`function_call` 不支持；MCP / 自定义 / 内置服务端工具历史不支持。
+
 ## 验证边界
 
 本轮使用假上游、内存 HTTP、竞态检测和 PGlite PostgreSQL 语义检查。
 浏览器预览使用隔离假 API，不会调用真实 Perplexity。
 这些验证不证明任何真实账号的档位、Cookie 生命周期或模型权益。
+函数工具模拟的遵从率依赖所选底座模型，不是上游原生函数调用；
+`search_focus=writing` 关搜索与遵从率由 `live_search_focus_probe_test.go`（需真实 cookie）实测。

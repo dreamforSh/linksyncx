@@ -62,6 +62,52 @@ func TestDecoderRequiresExplicitCompleteTerminal(t *testing.T) {
 	}
 }
 
+// 推理模型不发独立 end_of_stream，用 final_sse_message=true 作终止，且遗留 text 字段
+// 可能是步骤【数组】而非对象——两者都不得把流判为 malformed/incomplete。
+func TestDecoderFinalSSEMessageTerminatesWithArrayText(t *testing.T) {
+	legacy := `[{\"step_type\":\"FINAL\",\"content\":{\"answer\":\"ignored legacy\"}}]`
+	body := `data: {"final_sse_message":true,"status":"COMPLETED",` +
+		`"blocks":[{"intended_usage":"ask_text","markdown_block":{"progress":"DONE","answer":"The ball costs $0.05."}}],` +
+		`"text":"` + legacy + `"}` + "\n\n"
+	d := NewDecoder(strings.NewReader(body))
+	ev, err := d.Next()
+	if err != nil {
+		t.Fatalf("Next() error = %v, want nil (array text must not be malformed)", err)
+	}
+	if !ev.EndOfStream {
+		t.Fatalf("final_sse_message must terminate the stream: %+v", ev)
+	}
+	if ev.Text != "The ball costs $0.05." {
+		t.Fatalf("answer = %q", ev.Text)
+	}
+	if _, err := d.Next(); !errors.Is(err, io.EOF) {
+		t.Fatalf("after final = %v, want EOF", err)
+	}
+}
+
+// 计划块 goals[].description 被解析为 Event.Plan（思考部分来源）。
+func TestParseEventPlanGoals(t *testing.T) {
+	body := `data: {"blocks":[{"intended_usage":"plan","plan_block":{"goals":[` +
+		`{"description":"Set up the equation","todo_task_status":"INCOMPLETE"},` +
+		`{"description":"  ","todo_task_status":"INCOMPLETE"},` +
+		`{"description":"Solve for x","todo_task_status":"COMPLETE"}]}},` +
+		`{"intended_usage":"ask_text","markdown_block":{"answer":"x=0.05"}}]}` + "\n\n" +
+		"event: end_of_stream\ndata:\n\n"
+	ev, err := NewDecoder(strings.NewReader(body)).Next()
+	if err != nil {
+		t.Fatalf("Next() error = %v", err)
+	}
+	if len(ev.Plan) != 2 {
+		t.Fatalf("plan goals = %+v, want 2 non-empty", ev.Plan)
+	}
+	if ev.Plan[0].Description != "Set up the equation" || ev.Plan[1].Status != "COMPLETE" {
+		t.Fatalf("plan goals mismatch: %+v", ev.Plan)
+	}
+	if got := SafePlanReasoningText(ev.Plan[0]); got != "Set up the equation" {
+		t.Fatalf("SafePlanReasoningText = %q", got)
+	}
+}
+
 func TestDecoderIncrementalAndSnapshotMirrors(t *testing.T) {
 	body := "data: {\"blocks\":[" +
 		`{"intended_usage":"ask_text_0_markdown","markdown_block":{"progress":"IN_PROGRESS","chunks":["Hello"]}},` +

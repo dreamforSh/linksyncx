@@ -3,12 +3,18 @@ package service
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"strings"
 
 	"github.com/Wei-Shaw/sub2api/internal/pkg/perplexity"
 )
+
+// errPerplexityToolChoiceUnsatisfied 表示 tool_choice=required/具名 要求调用工具，但
+// 模型没有产出满足约束的工具调用。调用方据此返回 400（而非把模型文本当成功）。
+// 仅在 required/function 的同步翻译路径触发；绝不伪造调用。
+var errPerplexityToolChoiceUnsatisfied = errors.New("perplexity: tool_choice required a tool call but none was produced")
 
 // perplexityTranslateParams 是翻译协程的运行参数。来源和进度开关由 send 的
 // 默认请求选项显式传入；不把内部执行步骤映射为客户端可执行的 tool_calls。
@@ -27,6 +33,12 @@ type perplexityTranslateParams struct {
 	identity            *perplexityResponseIdentity
 	// metrics 在翻译完成后携带真实指标（搜索引用数）回转发层，供计费使用。
 	metrics *perplexityResponseMetrics
+	// toolAllowed 非空时启用函数工具模拟：用 ToolCallParser 识别上游回答开头的
+	// <tool_call>{...}</tool_call> 块，还原为 CC tool_calls；解析失败整段按文本下发，
+	// 绝不伪造调用。toolChoice 仅用于记录本轮约束（required/function 的兑现由模型
+	// 决定，不满足时不编造，按文本返回）。
+	toolAllowed []perplexity.ToolSpec
+	toolChoice  perplexity.ToolChoice
 }
 
 // perplexityCompletion 仅在明确 EOS、非空回答且成功写出之后发布。
@@ -56,6 +68,9 @@ func writePerplexityTranslation(ctx context.Context, upstream io.Reader, pw io.W
 	var sources []perplexity.Source
 	var progress []perplexity.SearchProgress
 	progressIndex := make(map[string]int)
+	// 推理模型的计划目标去重后作为 reasoning_content 下发（"思考部分"）。
+	planSeen := make(map[string]bool)
+	var planReasoning []string
 	backendUUID := ""
 	roleSent := false
 	sentBytes := 0
@@ -136,6 +151,14 @@ func writePerplexityTranslation(ctx context.Context, upstream io.Reader, pw io.W
 		return emitDelta(map[string]any{"content": perplexity.StripCitationMarkers(rest)}, nil, nil)
 	}
 
+	// 函数工具模拟：toolParser 非 nil 时，回答增量先过 parser 再下发文本；
+	// parser 吃未清洗原文（StripCitationMarkers 会破坏 {"ids":[1]} 这类参数），
+	// 引用清洗只作用于 parser 放行的文本部分。
+	var toolParser *perplexity.ToolCallParser
+	if len(p.toolAllowed) > 0 {
+		toolParser = perplexity.NewToolCallParser(p.toolAllowed)
+	}
+
 	decoder := perplexity.NewDecoder(upstream)
 	for {
 		if err := ctx.Err(); err != nil {
@@ -192,6 +215,27 @@ func writePerplexityTranslation(ctx context.Context, upstream io.Reader, pw io.W
 					}
 				}
 			}
+			// 推理模型的计划目标（去重）作为思考内容下发，先于最终答案。
+			for _, goal := range ev.Plan {
+				text := perplexity.SafePlanReasoningText(goal)
+				if text == "" || planSeen[text] {
+					continue
+				}
+				if len(planSeen) >= 128 {
+					break
+				}
+				planSeen[text] = true
+				planReasoning = append(planReasoning, text)
+				if p.stream {
+					if err := ensureRole(); err != nil {
+						return err
+					}
+					if err := emitDelta(map[string]any{"reasoning_content": text + "\n"}, nil,
+						map[string]any{"reasoning_plan": []string{text}}); err != nil {
+						return err
+					}
+				}
+			}
 		}
 		if p.stream && (sentBytes > 0 || strings.TrimSpace(answer.Content()) != "") {
 			// Apply already checks snapshot rewrites exactly. Incremental chunks
@@ -201,8 +245,15 @@ func writePerplexityTranslation(ctx context.Context, upstream io.Reader, pw io.W
 				if err := ensureRole(); err != nil {
 					return err
 				}
-				if err := emitContent(delta); err != nil {
-					return err
+				emitText := delta
+				if toolParser != nil {
+					// 疑似工具调用会被 parser 暂存（返回空串），确认是文本才放行。
+					emitText = toolParser.Feed(delta)
+				}
+				if emitText != "" {
+					if err := emitContent(emitText); err != nil {
+						return err
+					}
 				}
 				sentBytes = len(answer.Content())
 			}
@@ -217,6 +268,89 @@ func writePerplexityTranslation(ctx context.Context, upstream io.Reader, pw io.W
 	rawAnswer := answer.Content()
 	if strings.TrimSpace(rawAnswer) == "" {
 		return perplexity.ErrEmptyAnswer
+	}
+	// 函数工具模拟收尾：流式已逐段 Feed，非流式在此一次性喂入；Finish 给出解析到的
+	// 工具调用（与剩余文本互斥）。解析失败时 toolCalls 为空、toolRest 是回退文本。
+	var toolRest string
+	var toolCalls []perplexity.ToolCall
+	if toolParser != nil {
+		if !p.stream {
+			_ = toolParser.Feed(rawAnswer)
+		}
+		toolRest, toolCalls = toolParser.Finish()
+		// required/具名 tool_choice 未兑现：返回哨兵错误，由同步路径转 400，不伪造、
+		// 也不把模型文本当成功。auto/none 永远满足，此处不受影响。
+		if !p.toolChoice.Satisfied(toolCalls) {
+			return errPerplexityToolChoiceUnsatisfied
+		}
+	}
+	if len(toolCalls) > 0 {
+		modelIdentity := identity.Identity()
+		var argChars strings.Builder
+		for _, call := range toolCalls {
+			_, _ = argChars.WriteString(call.Arguments)
+		}
+		completionTokens := perplexity.EstimateTokens(argChars.String())
+		usage := map[string]any{
+			"prompt_tokens":     p.promptTokens,
+			"completion_tokens": completionTokens,
+			"total_tokens":      p.promptTokens + completionTokens,
+		}
+		metadata := map[string]any{
+			"usage_estimated": true, "usage_source": "local_estimate",
+			"model_identity": modelIdentity, "tool_emulation": true,
+		}
+		if p.stream {
+			if err := ensureRole(); err != nil {
+				return err
+			}
+			if err := emitDelta(map[string]any{"tool_calls": perplexity.ToolCallsChatDelta(toolCalls)}, nil, nil); err != nil {
+				return err
+			}
+			if err := emitDelta(map[string]any{}, "tool_calls", nil); err != nil {
+				return err
+			}
+			usageChunk := baseChunk()
+			usageChunk["choices"] = []any{}
+			usageChunk["usage"] = usage
+			usageChunk["perplexity"] = metadata
+			if err := writeChunk(usageChunk); err != nil {
+				return err
+			}
+			if _, err := io.WriteString(pw, "data: [DONE]\n\n"); err != nil {
+				return err
+			}
+		} else {
+			result := map[string]any{
+				"id":      p.id,
+				"object":  "chat.completion",
+				"created": p.created,
+				"model":   p.upstreamModel,
+				"choices": []any{map[string]any{
+					"index":         0,
+					"message":       map[string]any{"role": "assistant", "content": nil, "tool_calls": perplexity.ToolCallsChatMessage(toolCalls)},
+					"finish_reason": "tool_calls",
+				}},
+				"usage":      usage,
+				"perplexity": metadata,
+			}
+			data, err := json.Marshal(result)
+			if err != nil {
+				return err
+			}
+			if _, err := pw.Write(data); err != nil {
+				return err
+			}
+		}
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		if p.metrics != nil {
+			p.metrics.storeSearchCount(len(sources))
+		}
+		// 工具调用轮次不缓存可见正文续聊：下一轮客户端会带工具历史，由
+		// NormalizeToolHistory 折叠为文本，无需在此缓存 assistant 文本。
+		return nil
 	}
 	// 引用清洗只作用于答案正文；来源 footer 与代模型提示保持原样。
 	answerText := rawAnswer
@@ -254,6 +388,15 @@ func writePerplexityTranslation(ctx context.Context, upstream io.Reader, pw io.W
 		result["search_results"] = sources
 	}
 	if p.stream {
+		// 工具模拟回退：疑似工具调用最终解析失败时，暂存的原文在此作为普通文本补发。
+		if toolRest != "" {
+			if err := ensureRole(); err != nil {
+				return err
+			}
+			if err := emitContent(toolRest); err != nil {
+				return err
+			}
+		}
 		if err := flushCitations(); err != nil {
 			return err
 		}
@@ -278,8 +421,13 @@ func writePerplexityTranslation(ctx context.Context, upstream io.Reader, pw io.W
 		}
 	} else {
 		message := map[string]any{"role": "assistant", "content": full}
-		if len(progress) > 0 {
+		if len(planReasoning) > 0 || len(progress) > 0 {
 			var text strings.Builder
+			// 思考（计划目标）在前，检索进度在后，聚合为 reasoning_content。
+			for _, plan := range planReasoning {
+				_, _ = text.WriteString(plan)
+				_, _ = text.WriteString("\n")
+			}
 			for _, update := range progress {
 				_, _ = text.WriteString(update.Text)
 			}

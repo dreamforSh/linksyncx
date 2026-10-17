@@ -150,7 +150,9 @@ func (d *Decoder) Next() (Event, error) {
 			if ev.HasText && d.answerUsage == "" {
 				d.answerUsage = ev.AnswerUsage
 			}
-			if frame.Event == SSEEventEndOfStream {
+			// 推理模型不发独立 end_of_stream，用 final_sse_message 作等价终态，
+			// 否则连接关闭会被判 ErrIncompleteStream。
+			if frame.Event == SSEEventEndOfStream || ev.Final {
 				d.complete = true
 				ev.EndOfStream = true
 			}
@@ -175,6 +177,8 @@ func parseEvent(data []byte, answerUsage string) (Event, bool) {
 		DisplayModel:      reportedEventModel(root.Get("display_model")),
 		UserSelectedModel: reportedEventModel(root.Get("user_selected_model")),
 		Error:             hasEventError(root),
+		// 推理模型不发独立 end_of_stream，用 final_sse_message 标记终态。
+		Final: root.Get("final_sse_message").Bool(),
 	}
 	ev.Sources = sourcesFromResults(root.Get("web_results"))
 	var selected gjson.Result
@@ -192,6 +196,15 @@ func parseEvent(data []byte, answerUsage string) (Event, bool) {
 			}
 		case "web_results":
 			ev.Sources = append(ev.Sources, sourcesFromResults(block.Get("web_result_block.web_results"))...)
+		case "plan":
+			// 推理模型的计划块：goals[].description 是模型自述的思考目标。
+			for _, goal := range block.Get("plan_block.goals").Array() {
+				desc := goal.Get("description").String()
+				if strings.TrimSpace(desc) == "" {
+					continue
+				}
+				ev.Plan = append(ev.Plan, PlanGoal{Description: desc, Status: goal.Get("todo_task_status").String()})
+			}
 		}
 		ev.Sources = append(ev.Sources, sourcesFromResults(block.Get("markdown_block.web_results"))...)
 		typeIsAnswer := usage == "ask_text" || strings.HasPrefix(usage, "ask_text_")
@@ -235,14 +248,20 @@ func parseEvent(data []byte, answerUsage string) (Event, bool) {
 
 	// Legacy FINAL stores another JSON object in content.answer. It is also a
 	// snapshot, never another incremental channel alongside modern ask_text.
+	// 推理模型把它编码为步骤【数组】而非对象；两种都接受，且遗留字段无法解析时
+	// 跳过而不是整条事件判失败（现代 ask_text 已是权威答案，不能被遗留字段拖垮）。
 	rawText := root.Get("text")
-	if rawText.Type == gjson.String && strings.TrimSpace(rawText.String()) != "" {
-		if !gjson.Valid(rawText.String()) || !gjson.Parse(rawText.String()).IsObject() {
-			return Event{}, false
-		}
+	if rawText.Type == gjson.String && strings.TrimSpace(rawText.String()) != "" && gjson.Valid(rawText.String()) {
 		inner := gjson.Parse(rawText.String())
-		ev.Error = ev.Error || hasEventError(inner)
-		for i, raw := range inner.Get("steps").Array() {
+		var legacySteps gjson.Result
+		switch {
+		case inner.IsArray():
+			legacySteps = inner
+		case inner.IsObject():
+			ev.Error = ev.Error || hasEventError(inner)
+			legacySteps = inner.Get("steps")
+		}
+		for i, raw := range legacySteps.Array() {
 			if raw.Get("step_type").String() != "FINAL" {
 				if step, ok := parseStep(raw); ok {
 					if step.UUID == "" {
@@ -413,6 +432,33 @@ func SourcesFooter(sources []Source) string {
 		_, _ = fmt.Fprintf(&footer, "\n%d. [%s](<%s>)", i+1, escape.Replace(source.Title), source.URL)
 	}
 	return footer.String()
+}
+
+// PlanGoal 是推理模型计划块里的一个目标（plan_block.goals[]）。Description 是模型
+// 自述的思考目标，Status 是其完成状态。它是"思考部分"的来源，不是最终答案正文。
+type PlanGoal struct {
+	Description string
+	Status      string
+}
+
+// maxPlanGoalRunes 限制单条计划目标的展示长度，避免异常长载荷灌入 reasoning_content。
+const maxPlanGoalRunes = 2000
+
+// SafePlanReasoningText 把一条计划目标清洗为可下发的 reasoning_content 文本：
+// 规整空白、去控制字符、限长；空目标返回空串。它不透传 goal 的 id/原始结构，
+// 只给人类可读的思考描述。
+func SafePlanReasoningText(goal PlanGoal) string {
+	desc := strings.Join(strings.FieldsFunc(goal.Description, func(r rune) bool {
+		return r != ' ' && (unicode.IsSpace(r) || unicode.IsControl(r))
+	}), " ")
+	desc = strings.TrimSpace(desc)
+	if desc == "" {
+		return ""
+	}
+	if runes := []rune(desc); len(runes) > maxPlanGoalRunes {
+		desc = string(runes[:maxPlanGoalRunes]) + "…"
+	}
+	return desc
 }
 
 // SearchProgress 是安全的检索状态，不是模型思维链或客户端可执行工具。
