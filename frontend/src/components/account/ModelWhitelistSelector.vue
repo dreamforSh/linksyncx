@@ -72,7 +72,7 @@
                 </svg>
               </span>
               <ModelIcon :model="model.value" size="18px" />
-              <span class="truncate text-gray-900 dark:text-white">{{ model.value }}</span>
+              <span :title="model.label" class="truncate text-gray-900 dark:text-white">{{ model.value }}</span>
             </button>
             <button
               type="button"
@@ -145,12 +145,13 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed } from 'vue'
+import { ref, computed, watch, onBeforeUnmount } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useAppStore } from '@/stores/app'
 import { accountsAPI } from '@/api/admin/accounts'
 import type { SyncUpstreamPreviewParams } from '@/api/admin/accounts'
 import { useClipboard } from '@/composables/useClipboard'
+import { extractApiErrorMessage } from '@/utils/apiError'
 import ModelIcon from '@/components/common/ModelIcon.vue'
 import Icon from '@/components/icons/Icon.vue'
 import { allModels, getModelsByPlatform } from '@/composables/useModelWhitelist'
@@ -178,6 +179,27 @@ const searchQuery = ref('')
 const customModel = ref('')
 const isComposing = ref(false)
 const isSyncingUpstream = ref(false)
+const syncedOptions = ref<Array<{ value: string; label: string }>>([])
+let syncGeneration = 0
+
+watch([
+  () => props.accountId,
+  () => props.platform,
+  () => props.platforms?.join(','),
+  () => props.syncCredentials?.platform,
+  () => props.syncCredentials?.type,
+  () => props.syncCredentials?.base_url,
+  () => props.syncCredentials?.api_key,
+  () => props.syncCredentials?.csrf_token,
+  () => props.syncCredentials?.proxy_id
+], () => {
+  syncGeneration += 1
+  syncedOptions.value = []
+  isSyncingUpstream.value = false
+}, { flush: 'sync' })
+
+onBeforeUnmount(() => { syncGeneration += 1 })
+
 const normalizedPlatforms = computed(() => {
   const rawPlatforms =
     props.platforms && props.platforms.length > 0
@@ -220,18 +242,21 @@ const canSyncUpstream = computed(() => {
 })
 
 const availableOptions = computed(() => {
-  if (normalizedPlatforms.value.length === 0) {
-    return allModels
-  }
-
+  const platforms = normalizedPlatforms.value
   const allowedModels = new Set<string>()
-  for (const platform of normalizedPlatforms.value) {
+  for (const platform of platforms) {
     for (const model of getModelsByPlatform(platform)) {
       allowedModels.add(model)
     }
   }
-
-  return allModels.filter(model => allowedModels.has(model.value))
+  const defaults = platforms.length === 0
+    ? allModels
+    : allModels.filter(model => allowedModels.has(model.value))
+  const options = new Map(defaults.map(model => [model.value, model]))
+  for (const model of syncedOptions.value) {
+    options.set(model.value, model)
+  }
+  return [...options.values()]
 })
 
 const filteredModels = computed(() => {
@@ -295,6 +320,7 @@ const syncUpstreamModels = async () => {
   if (!props.accountId && !props.syncCredentials) return
 
   isSyncingUpstream.value = true
+  const generation = ++syncGeneration
   try {
     let result
     if (props.accountId) {
@@ -305,7 +331,12 @@ const syncUpstreamModels = async () => {
       return
     }
 
+    if (generation !== syncGeneration) return
     const upstreamModels = result.models.map(model => model.trim()).filter(Boolean)
+    syncedOptions.value = upstreamModels.map(id => ({
+      value: id,
+      label: result.metadata?.[id]?.display_name || id
+    }))
     if (upstreamModels.length === 0) {
       appStore.showInfo(t('admin.accounts.syncUpstreamModelsEmpty'))
       return
@@ -345,10 +376,11 @@ const syncUpstreamModels = async () => {
       appStore.showWarning(t('admin.accounts.syncUpstreamModelsMetadataPartial'))
     }
   } catch (error) {
-    const message = error instanceof Error ? error.message : t('admin.accounts.syncUpstreamModelsFailed')
+    if (generation !== syncGeneration) return
+    const message = extractApiErrorMessage(error, t('admin.accounts.syncUpstreamModelsFailed'))
     appStore.showError(t('admin.accounts.syncUpstreamModelsError', { message }))
   } finally {
-    isSyncingUpstream.value = false
+    if (generation === syncGeneration) isSyncingUpstream.value = false
   }
 }
 

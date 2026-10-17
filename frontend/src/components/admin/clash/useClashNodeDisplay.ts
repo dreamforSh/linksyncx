@@ -7,13 +7,14 @@ import { useI18n } from 'vue-i18n'
 import type { ClashNode, ClashNodeStatus, ClashPlatform, ClashPlatformCheckResult } from '@/types'
 import { formatDateTime } from '@/utils/format'
 
-export const CLASH_CHECK_PLATFORMS: ClashPlatform[] = ['openai', 'anthropic', 'gemini', 'grok']
+export const CLASH_CHECK_PLATFORMS: ClashPlatform[] = ['openai', 'anthropic', 'gemini', 'grok', 'perplexity']
 
 export const CLASH_PLATFORM_LABELS: Record<ClashPlatform, string> = {
   openai: 'OpenAI',
   anthropic: 'Anthropic',
   gemini: 'Gemini',
-  grok: 'Grok'
+  grok: 'Grok',
+  perplexity: 'Perplexity'
 }
 
 export const CLASH_TYPE_BADGE_CLASS =

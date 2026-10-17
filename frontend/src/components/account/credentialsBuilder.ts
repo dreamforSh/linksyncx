@@ -58,6 +58,26 @@ export function isHeaderOverrideCapable(platform: string, type: string): boolean
   return false
 }
 
+/** 与后端 IsUpstreamBillingProbeIdentity 保持一致；网页会话不支持中转倍率探测。 */
+export function isUpstreamBillingProbeCapable(platform: string, type: string): boolean {
+  if (type !== 'apikey') return false
+  switch (platform) {
+    case 'openai':
+    case 'anthropic':
+    case 'gemini':
+    case 'antigravity':
+    case 'grok':
+    case 'kimi':
+    case 'zhipu':
+    case 'deepseek':
+    case 'minimax':
+    case 'opencode_go':
+      return true
+    default:
+      return false
+  }
+}
+
 /** 禁止覆写的请求头（与后端 headerOverrideBlockedNames 保持一致） */
 const HEADER_OVERRIDE_BLOCKED_NAMES = new Set([
   'host',

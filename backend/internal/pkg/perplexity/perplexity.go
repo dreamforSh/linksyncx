@@ -242,25 +242,15 @@ func ToolNameForStep(stepType string) string {
 	return "pplx_" + t
 }
 
-// ParseModelsConfigIDs 解析 /rest/models/config/v2 响应，返回 models[].model
-// 裸 model_preference 列表（去重、保序）。这些值是 model_mapping 的映射目标。
+// ParseModelsConfigIDs returns explicit model preferences from the web catalog.
 func ParseModelsConfigIDs(body []byte) []string {
-	if !gjson.ValidBytes(body) {
+	models, err := ParseModelsConfig(body)
+	if err != nil {
 		return nil
 	}
-	models := gjson.GetBytes(body, "models")
-	if !models.IsArray() {
-		return nil
-	}
-	seen := map[string]bool{}
 	var ids []string
-	for _, m := range models.Array() {
-		id := strings.TrimSpace(m.Get("model").String())
-		if id == "" || seen[id] {
-			continue
-		}
-		seen[id] = true
-		ids = append(ids, id)
+	for _, model := range models {
+		ids = append(ids, model.ID)
 	}
 	return ids
 }

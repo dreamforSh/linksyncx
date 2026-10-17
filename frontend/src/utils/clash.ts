@@ -152,6 +152,8 @@ export function clashCheckPlatformFor(platform: string | null | undefined): Clas
       return 'gemini'
     case 'grok':
       return 'grok'
+    case 'perplexity':
+      return 'perplexity'
     default:
       return null
   }

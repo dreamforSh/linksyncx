@@ -681,6 +681,16 @@ var proxyQualityTargets = []proxyQualityTarget{
 			http.StatusUnauthorized: {},
 		},
 	},
+	{
+		// Perplexity 网页端：未登录的会话探测 200（匿名会话对象为空）。
+		// Cloudflare 质询/区域封锁表现为 403/503 或超时。
+		Target: "perplexity",
+		URL:    "https://www.perplexity.ai/api/auth/session",
+		Method: http.MethodGet,
+		AllowedStatuses: map[int]struct{}{
+			http.StatusOK: {},
+		},
+	},
 }
 
 const (

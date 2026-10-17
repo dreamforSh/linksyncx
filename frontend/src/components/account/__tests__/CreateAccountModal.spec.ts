@@ -686,6 +686,48 @@ describe('CreateAccountModal OpenAI long-context billing', () => {
     expect(probeUpstreamBillingMock).toHaveBeenCalledWith(42)
   })
 
+  it('creates a Perplexity web-session account without unsupported billing probes', async () => {
+    const wrapper = mountModal()
+    await wrapper.get('[data-testid="platform-perplexity"]').trigger('click')
+    await flushPromises()
+    await wrapper.get('form#create-account-form input[type="text"]').setValue('Perplexity subscription')
+    await wrapper.get('[data-testid="perplexity-session-token-input"]').setValue('fake-session')
+
+    expect(wrapper.find('[data-testid="upstream-billing-auto-probe"]').exists()).toBe(false)
+    await wrapper.get('form#create-account-form').trigger('submit.prevent')
+    await flushPromises()
+
+    expect(createAccountMock).toHaveBeenCalledTimes(1)
+    const payload = createAccountMock.mock.calls[0]?.[0]
+    expect(payload).toMatchObject({ platform: 'perplexity', type: 'apikey', credentials: { api_key: 'fake-session' } })
+    expect(payload.upstream_billing_probe_enabled).not.toBe(true)
+    expect(probeUpstreamBillingMock).not.toHaveBeenCalled()
+    expect(wrapper.emitted('created')).toHaveLength(1)
+    wrapper.unmount()
+  })
+
+  it('keeps billing probes disabled when Perplexity is selected by its preset group', async () => {
+    const group = { id: 100, name: 'Perplexity', platform: 'perplexity', kind: 'channel', status: 'active' }
+    const wrapper = mountModal([group], group)
+    await flushPromises()
+    await wrapper.get('form#create-account-form input[type="text"]').setValue('Preset Perplexity')
+    await wrapper.get('[data-testid="perplexity-session-token-input"]').setValue('fake-session')
+    await wrapper.get('form#create-account-form').trigger('submit.prevent')
+    await flushPromises()
+
+    expect(createAccountMock.mock.calls[0]?.[0]?.upstream_billing_probe_enabled).not.toBe(true)
+    expect(probeUpstreamBillingMock).not.toHaveBeenCalled()
+    wrapper.unmount()
+  })
+
+  it('displays the structured API error when account creation fails', async () => {
+    createAccountMock.mockRejectedValue({ status: 400, message: 'Selected proxy is unavailable' })
+    const wrapper = await submitApiKeyAccount('openai')
+    expect(showErrorMock).toHaveBeenCalledWith('Selected proxy is unavailable')
+    expect(wrapper.emitted('created')).toBeUndefined()
+    wrapper.unmount()
+  })
+
   it('antigravity OAuth 创建时同步按钮禁用并提示去编辑窗口', async () => {
     const wrapper = mountModal()
     await selectButtonByText(wrapper, 'Antigravity')

@@ -790,9 +790,13 @@ func (s *AccountTestService) fetchUpstreamModelList(ctx context.Context, account
 	}
 
 	if resp.StatusCode < http.StatusOK || resp.StatusCode >= http.StatusMultipleChoices {
+		message := fmt.Sprintf("Upstream model list request failed with HTTP %d", resp.StatusCode)
+		if account.IsPerplexity() && resp.StatusCode == http.StatusForbidden && strings.EqualFold(resp.Header.Get("cf-mitigated"), "challenge") {
+			message = "Perplexity model discovery was blocked by an upstream browser challenge (HTTP 403); check the session and proxy"
+		}
 		return nil, nil, &UpstreamModelSyncError{
 			Kind:       UpstreamModelSyncErrorUpstream,
-			Message:    fmt.Sprintf("Upstream model list request failed with HTTP %d", resp.StatusCode),
+			Message:    message,
 			StatusCode: resp.StatusCode,
 			Err:        fmt.Errorf("upstream model list returned HTTP %d", resp.StatusCode),
 		}
@@ -807,7 +811,11 @@ func (s *AccountTestService) fetchUpstreamModelList(ctx context.Context, account
 	}
 	models, err := extractModels(body)
 	if err != nil {
-		return nil, nil, newUpstreamModelSyncUpstreamError("Upstream model list response was not valid JSON", err)
+		message := "Upstream model list response was not valid JSON"
+		if account.IsPerplexity() {
+			message = "Perplexity model configuration is invalid or contains no supported search models"
+		}
+		return nil, nil, newUpstreamModelSyncUpstreamError(message, err)
 	}
 	if len(models) == 0 {
 		return nil, nil, newUpstreamModelSyncUpstreamError("Upstream returned no supported models", nil)
@@ -1357,7 +1365,7 @@ func (s *AccountTestService) buildPerplexityUpstreamModelsRequest(ctx context.Co
 	if err != nil {
 		return nil, newUpstreamModelSyncConfigError("Invalid Perplexity base URL", err)
 	}
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, strings.TrimRight(validatedBaseURL, "/")+perplexity.ModelsConfigPath, nil)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, perplexity.ModelsConfigURL(validatedBaseURL), nil)
 	if err != nil {
 		return nil, newUpstreamModelSyncConfigError("Failed to build Perplexity models request", err)
 	}
@@ -1386,36 +1394,31 @@ type PerplexityAccountModel struct {
 }
 
 func extractPerplexityModelMetadata(body []byte) (map[string]UpstreamModelMetadata, error) {
-	var response struct {
-		Models []struct {
+	models, err := perplexity.ParseModelsConfig(body)
+	if err != nil {
+		return nil, err
+	}
+	metadata := make(map[string]UpstreamModelMetadata, len(models))
+	for _, model := range models {
+		var definition struct {
 			upstreamModelCapabilityEntry
-			Model            string          `json:"model"`
-			Label            string          `json:"label"`
-			SubscriptionTier string          `json:"subscription_tier"`
-			Capabilities     json.RawMessage `json:"capabilities"`
-		} `json:"models"`
-	}
-	if err := json.Unmarshal(body, &response); err != nil {
-		return nil, fmt.Errorf("parse perplexity model metadata: %w", err)
-	}
-	metadata := make(map[string]UpstreamModelMetadata, len(response.Models))
-	for _, model := range response.Models {
-		id := strings.TrimSpace(model.Model)
-		if id == "" {
-			continue
+			Capabilities json.RawMessage `json:"capabilities"`
 		}
-		if _, exists := metadata[id]; exists {
-			continue
+		if err := json.Unmarshal(model.Definition, &definition); err != nil {
+			return nil, fmt.Errorf("parse perplexity model metadata: %w", err)
 		}
-		entry := upstreamMetadataFromCapabilityEntry(id, model.upstreamModelCapabilityEntry)
-		if label := strings.TrimSpace(model.Label); label != "" {
-			entry.DisplayName = label
+		entry := upstreamMetadataFromCapabilityEntry(model.ID, definition.upstreamModelCapabilityEntry)
+		if model.Label != "" {
+			entry.DisplayName = model.Label
 		}
-		entry.SubscriptionTier = strings.TrimSpace(model.SubscriptionTier)
-		if string(model.Capabilities) != "null" {
-			entry.Capabilities = model.Capabilities
+		if entry.Reasoning == nil {
+			entry.Reasoning = model.Reasoning
 		}
-		metadata[id] = entry
+		entry.SubscriptionTier = model.SubscriptionTier
+		if string(definition.Capabilities) != "null" {
+			entry.Capabilities = definition.Capabilities
+		}
+		metadata[model.ID] = entry
 	}
 	return metadata, nil
 }

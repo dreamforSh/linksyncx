@@ -18,6 +18,87 @@ const perplexityDynamicModelsFixture = `{"models":[
  {"model":"future_model","label":"Future Model Label","subscription_tier":"max","capabilities":{"image":true,"search":false},"reasoning":true,"context_window":32000,"input_modalities":["text","image"]}
 ]}`
 
+const perplexityV2ModelsFixture = `{
+ "models":{
+  "gpt_future":{"label":"GPT Future","mode":"search","context_window":64000,"input_modalities":["text","image"],"capabilities":{"image":true}},
+  "gpt_future_thinking":{"label":"GPT Future Thinking","mode":"search"},
+  "claudefuturesonnet":{"label":"Sonnet Future","mode":"search"},
+  "claudefutureopus":{"label":"Opus Future","mode":"search"},
+  "old_model":{"label":"Hidden old model","mode":"search"},
+  "computer_gpt":{"label":"Computer","mode":"asi"}
+ },
+ "search_config":[
+  {"label":"GPT Future","subscription_tier":"pro","non_reasoning_model":"gpt_future","reasoning_model":"gpt_future_thinking"},
+  {"label":"Sonnet Future","subscription_tier":"pro","non_reasoning_model":"claudefuturesonnet"},
+  {"label":"Opus Future","subscription_tier":"max","non_reasoning_model":"claudefutureopus"}
+ ],
+ "computer_config":[{"model":"computer_gpt"}],
+ "default_models":{"search":"gpt_future_thinking"}
+}`
+
+func TestPerplexityModels_V2DictionaryDiscoversThirdPartyPickerModels(t *testing.T) {
+	svc, upstream, account := newPerplexityInfoTestService(func(w http.ResponseWriter, req *http.Request) {
+		require.Equal(t, perplexity.ModelsConfigPath, req.URL.Path)
+		require.Equal(t, "2.18", req.URL.Query().Get("version"))
+		require.Equal(t, "default", req.URL.Query().Get("source"))
+		_, _ = w.Write([]byte(perplexityV2ModelsFixture))
+	})
+	repo := &perplexityInfoRepo{}
+	svc.accountRepo = repo
+	catalog, err := svc.SyncUpstreamModelCatalog(context.Background(), account)
+	require.NoError(t, err)
+	require.Equal(t, []string{"gpt_future", "gpt_future_thinking", "claudefuturesonnet", "claudefutureopus"}, catalog.Models)
+	require.Equal(t, 1, upstream.count(), "discovery must not send model calls or registry requests")
+	require.Equal(t, "GPT Future", catalog.Metadata["gpt_future"].DisplayName)
+	require.Equal(t, "pro", catalog.Metadata["gpt_future_thinking"].SubscriptionTier)
+	require.Equal(t, "max", catalog.Metadata["claudefutureopus"].SubscriptionTier)
+	require.NotNil(t, catalog.Metadata["gpt_future_thinking"].Reasoning)
+	require.True(t, *catalog.Metadata["gpt_future_thinking"].Reasoning)
+	require.Equal(t, int64(64000), catalog.Metadata["gpt_future"].ContextWindow)
+	require.JSONEq(t, `{"image":true}`, string(catalog.Metadata["gpt_future"].Capabilities))
+	require.Zero(t, catalog.Metadata["claudefuturesonnet"].ContextWindow, "do not fabricate capability limits")
+	require.NotContains(t, catalog.Metadata, "old_model")
+	require.NotContains(t, catalog.Metadata, "computer_gpt")
+	require.NotNil(t, account.GetUpstreamModelMetadataSnapshot())
+
+	models, err := svc.FetchPerplexityAccountModels(context.Background(), account)
+	require.NoError(t, err)
+	require.Len(t, models, 4)
+	require.Equal(t, "gpt_future", models[0].ID)
+	require.Equal(t, "GPT Future", models[0].DisplayName)
+}
+
+func TestPerplexityModels_FailuresKeepSafeDiagnosticsWithoutFallbackRequests(t *testing.T) {
+	for _, tc := range []struct {
+		name, body, hint string
+		status           int
+		challenge        bool
+	}{
+		{name: "browser challenge", status: 403, challenge: true, body: "<html>fake-session challenge</html>", hint: "browser challenge"},
+		{name: "unauthenticated", status: 401, body: `{"error":"fake-session"}`, hint: "HTTP 401"},
+		{name: "rate limited", status: 429, body: `{"error":"fake-session"}`, hint: "HTTP 429"},
+		{name: "invalid configuration", status: 200, body: `{"error":"fake-session"}`, hint: "configuration is invalid"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			svc, upstream, account := newPerplexityInfoTestService(func(w http.ResponseWriter, _ *http.Request) {
+				if tc.challenge {
+					w.Header().Set("cf-mitigated", "challenge")
+				}
+				w.WriteHeader(tc.status)
+				_, _ = w.Write([]byte(tc.body))
+			})
+			catalog, err := svc.SyncUpstreamModelCatalog(context.Background(), account)
+			require.Nil(t, catalog)
+			var syncErr *UpstreamModelSyncError
+			require.ErrorAs(t, err, &syncErr)
+			require.Contains(t, syncErr.SafeMessage(), tc.hint)
+			require.NotContains(t, syncErr.SafeMessage(), "fake-session")
+			require.NotContains(t, syncErr.SafeMessage(), "<html>")
+			require.Equal(t, 1, upstream.count())
+		})
+	}
+}
+
 func TestPerplexityModels_DiscoveryPreservesMetadataWithoutRegistryRequests(t *testing.T) {
 	svc, upstream, account := newPerplexityInfoTestService(func(w http.ResponseWriter, req *http.Request) {
 		require.Equal(t, perplexity.ModelsConfigPath, req.URL.Path)

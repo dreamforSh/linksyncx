@@ -24,7 +24,11 @@ vi.mock('vue-i18n', async () => {
   return {
     ...actual,
     useI18n: () => ({
-      t: (key: string) => (key === 'common.copy' ? '复制' : key)
+      t: (key: string, params?: Record<string, unknown>) => {
+        if (key === 'common.copy') return '复制'
+        if (key === 'admin.accounts.syncUpstreamModelsError') return `${key}: ${params?.message}`
+        return key
+      }
     })
   }
 })
@@ -229,6 +233,53 @@ describe('ModelWhitelistSelector', () => {
     await flushPromises()
     expect(syncUpstreamModelsPreview).toHaveBeenCalledWith(credentials)
     expect(wrapper.emitted('update:modelValue')).toEqual([[['turbo']]])
+  })
+
+  it('lists discovered Perplexity third-party models in the dropdown and resets them for another account', async () => {
+    syncUpstreamModels.mockResolvedValue({
+      models: ['gpt_future', 'claudefuturesonnet'],
+      metadata: {
+        gpt_future: { id: 'gpt_future', display_name: 'GPT Future' },
+        claudefuturesonnet: { id: 'claudefuturesonnet', display_name: 'Sonnet Future' }
+      }
+    })
+    const wrapper = mountSelector({ platform: 'perplexity', accountId: 11 })
+    const button = wrapper.findAll('button').find(candidate => candidate.text() === 'admin.accounts.syncUpstreamModels')!
+    await button.trigger('click')
+    await flushPromises()
+    await wrapper.get('div.cursor-pointer').trigger('click')
+
+    expect(findModelRow(wrapper, 'gpt_future').exists()).toBe(true)
+    expect(findModelRow(wrapper, 'claudefuturesonnet').exists()).toBe(true)
+    await wrapper.setProps({ accountId: 12 })
+    expect(wrapper.findAll('[data-testid="model-option"]').some(row => row.text().includes('gpt_future'))).toBe(false)
+    wrapper.unmount()
+  })
+
+  it('ignores a model sync response after switching accounts', async () => {
+    let resolveSync!: (value: { models: string[] }) => void
+    syncUpstreamModels.mockReturnValue(new Promise(resolve => { resolveSync = resolve }))
+    const wrapper = mountSelector({ platform: 'perplexity', accountId: 11 })
+    const button = wrapper.findAll('button').find(candidate => candidate.text() === 'admin.accounts.syncUpstreamModels')!
+    await button.trigger('click')
+    await wrapper.setProps({ accountId: 12 })
+    resolveSync({ models: ['gpt_future'] })
+    await flushPromises()
+
+    expect(wrapper.emitted('update:modelValue')).toBeUndefined()
+    expect(showSuccess).not.toHaveBeenCalled()
+    wrapper.unmount()
+  })
+
+  it('shows the structured upstream error instead of a generic sync failure', async () => {
+    syncUpstreamModels.mockRejectedValue({ status: 502, message: 'Upstream model list request failed with HTTP 403' })
+    const wrapper = mountSelector({ platform: 'perplexity', accountId: 11 })
+    const button = wrapper.findAll('button').find(candidate => candidate.text() === 'admin.accounts.syncUpstreamModels')!
+    await button.trigger('click')
+    await flushPromises()
+
+    expect(showError).toHaveBeenCalledWith('admin.accounts.syncUpstreamModelsError: Upstream model list request failed with HTTP 403')
+    wrapper.unmount()
   })
 
   it('shows the upstream sync button for OpenCode Go create-account credentials', () => {

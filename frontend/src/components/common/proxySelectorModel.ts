@@ -29,7 +29,8 @@ export const CLASH_CHECK_PLATFORM_LABELS: Record<ClashPlatform, string> = {
   openai: 'OpenAI',
   anthropic: 'Anthropic',
   gemini: 'Gemini',
-  grok: 'Grok'
+  grok: 'Grok',
+  perplexity: 'Perplexity'
 }
 
 // ==================== Search ====================

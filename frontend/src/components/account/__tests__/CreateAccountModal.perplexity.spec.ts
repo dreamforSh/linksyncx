@@ -1,7 +1,7 @@
 import { readFileSync } from 'node:fs'
 import { resolve } from 'node:path'
 import { describe, expect, it } from 'vitest'
-import { applyPerplexitySession } from '../credentialsBuilder'
+import { applyPerplexitySession, isUpstreamBillingProbeCapable } from '../credentialsBuilder'
 
 const source = readFileSync(
   resolve(process.cwd(), 'src/components/account/CreateAccountModal.vue'),
@@ -48,6 +48,20 @@ describe('CreateAccountModal Perplexity web-session accounts', () => {
     // 而 perplexity 强制 accountCategory = apikey（isOAuthFlow 恒为 false）
     expect(source).not.toContain("platform === 'perplexity' && isOAuthFlow")
     expect(source).not.toContain("form.platform === 'perplexity' && isOAuthFlow")
+  })
+})
+
+describe('relay billing probe eligibility', () => {
+  it('excludes Perplexity web sessions even though their account type is apikey', () => {
+    expect(isUpstreamBillingProbeCapable('perplexity', 'apikey')).toBe(false)
+    expect(isUpstreamBillingProbeCapable('unknown', 'apikey')).toBe(false)
+  })
+
+  it('preserves supported API-key platforms and excludes OAuth accounts', () => {
+    for (const platform of ['openai', 'anthropic', 'gemini', 'antigravity', 'grok', 'kimi', 'zhipu', 'deepseek', 'minimax', 'opencode_go']) {
+      expect(isUpstreamBillingProbeCapable(platform, 'apikey')).toBe(true)
+      expect(isUpstreamBillingProbeCapable(platform, 'oauth')).toBe(false)
+    }
   })
 })
 

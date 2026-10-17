@@ -43,7 +43,7 @@ func TestAccountHandlerGetAvailableModels_PerplexityDiscoversAndProjectsMapping(
 		},
 	}
 	upstream := &syncUpstreamHTTPUpstream{resp: perplexityModelsHTTPResponse(http.StatusOK,
-		`{"models":[{"model":"future_model","label":"Future Label","subscription_tier":"max","capabilities":{"image":true}},{"model":"turbo","label":"Auto"}]}`)}
+		`{"models":{"future_model":{"label":"Future Label","mode":"search","capabilities":{"image":true}},"turbo":{"label":"Auto"}},"search_config":[{"non_reasoning_model":"future_model","subscription_tier":"max"}]}`)}
 	router := perplexityModelsAdminRouter(adminSvc, upstream)
 	rec := httptest.NewRecorder()
 	router.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/api/v1/admin/accounts/81/models", nil))
@@ -58,7 +58,7 @@ func TestAccountHandlerGetAvailableModels_PerplexityDiscoversAndProjectsMapping(
 	require.Equal(t, "max", response.Data[0].SubscriptionTier)
 	require.JSONEq(t, `{"image":true}`, string(response.Data[0].Capabilities))
 	require.Len(t, upstream.requests, 1)
-	require.Equal(t, "https://web.example/rest/models/config/v2", upstream.requests[0].URL.String())
+	require.Equal(t, "https://web.example/rest/models/config/v2?version=2.18&source=default", upstream.requests[0].URL.String())
 	require.Contains(t, upstream.requests[0].Header.Get("Cookie"), "fake-csrf")
 	require.Empty(t, upstream.requests[0].Header.Get("Authorization"))
 }
@@ -110,7 +110,7 @@ func TestAccountHandlerGetAvailableModels_PerplexityMissingAssignedProxyDoesNotS
 
 func TestAccountHandlerSyncUpstreamModelsPreview_PerplexityUsesCookieCSRFBaseAndProxy(t *testing.T) {
 	upstream := &syncUpstreamHTTPUpstream{resp: perplexityModelsHTTPResponse(http.StatusOK,
-		`{"models":[{"model":"future_model","label":"Future Label","subscription_tier":"max"}]}`)}
+		`{"models":{"future_model":{"label":"Future Label","mode":"search"}},"search_config":[{"non_reasoning_model":"future_model","subscription_tier":"max"}]}`)}
 	adminSvc := &previewProxyAdminService{stubAdminService: newStubAdminService(), proxy: &service.Proxy{
 		ID: 9, Protocol: "socks5", Host: "127.0.0.1", Port: 7891, Status: service.StatusActive,
 	}}
@@ -122,7 +122,7 @@ func TestAccountHandlerSyncUpstreamModelsPreview_PerplexityUsesCookieCSRFBaseAnd
 	router.ServeHTTP(rec, req)
 	require.Equal(t, http.StatusOK, rec.Code)
 	require.Len(t, upstream.requests, 1, "metadata must not trigger a public API registry request")
-	require.Equal(t, "https://preview.example/rest/models/config/v2", upstream.requests[0].URL.String())
+	require.Equal(t, "https://preview.example/rest/models/config/v2?version=2.18&source=default", upstream.requests[0].URL.String())
 	require.Equal(t, "__Secure-next-auth.session-token=fake-session; next-auth.csrf-token=fake-csrf|fake-hash", upstream.requests[0].Header.Get("Cookie"))
 	require.Empty(t, upstream.requests[0].Header.Get("Authorization"), "neither session nor CSRF is a Bearer token")
 	require.Equal(t, "socks5://127.0.0.1:7891", upstream.proxyURLs[0])
