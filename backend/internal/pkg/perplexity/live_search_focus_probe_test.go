@@ -457,10 +457,7 @@ func TestLiveReasoningCapture(t *testing.T) {
 	var planGoals []string
 	cleanEOS := false
 	decodeErr := "(none)"
-	for {
-		if ctx.Err() != nil {
-			break
-		}
+	for ctx.Err() == nil {
 		ev, derr := decoder.Next()
 		if derr != nil {
 			if derr != io.EOF {
@@ -677,9 +674,9 @@ type cappedBuffer struct {
 func (c *cappedBuffer) Write(p []byte) (int, error) {
 	if remaining := c.limit - c.buf.Len(); remaining > 0 {
 		if len(p) > remaining {
-			c.buf.Write(p[:remaining])
+			_, _ = c.buf.Write(p[:remaining])
 		} else {
-			c.buf.Write(p)
+			_, _ = c.buf.Write(p)
 		}
 	}
 	return len(p), nil
