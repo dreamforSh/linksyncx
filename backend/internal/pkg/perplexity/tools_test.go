@@ -140,7 +140,9 @@ func TestToolCallParserMultipleCallsAndStringArgs(t *testing.T) {
 
 	delta := ToolCallsChatDelta(calls)
 	require.Len(t, delta, 2)
-	require.Equal(t, 1, delta[1].(map[string]any)["index"])
+	second, ok := delta[1].(map[string]any)
+	require.True(t, ok)
+	require.Equal(t, 1, second["index"])
 }
 
 func TestToolCallParserFallbackToText(t *testing.T) {
