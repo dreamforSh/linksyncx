@@ -57,6 +57,133 @@ func perplexityCCContent(t *testing.T, out string) string {
 	return content.String()
 }
 
+func perplexityToolParams(stream bool) perplexityTranslateParams {
+	return perplexityTranslateParams{
+		stream:        stream,
+		id:            "chatcmpl-tool",
+		upstreamModel: "sonar",
+		created:       1,
+		toolAllowed:   []perplexity.ToolSpec{{Name: "get_weather", Parameters: `{"type":"object"}`}},
+		toolChoice:    perplexity.ToolChoice{Mode: perplexity.ToolChoiceAuto},
+	}
+}
+
+func TestPerplexityTranslationStreamToolCall(t *testing.T) {
+	body := perplexityAnswerFixture(`<tool_call>{"name":"get_weather","arguments":{"city":"Tokyo"}}</tool_call>`) + "event: end_of_stream\n\n"
+	out, err := translatePerplexityFixture(t, body, perplexityToolParams(true))
+	require.NoError(t, err)
+
+	var name, args, finish, content string
+	for _, line := range strings.Split(out, "\n") {
+		if !strings.HasPrefix(line, "data: {") {
+			continue
+		}
+		payload := strings.TrimPrefix(line, "data: ")
+		require.True(t, gjson.Valid(payload))
+		if tc := gjson.Get(payload, "choices.0.delta.tool_calls.0"); tc.Exists() {
+			name = tc.Get("function.name").String()
+			args = tc.Get("function.arguments").String()
+			require.Equal(t, "function", tc.Get("type").String())
+		}
+		if fr := gjson.Get(payload, "choices.0.finish_reason"); fr.Exists() && fr.String() != "" {
+			finish = fr.String()
+		}
+		content += gjson.Get(payload, "choices.0.delta.content").String()
+	}
+	require.Equal(t, "get_weather", name)
+	require.Equal(t, `{"city":"Tokyo"}`, args)
+	require.Equal(t, "tool_calls", finish)
+	require.Empty(t, content, "工具调用轮次不得下发普通文本")
+	require.Contains(t, out, "data: [DONE]")
+}
+
+func TestPerplexityTranslationBufferedToolCall(t *testing.T) {
+	body := perplexityAnswerFixture(`<tool_call>{"name":"get_weather","arguments":{"city":"Tokyo"}}</tool_call>`) + "event: end_of_stream\n\n"
+	out, err := translatePerplexityFixture(t, body, perplexityToolParams(false))
+	require.NoError(t, err)
+	require.True(t, gjson.Valid(out))
+	require.Equal(t, "tool_calls", gjson.Get(out, "choices.0.finish_reason").String())
+	require.Equal(t, "get_weather", gjson.Get(out, "choices.0.message.tool_calls.0.function.name").String())
+	require.Equal(t, `{"city":"Tokyo"}`, gjson.Get(out, "choices.0.message.tool_calls.0.function.arguments").String())
+	require.False(t, gjson.Get(out, "choices.0.message.content").Exists() && gjson.Get(out, "choices.0.message.content").Type == gjson.String,
+		"工具调用消息的 content 应为 null")
+}
+
+func TestPerplexityTranslationToolFallbackText(t *testing.T) {
+	// 工具已声明但模型选择用普通文本回答：绝不伪造调用，按文本 + finish_reason=stop 返回。
+	body := perplexityAnswerFixture("Just a normal answer.") + "event: end_of_stream\n\n"
+	out, err := translatePerplexityFixture(t, body, perplexityToolParams(true))
+	require.NoError(t, err)
+	require.Contains(t, perplexityCCContent(t, out), "Just a normal answer.")
+	require.NotContains(t, out, "tool_calls")
+	var finish string
+	for _, line := range strings.Split(out, "\n") {
+		if strings.HasPrefix(line, "data: {") {
+			if fr := gjson.Get(strings.TrimPrefix(line, "data: "), "choices.0.finish_reason"); fr.Exists() && fr.String() != "" {
+				finish = fr.String()
+			}
+		}
+	}
+	require.Equal(t, "stop", finish)
+}
+
+func TestPerplexityTranslationReasoningPlan(t *testing.T) {
+	// 计划块的 goals 作为 reasoning_content 下发（思考部分），答案正文走 content。
+	// 计划在两个事件里重复，必须去重为一条。
+	planEvent := `data: {"blocks":[{"intended_usage":"plan","plan_block":{"goals":[{"description":"Set up the equation","todo_task_status":"INCOMPLETE"}]}}]}` + "\n\n"
+	body := planEvent + planEvent + perplexityAnswerFixture("x = 0.05") + "event: end_of_stream\ndata:\n\n"
+
+	// 流式：reasoning_content 含计划，content 仅含答案，且计划只出现一次。
+	out, err := translatePerplexityFixture(t, body, perplexityTranslateParams{stream: true, id: "x", upstreamModel: "sonar-reasoning", IncludeSearchProgress: true})
+	require.NoError(t, err)
+	require.Equal(t, "x = 0.05", perplexityCCContent(t, out))
+	require.Equal(t, 1, strings.Count(out, "reasoning_plan"), "重复计划必须去重为一条 reasoning_content")
+	var reasoning string
+	for _, line := range strings.Split(out, "\n") {
+		if strings.HasPrefix(line, "data: {") {
+			reasoning += gjson.Get(strings.TrimPrefix(line, "data: "), "choices.0.delta.reasoning_content").String()
+		}
+	}
+	require.Contains(t, reasoning, "Set up the equation")
+
+	// 非流式：reasoning_content 聚合在 message 上，content 为答案。
+	out, err = translatePerplexityFixture(t, body, perplexityTranslateParams{id: "x", upstreamModel: "sonar-reasoning", IncludeSearchProgress: true})
+	require.NoError(t, err)
+	require.Contains(t, gjson.Get(out, "choices.0.message.reasoning_content").String(), "Set up the equation")
+	require.Equal(t, "x = 0.05", gjson.Get(out, "choices.0.message.content").String())
+}
+
+func TestPerplexityTranslationRequiredUnsatisfied(t *testing.T) {
+	// tool_choice=required 但模型只回文本：返回哨兵错误（由同步路径转 400），绝不伪造。
+	for _, stream := range []bool{false, true} {
+		p := perplexityToolParams(stream)
+		p.toolChoice = perplexity.ToolChoice{Mode: perplexity.ToolChoiceRequired}
+		body := perplexityAnswerFixture("Just plain prose, no tool call here.") + "event: end_of_stream\n\n"
+		_, err := translatePerplexityFixture(t, body, p)
+		require.ErrorIs(t, err, errPerplexityToolChoiceUnsatisfied)
+	}
+}
+
+func TestPerplexityTranslationNamedUnsatisfiedWrongTool(t *testing.T) {
+	// tool_choice 指定 get_weather，但模型调了别的工具：视为未满足。
+	p := perplexityToolParams(false)
+	p.toolAllowed = []perplexity.ToolSpec{{Name: "get_weather", Parameters: `{"type":"object"}`}, {Name: "other_tool", Parameters: `{"type":"object"}`}}
+	p.toolChoice = perplexity.ToolChoice{Mode: perplexity.ToolChoiceFunction, Name: "get_weather"}
+	body := perplexityAnswerFixture(`<tool_call>{"name":"other_tool","arguments":{}}</tool_call>`) + "event: end_of_stream\n\n"
+	_, err := translatePerplexityFixture(t, body, p)
+	require.ErrorIs(t, err, errPerplexityToolChoiceUnsatisfied)
+}
+
+func TestPerplexityTranslationRequiredSatisfied(t *testing.T) {
+	p := perplexityToolParams(false)
+	p.toolChoice = perplexity.ToolChoice{Mode: perplexity.ToolChoiceRequired}
+	body := perplexityAnswerFixture(`<tool_call>{"name":"get_weather","arguments":{"city":"Tokyo"}}</tool_call>`) + "event: end_of_stream\n\n"
+	out, err := translatePerplexityFixture(t, body, p)
+	require.NoError(t, err)
+	require.Equal(t, "tool_calls", gjson.Get(out, "choices.0.finish_reason").String())
+	require.Equal(t, "get_weather", gjson.Get(out, "choices.0.message.tool_calls.0.function.name").String())
+}
+
 func TestPerplexityTranslationFailureNeverCompletes(t *testing.T) {
 	prefix := perplexityAnswerFixture("partial")
 	for _, tc := range []struct {

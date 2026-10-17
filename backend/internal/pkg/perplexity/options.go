@@ -55,6 +55,10 @@ type InternalOptions struct {
 	FrontendContextUUID string
 	Attachments         []string
 	ThinkingEnabled     *bool
+	// SearchFocus 覆盖 Ask 请求体的 search_focus（默认 "internet"）。函数工具模拟
+	// 必须设为 "writing"：实测 "internet" 会把注入 query_str 的工具协议当检索查询，
+	// "writing" 则关闭联网搜索、让 query_str 退化为纯 prompt（见 README 验证边界）。
+	SearchFocus string
 }
 
 // DefaultRequestOptions preserves ordinary cross-protocol clients. In
@@ -138,6 +142,10 @@ func BuildAskBodyWithOptions(query, modelPref, mode string, opts RequestOptions)
 	if opts.Internal.LastBackendUUID != "" {
 		lastBackendUUID = opts.Internal.LastBackendUUID
 	}
+	searchFocus := "internet"
+	if opts.Internal.SearchFocus != "" {
+		searchFocus = opts.Internal.SearchFocus
+	}
 	payload := map[string]any{
 		"query_str": query,
 		"params": map[string]any{
@@ -152,7 +160,7 @@ func BuildAskBodyWithOptions(query, modelPref, mode string, opts RequestOptions)
 			"model_preference":      modelPref,
 			"source":                "default",
 			"sources":               opts.Sources,
-			"search_focus":          "internet",
+			"search_focus":          searchFocus,
 			"version":               askVersion,
 		},
 	}

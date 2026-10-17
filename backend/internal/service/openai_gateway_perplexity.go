@@ -388,10 +388,36 @@ func (s *OpenAIGatewayService) sendPerplexityCCUpstreamRequest(
 		return nil, err
 	}
 	opts.Internal.Attachments = attachments
-	fullQuery, err := perplexity.FoldMessagesToQueryWithOptions(gjson.GetBytes(chatBody, "messages"), perplexity.FoldOptions{
+	foldOptions := perplexity.FoldOptions{
 		StripSystem: !opts.Local.KeepSystemPrompt,
 		MaxChars:    opts.Local.MaxQueryChars,
-	})
+	}
+	messages := gjson.GetBytes(chatBody, "messages")
+	// 函数工具模拟：所有入站协议到此已归一为 CC 形态，统一从 chatBody 解析工具。
+	toolSpecs, toolErr := perplexity.ParseToolSpecs(gjson.GetBytes(chatBody, "tools"))
+	if toolErr != nil {
+		cancelUpstream()
+		return nil, &perplexityBadRequestError{msg: toolErr.Error()}
+	}
+	toolChoice, choiceErr := perplexity.ParseToolChoice(gjson.GetBytes(chatBody, "tool_choice"), toolSpecs)
+	if choiceErr != nil {
+		cancelUpstream()
+		return nil, &perplexityBadRequestError{msg: choiceErr.Error()}
+	}
+	allowedTools := toolChoice.AllowedSpecs(toolSpecs)
+	var fullQuery string
+	if len(allowedTools) > 0 {
+		// 工具协议说明进 query_str，必须切到 writing 焦点关闭联网搜索（见 options 注释）。
+		opts.Internal.SearchFocus = "writing"
+		fullQuery, err = perplexity.FoldMessagesWithTools(messages, toolSpecs, toolChoice, foldOptions)
+		c.Header("X-Perplexity-Tool-Emulation", "active")
+	} else {
+		fullQuery, err = perplexity.FoldMessagesToQueryWithOptions(messages, foldOptions)
+		if errors.Is(err, perplexity.ErrUnsupportedToolHistory) {
+			// 历史含工具痕迹但本轮未声明工具：折叠为文本（不加协议、不强制 writing）。
+			fullQuery, err = perplexity.FoldMessagesWithTools(messages, nil, perplexity.ToolChoice{Mode: perplexity.ToolChoiceAuto}, foldOptions)
+		}
+	}
 	if err != nil {
 		cancelUpstream()
 		return nil, &perplexityBadRequestError{msg: err.Error()}
@@ -485,11 +511,11 @@ func (s *OpenAIGatewayService) sendPerplexityCCUpstreamRequest(
 		id:             "chatcmpl-" + strings.ReplaceAll(uuid.NewString(), "-", "")[:24],
 		IncludeSources: opts.Local.IncludeSources, IncludeSearchProgress: opts.Local.IncludeSearchProgress,
 		StripCitations: opts.Local.StripCitations,
+		toolAllowed:    allowedTools, toolChoice: toolChoice,
 	}
 	if continuation != nil {
 		params.onComplete = continuation.complete
 	}
-	go translatePerplexitySSEToCC(upstreamCtx, upstreamBody, writer, params)
 	header := resp.Header.Clone()
 	if stream {
 		header.Set("Content-Type", "text/event-stream")
@@ -508,10 +534,36 @@ func (s *OpenAIGatewayService) sendPerplexityCCUpstreamRequest(
 			}
 		}
 	}
-	return &http.Response{
-		StatusCode: http.StatusOK, Header: header,
-		Body: &perplexityCCBody{reader: reader, upstream: upstreamBody, cancel: cancelUpstream, identity: identity, metrics: metrics, onRead: onRead},
-	}, nil
+	makeBody := func() *perplexityCCBody {
+		return &perplexityCCBody{reader: reader, upstream: upstreamBody, cancel: cancelUpstream, identity: identity, metrics: metrics, onRead: onRead}
+	}
+
+	// required/具名 tool_choice：同步翻译到缓冲，先判定满足性——未满足则在任何响应
+	// 提交之前返回 400（三协议、流式/非流式统一）；满足则把缓冲重放为响应体。
+	if toolChoice.Mode == perplexity.ToolChoiceRequired || toolChoice.Mode == perplexity.ToolChoiceFunction {
+		var buf bytes.Buffer
+		if tErr := writePerplexityTranslation(upstreamCtx, upstreamBody, &buf, params); tErr != nil {
+			_ = upstreamBody.Close()
+			cancelUpstream()
+			if errors.Is(tErr, errPerplexityToolChoiceUnsatisfied) {
+				return nil, &perplexityBadRequestError{msg: "tool_choice required a tool call, but the selected Perplexity model returned none; retry or map this request to a stronger model"}
+			}
+			return nil, &UpstreamFailoverError{
+				StatusCode:             http.StatusBadGateway,
+				ResponseBody:           []byte(`{"error":{"type":"api_error","message":"perplexity returned no usable tool call"}}`),
+				RetryableOnSameAccount: false,
+			}
+		}
+		payload := buf.Bytes()
+		go func() {
+			_, _ = writer.Write(payload)
+			_ = writer.Close()
+		}()
+		return &http.Response{StatusCode: http.StatusOK, Header: header, Body: makeBody()}, nil
+	}
+
+	go translatePerplexitySSEToCC(upstreamCtx, upstreamBody, writer, params)
+	return &http.Response{StatusCode: http.StatusOK, Header: header, Body: makeBody()}, nil
 }
 
 // perplexityShouldFailover 判定上游状态码是否应换号重试：

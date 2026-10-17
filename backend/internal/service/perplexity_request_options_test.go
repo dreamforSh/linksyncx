@@ -85,9 +85,10 @@ func TestValidatePerplexityRequestGenericCompatibility(t *testing.T) {
 
 func TestValidatePerplexityRequestRejectsHardSemantics(t *testing.T) {
 	for _, body := range []string{
-		`{"tools":[{"type":"function","function":{"name":"f"}}]}`,
-		`{"tools":[{"name":"f","input_schema":{"type":"object"}}]}`,
-		`{"tool_choice":"required"}`, `{"tool_choice":{"type":"any"}}`, `{"tool_choice":{"type":"function","name":"f"}}`,
+		// 旧式 functions/function_call 不做模拟（现代 tools/tool_choice 才放行）。
+		`{"functions":[{"name":"f"}]}`,
+		`{"function_call":{"name":"f"}}`,
+		// 原生 web_search 带额外检索配置仍拒绝，避免静默放宽/收窄检索。
 		`{"tools":[{"type":"web_search","filters":{"allowed_domains":["example.com"]}}]}`,
 		`{"tools":[{"type":"web_search_preview","search_context_size":"high"}]}`,
 		`{"tools":[{"type":"web_search_20250305","name":"web_search","max_uses":3}]}`,
@@ -100,11 +101,9 @@ func TestValidatePerplexityRequestRejectsHardSemantics(t *testing.T) {
 		`{"messages":[{"role":"user","content":[{"type":"document","source":{"type":"base64","data":"AA=="}}]}]}`,
 		`{"thinking":{"type":"enabled","budget_tokens":4096}}`, `{"reasoning":{"budget_tokens":4096}}`,
 		`{"modalities":["audio"]}`, `{"audio":{"voice":"alloy"}}`,
-		`{"messages":[{"role":"tool","content":"output"}]}`,
-		`{"messages":[{"role":"assistant","content":"text","tool_calls":[{"id":"t"}]}]}`,
-		`{"messages":[{"role":"user","content":[{"type":"tool_result","tool_use_id":"t","content":"output"}]}]}`,
-		`{"input":[{"type":"function_call_output","call_id":"t","output":"result"}]}`,
+		// 非 function 的服务端/自定义/ MCP 工具历史无法折叠为文本，仍拒绝。
 		`{"input":[{"type":"custom_tool_call_output","call_id":"t","output":"result"}]}`,
+		`{"input":[{"type":"code_interpreter_call","id":"c"}]}`,
 		`{"input":[{"type":"mcp_list_tools","tools":[]}]}`,
 	} {
 		t.Run(body, func(t *testing.T) {
@@ -113,6 +112,34 @@ func TestValidatePerplexityRequestRejectsHardSemantics(t *testing.T) {
 			var badRequest *perplexityBadRequestError
 			if !errors.As(err, &badRequest) {
 				t.Fatalf("error = %v, want client 400 error", err)
+			}
+		})
+	}
+}
+
+// TestValidatePerplexityAcceptsToolEmulation 固定新策略：现代 function 工具声明、
+// 各形态 tool_choice、以及标准客户端工具调用/结果历史在入站层放行（真正的解析与
+// 折叠在上游发送汇聚点完成）。
+func TestValidatePerplexityAcceptsToolEmulation(t *testing.T) {
+	for _, tc := range []struct {
+		protocol string
+		body     string
+	}{
+		{"chat_completions", `{"tools":[{"type":"function","function":{"name":"f","parameters":{"type":"object"}}}]}`},
+		{"messages", `{"tools":[{"name":"f","input_schema":{"type":"object"}}]}`},
+		{"chat_completions", `{"tool_choice":"required","tools":[{"type":"function","function":{"name":"f"}}]}`},
+		{"messages", `{"tool_choice":{"type":"any"}}`},
+		{"chat_completions", `{"tool_choice":{"type":"function","function":{"name":"f"}}}`},
+		{"chat_completions", `{"messages":[{"role":"tool","tool_call_id":"t","content":"output"}]}`},
+		{"chat_completions", `{"messages":[{"role":"assistant","content":"text","tool_calls":[{"id":"t","type":"function","function":{"name":"f","arguments":"{}"}}]}]}`},
+		{"messages", `{"messages":[{"role":"user","content":[{"type":"tool_result","tool_use_id":"t","content":"output"}]}]}`},
+		{"responses", `{"input":[{"type":"function_call","call_id":"t","name":"f","arguments":"{}"}]}`},
+		{"responses", `{"input":[{"type":"function_call_output","call_id":"t","output":"result"}]}`},
+	} {
+		t.Run(tc.protocol+tc.body, func(t *testing.T) {
+			opts := perplexity.DefaultRequestOptions()
+			if err := validatePerplexityRequest([]byte(tc.body), tc.protocol, &opts); err != nil {
+				t.Fatalf("tool emulation request rejected at ingress: %v", err)
 			}
 		})
 	}
@@ -134,10 +161,15 @@ func TestValidatePerplexityNativeWebSearch(t *testing.T) {
 			t.Fatalf("native web search did not map to web source: %v", opts.Sources)
 		}
 	}
+	// tool_choice 的语义解析已移到上游发送汇聚点（ParseToolChoice）；入站层不再因
+	// tool_choice=none 与 web_search 并存而报错，只把原生 web_search 映射到 web source。
 	opts := perplexity.DefaultRequestOptions()
-	err := validatePerplexityRequest([]byte(`{"tools":[{"type":"web_search"}],"tool_choice":"none"}`), "responses", &opts)
-	if err == nil || !strings.Contains(err.Error(), "cannot disable") {
-		t.Fatalf("contradictory tool choice accepted: %v", err)
+	opts.Sources = []string{"scholar"}
+	if err := validatePerplexityRequest([]byte(`{"tools":[{"type":"web_search"}],"tool_choice":"none"}`), "responses", &opts); err != nil {
+		t.Fatalf("native web search with tool_choice none rejected: %v", err)
+	}
+	if !reflect.DeepEqual(opts.Sources, []string{"web"}) {
+		t.Fatalf("native web search did not map to web source: %v", opts.Sources)
 	}
 	if err := validatePerplexityRequest([]byte(`{"tools":[],"tool_choice":"none","response_format":{"type":"text"},"n":1,"stop":[]}`), "chat_completions", &opts); err != nil {
 		t.Fatalf("harmless defaults rejected: %v", err)

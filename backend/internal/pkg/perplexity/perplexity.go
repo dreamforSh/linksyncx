@@ -218,10 +218,16 @@ type Event struct {
 	UserSelectedModel string
 	HasText           bool
 	EndOfStream       bool
+	// Final 表示上游已标记这是最终消息（final_sse_message=true）。推理模型等不发
+	// 独立的 end_of_stream 事件，靠此字段作为等价终态，避免被判 ErrIncompleteStream。
+	Final bool
 	// Error 只标记上游失败，不保留可能含凭据的原始错误载荷。
 	Error   bool
 	Steps   []Step
 	Sources []Source
+	// Plan 是推理模型的计划/思考目标（plan_block.goals），作为"思考部分"下发给
+	// 客户端的 reasoning_content，不是客户端可执行工具，也不是最终答案正文。
+	Plan []PlanGoal
 }
 
 // Step 是上游内部执行步骤，Content 不可直接透传到下游。

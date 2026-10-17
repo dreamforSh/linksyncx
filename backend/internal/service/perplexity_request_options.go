@@ -267,12 +267,16 @@ func validatePerplexityRequest(body []byte, protocol string, opts *perplexity.Re
 	return nil
 }
 
+// validatePerplexityTools 只在入站层做"放行判定"：现代 function 工具与 tool_choice
+// 的真正解析/校验在折叠汇聚点由 perplexity.ParseToolSpecs/ParseToolChoice 完成
+// （三协议到那里已归一为 CC 形态）。这里仅：拒绝旧式 functions/function_call、
+// 把原生 web_search 声明映射到 web source。
 func validatePerplexityTools(root gjson.Result, opts *perplexity.RequestOptions) error {
 	if functions := root.Get("functions"); functions.Exists() && (!functions.IsArray() || len(functions.Array()) > 0) {
-		return perplexityOptionError("Perplexity does not support client function tools")
+		return perplexityOptionError("Perplexity tool emulation uses the modern tools field, not legacy functions")
 	}
 	if choice := root.Get("function_call"); choice.Exists() && (choice.Type != gjson.String || (choice.String() != "none" && choice.String() != "auto")) {
-		return perplexityOptionError("Perplexity does not support required or named function calls")
+		return perplexityOptionError("Perplexity tool emulation uses the modern tool_choice field, not legacy function_call")
 	}
 	webSearch := false
 	if search := root.Get("web_search_options"); search.Exists() {
@@ -286,38 +290,17 @@ func validatePerplexityTools(root gjson.Result, opts *perplexity.RequestOptions)
 			return perplexityOptionError("tools must be an array")
 		}
 		for _, tool := range tools.Array() {
-			if !tool.IsObject() {
-				return perplexityOptionError("Perplexity supports only native web_search tools")
-			}
-			switch tool.Get("type").String() {
-			case "web_search", "web_search_preview", "web_search_preview_2025_03_11", "web_search_20250305", "web_search_20260209":
-			default:
-				return perplexityOptionError("Perplexity does not support client function tools; only native web_search can be mapped")
-			}
-			for key, value := range tool.Map() {
-				if key == "type" || (key == "name" && value.Type == gjson.String && value.String() == "web_search") {
-					continue
+			// 原生 web_search 带额外配置（domain/context-size 等）仍拒绝，避免静默
+			// 放宽或收窄检索；function 等其它类型放行，到折叠汇聚点解析。
+			if tool.IsObject() && perplexity.IsNativeWebSearchToolType(tool.Get("type").String()) {
+				for key, value := range tool.Map() {
+					if key == "type" || (key == "name" && value.Type == gjson.String && value.String() == "web_search") {
+						continue
+					}
+					return perplexityOptionError("web_search.%s cannot be mapped to Perplexity search settings", key)
 				}
-				return perplexityOptionError("web_search.%s cannot be mapped to Perplexity search settings", key)
+				webSearch = true
 			}
-			webSearch = true
-		}
-	}
-	if choice := root.Get("tool_choice"); choice.Exists() {
-		kind := choice.String()
-		if choice.IsObject() {
-			kind = choice.Get("type").String()
-			if len(choice.Map()) != 1 {
-				return perplexityOptionError("Perplexity does not support named or configured tool_choice")
-			}
-		} else if choice.Type != gjson.String {
-			return perplexityOptionError("invalid tool_choice")
-		}
-		if kind != "auto" && kind != "none" {
-			return perplexityOptionError("Perplexity does not support required or named tool_choice")
-		}
-		if kind == "none" && webSearch {
-			return perplexityOptionError("tool_choice=none cannot disable Perplexity native web_search")
 		}
 	}
 	if webSearch {
@@ -339,23 +322,19 @@ func validatePerplexityRawHistory(root gjson.Result) error {
 				return err
 			}
 			kind := item.Get("type").String()
-			if strings.HasSuffix(kind, "_call") || strings.HasSuffix(kind, "_call_output") || strings.HasPrefix(kind, "mcp_") {
-				return perplexityOptionError("Perplexity does not support client tool call or tool result history")
+			// 标准客户端 function 工具历史（function_call / function_call_output）放行，
+			// 到折叠汇聚点由 NormalizeToolHistory 折叠为 <tool_call>/<tool_result> 文本。
+			// MCP / 自定义 / 内置服务端工具（code_interpreter_call 等）无法折叠，仍拒绝。
+			if strings.HasPrefix(kind, "mcp_") {
+				return perplexityOptionError("Perplexity does not support MCP tool history")
+			}
+			if (strings.HasSuffix(kind, "_call") || strings.HasSuffix(kind, "_call_output")) &&
+				kind != "function_call" && kind != "function_call_output" {
+				return perplexityOptionError("Perplexity does not support %q items", kind)
 			}
 			switch kind {
-			case "tool_use", "tool_result":
-				return perplexityOptionError("Perplexity does not support client tool call or tool result history")
 			case "input_file", "file", "input_audio", "audio", "video", "document":
 				return perplexityOptionError("Perplexity does not support file, audio, or document input")
-			}
-			if role := strings.ToLower(strings.TrimSpace(item.Get("role").String())); role == "tool" || role == "function" {
-				return perplexityOptionError("Perplexity does not support client tool call or tool result history")
-			}
-			if calls := item.Get("tool_calls"); calls.Exists() && (!calls.IsArray() || len(calls.Array()) > 0) {
-				return perplexityOptionError("Perplexity does not support client tool call or tool result history")
-			}
-			if item.Get("function_call").Exists() || item.Get("tool_call_id").Exists() {
-				return perplexityOptionError("Perplexity does not support client tool call or tool result history")
 			}
 			content := item.Get("content")
 			if content.Type == gjson.String || content.Type == gjson.Null {
@@ -369,10 +348,9 @@ func validatePerplexityRawHistory(root gjson.Result) error {
 					return err
 				}
 				switch part.Get("type").String() {
-				case "tool_use", "tool_result", "function_call", "function_call_output":
-					return perplexityOptionError("Perplexity does not support client tool call or tool result history")
-				case "text", "input_text", "output_text", "image", "image_url", "input_image", "thinking", "redacted_thinking":
-					// Image validation/upload happens after all raw capability checks.
+				case "text", "input_text", "output_text", "image", "image_url", "input_image", "thinking", "redacted_thinking",
+					"tool_use", "tool_result", "function_call", "function_call_output":
+					// 工具内容块放行：下游折叠为文本。图片校验/上传在能力检查之后进行。
 				default:
 					return perplexityOptionError("Perplexity does not support message content type %q", part.Get("type").String())
 				}
