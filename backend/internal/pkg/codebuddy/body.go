@@ -91,6 +91,9 @@ func PrepareChatBody(body []byte, profile string) ([]byte, error) {
 		}
 		messages = merged
 	}
+	// Strip third-party coding-agent fingerprints from the system prompt so the
+	// upstream channel risk control (code 11128) does not reject the request.
+	desensitizeSystemMessages(messages)
 	encodedMessages, err := marshalNoEscape(messages)
 	if err != nil {
 		return nil, err
