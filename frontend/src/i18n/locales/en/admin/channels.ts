@@ -557,8 +557,25 @@ export default {
         primaryModel: 'Primary Model',
         availability7d: '7d Availability',
         latency: 'Latency (ms)',
+        lastChecked: 'Last Check',
         enabled: 'Enabled',
         actions: 'Actions'
+      },
+      list: {
+        disabled: 'Disabled',
+        intervalEvery: 'every {interval}',
+        stale: 'Checks stalled',
+        staleHint: 'No check for more than 3 intervals; make sure V1 active probing is running',
+        neverChecked: 'Not checked yet',
+        extraModels: '+{count} models',
+        summary: {
+          operational: 'Operational',
+          degraded: 'Degraded',
+          failed: 'Failed',
+          error: 'Error',
+          disabled: 'Disabled',
+          pageScope: ' (this page)'
+        }
       },
       form: {
         name: 'Name',

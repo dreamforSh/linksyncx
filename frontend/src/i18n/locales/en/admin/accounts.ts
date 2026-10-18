@@ -1029,7 +1029,7 @@ export default {
           sessionHint: 'Checks the cookie session and quota snapshot without invoking the selected model.',
           costHint: 'Calls the selected model and consumes the account’s upstream quota; this is not a free session check.',
           title: 'Current model probe',
-          sendingProbe: 'Sending a short native model probe (output tokens are not fixed)',
+          sendingProbe: 'Sending "hi" to the model; its reply is shown below',
           recentTitle: 'Latest model probe',
           requested: 'Requested model',
           sent: 'Sent preference / mode',

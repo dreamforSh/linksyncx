@@ -406,7 +406,12 @@ func TestClassifyHTTPError(t *testing.T) {
 	}{
 		{"401 auth", http.StatusUnauthorized, nil, ``, ErrClassAuth, 0},
 		{"403 auth", http.StatusForbidden, nil, `{"error":"forbidden"}`, ErrClassAuth, 0},
-		{"403 cloudflare", http.StatusForbidden, http.Header{"Cf-Ray": {"abc"}}, ``, ErrClassCloudflare, 0},
+		// 整站经过 Cloudflare：仅有 CF-RAY/Server 头的 403/5xx 不是质询。
+		{"403 auth behind cloudflare", http.StatusForbidden, http.Header{"Cf-Ray": {"abc"}, "Server": {"cloudflare"}, "Content-Type": {"application/json"}}, `{"detail":"Not authenticated"}`, ErrClassAuth, 0},
+		{"502 server behind cloudflare", http.StatusBadGateway, http.Header{"Cf-Ray": {"abc"}, "Server": {"cloudflare"}}, ``, ErrClassServer, 0},
+		{"403 cf-mitigated", http.StatusForbidden, http.Header{"Cf-Mitigated": {"challenge"}}, ``, ErrClassCloudflare, 0},
+		{"403 just a moment", http.StatusForbidden, http.Header{"Content-Type": {"text/html; charset=UTF-8"}}, `<!DOCTYPE html><title>Just a moment...</title>`, ErrClassCloudflare, 0},
+		{"403 cloudflare block page", http.StatusForbidden, http.Header{"Content-Type": {"text/html"}}, `<html><h1>Access denied</h1>Error 1020 · Cloudflare</html>`, ErrClassCloudflare, 0},
 		{"429 with retry-after", http.StatusTooManyRequests, http.Header{"Retry-After": {"30"}}, ``, ErrClassRateLimited, 29 * time.Second},
 		{"429 no retry-after", http.StatusTooManyRequests, nil, ``, ErrClassRateLimited, 0},
 		{"500 server", http.StatusInternalServerError, nil, ``, ErrClassServer, 0},

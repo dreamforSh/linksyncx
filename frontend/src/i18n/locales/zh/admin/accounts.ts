@@ -1206,7 +1206,7 @@ export default {
           sessionHint: '只检查 Cookie 会话和配额快照，不会调用所选模型。',
           costHint: '将直接调用所选模型，消耗账号上游额度；这不是免费的会话检查。',
           title: '本次模型探测',
-          sendingProbe: '发送短模型探测请求（不保证固定输出 token）',
+          sendingProbe: '向模型发送 “hi”，下方显示模型回复原文',
           recentTitle: '最近模型探测',
           requested: '请求模型',
           sent: '发送的 preference / 模式',

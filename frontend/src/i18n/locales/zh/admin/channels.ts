@@ -557,8 +557,25 @@ export default {
         primaryModel: '主模型',
         availability7d: '7 天可用率',
         latency: '延迟 (ms)',
+        lastChecked: '最近检测',
         enabled: '启用',
         actions: '操作'
+      },
+      list: {
+        disabled: '已停用',
+        intervalEvery: '每 {interval}',
+        stale: '检测已停滞',
+        staleHint: '距上次检测已超过 3 个检测周期，请确认 V1 主动探测是否在运行',
+        neverChecked: '尚未检测',
+        extraModels: '+{count} 个模型',
+        summary: {
+          operational: '正常',
+          degraded: '降级',
+          failed: '失败',
+          error: '错误',
+          disabled: '停用',
+          pageScope: '（本页）'
+        }
       },
       form: {
         name: '名称',

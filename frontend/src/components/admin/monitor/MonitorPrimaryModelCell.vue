@@ -55,6 +55,21 @@
         </div>
       </div>
       </HelpTooltip>
+      <!-- 附加模型原本只藏在状态徽章的悬停里；这里直接给出数量和各自状态点 -->
+      <span
+        v-if="(row.extra_models?.length ?? 0) > 0"
+        class="inline-flex items-center gap-1 rounded-full bg-gray-100 px-1.5 py-0.5 text-[10px] font-medium text-gray-600 dark:bg-dark-700 dark:text-gray-300"
+        :title="(row.extra_models_status || []).map(m => `${m.model}: ${statusLabel(m.status)}`).join('\n') || row.extra_models.join('\n')"
+        data-testid="monitor-extra-models"
+      >
+        <span
+          v-for="m in (row.extra_models_status || [])"
+          :key="m.model"
+          class="h-1.5 w-1.5 rounded-full"
+          :class="extraDotClass(m.status)"
+        ></span>
+        {{ t('admin.channelMonitor.list.extraModels', { count: row.extra_models.length }) }}
+      </span>
     </div>
     <!-- 配额模式监控：主模型行内联展示最新用量/余额快照（管理端不受用户端开关限制） -->
     <MonitorQuotaView :snapshot="row.latest_quota" />
@@ -63,7 +78,7 @@
 
 <script setup lang="ts">
 import { useI18n } from 'vue-i18n'
-import type { ChannelMonitor } from '@/api/admin/channelMonitor'
+import type { ChannelMonitor, MonitorStatus } from '@/api/admin/channelMonitor'
 import HelpTooltip from '@/components/common/HelpTooltip.vue'
 import MonitorQuotaView from '@/components/common/MonitorQuotaView.vue'
 import { useChannelMonitorFormat } from '@/composables/useChannelMonitorFormat'
@@ -74,4 +89,13 @@ defineProps<{
 
 const { t } = useI18n()
 const { statusLabel, statusBadgeClass, formatLatency, formatMonitorModel } = useChannelMonitorFormat()
+
+function extraDotClass(status: MonitorStatus | ''): string {
+  switch (status) {
+    case 'operational': return 'bg-emerald-500'
+    case 'degraded': return 'bg-amber-500'
+    case 'failed': return 'bg-red-500'
+    default: return 'bg-gray-400'
+  }
+}
 </script>

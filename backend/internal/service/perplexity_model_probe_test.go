@@ -89,7 +89,7 @@ func TestPerplexityRealModelProbeIdentityAndPersistence(t *testing.T) {
 				body, err := io.ReadAll(req.Body)
 				require.NoError(t, err)
 				require.Equal(t, "gpt54", gjson.GetBytes(body, "params.model_preference").String())
-				require.Equal(t, "Reply with only OK.", gjson.GetBytes(body, "query_str").String())
+				require.Equal(t, perplexityModelProbeDefaultPrompt, gjson.GetBytes(body, "query_str").String())
 				_, _ = io.WriteString(w, perplexityModelAnswer("OK", reported)+"event: end_of_stream\n\n")
 			})
 			result, err := svc.probePerplexityModel(context.Background(), account, "public", "", "manual")

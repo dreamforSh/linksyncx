@@ -24,6 +24,9 @@ const (
 	perplexityModelHealthExtraKey  = "perplexity_model_health"
 	perplexityModelProbeTimeout    = 30 * time.Second
 	perplexityModelProbeMaxBytes   = 8 << 20
+	// perplexityModelProbeDefaultPrompt 是未指定提示词时的模型测试消息：像真实用户一样
+	// 打个招呼，回复原文作为测试输出返回，便于直观判断模型是否在正常应答。
+	perplexityModelProbeDefaultPrompt = "hi"
 )
 
 // PerplexityModelProbeResult records one direct, explicitly requested model
@@ -134,7 +137,7 @@ func (s *AccountTestService) probePerplexityModel(ctx context.Context, account *
 		return nil, fmt.Errorf("perplexity model probe prompt must not exceed 1024 characters")
 	}
 	if strings.TrimSpace(prompt) == "" {
-		prompt = "Reply with only OK."
+		prompt = perplexityModelProbeDefaultPrompt
 	}
 	if opts.Local.MaxQueryChars > 0 && utf8.RuneCountInString(prompt) > opts.Local.MaxQueryChars {
 		return nil, perplexityOptionError("probe prompt exceeds the account query character limit")

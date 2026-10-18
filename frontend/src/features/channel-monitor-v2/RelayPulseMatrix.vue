@@ -42,9 +42,9 @@
           >
             <span>{{ t('channelMonitorV2.matrix.dimension') }}</span>
             <span>{{ t('channelMonitorV2.metrics.successRate') }}</span>
-            <span>{{ t('channelMonitorV2.metrics.ttft') }}</span>
-            <span v-if="showThroughput">{{ t('channelMonitorV2.metrics.tps') }}</span>
-            <span>{{ t('channelMonitorV2.metrics.cacheRate') }}</span>
+            <span class="matrix-optional">{{ t('channelMonitorV2.metrics.ttft') }}</span>
+            <span v-if="showThroughput" class="matrix-optional">{{ t('channelMonitorV2.metrics.tps') }}</span>
+            <span class="matrix-optional">{{ t('channelMonitorV2.metrics.cacheRate') }}</span>
             <span class="pulse-axis flex justify-between gap-3">
               <i class="not-italic">{{ axisStart }}</i>
               <i class="not-italic">{{ axisEnd }}</i>
@@ -64,20 +64,20 @@
               {{ successRate(entry.row.metrics) }}
             </strong>
             <strong
-              class="summary-value bg-white text-xs font-medium tabular-nums text-gray-600 dark:bg-dark-800 dark:text-gray-300"
+              class="summary-value matrix-optional bg-white text-xs font-medium tabular-nums text-gray-600 dark:bg-dark-800 dark:text-gray-300"
               :title="latencyPrivacy(entry.row.metrics.ttft)"
             >
               {{ formatMs(entry.row.metrics.ttft.p50_ms) }}
             </strong>
             <strong
               v-if="showThroughput"
-              class="summary-value bg-white text-xs font-medium tabular-nums text-gray-600 dark:bg-dark-800 dark:text-gray-300"
+              class="summary-value matrix-optional bg-white text-xs font-medium tabular-nums text-gray-600 dark:bg-dark-800 dark:text-gray-300"
               :title="exactTps(entry.row.metrics.tpm)"
             >
               {{ formatTps(entry.row.metrics.tpm) }}
             </strong>
             <strong
-              class="summary-value bg-white text-xs font-medium tabular-nums text-gray-600 dark:bg-dark-800 dark:text-gray-300"
+              class="summary-value matrix-optional bg-white text-xs font-medium tabular-nums text-gray-600 dark:bg-dark-800 dark:text-gray-300"
             >
               {{ formatMonitorCacheRate(entry.row.metrics) }}
             </strong>
@@ -650,10 +650,16 @@ function formatBucketRange(value: string) {
   color: rgb(243 244 246);
 }
 
+/* 窄屏只保留 维度 / 成功率 / 色块 三列：其余指标在悬停提示与下方明细表里仍可查看，
+   否则 5–6 个单元格挤进 4 列网格会折行错位。 */
 @media (max-width: 640px) {
-  .matrix-row {
-    grid-template-columns: minmax(88px, 1fr) minmax(48px, 0.45fr) minmax(54px, 0.5fr) minmax(96px, 2.6fr);
+  .matrix-row,
+  .matrix-row--with-tps {
+    grid-template-columns: minmax(84px, 1fr) minmax(46px, 0.4fr) minmax(110px, 2.4fr);
     gap: 0.35rem;
+  }
+  .matrix-optional {
+    display: none;
   }
   .matrix-row > :nth-child(2) {
     left: 0;

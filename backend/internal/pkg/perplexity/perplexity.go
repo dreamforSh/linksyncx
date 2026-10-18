@@ -568,18 +568,7 @@ func ClassifyHTTPError(status int, headers http.Header, body []byte) (ErrorClass
 	if headers != nil {
 		retryAfter = parseRetryAfter(headers.Get("Retry-After"))
 	}
-	server := ""
-	cfRay := ""
-	if headers != nil {
-		server = strings.ToLower(headers.Get("Server"))
-		cfRay = headers.Get("CF-RAY")
-	}
-	bodyLower := ""
-	if len(body) > 0 && len(body) < 64*1024 {
-		bodyLower = strings.ToLower(string(body))
-	}
-	isCloudflare := strings.Contains(server, "cloudflare") || cfRay != "" ||
-		strings.Contains(bodyLower, "cf-chl") || strings.Contains(bodyLower, "cloudflare")
+	isCloudflare := isCloudflareChallenge(headers, body)
 
 	switch {
 	case status == http.StatusUnauthorized:
@@ -599,6 +588,40 @@ func ClassifyHTTPError(status int, headers http.Header, body []byte) (ErrorClass
 	default:
 		return ErrClassOther, retryAfter
 	}
+}
+
+// cloudflareChallengeMarkers 是 Cloudflare 质询/拦截页特有的正文片段。
+var cloudflareChallengeMarkers = []string{
+	"cf-chl", "cf_chl", "challenge-platform", "just a moment", "attention required",
+	"cf-error-details", "cf-browser-verification", "enable javascript and cookies to continue",
+}
+
+// isCloudflareChallenge 只认真正的质询/拦截信号。www.perplexity.ai 整站经过
+// Cloudflare，任何响应（包括会话失效的 403 和普通 5xx）都带 CF-RAY 与
+// Server: cloudflare，这两个头不能作为判据，否则失效会话只拿到 5 分钟 CF 冷却。
+func isCloudflareChallenge(headers http.Header, body []byte) bool {
+	if headers != nil && strings.EqualFold(strings.TrimSpace(headers.Get("Cf-Mitigated")), "challenge") {
+		return true
+	}
+	if len(body) == 0 {
+		return false
+	}
+	if len(body) > 64*1024 {
+		body = body[:64*1024]
+	}
+	bodyLower := strings.ToLower(string(body))
+	for _, marker := range cloudflareChallengeMarkers {
+		if strings.Contains(bodyLower, marker) {
+			return true
+		}
+	}
+	// Cloudflare 自己生成的 HTML 拦截页（如 1020 Access denied）；JSON 错误体不算。
+	contentType := ""
+	if headers != nil {
+		contentType = strings.ToLower(headers.Get("Content-Type"))
+	}
+	isHTML := strings.Contains(contentType, "text/html") || strings.HasPrefix(strings.TrimSpace(bodyLower), "<!doctype html") || strings.HasPrefix(strings.TrimSpace(bodyLower), "<html")
+	return isHTML && strings.Contains(bodyLower, "cloudflare")
 }
 
 // parseRetryAfter 解析 Retry-After 头（秒数或 HTTP 日期），无效值返回 0。

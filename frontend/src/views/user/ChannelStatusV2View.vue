@@ -17,7 +17,7 @@
               <span class="relative flex h-2 w-2 shrink-0">
                 <span
                   class="relative inline-flex h-2 w-2 rounded-full"
-                  :class="loading || refreshing ? 'bg-gray-400' : 'bg-green-500'"
+                  :class="loadError ? 'bg-red-500' : loading || refreshing ? 'bg-gray-400' : 'bg-green-500'"
                 ></span>
               </span>
               <span v-if="refreshing" class="inline-flex items-center gap-1 text-primary-600 dark:text-primary-300">
@@ -28,6 +28,9 @@
                 {{ t('channelMonitorV2.updatedTo', { time: formatTime(snapshot.coverage.data_through) }) }}
               </span>
               <span v-else class="text-gray-400">{{ t('common.loading') }}</span>
+              <span v-if="snapshot && !refreshing" class="text-gray-400 dark:text-dark-400" data-testid="monitor-auto-refresh">
+                · {{ pageHidden ? t('channelMonitorV2.autoRefreshPaused') : t('channelMonitorV2.autoRefresh', { minutes: refreshMinutes }) }}
+              </span>
               <span
                 v-if="snapshot && !snapshot.coverage.coverage_complete && !bootstrapActive"
                 class="badge badge-warning"
@@ -90,7 +93,7 @@
         </div>
 
         <!-- Single compact toolbar row: range · filters · view controls -->
-        <div class="monitor-toolbar flex flex-nowrap items-center gap-1.5 overflow-x-auto px-4 py-3 sm:gap-2 sm:px-5">
+        <div class="monitor-toolbar flex flex-wrap items-center gap-1.5 px-4 py-3 sm:flex-nowrap sm:gap-2 sm:overflow-x-auto sm:px-5">
           <div
             class="tabs inline-flex shrink-0"
             role="group"
@@ -248,8 +251,24 @@
       </section>
 
       <div class="relative min-h-[320px]">
+        <div
+          v-if="loadError && !snapshot"
+          class="card flex min-h-[320px] flex-col items-center justify-center gap-2 !rounded-3xl !border-0 px-6 text-center shadow-sm ring-1 ring-gray-900/5 dark:!bg-dark-800 dark:ring-dark-700"
+          role="alert"
+          data-testid="monitor-load-error"
+        >
+          <span class="inline-flex h-10 w-10 items-center justify-center rounded-2xl bg-red-50 text-red-500 dark:bg-red-900/30 dark:text-red-400">
+            <Icon name="exclamationTriangle" size="md" />
+          </span>
+          <p class="text-sm font-semibold text-gray-900 dark:text-white">{{ loadError }}</p>
+          <p class="text-xs text-gray-500 dark:text-dark-400">{{ t('channelMonitorV2.loadFailedHint') }}</p>
+          <button type="button" class="btn btn-secondary btn-sm mt-1" :disabled="loading" @click="reload(false)">
+            <Icon name="refresh" size="sm" :class="loading ? 'animate-spin' : ''" />
+            {{ t('channelMonitorV2.retry') }}
+          </button>
+        </div>
         <MonitorTrendChart
-          v-if="trendView === 'line'"
+          v-else-if="trendView === 'line'"
           :trend="snapshot?.trend || []"
           :coverage="snapshot?.coverage || null"
           :loading="loading && !snapshot"
@@ -292,18 +311,29 @@
               <thead>
                 <tr>
                   <th>{{ t('channelMonitorV2.table.platformModel') }}</th>
-                  <th>{{ t('channelMonitorV2.metrics.successRate') }}</th>
-                  <th>{{ t('channelMonitorV2.metrics.ttftP50') }}</th>
-                  <th v-if="showThroughput">{{ t('channelMonitorV2.metrics.tps') }}</th>
-                  <th>{{ t('channelMonitorV2.metrics.cacheRate') }}</th>
-                  <th v-if="showThroughput">{{ t('channelMonitorV2.metrics.rpm') }}</th>
+                  <th v-for="column in modelSortColumns" :key="column.key" :aria-sort="modelSort.key === column.key ? (modelSort.dir === 'asc' ? 'ascending' : 'descending') : 'none'">
+                    <button
+                      type="button"
+                      class="inline-flex items-center gap-1 hover:text-gray-900 dark:hover:text-white"
+                      :class="modelSort.key === column.key ? 'text-gray-900 dark:text-white' : ''"
+                      :title="t('channelMonitorV2.sortBy', { label: column.label })"
+                      :data-testid="`monitor-sort-${column.key}`"
+                      @click="toggleModelSort(column.key)"
+                    >
+                      {{ column.label }}
+                      <span class="text-[10px]" :class="modelSort.key === column.key ? '' : 'opacity-30'" aria-hidden="true">
+                        {{ modelSort.key === column.key && modelSort.dir === 'asc' ? '▲' : '▼' }}
+                      </span>
+                    </button>
+                  </th>
                 </tr>
               </thead>
               <tbody>
                 <tr
-                  v-for="row in modelRows"
+                  v-for="row in sortedModelRows"
                   :key="`${row.platform}:${row.model}`"
-                  class="cursor-pointer"
+                  class="cursor-pointer transition-colors hover:bg-gray-50 dark:hover:bg-dark-700/40"
+                  :title="t('channelMonitorV2.drillHint')"
                   @click="drillModel(row)"
                 >
                   <td>
@@ -318,11 +348,11 @@
                     </div>
                   </td>
                   <td>
-                    <span class="block">{{ formatPercent(1 - row.metrics.error_rate) }}</span>
+                    <span class="block font-medium" :class="healthTextClass(row.health.error_rate)">{{ formatPercent(1 - row.metrics.error_rate) }}</span>
                     <small class="text-xs text-gray-400">{{ t('channelMonitorV2.metrics.errorRateValue', { value: formatPercent(row.metrics.error_rate) }) }}</small>
                   </td>
                   <td>
-                    <span class="block">{{ formatMs(row.metrics.ttft.p50_ms) }}</span>
+                    <span class="block font-medium" :class="healthTextClass(ttftCellState(row.health.ttft, row.metrics.ttft))">{{ formatMs(row.metrics.ttft.p50_ms) }}</span>
                     <small class="text-xs text-gray-400">{{ latencyDetail(row.metrics.ttft) }}</small>
                   </td>
                   <td v-if="showThroughput" :title="exactTps(row.metrics.tpm)">{{ formatTps(row.metrics.tpm) }}</td>
@@ -345,15 +375,21 @@
                 class="grid w-full grid-cols-[minmax(100px,200px)_1fr_auto_auto] items-center gap-3 text-left"
                 @click="toggleError(row.category)"
               >
-                <span class="flex min-w-0 items-center gap-1.5 truncate text-gray-700 dark:text-gray-200">
-                  <span class="truncate">{{ errorLabel(row.category) }}</span>
-                  <span v-if="row.ignored" class="badge badge-gray shrink-0 !px-1.5 !py-0 text-[10px]">{{ t('channelMonitorV2.ignored') }}</span>
+                <span class="min-w-0">
+                  <span class="flex min-w-0 items-center gap-1.5 text-gray-700 dark:text-gray-200">
+                    <span class="truncate">{{ errorLabel(row.category) }}</span>
+                    <span v-if="row.ignored" class="badge badge-gray shrink-0 !px-1.5 !py-0 text-[10px]">{{ t('channelMonitorV2.ignored') }}</span>
+                  </span>
+                  <span class="block truncate text-[11px] text-gray-400" data-testid="monitor-error-share">
+                    {{ t('channelMonitorV2.errorShare', { value: formatPercent(errorShare(row)) }) }}<template v-if="isAdmin"> · {{ t('channelMonitorV2.errorCount', { count: row.count }) }}</template>
+                  </span>
                 </span>
+                <!-- 条长按各类错误的相对次数；按占全部请求的比例画时所有条都只有 1% 左右，看不出主次。 -->
                 <span class="h-2 overflow-hidden rounded-full bg-gray-100 dark:bg-dark-700">
                   <i
                     class="block h-full rounded-full"
                     :class="row.ignored ? 'bg-gray-400 dark:bg-gray-500' : 'bg-gradient-to-r from-red-400 to-red-500'"
-                    :style="{ width: `${Math.max(2, row.rate * 100)}%` }"
+                    :style="{ width: `${Math.max(2, errorBarRatio(row) * 100)}%` }"
                   ></i>
                 </span>
                 <small
@@ -566,6 +602,9 @@ const loading = ref(false)
 const tabLoading = ref(false)
 const refreshing = ref(false)
 const expandedErrors = ref(new Set<string>())
+const loadError = ref<string | null>(null)
+const pageHidden = ref(typeof document !== 'undefined' && document.hidden)
+let lastLoadedAt = 0
 let controller: AbortController | null = null
 let sequence = 0
 let autoRefreshTimer: number | null = null
@@ -639,6 +678,72 @@ watch(
   },
   { flush: 'post' },
 )
+type ModelSortKey = 'success' | 'ttft' | 'tps' | 'cache' | 'rpm'
+const modelSort = ref<{ key: ModelSortKey | null; dir: 'asc' | 'desc' }>({ key: null, dir: 'desc' })
+const modelSortColumns = computed(() => {
+  const columns: Array<{ key: ModelSortKey; label: string }> = [
+    { key: 'success', label: t('channelMonitorV2.metrics.successRate') },
+    { key: 'ttft', label: t('channelMonitorV2.metrics.ttftP50') },
+  ]
+  if (showThroughput.value) columns.push({ key: 'tps', label: t('channelMonitorV2.metrics.tps') })
+  columns.push({ key: 'cache', label: t('channelMonitorV2.metrics.cacheRate') })
+  if (showThroughput.value) columns.push({ key: 'rpm', label: t('channelMonitorV2.metrics.rpm') })
+  return columns
+})
+function modelSortValue(row: MonitorModelRow, key: ModelSortKey): number | null {
+  const m = row.metrics
+  switch (key) {
+    case 'success': return m.request_count ? 1 - m.error_rate : null
+    case 'ttft': return m.ttft.p50_ms
+    case 'tps': return m.tpm
+    case 'cache': return m.cache_rate_known === false ? null : m.cache_rate
+    case 'rpm': return m.rpm
+  }
+}
+/** 首次点击：成功率/吞吐/缓存从高到低，延迟从低到高；再次点击反转；缺值永远排最后。 */
+function toggleModelSort(key: ModelSortKey) {
+  if (modelSort.value.key === key) {
+    modelSort.value = { key, dir: modelSort.value.dir === 'asc' ? 'desc' : 'asc' }
+  } else {
+    modelSort.value = { key, dir: key === 'ttft' ? 'asc' : 'desc' }
+  }
+}
+const sortedModelRows = computed(() => {
+  const { key, dir } = modelSort.value
+  if (!key) return modelRows.value
+  return [...modelRows.value].sort((a, b) => {
+    const av = modelSortValue(a, key)
+    const bv = modelSortValue(b, key)
+    if (av == null || bv == null) return av == null ? (bv == null ? 0 : 1) : -1
+    return dir === 'asc' ? av - bv : bv - av
+  })
+})
+const errorTotals = computed(() => {
+  let total = 0
+  let max = 0
+  for (const row of errorRows.value) {
+    total += row.count || 0
+    max = Math.max(max, row.count || 0)
+  }
+  return { total, max }
+})
+function errorShare(row: MonitorErrorRow) {
+  return errorTotals.value.total ? (row.count || 0) / errorTotals.value.total : 0
+}
+function errorBarRatio(row: MonitorErrorRow) {
+  return errorTotals.value.max ? (row.count || 0) / errorTotals.value.max : 0
+}
+const refreshMinutes = computed(() =>
+  Math.max(1, Math.round((snapshot.value?.config?.refresh_interval_seconds || 300) / 60))
+)
+function healthTextClass(state: HealthState | undefined) {
+  switch (state) {
+    case 'healthy': return 'text-emerald-600 dark:text-emerald-400'
+    case 'warning': return 'text-amber-600 dark:text-amber-400'
+    case 'critical': return 'text-red-600 dark:text-red-400'
+    default: return 'text-gray-900 dark:text-white'
+  }
+}
 const activeRowsEmpty = computed(() =>
   activeTab.value === 'models'
     ? modelRows.value.length === 0
@@ -725,6 +830,8 @@ async function loadMetrics(signal?: AbortSignal, id = sequence) {
   if (id !== sequence) return
   snapshot.value = nextSnapshot
   matrix.value = nextMatrix
+  loadError.value = null
+  lastLoadedAt = Date.now()
   scheduleAutoRefresh()
   await loadTab(signal, id)
 }
@@ -744,7 +851,9 @@ async function reload(silent = true) {
     ])
   } catch (error) {
     if ((error as { name?: string }).name !== 'CanceledError') {
-      appStore.showError(extractApiErrorMessage(error, t('channelMonitorV2.loadFailed')))
+      const message = extractApiErrorMessage(error, t('channelMonitorV2.loadFailed'))
+      loadError.value = message
+      appStore.showError(message)
     }
   } finally {
     if (id === sequence) {
@@ -767,7 +876,9 @@ async function reloadMetricsOnly(silent = true) {
     await loadMetrics(request.signal, id)
   } catch (error) {
     if ((error as { name?: string }).name !== 'CanceledError') {
-      appStore.showError(extractApiErrorMessage(error, t('channelMonitorV2.loadFailed')))
+      const message = extractApiErrorMessage(error, t('channelMonitorV2.loadFailed'))
+      loadError.value = message
+      appStore.showError(message)
     }
   } finally {
     if (id === sequence) {
@@ -819,7 +930,8 @@ function scheduleAutoRefresh() {
     ? 10
     : snapshot.value?.config?.refresh_interval_seconds || 300
   autoRefreshTimer = window.setInterval(() => {
-    if (!loading.value && !refreshing.value) {
+    // 页面在后台时不轮询：切回前台时由 visibilitychange 按需补刷。
+    if (!loading.value && !refreshing.value && !document.hidden) {
       void reload(true)
     }
   }, Math.max(bootstrapActive.value ? 10 : 60, seconds) * 1000)
@@ -925,8 +1037,18 @@ watch(showUserRanking, (allowed) => {
     activeTab.value = 'models'
   }
 })
-onMounted(() => void reload(false))
+function onVisibilityChange() {
+  pageHidden.value = document.hidden
+  if (document.hidden || loading.value || refreshing.value) return
+  const intervalMs = (snapshot.value?.config?.refresh_interval_seconds || 300) * 1000
+  if (Date.now() - lastLoadedAt >= intervalMs) void reload(true)
+}
+onMounted(() => {
+  document.addEventListener('visibilitychange', onVisibilityChange)
+  void reload(false)
+})
 onBeforeUnmount(() => {
+  document.removeEventListener('visibilitychange', onVisibilityChange)
   controller?.abort()
   if (autoRefreshTimer) window.clearInterval(autoRefreshTimer)
 })
