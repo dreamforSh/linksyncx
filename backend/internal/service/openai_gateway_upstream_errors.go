@@ -10,6 +10,7 @@ import (
 	"strings"
 
 	"github.com/Wei-Shaw/sub2api/internal/config"
+	"github.com/Wei-Shaw/sub2api/internal/pkg/codebuddy"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/logger"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/openai"
 	"github.com/gin-gonic/gin"
@@ -813,7 +814,16 @@ func (s *OpenAIGatewayService) handleCompatErrorResponse(
 		return nil, fmt.Errorf("grok content policy rejection: %s", clientMsg)
 	}
 
-	upstreamMsg := strings.TrimSpace(extractUpstreamErrorMessage(body))
+	upstreamMsg := ""
+	if account != nil && account.IsCodeBuddy() {
+		// CodeBuddy nests its reason in a {code, msg} envelope the generic
+		// extractor (error.message / detail / message) cannot read, so without
+		// this the client only ever sees "Upstream error: <status>".
+		upstreamMsg = strings.TrimSpace(codebuddy.ErrorMessage(body))
+	}
+	if upstreamMsg == "" {
+		upstreamMsg = strings.TrimSpace(extractUpstreamErrorMessage(body))
+	}
 	if upstreamMsg == "" {
 		upstreamMsg = fmt.Sprintf("Upstream error: %d", resp.StatusCode)
 	}

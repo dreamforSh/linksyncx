@@ -69,7 +69,7 @@ import { computed } from 'vue'
 import { useI18n } from 'vue-i18n'
 import type { AccountPlatform, AccountType } from '@/types'
 import { platformLabel as sharedPlatformLabel } from '@/utils/platformColors'
-import { claudePlanTypeLabel, normalizePlanType, openAIPlanTypeLabel } from '@/utils/planType'
+import { claudePlanTypeLabel, codeBuddyPlanTypeLabel, normalizePlanType, openAIPlanTypeLabel } from '@/utils/planType'
 import GrokFreeIcon from './GrokFreeIcon.vue'
 import PlatformIcon from './PlatformIcon.vue'
 import Icon from '@/components/icons/Icon.vue'
@@ -133,6 +133,11 @@ const planLabel = computed(() => {
   if (props.platform === 'perplexity') {
     const labels: Record<string, string> = { free: 'Free', pro: 'Pro', max: 'Max', enterprise: 'Enterprise' }
     if (labels[normalizedPlanType.value]) return labels[normalizedPlanType.value]
+  }
+  // CodeBuddy 订阅挡位来自凭证 account_type（personal/ultimate/exclusive）。
+  if (props.platform === 'codebuddy') {
+    const label = codeBuddyPlanTypeLabel(props.planType)
+    if (label) return label
   }
   switch (normalizedPlanType.value) {
     case 'plus':
@@ -256,6 +261,10 @@ const typeClass = computed(() => {
 const planBadgeClass = computed(() => {
   if (normalizedPlanType.value === 'abnormal') {
     return 'bg-red-100 text-red-600 dark:bg-red-900/30 dark:text-red-400'
+  }
+  // CodeBuddy 挡位徽章（含 exclusive 专属）统一用平台色（violet），与其余 CodeBuddy 标识一致。
+  if (props.platform === 'codebuddy') {
+    return 'bg-violet-100 text-violet-600 dark:bg-violet-900/30 dark:text-violet-400'
   }
   // Free stays muted gray; paid Grok tiers get distinct colors.
   if (

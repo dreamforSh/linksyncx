@@ -243,6 +243,24 @@ func TestErrorClassification(t *testing.T) {
 	require.False(t, CreditsExhausted(200, []byte(`积分不足`)))
 }
 
+func TestErrorMessage(t *testing.T) {
+	t.Parallel()
+	// Top-level {code, msg} — the shape the generic extractor misses.
+	require.Equal(t, "service info not found (code 11102)",
+		ErrorMessage([]byte(`{"code":11102,"msg":"service info not found"}`)))
+	// Nested error envelope with message alias.
+	require.Equal(t, "model foo is not supported (code content_filter)",
+		ErrorMessage([]byte(`{"error":{"code":"content_filter","message":"model foo is not supported"}}`)))
+	// msg only.
+	require.Equal(t, "bad request", ErrorMessage([]byte(`{"msg":"bad request"}`)))
+	// code only (errCode alias).
+	require.Equal(t, "CodeBuddy upstream error (code 40001)",
+		ErrorMessage([]byte(`{"errCode":"40001"}`)))
+	// Neither code nor message → empty, so callers fall back.
+	require.Equal(t, "", ErrorMessage([]byte(`{"foo":"bar"}`)))
+	require.Equal(t, "", ErrorMessage([]byte(`not json`)))
+}
+
 func TestParseCredentialsOfficialInfo(t *testing.T) {
 	t.Parallel()
 	token := fakeJWT(map[string]any{"iss": "https://copilot.tencent.com/auth/realms/copilot"})
@@ -396,4 +414,53 @@ func TestRefresh(t *testing.T) {
 	failing := &fakeDoer{responses: map[string]string{"https://": `{"code":40001,"msg":"invalid refresh token"}`}}
 	_, err = Refresh(context.Background(), failing, Credentials{Profile: ProfileCNCLI, RefreshToken: "rt"})
 	require.ErrorContains(t, err, "invalid refresh token")
+}
+
+func TestRefreshEchoesAccountProfile(t *testing.T) {
+	t.Parallel()
+	base := Credentials{Profile: ProfileCNCLI, AccessToken: "old", RefreshToken: "rt", UID: "u", Domain: "www.codebuddy.cn"}
+
+	// Flat echo of the subscription tier in the refresh payload.
+	flat := &fakeDoer{responses: map[string]string{
+		"https://copilot.tencent.com/v2/plugin/auth/token/refresh": `{"code":0,"data":{"accessToken":"new","type":"ultimate","enterpriseId":"ent"}}`,
+	}}
+	res, err := Refresh(context.Background(), flat, base)
+	require.NoError(t, err)
+	require.Equal(t, "ultimate", res.AccountType)
+	require.Equal(t, "ent", res.EnterpriseID)
+
+	// Nested account object.
+	nested := &fakeDoer{responses: map[string]string{
+		"https://copilot.tencent.com/v2/plugin/auth/token/refresh": `{"code":0,"data":{"accessToken":"new","account":{"type":"exclusive","nickname":"n"}}}`,
+	}}
+	res, err = Refresh(context.Background(), nested, base)
+	require.NoError(t, err)
+	require.Equal(t, "exclusive", res.AccountType)
+	require.Equal(t, "n", res.Nickname)
+
+	// No echo → empty, caller keeps whatever it already stored.
+	bare := &fakeDoer{responses: map[string]string{
+		"https://copilot.tencent.com/v2/plugin/auth/token/refresh": `{"code":0,"data":{"accessToken":"new"}}`,
+	}}
+	res, err = Refresh(context.Background(), bare, base)
+	require.NoError(t, err)
+	require.Empty(t, res.AccountType)
+}
+
+func TestFetchAccountInfo(t *testing.T) {
+	t.Parallel()
+	doer := &fakeDoer{responses: map[string]string{
+		"https://copilot.tencent.com/v2/plugin/login/account": `{"code":0,"data":{"uid":"u","type":"exclusive","nickname":"nick","enterpriseId":"ent","enterpriseName":"Acme"}}`,
+	}}
+	info, err := FetchAccountInfo(context.Background(), doer, Identity{Profile: ProfileCNCLI, AccessToken: "at", Domain: "www.codebuddy.cn", UID: "u"})
+	require.NoError(t, err)
+	require.Equal(t, "u", info.UID)
+	require.Equal(t, "exclusive", info.AccountType)
+	require.Equal(t, "nick", info.Nickname)
+	require.Equal(t, "ent", info.EnterpriseID)
+	require.Equal(t, "Acme", info.EnterpriseName)
+
+	failing := &fakeDoer{responses: map[string]string{"https://": `{"code":40001,"msg":"nope"}`}}
+	_, err = FetchAccountInfo(context.Background(), failing, Identity{Profile: ProfileCNCLI, AccessToken: "at", UID: "u"})
+	require.ErrorContains(t, err, "nope")
 }

@@ -113,7 +113,44 @@ func (s *CodeBuddyOAuthService) RefreshAccountToken(ctx context.Context, account
 	if err != nil {
 		return nil, infraerrors.Newf(http.StatusBadGateway, "CODEBUDDY_OAUTH_REFRESH_FAILED", "%v", err)
 	}
+	s.backfillAccountType(refreshCtx, client, account, creds, result)
 	return result, nil
+}
+
+// backfillAccountType fills the subscription tier when neither the stored
+// credential nor the refresh response carries one (older accounts imported
+// before the tier was captured). It is a single self-healing lookup: once the
+// tier is persisted the guard below short-circuits future refreshes. A failed
+// lookup never fails the refresh.
+func (s *CodeBuddyOAuthService) backfillAccountType(ctx context.Context, client codebuddy.HTTPDoer, account *Account, creds codebuddy.Credentials, result *codebuddy.RefreshResult) {
+	if result == nil || result.AccountType != "" || strings.TrimSpace(creds.AccountType) != "" {
+		return
+	}
+	info, err := codebuddy.FetchAccountInfo(ctx, client, codebuddy.Identity{
+		Profile:     creds.Profile,
+		AccessToken: result.AccessToken,
+		Domain:      firstNonEmpty(result.Domain, creds.Domain),
+		UID:         creds.UID,
+	})
+	if err != nil || info == nil {
+		if err != nil {
+			logger.L().Debug("codebuddy account_type backfill failed",
+				zap.Int64("account_id", account.ID),
+				zap.Error(err),
+			)
+		}
+		return
+	}
+	result.AccountType = info.AccountType
+	if result.EnterpriseID == "" {
+		result.EnterpriseID = info.EnterpriseID
+	}
+	if result.EnterpriseName == "" {
+		result.EnterpriseName = info.EnterpriseName
+	}
+	if result.Nickname == "" {
+		result.Nickname = info.Nickname
+	}
 }
 
 // ApplyRefresh merges rotated tokens into the account's credentials, keeping
@@ -144,6 +181,20 @@ func (s *CodeBuddyOAuthService) ApplyRefresh(account *Account, result *codebuddy
 	}
 	if result.RefreshExpiresAt > 0 {
 		creds[codebuddy.KeyRefreshExpiresAt] = time.Unix(result.RefreshExpiresAt, 0).UTC().Format(time.RFC3339)
+	}
+	// Backfill the subscription tier (and identity) when the refresh carried it.
+	// Non-empty only: a refresh that omits these keeps whatever is already stored.
+	if result.AccountType != "" {
+		creds[codebuddy.KeyAccountType] = result.AccountType
+	}
+	if result.EnterpriseID != "" {
+		creds[codebuddy.KeyEnterpriseID] = result.EnterpriseID
+	}
+	if result.EnterpriseName != "" {
+		creds[codebuddy.KeyEnterpriseName] = result.EnterpriseName
+	}
+	if result.Nickname != "" {
+		creds[codebuddy.KeyNickname] = result.Nickname
 	}
 	return creds
 }

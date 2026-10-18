@@ -43,6 +43,28 @@ export function openAIPlanTypeLabel(value?: string | null): string {
 }
 
 /**
+ * CodeBuddy / WorkBuddy 订阅挡位 → 展示标签。挡位来自凭证里的 account_type
+ * （后端 codebuddy.Credentials.AccountType：personal / ultimate / exclusive / ...，
+ * 其中 exclusive 即「专属/私有」）。未知挡位返回空串，由调用方回退为原始值。
+ */
+export function codeBuddyPlanTypeLabel(value?: string | null): string {
+  switch (normalizePlanType(value)) {
+    case 'personal':
+      return 'Personal'
+    case 'ultimate':
+      return 'Ultimate'
+    case 'exclusive':
+      return 'Exclusive'
+    case 'enterprise':
+      return 'Enterprise'
+    case 'free':
+      return 'Free'
+    default:
+      return ''
+  }
+}
+
+/**
  * Claude 订阅档位 → 展示标签（后端 extra.claude_subscription.plan_type）；未知档位返回空串。
  * Max 的倍率来自 rate_limit_tier（default_claude_max_5x / default_claude_max_20x）；
  * Team 席位同样由 rate_limit_tier 决定：`team_premium` 高级席、`team_standard` 标准席，

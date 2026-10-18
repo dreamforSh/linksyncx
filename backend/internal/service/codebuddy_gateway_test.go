@@ -180,6 +180,69 @@ func TestCodeBuddyContentFilterDoesNotFailOver(t *testing.T) {
 	require.Equal(t, http.StatusBadRequest, rec.Code)
 }
 
+// TestCodeBuddyApplyRefreshPersistsAccountType verifies the refresh flow writes
+// the subscription tier when the rotation carries one, and preserves the stored
+// tier when it does not.
+func TestCodeBuddyApplyRefreshPersistsAccountType(t *testing.T) {
+	svc := &CodeBuddyOAuthService{}
+	account := codeBuddyTestAccount(codebuddy.ProfileCNCLI)
+	require.NotContains(t, account.Credentials, codebuddy.KeyAccountType, "test fixture should start without a tier")
+
+	// Refresh carries the tier (echoed or backfilled) → persisted.
+	creds := svc.ApplyRefresh(account, &codebuddy.RefreshResult{
+		AccessToken: "new", RefreshToken: "rt2", AccountType: "ultimate", EnterpriseID: "ent",
+	})
+	require.Equal(t, "new", creds[codebuddy.KeyAccessToken])
+	require.Equal(t, "ultimate", creds[codebuddy.KeyAccountType])
+	require.Equal(t, "ent", creds[codebuddy.KeyEnterpriseID])
+
+	// A later refresh without a tier must keep the stored one, not blank it.
+	account.Credentials[codebuddy.KeyAccountType] = "ultimate"
+	creds = svc.ApplyRefresh(account, &codebuddy.RefreshResult{AccessToken: "n2"})
+	require.Equal(t, "ultimate", creds[codebuddy.KeyAccountType])
+}
+
+// TestCodeBuddyUpstream400SurfacesCodeAndMsg locks in that a plain upstream 400
+// carrying only CodeBuddy's {code, msg} envelope reaches the client with the real
+// reason, not the opaque "Upstream error: 400" the generic extractor produced.
+func TestCodeBuddyUpstream400SurfacesCodeAndMsg(t *testing.T) {
+	body := []byte(`{"model":"glm-5.2","stream":false,"messages":[{"role":"user","content":"hi"}]}`)
+	c, rec := newCodeBuddyTestContext("/v1/chat/completions", body)
+	upstream := &httpUpstreamRecorder{resp: &http.Response{
+		StatusCode: http.StatusBadRequest,
+		Header:     http.Header{"Content-Type": []string{"application/json"}},
+		Body:       io.NopCloser(strings.NewReader(`{"code":40002,"msg":"invalid tool schema"}`)),
+	}}
+	svc := &OpenAIGatewayService{cfg: rawChatCompletionsTestConfig(), httpUpstream: upstream}
+
+	_, err := svc.ForwardAsChatCompletions(context.Background(), c, codeBuddyTestAccount(codebuddy.ProfileCNCLI), body, "", "")
+	require.Error(t, err)
+	var failover *UpstreamFailoverError
+	require.False(t, errors.As(err, &failover), "a plain 400 must not fail over: %v", err)
+	require.Equal(t, http.StatusBadRequest, rec.Code)
+	require.Equal(t, "invalid tool schema (code 40002)", gjson.Get(rec.Body.String(), "error.message").String())
+	require.Equal(t, "invalid_request_error", gjson.Get(rec.Body.String(), "error.type").String())
+}
+
+// TestCodeBuddyMessagesUpstream400SurfacesMsg is the Claude Code /v1/messages
+// counterpart: the same envelope must surface through the Anthropic error format.
+func TestCodeBuddyMessagesUpstream400SurfacesMsg(t *testing.T) {
+	body := []byte(`{"model":"glm-5.2","max_tokens":64,"messages":[{"role":"user","content":"hi"}]}`)
+	c, rec := newCodeBuddyTestContext("/v1/messages", body)
+	upstream := &httpUpstreamRecorder{resp: &http.Response{
+		StatusCode: http.StatusBadRequest,
+		Header:     http.Header{"Content-Type": []string{"application/json"}},
+		Body:       io.NopCloser(strings.NewReader(`{"code":"40003","msg":"messages malformed"}`)),
+	}}
+	svc := &OpenAIGatewayService{cfg: rawChatCompletionsTestConfig(), httpUpstream: upstream}
+
+	_, err := svc.ForwardAsAnthropic(context.Background(), c, codeBuddyTestAccount(codebuddy.ProfileCNCLI), body, "", "")
+	require.Error(t, err)
+	require.Equal(t, http.StatusBadRequest, rec.Code)
+	require.Equal(t, "error", gjson.Get(rec.Body.String(), "type").String())
+	require.Equal(t, "messages malformed (code 40003)", gjson.Get(rec.Body.String(), "error.message").String())
+}
+
 func TestCodeBuddyCreditPolicyBlocksPricedModel(t *testing.T) {
 	body := []byte(`{"model":"kimi","stream":true,"messages":[{"role":"user","content":"hi"}]}`)
 	c, rec := newCodeBuddyTestContext("/v1/chat/completions", body)

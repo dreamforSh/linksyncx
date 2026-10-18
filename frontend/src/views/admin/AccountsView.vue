@@ -1756,6 +1756,10 @@ function getAccountPlanType(row: any): string | undefined {
     // Perplexity 的订阅档位来自会话快照（维护任务定期刷新 extra.perplexity_quota_snapshot）。
     return firstNonBlankString(row.extra?.perplexity_quota_snapshot?.session?.subscription_tier, row.credentials?.plan_type)
   }
+  if (row.platform === 'codebuddy') {
+    // CodeBuddy 的订阅挡位登记在凭证的 account_type（personal/ultimate/exclusive），不走通用 plan_type。
+    return firstNonBlankString(row.credentials?.account_type, row.credentials?.plan_type, row.parent_plan_type)
+  }
   return firstNonBlankString(row.credentials?.plan_type, row.parent_plan_type)
 }
 

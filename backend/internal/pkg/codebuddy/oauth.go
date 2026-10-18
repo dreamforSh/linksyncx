@@ -334,6 +334,10 @@ func randomLoginID() string {
 
 // RefreshResult carries the rotated tokens. CodeBuddy rotates the refresh
 // token, so the caller must persist it before the next refresh.
+//
+// Account-profile fields (subscription tier, enterprise, nickname) are filled
+// only when the refresh response echoes them; they are empty otherwise and the
+// caller keeps whatever it already stored.
 type RefreshResult struct {
 	AccessToken      string
 	RefreshToken     string
@@ -342,6 +346,45 @@ type RefreshResult struct {
 	ExpiresAt        int64
 	RefreshExpiresAt int64
 	Domain           string
+	AccountType      string
+	EnterpriseID     string
+	EnterpriseName   string
+	Nickname         string
+}
+
+// AccountInfo is the account profile returned by /v2/plugin/login/account:
+// identity plus the subscription tier (AccountType: personal / ultimate /
+// exclusive / ...).
+type AccountInfo struct {
+	UID            string
+	Nickname       string
+	EnterpriseID   string
+	EnterpriseName string
+	AccountType    string
+}
+
+// FetchAccountInfo reads the account profile for an authenticated identity. It
+// is the shared primitive behind refresh-token import and the refresh-path
+// subscription-tier backfill.
+func FetchAccountInfo(ctx context.Context, client HTTPDoer, id Identity) (*AccountInfo, error) {
+	resp, err := DoJSON(ctx, client, http.MethodGet, EndpointForProfile(id.profile())+LoginAccountPath, CredentialHeaders(id), nil)
+	if err != nil {
+		return nil, err
+	}
+	if !resp.Success() {
+		return nil, fmt.Errorf("fetch account failed: %s", resp.ErrorMessage())
+	}
+	var account map[string]any
+	if json.Unmarshal(resp.Data, &account) != nil {
+		return nil, fmt.Errorf("decode account payload")
+	}
+	return &AccountInfo{
+		UID:            uidField(account),
+		Nickname:       stringField(account, "nickname"),
+		EnterpriseID:   stringField(account, "enterpriseId", KeyEnterpriseID),
+		EnterpriseName: stringField(account, "enterpriseName"),
+		AccountType:    stringField(account, "type", "accountType", KeyAccountType),
+	}, nil
 }
 
 // Refresh exchanges the refresh token at the profile's chat origin.
@@ -379,6 +422,16 @@ func Refresh(ctx context.Context, client HTTPDoer, creds Credentials) (*RefreshR
 	if refreshExpiresAt == 0 {
 		refreshExpiresAt = expiresAt
 	}
+	// Some refresh responses echo the account profile (flat, or nested under an
+	// "account" object). Capture the subscription tier / enterprise fields when
+	// present so the caller can backfill them without an extra round trip.
+	account := mapField(data, "account")
+	echoField := func(keys ...string) string {
+		if v := stringField(account, keys...); v != "" {
+			return v
+		}
+		return stringField(data, keys...)
+	}
 	return &RefreshResult{
 		AccessToken:      accessToken,
 		RefreshToken:     firstNonEmpty(stringField(data, "refreshToken", KeyRefreshToken), creds.RefreshToken),
@@ -387,6 +440,10 @@ func Refresh(ctx context.Context, client HTTPDoer, creds Credentials) (*RefreshR
 		ExpiresAt:        expiresAt,
 		RefreshExpiresAt: refreshExpiresAt,
 		Domain:           firstNonEmpty(stringField(data, "domain"), creds.Domain),
+		AccountType:      echoField("type", "accountType", KeyAccountType),
+		EnterpriseID:     echoField("enterpriseId", KeyEnterpriseID),
+		EnterpriseName:   echoField("enterpriseName", KeyEnterpriseName),
+		Nickname:         echoField("nickname"),
 	}, nil
 }
 
@@ -408,20 +465,15 @@ func ImportRefreshToken(ctx context.Context, client HTTPDoer, profile, refreshTo
 	if err != nil {
 		return nil, err
 	}
-	headers := CredentialHeaders(Identity{Profile: profile, AccessToken: refreshed.AccessToken, Domain: refreshed.Domain, UID: uid})
-	resp, err := DoJSON(ctx, client, http.MethodGet, EndpointForProfile(profile)+LoginAccountPath, headers, nil)
+	info, err := FetchAccountInfo(ctx, client, Identity{Profile: profile, AccessToken: refreshed.AccessToken, Domain: refreshed.Domain, UID: uid})
 	if err != nil {
 		return nil, err
 	}
-	if !resp.Success() {
-		return nil, fmt.Errorf("fetch account failed: %s", resp.ErrorMessage())
-	}
-	var account map[string]any
-	if json.Unmarshal(resp.Data, &account) != nil || uidField(account) == "" {
+	if info.UID == "" {
 		return nil, fmt.Errorf("official API did not return uid")
 	}
-	if got := uidField(account); got != uid {
-		return nil, fmt.Errorf("account uid %s does not match the refresh token subject", got)
+	if info.UID != uid {
+		return nil, fmt.Errorf("account uid %s does not match the refresh token subject", info.UID)
 	}
 	creds := Credentials{
 		AccessToken:      refreshed.AccessToken,
@@ -432,10 +484,10 @@ func ImportRefreshToken(ctx context.Context, client HTTPDoer, profile, refreshTo
 		RefreshExpiresAt: refreshed.RefreshExpiresAt,
 		Domain:           refreshed.Domain,
 		UID:              uid,
-		Nickname:         stringField(account, "nickname"),
-		EnterpriseID:     stringField(account, "enterpriseId", KeyEnterpriseID),
-		EnterpriseName:   stringField(account, "enterpriseName"),
-		AccountType:      stringField(account, "type"),
+		Nickname:         info.Nickname,
+		EnterpriseID:     info.EnterpriseID,
+		EnterpriseName:   info.EnterpriseName,
+		AccountType:      info.AccountType,
 		Profile:          profile,
 	}
 	out, err := finalizeCredentials(creds)

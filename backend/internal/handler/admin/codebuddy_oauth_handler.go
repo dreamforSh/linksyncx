@@ -233,6 +233,13 @@ func (h *CodeBuddyOAuthHandler) ReAuthAccount(c *gin.Context) {
 			credentials[key] = value
 		}
 	}
+	// Keep the subscription tier if the fresh source did not report one, so a
+	// re-auth never blanks an account's previously known account_type.
+	if _, has := credentials[codebuddy.KeyAccountType]; !has {
+		if value, exists := account.Credentials[codebuddy.KeyAccountType]; exists {
+			credentials[codebuddy.KeyAccountType] = value
+		}
+	}
 	updated, err := h.adminService.UpdateAccount(c.Request.Context(), account.ID, &service.UpdateAccountInput{Credentials: credentials})
 	if err != nil {
 		response.ErrorFrom(c, err)

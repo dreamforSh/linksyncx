@@ -67,6 +67,27 @@ func ModelNotServable(status int, body []byte) bool {
 	return code == ModelNotServableCode || notServableMessage.MatchString(msg)
 }
 
+// ErrorMessage renders a CodeBuddy business error envelope into a human-readable
+// line. CodeBuddy nests the reason in a {code, msg} shape (with errCode /
+// error_code / message aliases); the generic gateway extractor only reads
+// error.message / detail / message, so an upstream 400 that only carries
+// {code, msg} would otherwise reach the client as an opaque "Upstream error: 400".
+// Returns "" when the body carries neither a code nor a message, letting callers
+// fall back to their generic handling.
+func ErrorMessage(body []byte) string {
+	code, msg := envelopeCodeAndMessage(body)
+	switch {
+	case msg != "" && code != "":
+		return fmt.Sprintf("%s (code %s)", msg, code)
+	case msg != "":
+		return msg
+	case code != "":
+		return fmt.Sprintf("CodeBuddy upstream error (code %s)", code)
+	default:
+		return ""
+	}
+}
+
 func envelopeCodeAndMessage(body []byte) (string, string) {
 	var payload map[string]any
 	if json.Unmarshal(body, &payload) != nil {
