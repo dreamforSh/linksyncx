@@ -84,48 +84,69 @@ describe('Perplexity search settings contract', () => {
 })
 
 describe('Perplexity usage snapshots', () => {
-  it('shows per-section last-good times, stale values and unknown failed sections without claiming live usage', () => {
+  it('renders remaining buckets and credits in the shared compact quota style', () => {
     const wrapper = mount(PerplexityUsageDetails, {
       props: { usage: {
-        snapshot: { credits: { balance: 7 }, session: { subscription_tier: 'pro' } },
+        snapshot: {
+          credits: { balance: 4000, total: 10000, currency: 'credits' },
+          rate_limits: { remaining_research: 5, remaining_pro: 0, remaining_labs: -1, note: 'x' },
+          session: { subscription_tier: 'pro' }
+        },
         sections: {
           session: { status: 'success', fetched_at: '2026-10-16T00:00:00Z' },
-          credits: { status: 'stale', fetched_at: '2026-10-15T00:00:00Z', attempted_at: '2026-10-16T00:00:00Z', error: 'credits timeout' },
+          credits: { status: 'success', fetched_at: '2026-10-16T00:00:00Z' },
+          rate_limits: { status: 'success', fetched_at: '2026-10-15T00:00:00Z' }
+        }
+      } },
+      global: { plugins: [i18n] }
+    })
+    const rows = wrapper.findAll('[data-testid^="perplexity-bucket-"]')
+    expect(rows.map(row => row.attributes('data-testid'))).toEqual(['perplexity-bucket-pro', 'perplexity-bucket-research', 'perplexity-bucket-labs'])
+    expect(rows[0].text()).toContain('Pro')
+    expect(rows[0].find('.text-red-600').exists()).toBe(true)
+    expect(rows[1].text()).toContain('5')
+    expect(rows[2].text()).toContain('∞')
+    expect(wrapper.get('[data-testid="perplexity-credits"]').text()).toContain('4,000 / 10,000')
+    expect(wrapper.find('[data-testid="perplexity-session-status"]').exists()).toBe(false)
+    expect(wrapper.find('[data-testid="perplexity-usage-problem"]').exists()).toBe(false)
+    expect(wrapper.get('[data-testid="perplexity-usage-updated"]').attributes('title')).toBeTruthy()
+    expect(wrapper.find('pre').exists()).toBe(false)
+    expect(wrapper.text()).not.toContain('%')
+  })
+
+  it('dims stale sections and summarizes failed ones without claiming live usage', () => {
+    const wrapper = mount(PerplexityUsageDetails, {
+      props: { usage: {
+        snapshot: { credits: { balance: 7 }, rate_limits: { remaining_pro: 3 } },
+        sections: {
+          credits: { status: 'stale', fetched_at: '2026-10-15T00:00:00Z', error: 'credits timeout' },
           rate_limits: { status: 'error', error: 'limits unavailable' }
         }
       } },
       global: { plugins: [i18n] }
     })
-    expect(wrapper.get('[data-testid="perplexity-session-status"]').text()).toContain('sessionUnknown')
-    const credits = wrapper.get('[data-testid="perplexity-usage-credits"]')
-    expect(credits.text()).toContain('stale')
-    expect(credits.text()).toContain('balance: 7')
-    expect(credits.text()).toContain('credits timeout')
-    expect(credits.find('[title="2026-10-15T00:00:00Z"]').exists()).toBe(true)
-    const limits = wrapper.get('[data-testid="perplexity-usage-rate_limits"]')
-    expect(limits.text()).toContain('unknown')
-    expect(limits.text()).toContain('limits unavailable')
-    expect(limits.find('pre').exists()).toBe(false)
-    expect(wrapper.text()).not.toContain('0%')
+    expect(wrapper.get('[data-testid="perplexity-credits"]').classes()).toContain('opacity-60')
+    expect(wrapper.get('[data-testid="perplexity-bucket-pro"]').classes()).toContain('opacity-60')
+    const problem = wrapper.get('[data-testid="perplexity-usage-problem"]')
+    expect(problem.attributes('title')).toContain('credits timeout')
+    expect(problem.attributes('title')).toContain('limits unavailable')
   })
 
-  it('treats a failed refresh as unknown session status and retained values as stale', () => {
+  it('treats a failed refresh as stale and only declares the session invalid when the backend says false', async () => {
     const wrapper = mount(PerplexityUsageDetails, {
       props: {
         unavailable: true,
-        usage: { session_valid: true, snapshot: { credits: { balance: 7 } }, sections: { credits: { status: 'success', fetched_at: '2026-10-15T00:00:00Z' } } }
+        usage: { session_valid: false, snapshot: { credits: { balance: 7 } }, sections: { credits: { status: 'success', fetched_at: '2026-10-15T00:00:00Z' } } }
       },
       global: { plugins: [i18n] }
     })
-    expect(wrapper.get('[data-testid="perplexity-session-status"]').text()).toContain('sessionUnknown')
-    expect(wrapper.get('[data-testid="perplexity-usage-credits"]').text()).toContain('stale')
-    expect(wrapper.get('[data-testid="perplexity-usage-credits"]').text()).toContain('balance: 7')
-  })
+    expect(wrapper.find('[data-testid="perplexity-session-status"]').exists()).toBe(false)
+    expect(wrapper.get('[data-testid="perplexity-credits"]').classes()).toContain('opacity-60')
+    expect(wrapper.get('[data-testid="perplexity-usage-problem"]').text()).toContain('staleSnapshot')
 
-  it('only declares session invalid when the backend explicitly says false', async () => {
-    const wrapper = mount(PerplexityUsageDetails, { props: { usage: { snapshot: {}, sections: {}, session_valid: false } }, global: { plugins: [i18n] } })
-    expect(wrapper.get('[data-testid="perplexity-session-status"]').text()).toContain('sessionInvalid')
+    await wrapper.setProps({ unavailable: false, usage: { snapshot: {}, sections: {}, session_valid: false } })
+    expect(wrapper.get('[data-testid="perplexity-session-status"]').text()).toContain('needsReauth')
     await wrapper.setProps({ usage: { snapshot: {}, sections: {} } })
-    expect(wrapper.get('[data-testid="perplexity-session-status"]').text()).toContain('sessionUnknown')
+    expect(wrapper.find('[data-testid="perplexity-session-status"]').exists()).toBe(false)
   })
 })

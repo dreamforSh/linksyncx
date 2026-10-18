@@ -415,10 +415,28 @@
     </template>
 
     <template v-else-if="account.platform === 'perplexity' && account.type === 'apikey'">
-      <div v-if="loading" class="text-xs text-gray-400" role="status">{{ t('common.loading') }}</div>
-      <div v-if="error || usageInfo?.error" class="max-w-[260px] break-words text-xs text-amber-600 dark:text-amber-400">{{ error || usageInfo?.error }}</div>
-      <PerplexityUsageDetails :usage="usageInfo?.perplexity" :unavailable="Boolean(error)" />
-      <button type="button" class="mt-1 rounded px-1.5 py-0.5 text-[10px] text-blue-600 hover:bg-blue-50 disabled:opacity-50 dark:text-blue-400 dark:hover:bg-blue-900/30" :disabled="loading || activeQueryLoading" data-testid="perplexity-refresh-usage" @click="loadUsage({ source: 'active', bypassCache: true })">
+      <div v-if="loading && !usageInfo?.perplexity" class="space-y-1.5" role="status">
+        <div class="flex items-center gap-1">
+          <div class="h-3 w-[32px] animate-pulse rounded bg-gray-200 dark:bg-gray-700"></div>
+          <div class="h-3 w-8 animate-pulse rounded bg-gray-200 dark:bg-gray-700"></div>
+        </div>
+      </div>
+      <template v-else>
+        <div v-if="error && !usageInfo?.perplexity" class="max-w-[200px] truncate text-xs text-red-500" :title="error">{{ error }}</div>
+        <PerplexityUsageDetails v-if="usageInfo?.perplexity" :usage="usageInfo.perplexity" :unavailable="Boolean(error)" />
+        <div v-else-if="!error" class="text-xs text-gray-400">-</div>
+      </template>
+      <button
+        type="button"
+        class="mt-0.5 inline-flex items-center gap-0.5 rounded px-1.5 py-0.5 text-[10px] font-medium text-sky-700 transition-colors hover:bg-sky-50 disabled:cursor-not-allowed disabled:opacity-50 dark:text-sky-300 dark:hover:bg-sky-900/30"
+        :disabled="loading || activeQueryLoading"
+        :title="t('admin.accounts.perplexity.usage.snapshot')"
+        data-testid="perplexity-refresh-usage"
+        @click="loadUsage({ source: 'active', bypassCache: true })"
+      >
+        <svg class="h-2.5 w-2.5" :class="{ 'animate-spin': loading || activeQueryLoading }" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
+        </svg>
         {{ t('admin.accounts.perplexity.usage.refresh') }}
       </button>
     </template>

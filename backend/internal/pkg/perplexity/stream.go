@@ -30,6 +30,68 @@ var (
 	ErrAnswerRewritten  = errors.New("perplexity: upstream rewrote text already sent in the stream")
 )
 
+// UpstreamEventKind 是流内错误事件的粗分类，用于账号冷却与换号；不保留原始载荷。
+type UpstreamEventKind string
+
+const (
+	UpstreamEventOther       UpstreamEventKind = "other"
+	UpstreamEventRateLimited UpstreamEventKind = "rate_limited"
+	UpstreamEventAuth        UpstreamEventKind = "auth"
+)
+
+// UpstreamEventError 是带分类的流内错误；errors.Is(err, ErrUpstreamEvent) 仍成立。
+type UpstreamEventError struct {
+	Kind UpstreamEventKind
+}
+
+func (e *UpstreamEventError) Error() string {
+	return ErrUpstreamEvent.Error() + " (" + string(e.Kind) + ")"
+}
+
+func (e *UpstreamEventError) Is(target error) bool { return target == ErrUpstreamEvent }
+
+// UpstreamEventKindOf 返回流内错误的分类；非流内错误返回空串。
+func UpstreamEventKindOf(err error) UpstreamEventKind {
+	var typed *UpstreamEventError
+	if errors.As(err, &typed) {
+		return typed.Kind
+	}
+	if errors.Is(err, ErrUpstreamEvent) {
+		return UpstreamEventOther
+	}
+	return ""
+}
+
+// classifyUpstreamEvent 只读取载荷里的状态码与关键字做分类，结果是固定枚举。
+func classifyUpstreamEvent(data string) *UpstreamEventError {
+	if len(data) > 64*1024 {
+		data = data[:64*1024]
+	}
+	if gjson.Valid(data) {
+		root := gjson.Parse(data)
+		for _, path := range []string{"status", "status_code", "code", "error.status", "error.code", "error.status_code"} {
+			switch root.Get(path).Int() {
+			case 429:
+				return &UpstreamEventError{Kind: UpstreamEventRateLimited}
+			case 401, 403:
+				return &UpstreamEventError{Kind: UpstreamEventAuth}
+			}
+		}
+	}
+	lower := strings.ToLower(data)
+	for _, marker := range []string{"rate limit", "rate_limit", "ratelimit", "too many requests", "quota", "usage limit", "limit exceeded", "limit_exceeded"} {
+		if strings.Contains(lower, marker) {
+			return &UpstreamEventError{Kind: UpstreamEventRateLimited}
+		}
+	}
+	for _, marker := range []string{"unauthorized", "unauthenticated", "not logged in", "login required", "session expired", "forbidden"} {
+		if strings.Contains(lower, marker) {
+			return &UpstreamEventError{Kind: UpstreamEventAuth}
+		}
+	}
+	return &UpstreamEventError{Kind: UpstreamEventOther}
+}
+
 // SSEFrame 是一个以空行结束的 SSE 事件；多个 data 行以换行连接。
 type SSEFrame struct {
 	Event   string
@@ -130,7 +192,7 @@ func (d *Decoder) Next() (Event, error) {
 		}
 		switch frame.Event {
 		case "error":
-			return Event{}, ErrUpstreamEvent
+			return Event{}, classifyUpstreamEvent(frame.Data)
 		case SSEEventMessage, SSEEventEndOfStream:
 			// EOS may have no data, an empty data field, or a final JSON payload.
 			if frame.Event == SSEEventEndOfStream && strings.TrimSpace(frame.Data) == "" {
@@ -142,10 +204,15 @@ func (d *Decoder) Next() (Event, error) {
 			}
 			ev, ok := parseEvent([]byte(frame.Data), d.answerUsage)
 			if !ok {
+				// end_of_stream 本身就是终态：载荷不可解析（如 "done"）不能让已完整的回答失败。
+				if frame.Event == SSEEventEndOfStream {
+					d.complete = true
+					return Event{EndOfStream: true}, nil
+				}
 				return Event{}, ErrMalformedEvent
 			}
 			if ev.Error {
-				return Event{}, ErrUpstreamEvent
+				return Event{}, classifyUpstreamEvent(frame.Data)
 			}
 			if ev.HasText && d.answerUsage == "" {
 				d.answerUsage = ev.AnswerUsage
@@ -215,7 +282,9 @@ func parseEvent(data []byte, answerUsage string) (Event, bool) {
 		if status := md.Get("progress").String(); strings.EqualFold(status, "ERROR") || strings.EqualFold(status, "FAILED") || hasEventError(md) {
 			ev.Error = true
 		}
-		if !md.IsObject() || (!md.Get("answer").Exists() && !md.Get("chunks").IsArray()) {
+		// 占位帧（answer:null、无 chunks、非字符串 chunk）不是可用答案，跳过该块
+		// 而不是让整条事件判失败。
+		if !md.IsObject() || !usableAnswerBlock(md) {
 			continue
 		}
 		if answerUsage != "" {
@@ -231,18 +300,13 @@ func parseEvent(data []byte, answerUsage string) (Event, bool) {
 		ev.AnswerUsage = selected.Get("intended_usage").String()
 		if answer := md.Get("answer"); answer.Type == gjson.String {
 			ev.Text, ev.HasText = answer.String(), true
-		} else if chunks := md.Get("chunks"); chunks.IsArray() {
+		} else {
 			var text strings.Builder
-			for _, chunk := range chunks.Array() {
-				if chunk.Type != gjson.String {
-					return Event{}, false
-				}
+			for _, chunk := range md.Get("chunks").Array() {
 				_, _ = text.WriteString(chunk.String())
 			}
 			ev.Text, ev.HasText = text.String(), true
 			ev.IsDelta = !strings.EqualFold(md.Get("progress").String(), "DONE")
-		} else {
-			return Event{}, false
 		}
 	}
 
@@ -286,6 +350,24 @@ func parseEvent(data []byte, answerUsage string) (Event, bool) {
 	}
 	ev.Sources = MergeSources(nil, ev.Sources)
 	return ev, true
+}
+
+// usableAnswerBlock 报告 markdown_block 是否携带可用答案：字符串 answer，或全部为
+// 字符串的 chunks 数组。
+func usableAnswerBlock(md gjson.Result) bool {
+	if md.Get("answer").Type == gjson.String {
+		return true
+	}
+	chunks := md.Get("chunks")
+	if !chunks.IsArray() {
+		return false
+	}
+	usable := true
+	chunks.ForEach(func(_, chunk gjson.Result) bool {
+		usable = chunk.Type == gjson.String
+		return usable
+	})
+	return usable
 }
 
 func reportedEventModel(value gjson.Result) string {
@@ -336,24 +418,31 @@ type Answer struct {
 
 // Apply 合并事件并返回新增文本；allowRewrite 仅可用于尚未输出的缓冲回答。
 func (a *Answer) Apply(ev Event, allowRewrite bool) (string, error) {
+	delta, _, err := a.ApplyEvent(ev, allowRewrite)
+	return delta, err
+}
+
+// ApplyEvent 同 Apply，并报告快照是否改写了已累积的正文（rewritten 时返回值是
+// 完整新正文，调用方须丢弃基于旧正文的派生状态）。
+func (a *Answer) ApplyEvent(ev Event, allowRewrite bool) (delta string, rewritten bool, err error) {
 	if !ev.HasText {
-		return "", nil
+		return "", false, nil
 	}
 	if ev.IsDelta {
 		_, _ = a.text.WriteString(ev.Text)
-		return ev.Text, nil
+		return ev.Text, false, nil
 	}
-	delta, err := DeltaFromSnapshot(a.text.String(), ev.Text)
+	delta, err = DeltaFromSnapshot(a.text.String(), ev.Text)
 	if err != nil {
 		if !allowRewrite {
-			return "", err
+			return "", false, err
 		}
 		a.text.Reset()
 		_, _ = a.text.WriteString(ev.Text)
-		return ev.Text, nil
+		return ev.Text, true, nil
 	}
 	_, _ = a.text.WriteString(delta)
-	return delta, nil
+	return delta, false, nil
 }
 
 // Content 返回当前权威正文，不包含来源 footer。
@@ -377,6 +466,8 @@ func sourcesFromResults(results gjson.Result) []Source {
 	return sources
 }
 
+var sourceURLEscaper = strings.NewReplacer("<", "%3C", ">", "%3E", "\\", "%5C")
+
 // MergeSources 验证 http(s) URL，按 URL 去重保序，并更新同来源的新标题。
 func MergeSources(current, incoming []Source) []Source {
 	if len(current) == 0 && len(incoming) == 0 {
@@ -395,7 +486,7 @@ func MergeSources(current, incoming []Source) []Source {
 			}
 			u.Scheme, u.Host = strings.ToLower(u.Scheme), strings.ToLower(u.Host)
 			u.Fragment = ""
-			source.URL = strings.NewReplacer("<", "%3C", ">", "%3E", "\\", "%5C").Replace(u.String())
+			source.URL = sourceURLEscaper.Replace(u.String())
 			source.Title = strings.Join(strings.FieldsFunc(source.Title, func(r rune) bool { return unicode.IsSpace(r) || unicode.IsControl(r) }), " ")
 			if title := []rune(source.Title); len(title) > 240 {
 				source.Title = string(title[:240])

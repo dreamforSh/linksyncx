@@ -148,13 +148,23 @@ func TestTranslatePerplexitySSEToCC_StepsAsSafeProgress(t *testing.T) {
 	require.NotContains(t, out, "tool_calls")
 	require.NotContains(t, out, "private query")
 	require.NotContains(t, out, "secret")
-	updates := 0
+	texts, updates := 0, 0
 	for _, line := range strings.Split(out, "\n") {
-		if strings.HasPrefix(line, "data: {") && gjson.Parse(strings.TrimPrefix(line, "data: ")).Get("choices.0.delta.reasoning_content").Exists() {
+		if !strings.HasPrefix(line, "data: {") {
+			continue
+		}
+		chunk := gjson.Parse(strings.TrimPrefix(line, "data: "))
+		if chunk.Get("choices.0.delta.reasoning_content").Exists() {
+			texts++
+		}
+		// 末尾 usage 块（choices 为空）汇总全部进度，不算增量更新。
+		if chunk.Get("choices.#").Int() > 0 && chunk.Get("perplexity.search_progress").Exists() {
 			updates++
 		}
 	}
-	require.Equal(t, 2, updates, "重复状态去重，同 UUID 的完成状态仍应更新")
+	require.Equal(t, 1, texts, "同一步骤的文字只下发一次，状态变化不重复堆叠")
+	require.Equal(t, 2, updates, "重复状态去重，同 UUID 的完成状态仍应更新元数据")
+	require.Contains(t, out, `"status":"DONE"`)
 	require.Contains(t, out, `"Answer."`)
 	require.Contains(t, out, `"finish_reason":"stop"`)
 	require.Less(t, strings.Index(out, `"role":"assistant"`), strings.Index(out, `"reasoning_content"`))

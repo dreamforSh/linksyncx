@@ -249,6 +249,7 @@ export default {
       privacyFailed: '关闭训练数据共享失败',
       privacyAntigravitySet: '已关闭遥测和营销邮件',
       privacyAntigravityFailed: '隐私设置失败',
+      privacyPerplexityIncognito: '默认隐身搜索：对话不写入 Perplexity 历史，也不参与续聊缓存',
       setPrivacy: '设置隐私',
       subscriptionAbnormal: '异常',
       subscriptionExpires: '到期',
@@ -1248,9 +1249,20 @@ export default {
           sessionValid: '会话有效',
           sessionInvalid: '会话失效，需更新 Cookie',
           sessionUnknown: '当前会话状态未知',
-          refresh: '刷新快照',
+          refresh: '刷新',
           details: '查看快照明细',
-          noFields: '无可展示的额度字段'
+          noFields: '无可展示的额度字段',
+          remaining: '次剩余',
+          creditsBalance: '积分余额',
+          staleSnapshot: '刷新失败，显示上次快照',
+          partialFailure: '{sections} 获取失败',
+          updated: '更新于 {time}',
+          bucketTitle: '{name}剩余次数（上游快照，非实时）',
+          buckets: {
+            pro: 'Pro 搜索',
+            research: 'Deep Research',
+            labs: 'Labs'
+          }
         }
       },
       grokClientToolCache: {

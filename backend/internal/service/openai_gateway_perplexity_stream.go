@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"strings"
+	"sync"
 
 	"github.com/Wei-Shaw/sub2api/internal/pkg/perplexity"
 )
@@ -33,10 +34,10 @@ type perplexityTranslateParams struct {
 	identity            *perplexityResponseIdentity
 	// metrics 在翻译完成后携带真实指标（搜索引用数）回转发层，供计费使用。
 	metrics *perplexityResponseMetrics
-	// toolAllowed 非空时启用函数工具模拟：用 ToolCallParser 识别上游回答开头的
-	// <tool_call>{...}</tool_call> 块，还原为 CC tool_calls；解析失败整段按文本下发，
-	// 绝不伪造调用。toolChoice 仅用于记录本轮约束（required/function 的兑现由模型
-	// 决定，不满足时不编造，按文本返回）。
+	// toolAllowed 非空时启用函数工具模拟：用 ToolCallParser 识别上游回答里从行首
+	// 开始的 <tool_call>{...}</tool_call> 块（之前的文字按正文下发），还原为 CC
+	// tool_calls；解析失败整段按文本下发，绝不伪造调用。toolChoice 为 required/
+	// function 且未兑现时返回 errPerplexityToolChoiceUnsatisfied。
 	toolAllowed []perplexity.ToolSpec
 	toolChoice  perplexity.ToolChoice
 }
@@ -52,6 +53,12 @@ type perplexityCompletion struct {
 // translatePerplexitySSEToCC 翻译真实 SSE 事件。首个语义事件前不发送 role，
 // 出错保留已输出内容但绝不补 stop/[DONE]，以便调用方区分安全重试与部分失败。
 func translatePerplexitySSEToCC(ctx context.Context, upstream io.ReadCloser, pw *io.PipeWriter, p perplexityTranslateParams) {
+	_ = runPerplexityTranslation(ctx, upstream, pw, pw, p)
+}
+
+// runPerplexityTranslation 把翻译结果写入 out（通常就是 pw 或其包装），结束时以
+// 翻译错误关闭 pw 并返回该错误。
+func runPerplexityTranslation(ctx context.Context, upstream io.ReadCloser, pw *io.PipeWriter, out io.Writer, p perplexityTranslateParams) error {
 	defer func() { _ = upstream.Close() }()
 	// A canceled context must interrupt both blocked reads and pipe backpressure.
 	// The response-body owner cancels this context when its pipe reader closes.
@@ -60,7 +67,41 @@ func translatePerplexitySSEToCC(ctx context.Context, upstream io.ReadCloser, pw 
 		_ = upstream.Close()
 	})
 	defer stop()
-	_ = pw.CloseWithError(writePerplexityTranslation(ctx, upstream, pw, p))
+	err := writePerplexityTranslation(ctx, upstream, out, p)
+	_ = pw.CloseWithError(err)
+	return err
+}
+
+// perplexityFirstWriteGate 在第一次写出时关闭 started。写入在管道上阻塞直到
+// 响应体被读取，所以 started 恰好标记"即将有字节交给客户端"的时刻。
+type perplexityFirstWriteGate struct {
+	w       io.Writer
+	once    sync.Once
+	started chan struct{}
+}
+
+func (g *perplexityFirstWriteGate) Write(b []byte) (int, error) {
+	g.once.Do(func() { close(g.started) })
+	return g.w.Write(b)
+}
+
+// startPerplexityTranslation 启动翻译协程，等到它第一次写出（返回 nil）或在写出
+// 前失败（返回翻译错误）。写出前的失败此时尚未提交任何响应，调用方可以换号重试；
+// 写出后的失败沿用流式部分失败语义（不补 stop/[DONE]）。
+func startPerplexityTranslation(ctx context.Context, upstream io.ReadCloser, pw *io.PipeWriter, p perplexityTranslateParams) error {
+	gate := &perplexityFirstWriteGate{w: pw, started: make(chan struct{})}
+	done := make(chan error, 1)
+	go func() { done <- runPerplexityTranslation(ctx, upstream, pw, gate, p) }()
+	select {
+	case <-gate.started:
+		return nil
+	case err := <-done:
+		// 成功的翻译必然先写出（并阻塞在管道上），走到这里只可能是写出前失败。
+		if err == nil {
+			err = perplexity.ErrEmptyAnswer
+		}
+		return err
+	}
 }
 
 func writePerplexityTranslation(ctx context.Context, upstream io.Reader, pw io.Writer, p perplexityTranslateParams) error {
@@ -73,7 +114,10 @@ func writePerplexityTranslation(ctx context.Context, upstream io.Reader, pw io.W
 	var planReasoning []string
 	backendUUID := ""
 	roleSent := false
+	// sentBytes 是已交给工具解析器/客户端的答案字节数；answerEmitted 表示客户端
+	// 确实收到过答案正文。解析器暂存的文本客户端没看到，快照改写仍可安全重放。
 	sentBytes := 0
+	answerEmitted := false
 	preference := p.requestedPreference
 	if preference == "" {
 		preference, _ = perplexity.ResolveModelPreference(p.upstreamModel)
@@ -130,6 +174,7 @@ func writePerplexityTranslation(ctx context.Context, upstream io.Reader, pw io.W
 	// 前缀（"["、"[1"）暂存到下一段；收尾时按普通文本下发残余。
 	var citePending strings.Builder
 	emitContent := func(text string) error {
+		answerEmitted = true
 		if !p.StripCitations {
 			return emitDelta(map[string]any{"content": text}, nil, nil)
 		}
@@ -174,13 +219,19 @@ func writePerplexityTranslation(ctx context.Context, upstream io.Reader, pw io.W
 		if len(ev.Sources) > 0 {
 			sources = perplexity.MergeSources(sources, ev.Sources)
 		}
-		rewritten := ev.HasText && !ev.IsDelta && !strings.HasPrefix(ev.Text, answer.Content())
-		newText, err := answer.Apply(ev, !p.stream || sentBytes == 0)
+		// 流式下只要客户端还没收到答案正文，就接受快照改写（解析器暂存的旧文本
+		// 一并作废重放）；一旦正文已下发，改写只能报错。
+		newText, rewritten, err := answer.ApplyEvent(ev, !p.stream || !answerEmitted)
 		if err != nil {
 			return err
 		}
 		if rewritten {
 			identity.ResetAnswer()
+			sentBytes = 0
+			citePending.Reset()
+			if toolParser != nil {
+				toolParser = perplexity.NewToolCallParser(p.toolAllowed)
+			}
 		}
 		identity.Observe(ev, newText)
 		if p.identity != nil {
@@ -192,6 +243,7 @@ func writePerplexityTranslation(ctx context.Context, upstream io.Reader, pw io.W
 				if !ok {
 					continue
 				}
+				firstSeen := false
 				if i, exists := progressIndex[update.ID]; exists {
 					if progress[i] == update {
 						continue
@@ -204,36 +256,44 @@ func writePerplexityTranslation(ctx context.Context, upstream io.Reader, pw io.W
 					}
 					progressIndex[update.ID] = len(progress)
 					progress = append(progress, update)
+					firstSeen = true
 				}
 				if p.stream {
 					if err := ensureRole(); err != nil {
 						return err
 					}
-					if err := emitDelta(map[string]any{"reasoning_content": update.Text}, nil,
+					// 每个步骤的文字只下发一次；之后的状态变化只更新元数据，
+					// 避免"正在搜索网页。正在搜索网页（已完成）。"重复堆叠。
+					delta := map[string]any{}
+					if firstSeen {
+						delta["reasoning_content"] = update.Text
+					}
+					if err := emitDelta(delta, nil,
 						map[string]any{"search_progress": []perplexity.SearchProgress{update}}); err != nil {
 						return err
 					}
 				}
 			}
-			// 推理模型的计划目标（去重）作为思考内容下发，先于最终答案。
-			for _, goal := range ev.Plan {
-				text := perplexity.SafePlanReasoningText(goal)
-				if text == "" || planSeen[text] {
-					continue
+		}
+		// 推理模型的计划目标（去重）是模型思考内容，作为 reasoning_content 先于答案下发；
+		// 它不是检索进度，不受 include_search_progress 控制。
+		for _, goal := range ev.Plan {
+			text := perplexity.SafePlanReasoningText(goal)
+			if text == "" || planSeen[text] {
+				continue
+			}
+			if len(planSeen) >= 128 {
+				break
+			}
+			planSeen[text] = true
+			planReasoning = append(planReasoning, text)
+			if p.stream {
+				if err := ensureRole(); err != nil {
+					return err
 				}
-				if len(planSeen) >= 128 {
-					break
-				}
-				planSeen[text] = true
-				planReasoning = append(planReasoning, text)
-				if p.stream {
-					if err := ensureRole(); err != nil {
-						return err
-					}
-					if err := emitDelta(map[string]any{"reasoning_content": text + "\n"}, nil,
-						map[string]any{"reasoning_plan": []string{text}}); err != nil {
-						return err
-					}
+				if err := emitDelta(map[string]any{"reasoning_content": text + "\n"}, nil,
+					map[string]any{"reasoning_plan": []string{text}}); err != nil {
+					return err
 				}
 			}
 		}
@@ -271,11 +331,12 @@ func writePerplexityTranslation(ctx context.Context, upstream io.Reader, pw io.W
 	}
 	// 函数工具模拟收尾：流式已逐段 Feed，非流式在此一次性喂入；Finish 给出解析到的
 	// 工具调用（与剩余文本互斥）。解析失败时 toolCalls 为空、toolRest 是回退文本。
-	var toolRest string
+	var toolRest, toolPreamble string
 	var toolCalls []perplexity.ToolCall
 	if toolParser != nil {
 		if !p.stream {
-			_ = toolParser.Feed(rawAnswer)
+			// 非流式：Feed 放行的是调用块之前的前置正文（"我来查一下："）。
+			toolPreamble = toolParser.Feed(rawAnswer)
 		}
 		toolRest, toolCalls = toolParser.Finish()
 		// required/具名 tool_choice 未兑现：返回哨兵错误，由同步路径转 400，不伪造、
@@ -287,6 +348,7 @@ func writePerplexityTranslation(ctx context.Context, upstream io.Reader, pw io.W
 	if len(toolCalls) > 0 {
 		modelIdentity := identity.Identity()
 		var argChars strings.Builder
+		_, _ = argChars.WriteString(toolPreamble)
 		for _, call := range toolCalls {
 			_, _ = argChars.WriteString(call.Arguments)
 		}
@@ -302,6 +364,10 @@ func writePerplexityTranslation(ctx context.Context, upstream io.Reader, pw io.W
 		}
 		if p.stream {
 			if err := ensureRole(); err != nil {
+				return err
+			}
+			// 前置正文已逐段下发；补发角标清洗暂存的残余，再发调用。
+			if err := flushCitations(); err != nil {
 				return err
 			}
 			if err := emitDelta(map[string]any{"tool_calls": perplexity.ToolCallsChatDelta(toolCalls)}, nil, nil); err != nil {
@@ -321,6 +387,13 @@ func writePerplexityTranslation(ctx context.Context, upstream io.Reader, pw io.W
 				return err
 			}
 		} else {
+			var content any
+			if preamble := strings.TrimSpace(toolPreamble); preamble != "" {
+				if p.StripCitations {
+					preamble = perplexity.StripCitationMarkers(preamble)
+				}
+				content = preamble
+			}
 			result := map[string]any{
 				"id":      p.id,
 				"object":  "chat.completion",
@@ -328,7 +401,7 @@ func writePerplexityTranslation(ctx context.Context, upstream io.Reader, pw io.W
 				"model":   p.upstreamModel,
 				"choices": []any{map[string]any{
 					"index":         0,
-					"message":       map[string]any{"role": "assistant", "content": nil, "tool_calls": perplexity.ToolCallsChatMessage(toolCalls)},
+					"message":       map[string]any{"role": "assistant", "content": content, "tool_calls": perplexity.ToolCallsChatMessage(toolCalls)},
 					"finish_reason": "tool_calls",
 				}},
 				"usage":      usage,

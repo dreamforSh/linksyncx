@@ -62,6 +62,70 @@ func TestDecoderRequiresExplicitCompleteTerminal(t *testing.T) {
 	}
 }
 
+func TestDecoderClassifiesUpstreamErrors(t *testing.T) {
+	for _, tc := range []struct {
+		name, body string
+		want       UpstreamEventKind
+	}{
+		{"status 429", "data: {\"error\":{\"status\":429}}\n\n", UpstreamEventRateLimited},
+		{"rate keyword", "event: error\ndata: Rate limit reached for pro searches\n\n", UpstreamEventRateLimited},
+		{"quota keyword", "data: {\"status\":\"FAILED\",\"error\":\"quota exhausted\"}\n\n", UpstreamEventRateLimited},
+		{"auth code", "event: error\ndata: {\"code\":401}\n\n", UpstreamEventAuth},
+		{"auth keyword", "data: {\"error\":\"Unauthorized\"}\n\n", UpstreamEventAuth},
+		{"other", "event: error\ndata: private browser key\n\n", UpstreamEventOther},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			_, err := NewDecoder(strings.NewReader(tc.body)).Next()
+			if !errors.Is(err, ErrUpstreamEvent) || UpstreamEventKindOf(err) != tc.want {
+				t.Fatalf("Next() error = %v (kind %q), want kind %q", err, UpstreamEventKindOf(err), tc.want)
+			}
+			if strings.Contains(err.Error(), "private browser key") {
+				t.Fatalf("error echoed private payload: %v", err)
+			}
+		})
+	}
+	if UpstreamEventKindOf(ErrMalformedEvent) != "" {
+		t.Fatal("non-event errors must not be classified")
+	}
+}
+
+func TestDecoderToleratesPlaceholderAnswerAndOpaqueEOS(t *testing.T) {
+	body := strings.Join([]string{
+		`data: {"blocks":[{"intended_usage":"ask_text","markdown_block":{"answer":null,"progress":"IN_PROGRESS"}}]}`, "",
+		`data: {"blocks":[{"intended_usage":"ask_text","markdown_block":{"chunks":[{"x":1}],"progress":"IN_PROGRESS"}}]}`, "",
+		`data: {"blocks":[{"intended_usage":"ask_text","markdown_block":{"chunks":["Hel","lo"],"progress":"IN_PROGRESS"}}]}`, "",
+		"event: end_of_stream", "data: done", "", "",
+	}, "\n")
+	d := NewDecoder(strings.NewReader(body))
+	var answer Answer
+	for {
+		ev, err := d.Next()
+		if err != nil {
+			t.Fatalf("Next() = %v", err)
+		}
+		if _, err := answer.Apply(ev, false); err != nil {
+			t.Fatalf("Apply() = %v", err)
+		}
+		if ev.EndOfStream {
+			break
+		}
+	}
+	if answer.Content() != "Hello" {
+		t.Fatalf("answer = %q", answer.Content())
+	}
+}
+
+func TestAnswerApplyEventReportsRewrite(t *testing.T) {
+	var answer Answer
+	if _, rewritten, _ := answer.ApplyEvent(Event{HasText: true, Text: "Hello"}, true); rewritten {
+		t.Fatal("first snapshot is not a rewrite")
+	}
+	delta, rewritten, err := answer.ApplyEvent(Event{HasText: true, Text: "Goodbye"}, true)
+	if err != nil || !rewritten || delta != "Goodbye" || answer.Content() != "Goodbye" {
+		t.Fatalf("rewrite = %q %v %v (content %q)", delta, rewritten, err, answer.Content())
+	}
+}
+
 // 推理模型不发独立 end_of_stream，用 final_sse_message=true 作终止，且遗留 text 字段
 // 可能是步骤【数组】而非对象——两者都不得把流判为 malformed/incomplete。
 func TestDecoderFinalSSEMessageTerminatesWithArrayText(t *testing.T) {

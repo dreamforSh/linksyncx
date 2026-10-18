@@ -403,6 +403,7 @@ export default {
       privacyCfBlocked: 'Blocked by Cloudflare, training may still be on',
       privacyFailed: 'Failed to disable training',
       privacyAntigravitySet: 'Telemetry and marketing emails disabled',
+      privacyPerplexityIncognito: 'Incognito search by default: threads are not saved to Perplexity history or reused for follow-ups',
       privacyAntigravityFailed: 'Privacy setting failed',
       setPrivacy: 'Set Privacy',
       subscriptionAbnormal: 'Abnormal',
@@ -1071,9 +1072,20 @@ export default {
           sessionValid: 'Session valid',
           sessionInvalid: 'Session expired; update cookie',
           sessionUnknown: 'Current session status unknown',
-          refresh: 'Refresh snapshot',
+          refresh: 'Refresh',
           details: 'View snapshot details',
-          noFields: 'No quota fields available'
+          noFields: 'No quota fields available',
+          remaining: 'left',
+          creditsBalance: 'Credits',
+          staleSnapshot: 'Refresh failed; showing last snapshot',
+          partialFailure: 'Failed to fetch {sections}',
+          updated: 'Updated {time}',
+          bucketTitle: '{name} remaining (upstream snapshot, not live)',
+          buckets: {
+            pro: 'Pro Search',
+            research: 'Deep Research',
+            labs: 'Labs'
+          }
         }
       },
       grokClientToolCache: {

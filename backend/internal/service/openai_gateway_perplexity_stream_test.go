@@ -490,3 +490,91 @@ func TestPerplexityTranslationSearchCountMetrics(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, 2, metrics.snapshot())
 }
+
+func TestPerplexityTranslationPreambleThenToolCall(t *testing.T) {
+	answer := "I'll look that up.\n<tool_call>{\"name\":\"get_weather\",\"arguments\":{\"city\":\"Tokyo\"}}</tool_call>\nIt is sunny."
+	body := perplexityAnswerFixture(answer) + "event: end_of_stream\n\n"
+
+	out, err := translatePerplexityFixture(t, body, perplexityToolParams(true))
+	require.NoError(t, err)
+	require.Equal(t, "I'll look that up.\n", perplexityCCContent(t, out), "前置正文下发，调用块后的臆造结果丢弃")
+	require.Contains(t, out, `"finish_reason":"tool_calls"`)
+	require.Contains(t, out, `"name":"get_weather"`)
+	require.NotContains(t, out, "sunny")
+
+	out, err = translatePerplexityFixture(t, body, perplexityToolParams(false))
+	require.NoError(t, err)
+	require.Equal(t, "I'll look that up.", gjson.Get(out, "choices.0.message.content").String())
+	require.Equal(t, "tool_calls", gjson.Get(out, "choices.0.finish_reason").String())
+	require.Equal(t, `{"city":"Tokyo"}`, gjson.Get(out, "choices.0.message.tool_calls.0.function.arguments").String())
+}
+
+func TestPerplexityTranslationRewriteWhileToolParserBuffers(t *testing.T) {
+	// 解析器暂存的文本客户端没看到：快照改写不应判为 ErrAnswerRewritten，应按新快照重放。
+	diverge := perplexityAnswerFixture("<tool_call>{\"name\":\"draft\"") +
+		perplexityAnswerFixture("<tool_call>{\"name\":\"get_weather\",\"arguments\":{\"city\":\"Rome\"}}</tool_call>") +
+		"event: end_of_stream\n\n"
+	out, err := translatePerplexityFixture(t, diverge, perplexityToolParams(true))
+	require.NoError(t, err)
+	require.Contains(t, out, `"finish_reason":"tool_calls"`)
+	require.Contains(t, out, `\"city\":\"Rome\"`)
+	require.Empty(t, perplexityCCContent(t, out))
+}
+
+func TestPerplexityTranslationPlanIndependentOfSearchProgress(t *testing.T) {
+	planEvent := `data: {"blocks":[{"intended_usage":"plan","plan_block":{"goals":[{"description":"Check units"}]}}]}` + "\n\n"
+	body := planEvent + perplexityAnswerFixture("42") + "event: end_of_stream\n\n"
+	out, err := translatePerplexityFixture(t, body, perplexityTranslateParams{stream: true, id: "x", upstreamModel: "sonar-reasoning"})
+	require.NoError(t, err)
+	require.Contains(t, out, "Check units")
+	out, err = translatePerplexityFixture(t, body, perplexityTranslateParams{id: "x", upstreamModel: "sonar-reasoning"})
+	require.NoError(t, err)
+	require.Contains(t, gjson.Get(out, "choices.0.message.reasoning_content").String(), "Check units")
+}
+
+func TestStartPerplexityTranslationGatesFirstWrite(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+
+	// 写出前失败：同步返回错误，调用方可换号。
+	pr, pw := io.Pipe()
+	err := startPerplexityTranslation(ctx, io.NopCloser(strings.NewReader("event: error\ndata: rate limit reached\n\n")), pw, perplexityTranslateParams{stream: true})
+	require.ErrorIs(t, err, perplexity.ErrUpstreamEvent)
+	require.Equal(t, perplexity.UpstreamEventRateLimited, perplexity.UpstreamEventKindOf(err))
+	_ = pr.Close()
+
+	pr, pw = io.Pipe()
+	err = startPerplexityTranslation(ctx, io.NopCloser(strings.NewReader("event: end_of_stream\n\n")), pw, perplexityTranslateParams{})
+	require.ErrorIs(t, err, perplexity.ErrEmptyAnswer)
+	_ = pr.Close()
+
+	// 有输出：立即返回 nil，响应体可读到完整结果。
+	pr, pw = io.Pipe()
+	err = startPerplexityTranslation(ctx, io.NopCloser(strings.NewReader(perplexityAnswerFixture("hi")+"event: end_of_stream\n\n")), pw, perplexityTranslateParams{})
+	require.NoError(t, err)
+	out, readErr := io.ReadAll(pr)
+	require.NoError(t, readErr)
+	require.Equal(t, "hi", gjson.GetBytes(out, "choices.0.message.content").String())
+}
+
+func TestPerplexityTranslationErrorMapping(t *testing.T) {
+	s := &OpenAIGatewayService{}
+	account := &Account{ID: 7, Platform: PlatformPerplexity}
+
+	var failover *UpstreamFailoverError
+	err := s.perplexityTranslationError(context.Background(), nil, account, &perplexity.UpstreamEventError{Kind: perplexity.UpstreamEventRateLimited})
+	require.ErrorAs(t, err, &failover)
+	require.Equal(t, 429, failover.StatusCode)
+
+	err = s.perplexityTranslationError(context.Background(), nil, account, perplexity.ErrIncompleteStream)
+	require.ErrorAs(t, err, &failover)
+	require.Equal(t, 502, failover.StatusCode)
+	require.NotContains(t, string(failover.ResponseBody), "end_of_stream")
+
+	var bad *perplexityBadRequestError
+	require.ErrorAs(t, s.perplexityTranslationError(context.Background(), nil, account, errPerplexityToolChoiceUnsatisfied), &bad)
+
+	canceled, cancel := context.WithCancel(context.Background())
+	cancel()
+	require.ErrorIs(t, s.perplexityTranslationError(canceled, nil, account, perplexity.ErrIncompleteStream), context.Canceled)
+}

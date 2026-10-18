@@ -262,7 +262,7 @@
                 <PlatformTypeBadge :platform="row.platform" :type="row.type"
                   :auth-mode="getOpenAIAuthMode(row)"
                   :plan-type="getAccountPlanType(row)"
-                  :privacy-mode="row.extra?.privacy_mode || row.parent_privacy_mode"
+                  :privacy-mode="getAccountPrivacyMode(row)"
                   :subscription-expires-at="row.credentials?.subscription_expires_at || row.parent_subscription_expires_at" />
                 <span
                   v-if="getAntigravityTierLabel(row)"
@@ -1751,7 +1751,20 @@ function getAccountPlanType(row: any): string | undefined {
     // Claude OAuth 的档位由后端从 /api/oauth/profile 同步到 extra.claude_subscription。
     return firstNonBlankString(row.extra?.claude_subscription?.plan_type, row.credentials?.plan_type)
   }
+  if (row.platform === 'perplexity') {
+    // Perplexity 的订阅档位来自会话快照（维护任务定期刷新 extra.perplexity_quota_snapshot）。
+    return firstNonBlankString(row.extra?.perplexity_quota_snapshot?.session?.subscription_tier, row.credentials?.plan_type)
+  }
   return firstNonBlankString(row.credentials?.plan_type, row.parent_plan_type)
+}
+
+// 隐私徽章状态：OpenAI/Antigravity 取 OAuth 隐私设置；Perplexity 取账号默认隐身搜索。
+function getAccountPrivacyMode(row: any): string | undefined {
+  if (!row) return undefined
+  if (row.platform === 'perplexity') {
+    return row.credentials?.perplexity_options?.is_incognito === true ? 'incognito' : undefined
+  }
+  return row.extra?.privacy_mode || row.parent_privacy_mode
 }
 
 function getOpenAIAuthMode(row: any): string | undefined {

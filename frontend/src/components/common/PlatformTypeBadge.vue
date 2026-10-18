@@ -129,6 +129,11 @@ const planLabel = computed(() => {
     const label = claudePlanTypeLabel(props.planType)
     if (label) return label
   }
+  // Perplexity 会话快照里的档位是小写枚举（free/pro/max/enterprise）。
+  if (props.platform === 'perplexity') {
+    const labels: Record<string, string> = { free: 'Free', pro: 'Pro', max: 'Max', enterprise: 'Enterprise' }
+    if (labels[normalizedPlanType.value]) return labels[normalizedPlanType.value]
+  }
   switch (normalizedPlanType.value) {
     case 'plus':
       return 'Plus'
@@ -282,6 +287,9 @@ const planBadgeClass = computed(() => {
       return 'bg-slate-100 text-slate-700 dark:bg-slate-800 dark:text-slate-300'
     }
   }
+  if (props.platform === 'perplexity' && normalizedPlanType.value === 'max') {
+    return 'bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-300'
+  }
   // OpenAI / other paid plan labels: keep readable distinction from free gray
   if (normalizedPlanType.value === 'plus') {
     return 'bg-sky-100 text-sky-700 dark:bg-sky-900/30 dark:text-sky-300'
@@ -319,14 +327,19 @@ const expiresLabel = computed(() => {
   }
 })
 
-// Privacy badge — shows different states for OpenAI/Antigravity OAuth privacy setting
+// Privacy badge — OpenAI/Antigravity OAuth 隐私设置状态，以及 Perplexity 默认隐身搜索
 const privacyBadge = computed(() => {
+  const shieldCheck = 'M9 12.75L11.25 15 15 9.75m-3-7.036A11.959 11.959 0 013.598 6 11.99 11.99 0 003 9.749c0 5.592 3.824 10.29 9 11.623 5.176-1.332 9-6.03 9-11.622 0-1.31-.21-2.571-.598-3.751h-.152c-3.196 0-6.1-1.248-8.25-3.285z'
+  const shieldX = 'M12 9v3.75m0-10.036A11.959 11.959 0 013.598 6 11.99 11.99 0 003 9.749c0 5.592 3.824 10.29 9 11.623 5.176-1.332 9-6.03 9-11.622 0-1.31-.21-2.571-.598-3.751h-.152c-3.196 0-6.1-1.248-8.25-3.285zM12 18h.008v.008H12V18z'
+  // Perplexity：账号默认 is_incognito 时显示同款 Private 徽章（Cookie 账号，type 为 apikey）
+  if (props.platform === 'perplexity') {
+    if (props.privacyMode !== 'incognito') return null
+    return { label: 'Private', icon: shieldCheck, title: t('admin.accounts.privacyPerplexityIncognito'), class: 'bg-green-100 text-green-600 dark:bg-green-900/30 dark:text-green-400' }
+  }
   if (props.type !== 'oauth' || !props.privacyMode) return null
   // 支持 OpenAI 和 Antigravity 平台
   if (props.platform !== 'openai' && props.platform !== 'antigravity') return null
 
-  const shieldCheck = 'M9 12.75L11.25 15 15 9.75m-3-7.036A11.959 11.959 0 013.598 6 11.99 11.99 0 003 9.749c0 5.592 3.824 10.29 9 11.623 5.176-1.332 9-6.03 9-11.622 0-1.31-.21-2.571-.598-3.751h-.152c-3.196 0-6.1-1.248-8.25-3.285z'
-  const shieldX = 'M12 9v3.75m0-10.036A11.959 11.959 0 013.598 6 11.99 11.99 0 003 9.749c0 5.592 3.824 10.29 9 11.623 5.176-1.332 9-6.03 9-11.622 0-1.31-.21-2.571-.598-3.751h-.152c-3.196 0-6.1-1.248-8.25-3.285zM12 18h.008v.008H12V18z'
   switch (props.privacyMode) {
     // OpenAI states
     case 'training_off':

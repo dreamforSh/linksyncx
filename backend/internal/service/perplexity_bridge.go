@@ -67,7 +67,7 @@ func (m *perplexityResponseMetrics) snapshot() int {
 }
 
 type perplexityCCBody struct {
-	reader   *io.PipeReader
+	reader   io.ReadCloser
 	upstream io.Closer
 	cancel   context.CancelFunc
 	onRead   func()

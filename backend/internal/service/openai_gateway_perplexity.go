@@ -545,25 +545,66 @@ func (s *OpenAIGatewayService) sendPerplexityCCUpstreamRequest(
 		if tErr := writePerplexityTranslation(upstreamCtx, upstreamBody, &buf, params); tErr != nil {
 			_ = upstreamBody.Close()
 			cancelUpstream()
-			if errors.Is(tErr, errPerplexityToolChoiceUnsatisfied) {
-				return nil, &perplexityBadRequestError{msg: "tool_choice required a tool call, but the selected Perplexity model returned none; retry or map this request to a stronger model"}
-			}
-			return nil, &UpstreamFailoverError{
-				StatusCode:             http.StatusBadGateway,
-				ResponseBody:           []byte(`{"error":{"type":"api_error","message":"perplexity returned no usable tool call"}}`),
-				RetryableOnSameAccount: false,
-			}
+			return nil, s.perplexityTranslationError(ctx, c, account, tErr)
 		}
-		payload := buf.Bytes()
-		go func() {
-			_, _ = writer.Write(payload)
-			_ = writer.Close()
-		}()
-		return &http.Response{StatusCode: http.StatusOK, Header: header, Body: makeBody()}, nil
+		_ = upstreamBody.Close()
+		_ = writer.Close()
+		_ = reader.Close()
+		return &http.Response{StatusCode: http.StatusOK, Header: header, Body: &perplexityCCBody{
+			reader: io.NopCloser(bytes.NewReader(buf.Bytes())), upstream: upstreamBody, cancel: cancelUpstream,
+			identity: identity, metrics: metrics, onRead: onRead,
+		}}, nil
 	}
 
-	go translatePerplexitySSEToCC(upstreamCtx, upstreamBody, writer, params)
+	// 等到首次写出再返回响应：写出前的失败（流内错误、空回答、截断）在响应提交前
+	// 换号重试，三种入站协议、流式/非流式一致。
+	if tErr := startPerplexityTranslation(upstreamCtx, upstreamBody, writer, params); tErr != nil {
+		cancelUpstream()
+		return nil, s.perplexityTranslationError(ctx, c, account, tErr)
+	}
 	return &http.Response{StatusCode: http.StatusOK, Header: header, Body: makeBody()}, nil
+}
+
+// perplexityTranslationError 把响应提交前的翻译失败映射为客户端错误或换号错误：
+//   - tool_choice 未兑现 → 400（换号也无济于事）；
+//   - 客户端已断开 → 原样返回上下文错误，不换号；
+//   - 流内限流/鉴权错误 → 账号冷却后换号；其余（空回答、截断、畸形事件）直接换号。
+func (s *OpenAIGatewayService) perplexityTranslationError(ctx context.Context, c *gin.Context, account *Account, err error) error {
+	if errors.Is(err, errPerplexityToolChoiceUnsatisfied) {
+		return &perplexityBadRequestError{msg: "tool_choice required a tool call, but the selected Perplexity model returned none; retry or map this request to a stronger model"}
+	}
+	if ctxErr := ctx.Err(); ctxErr != nil {
+		return ctxErr
+	}
+	status := http.StatusBadGateway
+	message := "perplexity stream failed before any output"
+	kind := perplexity.UpstreamEventKindOf(err)
+	switch kind {
+	case perplexity.UpstreamEventRateLimited:
+		status = http.StatusTooManyRequests
+		message = "perplexity account is rate limited"
+		if !account.IsPoolMode() {
+			s.rateLimitPerplexity(ctx, account, time.Now().Add(5*time.Minute))
+		}
+	case perplexity.UpstreamEventAuth:
+		status = http.StatusUnauthorized
+		message = "perplexity session was rejected"
+		if !account.IsPoolMode() {
+			s.tempUnschedulePerplexity(ctx, account, 10*time.Minute, "perplexity session rejected in stream")
+		}
+	default:
+		if errors.Is(err, context.DeadlineExceeded) {
+			status = http.StatusGatewayTimeout
+			message = "perplexity upstream timed out before any output"
+		}
+	}
+	appendOpsUpstreamError(c, OpsUpstreamErrorEvent{
+		ProxyID: opsUpstreamProxyID(account), ProxyName: opsUpstreamProxyName(account),
+		Platform: account.Platform, AccountID: account.ID, AccountName: account.Name,
+		UpstreamStatusCode: status, Kind: "failover", Message: err.Error(),
+	})
+	body, _ := json.Marshal(map[string]any{"error": map[string]any{"type": "upstream_error", "message": message}})
+	return &UpstreamFailoverError{StatusCode: status, ResponseBody: body, RetryableOnSameAccount: false}
 }
 
 // perplexityShouldFailover 判定上游状态码是否应换号重试：
