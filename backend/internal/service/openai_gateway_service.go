@@ -491,6 +491,9 @@ type OpenAIGatewayService struct {
 	openAITokenProvider   *OpenAITokenProvider
 	grokTokenProvider     *GrokTokenProvider
 	tlsFPProfileService   *TLSFingerprintProfileService
+
+	codeBuddyTokenProvider *CodeBuddyTokenProvider
+
 	toolCorrector         *CodexToolCorrector
 	openaiWSResolver      OpenAIWSProtocolResolver
 	resolver              *ModelPricingResolver
@@ -618,6 +621,11 @@ func NewOpenAIGatewayService(
 	}
 	svc.logOpenAIWSModeBootstrap()
 	return svc
+}
+
+// SetCodeBuddyTokenProvider injects the CodeBuddy OAuth token provider.
+func (s *OpenAIGatewayService) SetCodeBuddyTokenProvider(provider *CodeBuddyTokenProvider) {
+	s.codeBuddyTokenProvider = provider
 }
 
 // SetTLSFingerprintProfileService 挂载 TLS 指纹模板服务（可选）。
@@ -1250,6 +1258,20 @@ func (s *OpenAIGatewayService) GetAccessToken(ctx context.Context, account *Acco
 	case AccountTypeOAuth:
 		if account.IsOpenAIAgentIdentity() {
 			return "", OpenAIAuthModeAgentIdentity, nil
+		}
+		if account.IsCodeBuddy() {
+			if s.codeBuddyTokenProvider != nil {
+				accessToken, err := s.codeBuddyTokenProvider.GetAccessToken(ctx, account)
+				if err != nil {
+					return "", "", err
+				}
+				return accessToken, "oauth", nil
+			}
+			accessToken := account.GetCodeBuddyAccessToken()
+			if accessToken == "" {
+				return "", "", errors.New("access_token not found in credentials")
+			}
+			return accessToken, "oauth", nil
 		}
 		if account.Platform == PlatformGrok {
 			if s.grokTokenProvider != nil {

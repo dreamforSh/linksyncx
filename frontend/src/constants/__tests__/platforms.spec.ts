@@ -8,6 +8,7 @@ const concretePlatforms = [
   'antigravity',
   'grok',
   'perplexity',
+  'codebuddy',
   'kimi',
   'zhipu',
   'deepseek',

@@ -58,6 +58,11 @@ func (s *OpenAIGatewayService) ForwardAsAnthropic(
 		return s.forwardPerplexityMessages(ctx, c, account, body, defaultMappedModel)
 	}
 
+	// CodeBuddy：上游仅提供 Chat Completions，Messages 入站经 CC 直接桥接。
+	if account.IsCodeBuddy() {
+		return s.forwardAnthropicViaRawChatCompletions(ctx, c, account, body, defaultMappedModel)
+	}
+
 	// OpenCode Go：按模型原生协议分流。规则未命中兜底 Chat Completions。
 	if account.IsOpenCodeGo() {
 		mapped := resolveOpenCodeGoMappedModel(account, body, defaultMappedModel)

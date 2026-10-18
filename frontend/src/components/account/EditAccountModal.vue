@@ -26,6 +26,14 @@
         <p class="input-hint">{{ t('admin.accounts.notesHint') }}</p>
       </div>
 
+      <!-- CodeBuddy / WorkBuddy：积分策略、模型目录同步与重新授权 -->
+      <CodeBuddyAccountPanel
+        v-if="account.platform === 'codebuddy'"
+        v-model:credit-policy="editCodeBuddyCreditPolicy"
+        :account="account"
+        @reauthorized="(updated) => emit('updated', updated)"
+      />
+
       <!-- API Key fields (only for apikey type) -->
       <div v-if="account.type === 'apikey'" class="space-y-4">
         <div v-if="!isCNApiKeyAccount || editApiProtocol !== 'adaptive'">
@@ -3244,6 +3252,8 @@ import GrokBaseUrlPresets from '@/components/account/GrokBaseUrlPresets.vue'
 import CnBaseUrlPresets from '@/components/account/CnBaseUrlPresets.vue'
 import OpenCodeGoProtocolRulesEditor from '@/components/account/OpenCodeGoProtocolRulesEditor.vue'
 import PerplexityOptionsFields from '@/components/account/PerplexityOptionsFields.vue'
+import CodeBuddyAccountPanel from '@/components/account/CodeBuddyAccountPanel.vue'
+import type { CodeBuddyCreditPolicy } from '@/api/admin/codebuddy'
 import HeaderOverrideEditor from '@/components/account/HeaderOverrideEditor.vue'
 import DeviceProfileEditor from '@/components/account/DeviceProfileEditor.vue'
 import OllamaCloudUsageSettings from '@/components/account/OllamaCloudUsageSettings.vue'
@@ -3336,6 +3346,7 @@ const emit = defineEmits<{
 
 const { t } = useI18n()
 const appStore = useAppStore()
+const editCodeBuddyCreditPolicy = ref<CodeBuddyCreditPolicy>('all')
 const browserTimeZone = getBrowserTimeZone()
 
 const selectableGroups = computed(() => {
@@ -4277,6 +4288,7 @@ const syncFormFromAccount = (newAccount: Account | null) => {
   // Load intercept warmup requests setting (applies to all account types)
   const credentials = newAccount.credentials as Record<string, unknown> | undefined
   interceptWarmupRequests.value = credentials?.intercept_warmup_requests === true
+  editCodeBuddyCreditPolicy.value = credentials?.credit_policy === 'zero_only' ? 'zero_only' : 'all'
   autoPauseOnExpired.value = newAccount.auto_pause_on_expired === true
   editVertexProjectId.value = ''
   editVertexClientEmail.value = ''
@@ -5633,6 +5645,13 @@ const handleSubmit = async () => {
       }
 
       updatePayload.credentials = newCredentials
+    }
+
+    // CodeBuddy：积分策略存于 credentials（非敏感键，令牌由后端合并保留）
+    if (props.account.platform === 'codebuddy') {
+      const currentCredentials = (updatePayload.credentials as Record<string, unknown>) ||
+        ((props.account.credentials as Record<string, unknown>) || {})
+      updatePayload.credentials = { ...currentCredentials, credit_policy: editCodeBuddyCreditPolicy.value }
     }
 
     // OpenAI/Grok OAuth: persist model mapping to credentials

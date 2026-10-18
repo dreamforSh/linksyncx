@@ -218,6 +218,13 @@ const perplexityModels = [
   'sonar-computer', 'sonar-pro-computer'
 ]
 
+// CodeBuddy / WorkBuddy（国内 CLI 静态目录；实际可用模型以账号同步的 /v3/config 目录为准，
+// 与后端 internal/pkg/codebuddy 的 DefaultModelIDs 保持一致）
+const codebuddyModels = [
+  'auto', 'hy4-preview', 'hy3', 'deepseek-v4-pro', 'deepseek-v4-flash',
+  'glm-5.3', 'glm-5.2', 'minimax-m3', 'kimi-k3-1', 'kimi-k2.7'
+]
+
 // 所有模型（去重）
 const allModelsList: string[] = [
   ...openaiModels,
@@ -237,7 +244,8 @@ const allModelsList: string[] = [
   ...baiduModels,
   ...sparkModels,
   ...hunyuanModels,
-  ...perplexityModels
+  ...perplexityModels,
+  ...codebuddyModels
 ]
 
 // 转换为下拉选项格式
@@ -454,6 +462,7 @@ export function getModelsByPlatform(platform: string): string[] {
     case 'spark': return sparkModels
     case 'hunyuan': return hunyuanModels
     case 'perplexity': return perplexityModels
+    case 'codebuddy': return codebuddyModels
     default: return claudeModels
   }
 }
@@ -466,6 +475,7 @@ export function getPresetMappingsByPlatform(platform: string) {
   if (platform === 'antigravity') return antigravityPresetMappings
   if (platform === 'bedrock') return bedrockPresetMappings
   if (platform === 'perplexity') return perplexityPresetMappings
+  if (platform === 'codebuddy') return []
   return anthropicPresetMappings
 }
 

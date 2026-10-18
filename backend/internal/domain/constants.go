@@ -27,6 +27,10 @@ const (
 	// PlatformPerplexity 是 Perplexity.ai 网页订阅平台（Cookie 会话认证，
 	// 经 OpenAI 网关按 Chat Completions 协议转发到 /rest/sse/perplexity_ask）。
 	PlatformPerplexity = "perplexity"
+	// PlatformCodeBuddy 是腾讯 CodeBuddy / WorkBuddy 订阅平台（扫码 OAuth 认证，
+	// 经 OpenAI 网关按 Chat Completions 协议转发到 /v2/chat/completions）。
+	// 国内（copilot.tencent.com / *.cn）与国际（*.ai）站点由凭证 profile 区分。
+	PlatformCodeBuddy = "codebuddy"
 	// 国产 OpenAI 兼容供应商（经 OpenAI 网关转发，按 Chat Completions 协议）。
 	PlatformKimi     = "kimi"     // Kimi (月之暗面 / Moonshot)
 	PlatformZhipu    = "zhipu"    // 智谱 GLM (bigmodel)

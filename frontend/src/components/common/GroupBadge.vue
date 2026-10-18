@@ -165,6 +165,9 @@ const labelClass = computed(() => {
   if (props.platform === 'perplexity') {
     return `${base} bg-sky-200/60 text-sky-800 dark:bg-sky-800/40 dark:text-sky-300`
   }
+  if (props.platform === 'codebuddy') {
+    return `${base} bg-violet-200/60 text-violet-800 dark:bg-violet-800/40 dark:text-violet-300`
+  }
   if (props.platform === 'kimi') {
     return `${base} bg-pink-200/60 text-pink-800 dark:bg-pink-800/40 dark:text-pink-300`
   }
@@ -219,6 +222,11 @@ const badgeClass = computed(() => {
     return isSubscription.value
       ? 'bg-sky-100 text-sky-700 dark:bg-sky-900/30 dark:text-sky-400'
       : 'bg-sky-50 text-sky-700 dark:bg-sky-900/20 dark:text-sky-400'
+  }
+  if (props.platform === 'codebuddy') {
+    return isSubscription.value
+      ? 'bg-violet-100 text-violet-700 dark:bg-violet-900/30 dark:text-violet-400'
+      : 'bg-violet-50 text-violet-700 dark:bg-violet-900/20 dark:text-violet-400'
   }
   if (props.platform === 'kimi') {
     return isSubscription.value

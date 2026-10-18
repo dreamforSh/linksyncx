@@ -1151,6 +1151,7 @@ export default {
         antigravity: 'Antigravity',
         grok: 'Grok',
         perplexity: 'Perplexity',
+        codebuddy: 'CodeBuddy',
         kimi: 'Kimi',
         zhipu: 'Zhipu GLM',
         deepseek: 'DeepSeek',

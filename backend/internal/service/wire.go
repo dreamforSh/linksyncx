@@ -134,8 +134,11 @@ func ProvideTokenRefreshService(
 	proxyRepo ProxyRepository,
 	refreshAPI *OAuthRefreshAPI,
 	runtimeBlocker AccountRuntimeBlocker,
+	codeBuddyOAuthService *CodeBuddyOAuthService,
 ) *TokenRefreshService {
 	svc := NewTokenRefreshService(accountRepo, oauthService, openaiOAuthService, geminiOAuthService, antigravityOAuthService, cacheInvalidator, schedulerCache, cfg, tempUnschedCache, grokOAuthService)
+	codeBuddyRefresher := NewCodeBuddyTokenRefresher(codeBuddyOAuthService)
+	svc.RegisterPlatformRefresher(PlatformCodeBuddy, codeBuddyRefresher, codeBuddyRefresher)
 	// 注入 OpenAI privacy opt-out 依赖
 	svc.SetPrivacyDeps(privacyClientFactory, proxyRepo)
 	// 注入统一 OAuth 刷新 API（消除 TokenRefreshService 与 TokenProvider 之间的竞争条件）
@@ -247,6 +250,7 @@ func ProvideOpenAIGatewayService(
 	settingService *SettingService,
 	userPlatformQuotaRepo UserPlatformQuotaRepository,
 	tlsFPProfileService *TLSFingerprintProfileService,
+	codeBuddyTokenProvider *CodeBuddyTokenProvider,
 ) *OpenAIGatewayService {
 	service := NewOpenAIGatewayService(
 		accountRepo,
@@ -273,6 +277,7 @@ func ProvideOpenAIGatewayService(
 		userPlatformQuotaRepo,
 	)
 	service.SetTLSFingerprintProfileService(tlsFPProfileService)
+	service.SetCodeBuddyTokenProvider(codeBuddyTokenProvider)
 	return service
 }
 
@@ -444,6 +449,18 @@ func ProvideGrokTokenProvider(
 	p.SetRefreshAPI(refreshAPI, executor)
 	p.SetRefreshPolicy(GrokProviderRefreshPolicy())
 	p.SetTempUnschedCache(tempUnschedCache)
+	return p
+}
+
+// ProvideCodeBuddyTokenProvider creates CodeBuddyTokenProvider with OAuthRefreshAPI injection.
+func ProvideCodeBuddyTokenProvider(
+	accountRepo AccountRepository,
+	tokenCache GeminiTokenCache,
+	codeBuddyOAuthService *CodeBuddyOAuthService,
+	refreshAPI *OAuthRefreshAPI,
+) *CodeBuddyTokenProvider {
+	p := NewCodeBuddyTokenProvider(accountRepo, tokenCache)
+	p.SetRefreshAPI(refreshAPI, NewCodeBuddyTokenRefresher(codeBuddyOAuthService))
 	return p
 }
 
@@ -971,6 +988,8 @@ var ProviderSet = wire.NewSet(
 	NewGeminiMessagesCompatService,
 	ProvideAntigravityTokenProvider,
 	ProvideGrokTokenProvider,
+	NewCodeBuddyOAuthService,
+	ProvideCodeBuddyTokenProvider,
 	ProvideOpenAITokenProvider,
 	ProvideOpenAIQuotaService,
 	ProvideOpenAIQuotaAutoResetService,

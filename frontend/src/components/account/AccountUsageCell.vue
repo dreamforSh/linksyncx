@@ -414,6 +414,10 @@
       <div v-else class="text-xs text-gray-400">-</div>
     </template>
 
+    <template v-else-if="account.platform === 'codebuddy'">
+      <CodeBuddyCreditsCell :account="account" />
+    </template>
+
     <template v-else-if="account.platform === 'perplexity' && account.type === 'apikey'">
       <div v-if="loading && !usageInfo?.perplexity" class="space-y-1.5" role="status">
         <div class="flex items-center gap-1">
@@ -783,6 +787,7 @@ import { buildOpenAIUsageRefreshKey } from '@/utils/accountUsageRefresh'
 import { enqueueUsageRequest } from '@/utils/usageLoadQueue'
 import { formatCompactNumber } from '@/utils/format'
 import PerplexityUsageDetails from './PerplexityUsageDetails.vue'
+import CodeBuddyCreditsCell from './CodeBuddyCreditsCell.vue'
 import UsageProgressBar from './UsageProgressBar.vue'
 import AccountQuotaInfo from './AccountQuotaInfo.vue'
 import OpenAIQuotaResetCell from './OpenAIQuotaResetCell.vue'
@@ -870,6 +875,8 @@ const showUsageWindows = computed(() => {
 })
 
 const shouldFetchUsage = computed(() => {
+  // CodeBuddy 积分由 CodeBuddyCreditsCell 读取账号缓存并按需刷新。
+  if (props.account.platform === 'codebuddy') return false
   if (props.account.platform === 'perplexity') return props.account.type === 'apikey'
   if (props.account.platform === 'anthropic') {
     return props.account.type === 'oauth' || props.account.type === 'setup-token'

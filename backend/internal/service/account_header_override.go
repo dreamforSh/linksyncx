@@ -88,6 +88,8 @@ func (a *Account) IsHeaderOverrideEligible() bool {
 		return a.Type == AccountTypeAPIKey
 	case PlatformGrok:
 		return a.Type == AccountTypeAPIKey || a.Type == AccountTypeOAuth
+	case PlatformCodeBuddy:
+		return a.Type == AccountTypeOAuth
 	default:
 		return false
 	}

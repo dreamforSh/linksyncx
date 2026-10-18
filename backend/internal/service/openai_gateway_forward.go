@@ -159,6 +159,10 @@ func (s *OpenAIGatewayService) Forward(ctx context.Context, c *gin.Context, acco
 		return s.forwardPerplexityResponses(ctx, c, account, body, originalModel, reqStream, startTime)
 	}
 
+	if account.IsCodeBuddy() {
+		return s.forwardResponsesViaRawChatCompletions(ctx, c, account, body)
+	}
+
 	if account.Platform == PlatformGrok {
 		return s.forwardGrokResponses(ctx, c, account, body, originalModel, reqStream, startTime)
 	}
@@ -1351,6 +1355,9 @@ func (s *OpenAIGatewayService) Forward(ctx context.Context, c *gin.Context, acco
 }
 
 func shouldForwardOpenAIResponsesViaRawChatCompletions(account *Account) bool {
+	if account.IsCodeBuddy() {
+		return true
+	}
 	if account == nil || account.Type != AccountTypeAPIKey {
 		return false
 	}

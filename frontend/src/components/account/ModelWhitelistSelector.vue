@@ -224,6 +224,7 @@ const upstreamSyncPlatforms = new Set([
   'antigravity',
   'grok',
   'perplexity',
+  'codebuddy',
   'kimi',
   'zhipu',
   'deepseek',

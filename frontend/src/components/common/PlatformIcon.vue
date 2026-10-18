@@ -59,6 +59,11 @@
     <circle cx="10.5" cy="10.5" r="6.5" />
     <path stroke-linecap="round" d="M10.5 4v13M4.5 10.5h12M15.3 15.3 21 21" />
   </svg>
+  <!-- CodeBuddy / WorkBuddy (Tencent): code brackets in a chat bubble -->
+  <svg v-else-if="platform === 'codebuddy'" :class="sizeClass" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+    <path stroke-linejoin="round" d="M4 5.5A2.5 2.5 0 0 1 6.5 3h11A2.5 2.5 0 0 1 20 5.5v9a2.5 2.5 0 0 1-2.5 2.5H11l-4.5 4v-4h0A2.5 2.5 0 0 1 4 14.5z" />
+    <path stroke-linecap="round" stroke-linejoin="round" d="m9.5 8-2 2 2 2M14.5 8l2 2-2 2" />
+  </svg>
   <!-- Composite group icon -->
   <svg v-else-if="platform === 'composite'" :class="sizeClass" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
     <circle cx="6" cy="12" r="3" />

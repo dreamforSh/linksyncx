@@ -45,6 +45,7 @@ const (
 	PlatformAntigravity = domain.PlatformAntigravity
 	PlatformGrok        = domain.PlatformGrok
 	PlatformPerplexity  = domain.PlatformPerplexity
+	PlatformCodeBuddy   = domain.PlatformCodeBuddy
 	// 国产 OpenAI 兼容供应商（与 grok 一样经 OpenAI 网关转发）。
 	PlatformKimi       = domain.PlatformKimi
 	PlatformZhipu      = domain.PlatformZhipu
@@ -133,6 +134,7 @@ var AllowedQuotaPlatforms = []string{
 	PlatformAntigravity,
 	PlatformGrok,
 	PlatformPerplexity,
+	PlatformCodeBuddy,
 	PlatformKimi,
 	PlatformZhipu,
 	PlatformDeepseek,

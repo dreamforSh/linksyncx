@@ -513,6 +513,7 @@ export default {
       gemini: 'Gemini',
       grok: 'Grok',
       perplexity: 'Perplexity',
+      codebuddy: 'CodeBuddy',
       antigravity: 'Antigravity',
       kimi: 'Kimi',
       zhipu: '智谱 GLM',

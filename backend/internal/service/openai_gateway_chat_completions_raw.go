@@ -8,6 +8,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/Wei-Shaw/sub2api/internal/pkg/codebuddy"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/logger"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/openai"
 	"github.com/Wei-Shaw/sub2api/internal/util/responseheaders"
@@ -261,6 +262,9 @@ func (s *OpenAIGatewayService) forwardAsRawChatCompletions(
 }
 
 func (s *OpenAIGatewayService) rawChatCompletionsURL(account *Account) (string, error) {
+	if account.IsCodeBuddy() {
+		return codebuddy.ChatCompletionsURL(account.CodeBuddyProfile()), nil
+	}
 	if account.Platform == PlatformGrok {
 		targetURL, err := buildGrokChatCompletionsURL(account, s.cfg, s.settingService)
 		if err != nil {

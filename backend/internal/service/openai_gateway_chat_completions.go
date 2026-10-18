@@ -99,6 +99,10 @@ func (s *OpenAIGatewayService) forwardAsChatCompletions(
 		return s.forwardPerplexityChatCompletions(ctx, c, account, body, promptCacheKey, defaultMappedModel)
 	}
 
+	if account.IsCodeBuddy() {
+		return s.forwardAsRawChatCompletions(ctx, c, account, body, defaultMappedModel)
+	}
+
 	if account.Platform == PlatformGrok {
 		if account.IsGrokOAuth() {
 			if eligible, reason := grokChatResponsesBridgeEligibility(body); eligible {

@@ -239,6 +239,9 @@ type UsageInfo struct {
 	// Perplexity 网页会话画像；各分项的 fetched_at 才是该项 last-good 时间。
 	Perplexity *PerplexityUsage `json:"perplexity,omitempty"`
 
+	// CodeBuddy 积分快照（来自最近一次计费探测与网关本地计数，不在此处发起探测）。
+	CodeBuddy *CodeBuddyCreditsReport `json:"codebuddy,omitempty"`
+
 	// Antigravity 账号级信息
 	SubscriptionTier    string `json:"subscription_tier,omitempty"`     // 归一化订阅等级: FREE/PRO/ULTRA/UNKNOWN
 	SubscriptionTierRaw string `json:"subscription_tier_raw,omitempty"` // 上游原始订阅等级名称
@@ -447,6 +450,12 @@ func (s *AccountUsageService) getUsageForAccount(ctx context.Context, account *A
 
 	if account.IsPerplexity() {
 		return s.getPerplexityUsage(ctx, account, forceProbe)
+	}
+
+	if account.IsCodeBuddy() {
+		// 积分探测走 /admin/codebuddy/accounts/:id/credits；这里只回放缓存，
+		// 避免账号列表每次加载都打到计费接口。
+		return &UsageInfo{CodeBuddy: account.CodeBuddyCachedCreditsReport()}, nil
 	}
 
 	// 只有oauth类型账号可以通过API获取usage（有profile scope）

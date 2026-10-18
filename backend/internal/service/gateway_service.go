@@ -1471,6 +1471,16 @@ func (s *GatewayService) GetAvailableModels(ctx context.Context, groupID *int64,
 			return nil
 		}
 
+		// CodeBuddy accounts advertise their synced catalog (or whitelist),
+		// which model_mapping alone cannot express.
+		if acc.IsCodeBuddy() {
+			for _, model := range acc.CodeBuddyAvailableModels() {
+				modelSet[model.ID] = struct{}{}
+				hasAnyMapping = true
+			}
+			continue
+		}
+
 		mapping := acc.GetModelMapping()
 		for model := range mapping {
 			// Accounts pulled in through mixed scheduling only contribute the

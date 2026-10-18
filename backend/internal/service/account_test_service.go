@@ -421,6 +421,10 @@ func (s *AccountTestService) TestAccountConnection(c *gin.Context, accountID int
 		return s.testGrokAccountConnection(c, account, modelID, prompt, mode, testOpts)
 	}
 
+	if account.IsCodeBuddy() {
+		return s.testCodeBuddyAccountConnection(c, account, modelID, prompt)
+	}
+
 	if account.IsPerplexity() {
 		if mode == AccountTestModePerplexityModel {
 			return s.testPerplexityModelConnection(c, account, modelID, prompt)

@@ -80,7 +80,7 @@
         <input
           v-model="form.name"
           type="text"
-          :required="!isGrokSSOInputMethod"
+          :required="!isGrokSSOInputMethod && form.platform !== 'codebuddy'"
           class="input"
           :placeholder="t('admin.accounts.enterAccountName')"
           data-tour="account-form-name"
@@ -203,6 +203,20 @@
           >
             <PlatformIcon platform="perplexity" size="sm" />
             Perplexity
+          </button>
+          <button
+            type="button"
+            data-testid="platform-codebuddy"
+            @click="form.platform = 'codebuddy'"
+            :class="[
+              'flex flex-1 items-center justify-center gap-2 rounded-md px-4 py-2.5 text-sm font-medium transition-all',
+              form.platform === 'codebuddy'
+                ? 'bg-white text-violet-600 shadow-sm dark:bg-dark-600 dark:text-violet-400'
+                : 'text-gray-600 hover:text-gray-900 dark:text-gray-400 dark:hover:text-gray-200'
+            ]"
+          >
+            <PlatformIcon platform="codebuddy" size="sm" />
+            CodeBuddy
           </button>
         </div>
         <!-- Multi-protocol API-key providers: Kimi / Zhipu GLM / DeepSeek / OpenCode -->
@@ -521,6 +535,11 @@
             </div>
           </button>
         </div>
+      </div>
+
+      <!-- CodeBuddy / WorkBuddy：扫码登录（国内 / 国际）、.info 导入或刷新令牌导入 -->
+      <div v-if="form.platform === 'codebuddy'" data-testid="create-codebuddy-section">
+        <CodeBuddyCredentialFields ref="codebuddyFieldsRef" :proxy-id="form.proxy_id" />
       </div>
 
       <!-- OpenCode Zen vs Go -->
@@ -4040,6 +4059,7 @@ import { useOpenAIOAuth } from '@/composables/useOpenAIOAuth'
 import { useGeminiOAuth } from '@/composables/useGeminiOAuth'
 import { useAntigravityOAuth } from '@/composables/useAntigravityOAuth'
 import { useGrokOAuth } from '@/composables/useGrokOAuth'
+import CodeBuddyCredentialFields from './CodeBuddyCredentialFields.vue'
 import type {
   Proxy,
   AdminGroup,
@@ -4275,6 +4295,42 @@ const openaiOAuth = useOpenAIOAuth() // For OpenAI OAuth
 const geminiOAuth = useGeminiOAuth() // For Gemini OAuth
 const antigravityOAuth = useAntigravityOAuth() // For Antigravity OAuth
 const grokOAuth = useGrokOAuth() // For Grok OAuth
+const codebuddyFieldsRef = ref<InstanceType<typeof CodeBuddyCredentialFields> | null>(null)
+
+// CodeBuddy：凭证来源（扫码 / .info / 刷新令牌）在第一步内完成，直接调用专用创建接口。
+const handleCreateCodeBuddy = async () => {
+  if (!validateGroupSelection()) return
+  const fields = codebuddyFieldsRef.value
+  if (!fields) return
+  const built = fields.buildSource()
+  if (!built.source) {
+    appStore.showError(t(built.error || 'admin.accounts.codebuddyOAuth.failedToCreate'))
+    return
+  }
+  submitting.value = true
+  try {
+    await adminAPI.codebuddy.createFromOAuth({
+      ...built.source,
+      credit_policy: fields.creditPolicy,
+      name: form.name.trim() || undefined,
+      notes: form.notes,
+      proxy_id: form.proxy_id,
+      concurrency: form.concurrency,
+      priority: form.priority,
+      rate_multiplier: form.rate_multiplier,
+      load_factor: form.load_factor ?? undefined,
+      group_ids: form.group_ids
+    })
+    appStore.showSuccess(t('admin.accounts.accountCreated'))
+    emit('created')
+    fields.reset()
+    handleClose()
+  } catch (error: unknown) {
+    appStore.showError(extractApiErrorMessage(error, t('admin.accounts.codebuddyOAuth.failedToCreate')))
+  } finally {
+    submitting.value = false
+  }
+}
 
 // Computed: current OAuth state for template binding
 const currentAuthUrl = computed(() => {
@@ -4959,6 +5015,10 @@ const blockClashBatchCreate = (count: number, setError?: (message: string) => vo
 
 // Helper to check if current type needs OAuth flow
 const isOAuthFlow = computed(() => {
+  // CodeBuddy 的扫码 / 导入在第一步内完成，不走第二步授权页
+  if (form.platform === 'codebuddy') {
+    return false
+  }
   // Antigravity upstream 类型不需要 OAuth 流程
   if (form.platform === 'antigravity' && antigravityAccountType.value === 'upstream') {
     return false
@@ -5132,6 +5192,12 @@ watch(
       modelRestrictionMode.value = 'mapping'
       form.concurrency = 1
       form.load_factor = null
+    }
+    if (newPlatform === 'codebuddy') {
+      accountCategory.value = 'oauth-based'
+      form.type = 'oauth'
+    } else {
+      codebuddyFieldsRef.value?.reset()
     }
     if (newPlatform === 'perplexity') {
       // 仅支持网页会话（apikey）账号，防止分组预选等路径绕过 selectPerplexityPlatform
@@ -5957,6 +6023,10 @@ const validateGroupSelection = (): boolean => {
 }
 
 const handleSubmit = async () => {
+  if (form.platform === 'codebuddy') {
+    await handleCreateCodeBuddy()
+    return
+  }
   if (form.platform === 'perplexity') {
     const validationError = validatePerplexityOptions(perplexityOptions.value)
     if (validationError) {

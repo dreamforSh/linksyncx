@@ -178,6 +178,23 @@ func NewTokenRefreshService(
 	return s
 }
 
+// RegisterPlatformRefresher adds a provider registered outside the constructor
+// (CodeBuddy). A platform already registered is replaced, keeping the
+// one-registration-per-platform invariant.
+func (s *TokenRefreshService) RegisterPlatformRefresher(platform string, refresher TokenRefresher, executor OAuthRefreshExecutor) {
+	if s == nil || platform == "" || refresher == nil {
+		return
+	}
+	registration := tokenRefreshRegistration{platform: platform, refresher: refresher, executor: executor}
+	for i := range s.registrations {
+		if s.registrations[i].platform == platform {
+			s.registrations[i] = registration
+			return
+		}
+	}
+	s.registrations = append(s.registrations, registration)
+}
+
 func (s *TokenRefreshService) eligiblePlatforms() []string {
 	platforms := make([]string, 0, len(s.registrations))
 	for _, registration := range s.registrations {

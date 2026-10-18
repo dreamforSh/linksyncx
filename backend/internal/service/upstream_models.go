@@ -753,6 +753,9 @@ func (s *AccountTestService) fetchUpstreamModelList(ctx context.Context, account
 	if account.Platform == PlatformAntigravity && !antigravityUsesRelayModelList(account) {
 		return s.fetchAntigravityOAuthUpstreamModels(ctx, account)
 	}
+	if account.IsCodeBuddy() {
+		return s.fetchCodeBuddyUpstreamModels(ctx, account)
+	}
 	if account.IsPerplexity() {
 		fresh, err := freshPerplexityAccount(ctx, s.accountRepo, account)
 		if err != nil {

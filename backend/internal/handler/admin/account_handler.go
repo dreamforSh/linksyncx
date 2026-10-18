@@ -69,6 +69,13 @@ type AccountHandler struct {
 	opencodeGoUsage         *service.OpenCodeGoUsageService
 	identityService         *service.IdentityService
 	settingService          *service.SettingService
+	codeBuddyOAuthService   *service.CodeBuddyOAuthService
+}
+
+// SetCodeBuddyOAuthService attaches the CodeBuddy credential service used by
+// the generic refresh-credentials action and per-account model listing.
+func (h *AccountHandler) SetCodeBuddyOAuthService(svc *service.CodeBuddyOAuthService) {
+	h.codeBuddyOAuthService = svc
 }
 
 // SetUpstreamBillingProbeService attaches the optional remote billing probe service.
@@ -1524,6 +1531,15 @@ func (h *AccountHandler) refreshSingleAccount(ctx context.Context, account *serv
 				return nil, "", fmt.Errorf("failed to clear account error: %w", clearErr)
 			}
 		}
+	} else if account.IsCodeBuddy() {
+		if h.codeBuddyOAuthService == nil {
+			return nil, "", fmt.Errorf("codebuddy oauth service is not configured")
+		}
+		result, err := h.codeBuddyOAuthService.RefreshAccountToken(ctx, account)
+		if err != nil {
+			return nil, "", err
+		}
+		newCredentials = h.codeBuddyOAuthService.ApplyRefresh(account, result)
 	} else if account.Platform == service.PlatformGrok {
 		if h.grokOAuthService == nil {
 			return nil, "", fmt.Errorf("grok oauth service is not configured")
@@ -2990,6 +3006,12 @@ func (h *AccountHandler) GetAvailableModels(c *gin.Context) {
 			}
 		}
 		response.Success(c, service.DefaultPerplexityAccountModels(account))
+		return
+	}
+
+	// CodeBuddy advertises its synced catalog (or whitelist / defaults).
+	if account.IsCodeBuddy() {
+		response.Success(c, service.CodeBuddyAvailableOpenAIModels(account))
 		return
 	}
 
