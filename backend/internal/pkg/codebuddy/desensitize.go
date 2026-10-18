@@ -33,7 +33,7 @@ import (
 // rewritten.
 
 // zwsp is the zero-width space inserted inside a matched term.
-const zwsp = "​"
+var zwsp = string(rune(0x200b)) // zero-width space
 
 // sensitiveTerms are the vendor-identity fingerprints (Claude / Anthropic family)
 // the upstream signature-matches inside the Claude Code system prompt. Only
@@ -165,7 +165,7 @@ func replaceGitStatusText(text string, protected bool) string {
 				}
 			}
 		}
-		b.WriteString(line)
+		_, _ = b.WriteString(line)
 	}
 	return b.String()
 }
