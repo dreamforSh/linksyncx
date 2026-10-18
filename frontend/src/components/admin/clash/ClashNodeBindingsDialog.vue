@@ -30,7 +30,17 @@
       </div>
 
       <section>
-        <h4 class="font-semibold text-gray-900 dark:text-white">{{ t('admin.clash.nodes.bindings.current') }}</h4>
+        <div class="flex flex-wrap items-baseline justify-between gap-x-3 gap-y-1">
+          <h4 class="font-semibold text-gray-900 dark:text-white">{{ t('admin.clash.nodes.bindings.current') }}</h4>
+          <span
+            v-if="bound.length > 0 && nodeToday > 0"
+            class="text-xs text-gray-500 dark:text-dark-400"
+            :title="unattributedToday > 0 ? t('admin.clash.nodes.bindings.unattributed', { value: formatTrafficBytes(unattributedToday) }) : undefined"
+            data-testid="clash-bindings-traffic-summary"
+          >
+            {{ t('admin.clash.nodes.bindings.trafficSummary', { today: formatTrafficBytes(nodeToday), attributed: formatTrafficBytes(nodeToday - unattributedToday) }) }}
+          </span>
+        </div>
         <ul
           v-if="bound.length > 0"
           class="mt-2 divide-y divide-gray-100 rounded-lg border border-gray-200 dark:divide-dark-700 dark:border-dark-700"
@@ -40,7 +50,24 @@
             <PlatformIcon :platform="account.platform as GroupPlatform" size="xs" />
             <span class="min-w-0 truncate text-gray-900 dark:text-gray-100" :title="account.name">{{ account.name }}</span>
             <span v-if="account.is_shadow" class="badge badge-gray">{{ t('admin.clash.nodes.shadowTag') }}</span>
-            <div class="ml-auto flex-shrink-0">
+            <!-- 每个账号经此节点的流量：账号用自己的监听器用户名出站，按连接归属 -->
+            <span
+              class="ml-auto flex flex-shrink-0 flex-col items-end text-[11px] leading-4 tabular-nums text-gray-500 dark:text-dark-400"
+              :title="accountTrafficTitle(account)"
+              data-testid="clash-bindings-account-traffic"
+            >
+              <template v-if="accountTraffic(account).total > 0 || accountTraffic(account).connections > 0">
+                <span class="text-gray-700 dark:text-gray-300">{{ t('admin.clash.nodes.bindings.accountToday', { value: formatTrafficBytes(accountTraffic(account).today) }) }}</span>
+                <span>
+                  {{ t('admin.clash.nodes.bindings.accountRecent', { value: formatTrafficBytes(accountTraffic(account).recent) }) }}
+                  <template v-if="accountTraffic(account).connections > 0">
+                    · <span class="text-emerald-600 dark:text-emerald-400">{{ formatTrafficRate(accountTraffic(account).rate) }}</span>
+                  </template>
+                </span>
+              </template>
+              <span v-else class="text-gray-400 dark:text-dark-500">{{ t('admin.clash.nodes.bindings.accountNoTraffic') }}</span>
+            </span>
+            <div class="flex-shrink-0">
               <span v-if="account.is_shadow" class="text-xs text-gray-400 dark:text-dark-500">
                 {{ t('admin.clash.nodes.bindings.followsParent') }}
               </span>
@@ -208,8 +235,13 @@ import Icon from '@/components/icons/Icon.vue'
 import type { AccountListItem, ClashBoundAccount, ClashExitList, ClashNode, GroupPlatform } from '@/types'
 import { extractApiErrorMessage } from '@/utils/apiError'
 import {
+  clashAccountTrafficTotals,
   clashCheckPlatformFor,
   clashErrorMessage,
+  clashTrafficToday,
+  clashUnattributedToday,
+  formatTrafficBytes,
+  formatTrafficRate,
   isBlockingPlatformCheck,
   localizeClashUnavailableReason
 } from '@/utils/clash'
@@ -246,6 +278,24 @@ const selected = ref(new Set<number>())
 const working = ref(false)
 const pendingUnbind = ref<ClashBoundAccount | null>(null)
 const pauseOnUnbind = ref(true)
+
+const accountTraffic = (account: ClashBoundAccount) => clashAccountTrafficTotals(account.traffic)
+const nodeToday = computed(() => clashTrafficToday(props.node?.traffic))
+const unattributedToday = computed(() =>
+  props.node ? clashUnattributedToday({ traffic: props.node.traffic, accounts: bound.value }) : 0
+)
+function accountTrafficTitle(account: ClashBoundAccount): string {
+  const traffic = accountTraffic(account)
+  const lines = [
+    t('admin.clash.nodes.bindings.accountToday', { value: formatTrafficBytes(traffic.today) }),
+    t('admin.clash.nodes.bindings.accountRecent', { value: formatTrafficBytes(traffic.recent) }),
+    t('admin.clash.nodes.bindings.accountTotal', { value: formatTrafficBytes(traffic.total) }),
+  ]
+  if (traffic.connections > 0) {
+    lines.push(t('admin.clash.nodes.bindings.accountLive', { rate: formatTrafficRate(traffic.rate), count: traffic.connections }))
+  }
+  return lines.join('\n')
+}
 
 const describeError = (error: unknown, fallbackKey: string) =>
   clashErrorMessage(error, t) ?? extractApiErrorMessage(error, t(fallbackKey))

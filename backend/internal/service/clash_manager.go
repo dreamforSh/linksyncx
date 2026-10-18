@@ -152,6 +152,8 @@ func (m *ClashManager) Stop() {
 	}
 	m.cancel()
 	m.wg.Wait()
+	// Nothing confirms tagged usernames once this manager stops.
+	clashAccountRoutes.set(nil)
 	if m.runtime != nil {
 		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer cancel()
@@ -209,13 +211,20 @@ func (m *ClashManager) syncOnce(ctx context.Context) error {
 		if err != nil {
 			return m.recordError(err)
 		}
+		routes := clashRenderAccountRoutes(nodes)
 		if m.currentHash() == rendered.Hash {
 			if ok, err := m.runtime.HasProxy(ctx, rendered.MarkerName); err == nil && ok {
+				// The core runs exactly this render (another instance may have
+				// applied it), so its tagged usernames are accepted.
+				clashAccountRoutes.set(routes)
 				m.maybeCheckListeners(ctx, nodes, false)
 				m.publishStatus(ctx)
 				return nil
 			}
 		}
+		// Usernames this render drops stop being used before the apply; new
+		// ones only after it succeeded.
+		clashAccountRoutes.retain(routes)
 		err = m.runtime.Apply(ctx, rendered.Payload)
 		var cfgErr *ClashConfigError
 		if errors.As(err, &cfgErr) {
@@ -238,6 +247,7 @@ func (m *ClashManager) syncOnce(ctx context.Context) error {
 		m.lastErr = ""
 		m.listeners = rendered.Listeners
 		m.mu.Unlock()
+		clashAccountRoutes.set(routes)
 		applied = true
 		m.maybeCheckListeners(ctx, nodes, true)
 		break

@@ -68,7 +68,8 @@ func perplexityAccountFingerprint(account *Account) string {
 	if account == nil {
 		return ""
 	}
-	proxyURL, err := account.ProxyURLForOutbound()
+	// Fingerprint the egress, not the Clash attribution tag in the URL.
+	proxyURL, err := account.ProxyEgressIdentityURL()
 	if err != nil {
 		return ""
 	}
@@ -172,15 +173,19 @@ func (s *AccountUsageService) getPerplexityUsage(ctx context.Context, account *A
 	if account.Type != AccountTypeAPIKey {
 		return nil, fmt.Errorf("perplexity usage requires a cookie-backed api-key account")
 	}
-	proxyURL, err := account.ProxyURLForOutbound()
-	if err != nil {
+	// Fail closed on an unusable proxy before touching the cache.
+	if _, err := account.ProxyURLForOutbound(); err != nil {
 		return nil, err
 	}
 	if s.cache == nil {
 		return nil, fmt.Errorf("perplexity usage cache is not configured")
 	}
 	// Credentials and egress changes must not hit a previous identity's cache.
-	fingerprint := perplexityIdentityFingerprint(account, proxyURL)
+	identityURL, err := account.ProxyEgressIdentityURL()
+	if err != nil {
+		return nil, err
+	}
+	fingerprint := perplexityIdentityFingerprint(account, identityURL)
 	load := func() *perplexityUsageCache {
 		raw, ok := s.cache.perplexityCache.Load(account.ID)
 		if !ok {

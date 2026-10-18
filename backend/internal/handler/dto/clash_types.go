@@ -110,12 +110,37 @@ type ClashBoundAccount struct {
 	Name     string `json:"name"`
 	Platform string `json:"platform"`
 	IsShadow bool   `json:"is_shadow"`
+	// Traffic is the account's attributed traffic through this node; omitted
+	// when nothing was attributed (and on exit-selector occupants).
+	Traffic *ClashAccountTraffic `json:"traffic,omitempty"`
+}
+
+// ClashAccountTraffic is one account's measured traffic through one node.
+type ClashAccountTraffic struct {
+	UploadBytes         int64 `json:"upload_bytes"`
+	DownloadBytes       int64 `json:"download_bytes"`
+	TodayUploadBytes    int64 `json:"today_upload_bytes"`
+	TodayDownloadBytes  int64 `json:"today_download_bytes"`
+	RecentUploadBytes   int64 `json:"recent_upload_bytes"`
+	RecentDownloadBytes int64 `json:"recent_download_bytes"`
+	UploadRate          int64 `json:"upload_rate"`
+	DownloadRate        int64 `json:"download_rate"`
+	Connections         int   `json:"connections"`
 }
 
 func clashAccountsFromService(accounts []service.ClashBoundAccount) []ClashBoundAccount {
 	out := make([]ClashBoundAccount, 0, len(accounts))
 	for _, acc := range accounts {
-		out = append(out, ClashBoundAccount{ID: acc.ID, Name: acc.Name, Platform: acc.Platform, IsShadow: acc.ParentAccountID != nil})
+		item := ClashBoundAccount{ID: acc.ID, Name: acc.Name, Platform: acc.Platform, IsShadow: acc.ParentAccountID != nil}
+		if t := acc.Traffic; t != (service.ClashAccountTraffic{}) {
+			item.Traffic = &ClashAccountTraffic{
+				UploadBytes: t.Upload, DownloadBytes: t.Download,
+				TodayUploadBytes: t.TodayUpload, TodayDownloadBytes: t.TodayDownload,
+				RecentUploadBytes: t.RecentUpload, RecentDownloadBytes: t.RecentDownload,
+				UploadRate: t.UploadRate, DownloadRate: t.DownloadRate, Connections: t.Connections,
+			}
+		}
+		out = append(out, item)
 	}
 	return out
 }

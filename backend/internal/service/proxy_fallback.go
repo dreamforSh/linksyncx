@@ -28,7 +28,8 @@ func ResolveProxyFallbackTarget(start Proxy, byID map[int64]Proxy, now time.Time
 		if !ok {
 			return nil, false
 		}
-		// Clash exits are exclusive; never fail over onto one.
+		// Clash exits are bound explicitly (pause and exit-change tracking follow
+		// the binding); never fail over onto one implicitly.
 		if p.IsClashManaged() {
 			return nil, false
 		}

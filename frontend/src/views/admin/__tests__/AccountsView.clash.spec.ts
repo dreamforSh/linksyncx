@@ -151,14 +151,15 @@ describe('admin AccountsView — Clash exits', () => {
     vi.unstubAllGlobals()
   })
 
-  it('loads the exits on mount and hands them to the create/edit modals only', async () => {
+  it('loads the exits on mount and hands them to the create, edit and bulk modals', async () => {
     const wrapper = mountView()
     await flushPromises()
 
     expect(api.listExits).toHaveBeenCalledTimes(1)
     expect(wrapper.findComponent({ name: 'CreateAccountModal' }).props('clashExits')).toEqual(exits)
     expect(wrapper.findComponent({ name: 'EditAccountModal' }).props('clashExits')).toEqual(exits)
-    expect(wrapper.findComponent({ name: 'BulkEditAccountModal' }).props()).not.toHaveProperty('clashExits')
+    // Exits are shareable, so bulk edit can bind several accounts to one too.
+    expect(wrapper.findComponent({ name: 'BulkEditAccountModal' }).props('clashExits')).toEqual(exits)
   })
 
   it('shows the Clash tag, node and exit IP for accounts bound to an exit', async () => {

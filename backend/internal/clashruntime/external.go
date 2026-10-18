@@ -183,6 +183,7 @@ func (r *externalRuntime) Connections(ctx context.Context) ([]service.ClashConne
 			Start    string `json:"start"`
 			Metadata struct {
 				InboundName string `json:"inboundName"`
+				InboundUser string `json:"inboundUser"`
 			} `json:"metadata"`
 		} `json:"connections"`
 	}
@@ -199,6 +200,7 @@ func (r *externalRuntime) Connections(ctx context.Context) ([]service.ClashConne
 		out = append(out, service.ClashConnection{
 			ID:       conn.ID,
 			Inbound:  conn.Metadata.InboundName,
+			User:     conn.Metadata.InboundUser,
 			Upload:   conn.Upload,
 			Download: conn.Download,
 			Start:    start,

@@ -612,7 +612,8 @@ watch(
 const clashExitViews = computed<ClashExitView[]>(() => {
   const list = props.clashExits
   if (!list) return []
-  const maxPerExit = Math.max(1, list.max_accounts_per_exit || 1)
+  // 0 (or absent) = unlimited sharing; only a positive limit can make an exit full.
+  const maxPerExit = list.max_accounts_per_exit && list.max_accounts_per_exit > 0 ? list.max_accounts_per_exit : Infinity
   return list.exits.map((exit) => {
     const others = (exit.occupants ?? []).filter(
       (account) => !account.is_shadow && account.id !== props.accountId

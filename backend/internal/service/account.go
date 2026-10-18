@@ -2528,6 +2528,22 @@ var ErrAccountProxyUnavailable = errors.New("assigned proxy is currently unavail
 // 因此账号级的判定必须在这里完成。clash 出口是 socks5://127.0.0.1:<port> 的 Proxy 行，核心/节点
 // 不健康时连接会被拒绝（REJECT 占位监听 / connection-refused），只要真的使用该 URL 即天然 fail-closed。
 func (a *Account) ProxyURLForOutbound() (string, error) {
+	proxyURL, err := a.ProxyEgressIdentityURL()
+	if err != nil || proxyURL == "" {
+		return proxyURL, err
+	}
+	// A shared Clash exit attributes traffic per account through a tagged
+	// listener username; same endpoint, so the fail-closed rule is unchanged.
+	if tagged := clashAccountProxyURL(a.Proxy, a.ID); tagged != "" {
+		return tagged, nil
+	}
+	return proxyURL, nil
+}
+
+// ProxyEgressIdentityURL is the account's proxy URL without the per-account
+// Clash attribution tag. Use it to fingerprint the egress (same node, same exit
+// IP), never to dial: the fail-closed semantics match ProxyURLForOutbound.
+func (a *Account) ProxyEgressIdentityURL() (string, error) {
 	if a == nil || a.ProxyID == nil {
 		return "", nil
 	}

@@ -1135,6 +1135,22 @@ export interface ClashBoundAccount {
   name: string
   platform: string
   is_shadow: boolean
+  /** 该账号经此节点的已归属流量（仅节点列表下发；无数据时省略） */
+  traffic?: ClashAccountTraffic
+}
+
+/** 账号经某节点的流量：账号用自己的监听器用户名出站，按连接归属。 */
+export interface ClashAccountTraffic {
+  upload_bytes: number
+  download_bytes: number
+  today_upload_bytes: number
+  today_download_bytes: number
+  /** 近 7 天（与节点趋势窗口一致） */
+  recent_upload_bytes: number
+  recent_download_bytes: number
+  upload_rate: number
+  download_rate: number
+  connections: number
 }
 
 export interface ClashPlatformChecks {

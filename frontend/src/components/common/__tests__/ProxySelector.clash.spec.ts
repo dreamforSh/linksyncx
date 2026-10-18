@@ -166,6 +166,20 @@ describe('ProxySelector — Clash exits', () => {
     expect(optionFor(wrapper, 321).get('[data-testid="clash-exit-occupancy"]').text()).toContain('first')
   })
 
+  it('treats a limit of 0 as unlimited sharing', async () => {
+    const busy = exit({
+      proxy_id: 322,
+      occupants: [
+        { id: 61, name: 'a', platform: 'openai', is_shadow: false },
+        { id: 62, name: 'b', platform: 'openai', is_shadow: false },
+        { id: 63, name: 'c', platform: 'openai', is_shadow: false }
+      ]
+    })
+    const wrapper = await openSelector({ clashExits: list([busy], { max_accounts_per_exit: 0 }) })
+    expect(optionFor(wrapper, 322).attributes('aria-disabled')).toBeUndefined()
+    expect(optionFor(wrapper, 322).get('[data-testid="clash-exit-occupancy"]').text()).toContain('a')
+  })
+
   it('keeps the current binding selectable even when it is blocked', async () => {
     const down = exit({ proxy_id: 331, available: false, unavailable_reason: 'node disabled', status: 'disabled' })
     const wrapper = await openSelector({ clashExits: list([down]), modelValue: 331 })

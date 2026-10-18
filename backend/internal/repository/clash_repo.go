@@ -575,6 +575,72 @@ func (r *clashRepository) ListNodeTraffic(ctx context.Context, nodeIDs []int64, 
 	return out, dayRows.Err()
 }
 
+func (r *clashRepository) AddAccountTraffic(ctx context.Context, incs []service.ClashAccountTrafficIncrement, at time.Time) error {
+	if len(incs) == 0 {
+		return nil
+	}
+	accountIDs := make([]int64, len(incs))
+	nodeIDs := make([]int64, len(incs))
+	dates := make([]string, len(incs))
+	uploads := make([]int64, len(incs))
+	downloads := make([]int64, len(incs))
+	for i, inc := range incs {
+		accountIDs[i], nodeIDs[i], dates[i], uploads[i], downloads[i] = inc.AccountID, inc.NodeID, inc.Date, inc.Upload, inc.Download
+	}
+	// Same shape as AddNodeTraffic: one grouped statement, stable lock order.
+	_, err := r.db.ExecContext(ctx, `
+		INSERT INTO clash_account_traffic_daily AS t (account_id, node_id, bucket_date, upload_bytes, download_bytes, updated_at)
+		SELECT d.account_id, d.node_id, d.bucket::date, SUM(d.up), SUM(d.down), $6::timestamptz
+		FROM unnest($1::bigint[], $2::bigint[], $3::text[], $4::bigint[], $5::bigint[]) AS d(account_id, node_id, bucket, up, down)
+		WHERE EXISTS (SELECT 1 FROM clash_nodes n WHERE n.id = d.node_id)
+			AND EXISTS (SELECT 1 FROM accounts a WHERE a.id = d.account_id)
+		GROUP BY d.account_id, d.node_id, d.bucket
+		ORDER BY d.account_id, d.node_id, d.bucket
+		ON CONFLICT (account_id, node_id, bucket_date) DO UPDATE SET
+			upload_bytes = t.upload_bytes + EXCLUDED.upload_bytes,
+			download_bytes = t.download_bytes + EXCLUDED.download_bytes,
+			updated_at = EXCLUDED.updated_at`,
+		pq.Array(accountIDs), pq.Array(nodeIDs), pq.Array(dates), pq.Array(uploads), pq.Array(downloads), at)
+	return err
+}
+
+func (r *clashRepository) ListAccountTraffic(ctx context.Context, nodeIDs []int64, today, since string) (map[int64]map[int64]service.ClashAccountTraffic, error) {
+	out := make(map[int64]map[int64]service.ClashAccountTraffic)
+	if len(nodeIDs) == 0 {
+		return out, nil
+	}
+	rows, err := r.db.QueryContext(ctx, `
+		SELECT node_id, account_id,
+			COALESCE(SUM(upload_bytes), 0)::bigint,
+			COALESCE(SUM(download_bytes), 0)::bigint,
+			COALESCE(SUM(upload_bytes) FILTER (WHERE bucket_date = $2::date), 0)::bigint,
+			COALESCE(SUM(download_bytes) FILTER (WHERE bucket_date = $2::date), 0)::bigint,
+			COALESCE(SUM(upload_bytes) FILTER (WHERE bucket_date >= $3::date), 0)::bigint,
+			COALESCE(SUM(download_bytes) FILTER (WHERE bucket_date >= $3::date), 0)::bigint
+		FROM clash_account_traffic_daily
+		WHERE node_id = ANY($1)
+		GROUP BY node_id, account_id`, pq.Array(nodeIDs), today, since)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = rows.Close() }()
+	for rows.Next() {
+		var (
+			nodeID, accountID int64
+			traffic           service.ClashAccountTraffic
+		)
+		if err := rows.Scan(&nodeID, &accountID, &traffic.Upload, &traffic.Download,
+			&traffic.TodayUpload, &traffic.TodayDownload, &traffic.RecentUpload, &traffic.RecentDownload); err != nil {
+			return nil, err
+		}
+		if out[nodeID] == nil {
+			out[nodeID] = make(map[int64]service.ClashAccountTraffic)
+		}
+		out[nodeID][accountID] = traffic
+	}
+	return out, rows.Err()
+}
+
 func (r *clashRepository) ListProfileTraffic(ctx context.Context, today string) (map[int64]service.ClashProfileTraffic, error) {
 	rows, err := r.db.QueryContext(ctx, `
 		SELECT n.profile_id,
@@ -994,9 +1060,10 @@ func (r *clashRepository) ReclaimNodes(ctx context.Context, missingBefore time.T
 
 func (r *clashRepository) ListRenderNodes(ctx context.Context) ([]service.ClashRenderNode, error) {
 	rows, err := r.db.QueryContext(ctx, `
-		SELECT n.id, n.listen_port, COALESCE(pr.username, ''), COALESCE(pr.password, ''), n.config,
+		SELECT n.id, n.listen_port, n.proxy_id, COALESCE(pr.username, ''), COALESCE(pr.password, ''), n.config,
 			(n.status = 'active' AND p.enabled AND p.deleted_at IS NULL) AS live,
-			EXISTS (SELECT 1 FROM accounts a WHERE a.proxy_id = n.proxy_id AND a.deleted_at IS NULL) AS bound
+			COALESCE((SELECT array_agg(a.id ORDER BY a.id) FROM accounts a
+				WHERE a.proxy_id = n.proxy_id AND a.deleted_at IS NULL), '{}'::bigint[]) AS account_ids
 		FROM clash_nodes n
 		JOIN clash_profiles p ON p.id = n.profile_id
 		JOIN proxies pr ON pr.id = n.proxy_id
@@ -1008,13 +1075,16 @@ func (r *clashRepository) ListRenderNodes(ctx context.Context) ([]service.ClashR
 	out := make([]service.ClashRenderNode, 0)
 	for rows.Next() {
 		var (
-			node        service.ClashRenderNode
-			configRaw   []byte
-			live, bound bool
+			node       service.ClashRenderNode
+			configRaw  []byte
+			live       bool
+			accountIDs pq.Int64Array
 		)
-		if err := rows.Scan(&node.NodeID, &node.ListenPort, &node.Username, &node.Password, &configRaw, &live, &bound); err != nil {
+		if err := rows.Scan(&node.NodeID, &node.ListenPort, &node.ProxyID, &node.Username, &node.Password, &configRaw, &live, &accountIDs); err != nil {
 			return nil, err
 		}
+		node.AccountIDs = []int64(accountIDs)
+		bound := len(node.AccountIDs) > 0
 		switch {
 		case live:
 			if err := json.Unmarshal(configRaw, &node.Config); err != nil {

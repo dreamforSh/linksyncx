@@ -109,7 +109,8 @@ func (s *OpenAIGatewayService) preparePerplexityContinuation(account *Account, a
 	if len(gjson.GetBytes(body, "tools").Array()) > 0 || len(gjson.GetBytes(body, "functions").Array()) > 0 {
 		return nil
 	}
-	proxyURL, proxyErr := account.ProxyURLForOutbound()
+	// Scope by egress; the Clash attribution tag in the dial URL is not identity.
+	proxyURL, proxyErr := account.ProxyEgressIdentityURL()
 	if proxyErr != nil {
 		return nil
 	}

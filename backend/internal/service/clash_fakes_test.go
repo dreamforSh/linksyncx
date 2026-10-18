@@ -36,6 +36,8 @@ type fakeClashRepo struct {
 	// traffic holds daily buckets per node and day; trafficErr fails flushes.
 	traffic    map[int64]map[string]*ClashTrafficDay
 	trafficErr error
+	// accountTraffic holds attributed increments as flushed.
+	accountTraffic []ClashAccountTrafficIncrement
 }
 
 func newFakeClashRepo() *fakeClashRepo {
@@ -97,6 +99,12 @@ func (r *fakeClashRepo) bind(name string, proxyID int64, parent *int64) *fakeCla
 	acc := &fakeClashAccount{ID: id, Name: name, Platform: PlatformAnthropic, Parent: parent, ProxyID: &pid}
 	r.accounts[id] = acc
 	return acc
+}
+
+func (r *fakeClashRepo) unbind(id int64) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.accounts[id].ProxyID = nil
 }
 
 func (r *fakeClashRepo) account(id int64) fakeClashAccount {
@@ -340,6 +348,51 @@ func (r *fakeClashRepo) ListNodeIDs(_ context.Context, filter ClashNodeFilter) (
 		ids = append(ids, v.ID)
 	}
 	return ids, nil
+}
+
+func (r *fakeClashRepo) AddAccountTraffic(_ context.Context, incs []ClashAccountTrafficIncrement, _ time.Time) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.trafficErr != nil {
+		return r.trafficErr
+	}
+	for _, inc := range incs {
+		if _, ok := r.nodes[inc.NodeID]; ok {
+			r.accountTraffic = append(r.accountTraffic, inc)
+		}
+	}
+	return nil
+}
+
+func (r *fakeClashRepo) ListAccountTraffic(_ context.Context, nodeIDs []int64, today, since string) (map[int64]map[int64]ClashAccountTraffic, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	wanted := make(map[int64]bool, len(nodeIDs))
+	for _, id := range nodeIDs {
+		wanted[id] = true
+	}
+	out := map[int64]map[int64]ClashAccountTraffic{}
+	for _, inc := range r.accountTraffic {
+		if !wanted[inc.NodeID] {
+			continue
+		}
+		if out[inc.NodeID] == nil {
+			out[inc.NodeID] = map[int64]ClashAccountTraffic{}
+		}
+		t := out[inc.NodeID][inc.AccountID]
+		t.Upload += inc.Upload
+		t.Download += inc.Download
+		if inc.Date == today {
+			t.TodayUpload += inc.Upload
+			t.TodayDownload += inc.Download
+		}
+		if inc.Date >= since {
+			t.RecentUpload += inc.Upload
+			t.RecentDownload += inc.Download
+		}
+		out[inc.NodeID][inc.AccountID] = t
+	}
+	return out, nil
 }
 
 func (r *fakeClashRepo) AddNodeTraffic(_ context.Context, incs []ClashTrafficIncrement, _ time.Time) error {
@@ -619,6 +672,17 @@ func (r *fakeClashRepo) boundLocked(proxyID int64) bool {
 	return false
 }
 
+func (r *fakeClashRepo) boundAccountIDsLocked(proxyID int64) []int64 {
+	var out []int64
+	for _, acc := range r.accounts {
+		if acc.ProxyID != nil && *acc.ProxyID == proxyID {
+			out = append(out, acc.ID)
+		}
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i] < out[j] })
+	return out
+}
+
 func (r *fakeClashRepo) ReclaimNodes(_ context.Context, before time.Time) ([]int64, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -639,7 +703,7 @@ func (r *fakeClashRepo) ListRenderNodes(_ context.Context) ([]ClashRenderNode, e
 	for _, n := range r.nodes {
 		p := r.profiles[n.ProfileID]
 		proxy := r.proxies[n.ProxyID]
-		node := ClashRenderNode{NodeID: n.ID, ListenPort: n.ListenPort, Username: proxy.Username, Password: proxy.Password}
+		node := ClashRenderNode{NodeID: n.ID, ListenPort: n.ListenPort, ProxyID: n.ProxyID, AccountIDs: r.boundAccountIDsLocked(n.ProxyID), Username: proxy.Username, Password: proxy.Password}
 		live := n.Status == ClashNodeStatusActive && p.Enabled && !r.deleted[p.ID]
 		switch {
 		case live:

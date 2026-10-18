@@ -186,8 +186,10 @@ func (e *Engine) CloseInboundConnections(inboundNames []string) int {
 
 // Connection is a tracked connection with its cumulative byte counters.
 type Connection struct {
-	ID       string
-	Inbound  string
+	ID      string
+	Inbound string
+	// InUser is the username the client authenticated to the listener with.
+	InUser   string
 	Upload   int64
 	Download int64
 	Start    time.Time
@@ -209,6 +211,7 @@ func (e *Engine) Connections() []Connection {
 		out = append(out, Connection{
 			ID:       info.UUID.String(),
 			Inbound:  info.Metadata.InName,
+			InUser:   info.Metadata.InUser,
 			Upload:   info.UploadTotal.Load(),
 			Download: info.DownloadTotal.Load(),
 			Start:    info.Start,

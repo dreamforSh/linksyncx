@@ -207,6 +207,9 @@ type ClashBoundAccount struct {
 	// ParentAccountID is set for credential shadows, which inherit their
 	// parent's proxy and never count as separate exit occupants.
 	ParentAccountID *int64
+	// Traffic is the account's attributed traffic through this node (filled
+	// on node listings only).
+	Traffic ClashAccountTraffic
 }
 
 // ClashNodeView joins a node with its profile and bound accounts.
@@ -331,6 +334,10 @@ type ClashNodeExitUpdate struct {
 type ClashRenderNode struct {
 	NodeID     int64
 	ListenPort int
+	// ProxyID is the node's proxies row; AccountIDs are the accounts bound to
+	// it, each accepted under its own tagged listener username.
+	ProxyID    int64
+	AccountIDs []int64
 	Username   string
 	Password   string
 	// Config is nil for placeholders: nodes that must not carry traffic but
@@ -455,6 +462,12 @@ type ClashRepository interface {
 	// (YYYY-MM-DD) on; nodes without traffic are absent.
 	ListNodeTraffic(ctx context.Context, nodeIDs []int64, since string) (map[int64]*ClashNodeTrafficTotals, error)
 	ListProfileTraffic(ctx context.Context, today string) (map[int64]ClashProfileTraffic, error)
+	// AddAccountTraffic adds attributed bytes to account daily buckets in one
+	// statement; increments for missing accounts or nodes are dropped.
+	AddAccountTraffic(ctx context.Context, increments []ClashAccountTrafficIncrement, at time.Time) error
+	// ListAccountTraffic returns node -> account -> traffic for the nodes:
+	// all-time totals, the today bucket and the sum since the given day.
+	ListAccountTraffic(ctx context.Context, nodeIDs []int64, today, since string) (map[int64]map[int64]ClashAccountTraffic, error)
 }
 
 // ClashManagedProxySpecFactory creates listener credentials for new nodes.

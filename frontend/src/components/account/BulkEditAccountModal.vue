@@ -687,6 +687,7 @@
           <ProxySelector
             v-model="proxyId"
             :proxies="proxies"
+            :clash-exits="clashExits ?? null"
             aria-labelledby="bulk-edit-proxy-label"
           />
         </div>
@@ -1484,7 +1485,8 @@ import type {
   AccountType,
   OpenAICompactMode,
   OpenAIEndpointCapability,
-  OpenAIResponsesMode
+  OpenAIResponsesMode,
+  ClashExitList
 } from '@/types'
 import BaseDialog from '@/components/common/BaseDialog.vue'
 import ConfirmDialog from '@/components/common/ConfirmDialog.vue'
@@ -1530,6 +1532,8 @@ interface Props {
     selectedTypes?: AccountType[]
   }
   proxies: ProxyConfig[]
+  /** Clash exits are shareable, so bulk edit may bind many accounts to one. */
+  clashExits?: ClashExitList | null
   groups: AdminGroup[]
 }
 

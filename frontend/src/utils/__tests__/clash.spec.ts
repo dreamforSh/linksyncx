@@ -2,12 +2,14 @@ import { describe, expect, it } from 'vitest'
 import en from '@/i18n/locales/en'
 import zh from '@/i18n/locales/zh'
 import {
+  clashAccountTrafficTotals,
   clashCheckPlatformFor,
   clashErrorMessage,
   clashNodeLinkName,
   clashTrafficToday,
   clashTrafficTotal,
   clashTrafficTrend,
+  clashUnattributedToday,
   countryFlagUrl,
   describeClashExitPause,
   estimateCodexImportCount,
@@ -267,5 +269,30 @@ describe('node share links', () => {
   it('counts the links of pasted text and names the first one', () => {
     expect(summarizeClashNodeLinks(`${ssLink}\r\n\r\n${vmessLink}\nnot a link`)).toEqual({ count: 2, firstName: '🇺🇸 美国-洛杉矶 04' })
     expect(summarizeClashNodeLinks('proxies: []')).toEqual({ count: 0, firstName: '' })
+  })
+})
+
+describe('per-account clash traffic', () => {
+  const traffic = {
+    upload_bytes: 100, download_bytes: 900, today_upload_bytes: 10, today_download_bytes: 90,
+    recent_upload_bytes: 50, recent_download_bytes: 450, upload_rate: 4, download_rate: 6, connections: 2
+  }
+
+  it('sums an account bucket per window', () => {
+    expect(clashAccountTrafficTotals(traffic)).toEqual({ today: 100, recent: 500, total: 1000, connections: 2, rate: 10 })
+    expect(clashAccountTrafficTotals(undefined)).toEqual({ today: 0, recent: 0, total: 0, connections: 0, rate: 0 })
+  })
+
+  it('reports node traffic no account was credited with, never below zero', () => {
+    const nodeTraffic = {
+      upload_bytes: 0, download_bytes: 0, today_upload_bytes: 30, today_download_bytes: 120,
+      daily: [], updated_at: null, upload_rate: 0, download_rate: 0, connections: 0
+    }
+    const accounts = [
+      { id: 1, name: 'a', platform: 'openai', is_shadow: false, traffic },
+      { id: 2, name: 'b', platform: 'openai', is_shadow: false }
+    ]
+    expect(clashUnattributedToday({ traffic: nodeTraffic, accounts })).toBe(50)
+    expect(clashUnattributedToday({ traffic: { ...nodeTraffic, today_download_bytes: 0 }, accounts })).toBe(0)
   })
 })

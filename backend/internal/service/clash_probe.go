@@ -593,6 +593,10 @@ func (s *ClashService) FindExitConflicts(ctx context.Context) ([]ClashExitConfli
 		return nil, err
 	}
 	conflicts := make([]ClashExitConflict, 0)
+	if settings.MaxAccountsPerExit <= 0 {
+		// Unlimited sharing: no exit can be over its limit.
+		return conflicts, nil
+	}
 	for key, accounts := range clashExitOccupants(views) {
 		if len(accounts) > settings.MaxAccountsPerExit {
 			conflicts = append(conflicts, ClashExitConflict{ExitKey: key, Accounts: accounts})
@@ -640,7 +644,8 @@ func (s *ClashService) OnBindingsChanged(ctx context.Context) {
 
 var _ ClashExitGuard = (*ClashService)(nil)
 
-// CheckAccountBinding enforces exit exclusivity. It only validates when the
+// CheckAccountBinding enforces the optional per-exit account limit
+// (MaxAccountsPerExit, 0 = unlimited). It only validates when the
 // binding changes to a Clash exit, so accounts parked on a missing node can
 // still be edited. The returned unlock must be called after persisting.
 func (s *ClashService) CheckAccountBinding(ctx context.Context, check ClashBindingCheck) (func(), error) {
@@ -660,11 +665,6 @@ func (s *ClashService) CheckAccountBinding(ctx context.Context, check ClashBindi
 	if !changed {
 		return noop, nil
 	}
-	if check.Bulk {
-		return noop, infraerrors.BadRequest(ClashErrCodeBulkUnsupported,
-			"Clash exits are assigned one account at a time; bind them from the account editor")
-	}
-
 	s.guardMu.Lock()
 	unlock := s.guardMu.Unlock
 	fail := func(err error) (func(), error) {
@@ -705,7 +705,7 @@ func (s *ClashService) CheckAccountBinding(ctx context.Context, check ClashBindi
 		}
 	}
 	incoming := len(check.AccountIDs) + check.NewAccounts
-	if len(others)+incoming > settings.MaxAccountsPerExit {
+	if settings.MaxAccountsPerExit > 0 && len(others)+incoming > settings.MaxAccountsPerExit {
 		return fail(infraerrors.Conflict(ClashErrCodeExitOccupied,
 			fmt.Sprintf("this exit already serves %d account(s) (limit %d)", len(others), settings.MaxAccountsPerExit)).
 			WithMetadata(map[string]string{"accounts": strings.Join(limitStrings(others, 10), ", ")}))

@@ -22,7 +22,10 @@ var ErrClashRuntimeUnavailable = errors.New("clash core is unavailable")
 type ClashConnection struct {
 	ID string
 	// Inbound is the name of the listener that accepted the connection.
-	Inbound  string
+	Inbound string
+	// User is the listener username the client authenticated with; a tagged
+	// username identifies the account (ParseClashAccountProxyUsername).
+	User     string
 	Upload   int64
 	Download int64
 	Start    time.Time

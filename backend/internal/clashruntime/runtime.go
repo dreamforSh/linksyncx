@@ -167,6 +167,7 @@ func (r *embeddedRuntime) Connections(context.Context) ([]service.ClashConnectio
 		out = append(out, service.ClashConnection{
 			ID:       conn.ID,
 			Inbound:  conn.Inbound,
+			User:     conn.InUser,
 			Upload:   conn.Upload,
 			Download: conn.Download,
 			Start:    conn.Start,

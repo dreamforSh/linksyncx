@@ -132,7 +132,7 @@ const sections: Array<{ key: SectionKey; fields: FieldDef[] }> = [
   {
     key: 'binding',
     fields: [
-      { key: 'max_accounts_per_exit', type: 'number', min: 1, max: 100 },
+      { key: 'max_accounts_per_exit', type: 'number', min: 0, max: 100 },
       { key: 'exit_change_policy', type: 'select' },
       { key: 'allow_unprobed_exit_binding', type: 'toggle', wide: true }
     ]

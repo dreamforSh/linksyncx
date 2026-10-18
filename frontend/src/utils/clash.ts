@@ -4,6 +4,8 @@
  */
 
 import type {
+  ClashAccountTraffic,
+  ClashBoundAccount,
   ClashExitList,
   ClashExitOption,
   ClashNodeTraffic,
@@ -208,6 +210,26 @@ export function clashTrafficTotal(traffic: ClashNodeTraffic | null | undefined):
 
 export function clashTrafficToday(traffic: ClashNodeTraffic | null | undefined): number {
   return (traffic?.today_upload_bytes ?? 0) + (traffic?.today_download_bytes ?? 0)
+}
+
+/** Per-account traffic through one node: today / last 7 days / all time. */
+export function clashAccountTrafficTotals(traffic: ClashAccountTraffic | null | undefined) {
+  return {
+    today: (traffic?.today_upload_bytes ?? 0) + (traffic?.today_download_bytes ?? 0),
+    recent: (traffic?.recent_upload_bytes ?? 0) + (traffic?.recent_download_bytes ?? 0),
+    total: (traffic?.upload_bytes ?? 0) + (traffic?.download_bytes ?? 0),
+    connections: traffic?.connections ?? 0,
+    rate: (traffic?.upload_rate ?? 0) + (traffic?.download_rate ?? 0)
+  }
+}
+
+/**
+ * Today's node traffic that no account was credited with (shared-credential
+ * requests such as probes, or requests sent before a new binding was applied).
+ */
+export function clashUnattributedToday(node: { traffic?: ClashNodeTraffic | null; accounts: ClashBoundAccount[] }): number {
+  const attributed = node.accounts.reduce((sum, account) => sum + clashAccountTrafficTotals(account.traffic).today, 0)
+  return Math.max(0, clashTrafficToday(node.traffic) - attributed)
 }
 
 /** Daily totals of the trend window, oldest first. */

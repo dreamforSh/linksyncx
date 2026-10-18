@@ -300,8 +300,8 @@ func (s *adminServiceImpl) DuplicateAccount(ctx context.Context, id int64, actor
 		// Proxy fallback is transient runtime state; duplicate the configured origin.
 		proxyID = source.ProxyFallbackOriginID
 	}
-	if s.isClashManagedProxy(ctx, proxyID) {
-		// A Clash exit is exclusive to its account; the (paused) copy needs its own.
+	if s.isClashManagedProxy(ctx, proxyID) && !s.clashExitHasRoom(ctx, proxyID) {
+		// The exit is at its per-exit account limit; the copy needs its own.
 		proxyID = nil
 	}
 	input := &CreateAccountInput{
@@ -1906,6 +1906,17 @@ func (s *adminServiceImpl) checkClashBinding(ctx context.Context, check ClashBin
 		return func() {}, nil
 	}
 	return s.clashGuard.CheckAccountBinding(ctx, check)
+}
+
+// clashExitHasRoom reports whether one more account may bind the Clash exit
+// (available, probed as required, and under the optional per-exit limit).
+func (s *adminServiceImpl) clashExitHasRoom(ctx context.Context, proxyID *int64) bool {
+	unlock, err := s.checkClashBinding(ctx, ClashBindingCheck{NewAccounts: 1, NewProxyID: proxyID})
+	if err != nil {
+		return false
+	}
+	unlock()
+	return true
 }
 
 // clashBindingsChanged lets the Clash pool re-evaluate pauses and listener

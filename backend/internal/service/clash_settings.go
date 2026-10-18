@@ -19,11 +19,18 @@ const (
 
 const clashDefaultUserAgent = "clash.meta"
 
+// clashPoolSettingsVersion 2 introduced unlimited exit sharing (0).
+const clashPoolSettingsVersion = 2
+
 // ClashPoolSettings are runtime tunables stored in the settings table so every
 // instance shares them and admins can change them without a restart.
 type ClashPoolSettings struct {
-	// MaxAccountsPerExit caps accounts sharing one egress IP (1 = exclusive).
+	// MaxAccountsPerExit caps accounts sharing one egress IP; 0 = unlimited
+	// (default), 1 = exclusive.
 	MaxAccountsPerExit int `json:"max_accounts_per_exit"`
+	// SettingsVersion marks the stored schema. Version 1 (absent) predates
+	// unlimited sharing, when 1 was both the minimum and the default.
+	SettingsVersion int `json:"settings_version,omitempty"`
 	// AllowUnprobedExitBinding allows binding nodes whose egress IP is unknown.
 	AllowUnprobedExitBinding bool   `json:"allow_unprobed_exit_binding"`
 	HealthTestURL            string `json:"health_test_url"`
@@ -51,7 +58,8 @@ type ClashPoolSettings struct {
 
 func defaultClashPoolSettings() *ClashPoolSettings {
 	return &ClashPoolSettings{
-		MaxAccountsPerExit:          1,
+		MaxAccountsPerExit:          0,
+		SettingsVersion:             clashPoolSettingsVersion,
 		HealthTestURL:               "https://www.gstatic.com/generate_204",
 		HealthTimeoutMs:             5000,
 		BoundCheckIntervalSeconds:   60,
@@ -86,8 +94,17 @@ func (s *SettingService) GetClashPoolSettings(ctx context.Context) (*ClashPoolSe
 		return defaults, nil
 	}
 	settings := *defaults
+	settings.SettingsVersion = 0
 	if err := json.Unmarshal([]byte(raw), &settings); err != nil {
 		return nil, fmt.Errorf("parse clash pool settings: %w", err)
+	}
+	if settings.SettingsVersion < clashPoolSettingsVersion {
+		// Before version 2 the limit could not go below 1 and defaulted to 1,
+		// so a stored 1 is the old forced exclusivity, not an explicit choice.
+		if settings.MaxAccountsPerExit == 1 {
+			settings.MaxAccountsPerExit = 0
+		}
+		settings.SettingsVersion = clashPoolSettingsVersion
 	}
 	if err := validateClashPoolSettings(&settings); err != nil {
 		// A stored value that no longer validates must not stall the pool.
@@ -107,6 +124,7 @@ func (s *SettingService) SetClashPoolSettings(ctx context.Context, settings *Cla
 	if err := validateClashPoolSettings(settings); err != nil {
 		return err
 	}
+	settings.SettingsVersion = clashPoolSettingsVersion
 	data, err := json.Marshal(settings)
 	if err != nil {
 		return fmt.Errorf("marshal clash pool settings: %w", err)
@@ -126,7 +144,7 @@ func validateClashPoolSettings(s *ClashPoolSettings) error {
 		value    int
 		min, max int
 	}{
-		{"max_accounts_per_exit", s.MaxAccountsPerExit, 1, 100},
+		{"max_accounts_per_exit", s.MaxAccountsPerExit, 0, 100},
 		{"health_timeout_ms", s.HealthTimeoutMs, 1000, 30000},
 		{"bound_check_interval_seconds", s.BoundCheckIntervalSeconds, 30, 3600},
 		{"unbound_check_interval_seconds", s.UnboundCheckIntervalSeconds, 60, 86400},

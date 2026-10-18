@@ -376,6 +376,13 @@ export default {
         occupancy: '出口占用 {used} / {max}',
         otherNodes: '其中 {count} 个经同一出口 IP 的其他节点',
         current: '当前绑定',
+        trafficSummary: '今日 {today}，已归属到账号 {attributed}',
+        unattributed: '未归属 {value}：节点共用凭证的探测，或新绑定生效前的请求',
+        accountToday: '今日 {value}',
+        accountRecent: '近 7 天 {value}',
+        accountTotal: '累计 {value}',
+        accountLive: '{rate} · {count} 个连接',
+        accountNoTraffic: '暂无流量',
         none: '暂无账号使用此节点',
         followsParent: '跟随母账号',
         unbindConfirm: '解绑后「{name}」不再使用任何代理，请求会从本机直连上游。',
@@ -481,7 +488,7 @@ export default {
       fields: {
         max_accounts_per_exit: {
           label: '单出口账号上限',
-          hint: '同一出口 IP 最多可绑定的账号数，1 表示独占'
+          hint: '同一出口 IP 最多可绑定的账号数；0 表示不限制（默认），1 表示独占'
         },
         allow_unprobed_exit_binding: {
           label: '允许绑定未探测出口',

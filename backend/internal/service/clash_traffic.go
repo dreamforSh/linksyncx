@@ -57,6 +57,29 @@ type ClashTrafficIncrement struct {
 	Download int64
 }
 
+// ClashAccountTrafficIncrement adds bytes to one account's daily bucket on a
+// node. Only connections opened with the account's tagged listener username
+// are attributed; the rest stays node-level only.
+type ClashAccountTrafficIncrement struct {
+	AccountID int64
+	NodeID    int64
+	Date      string
+	Upload    int64
+	Download  int64
+}
+
+// ClashAccountTraffic is one account's measured traffic through one node.
+type ClashAccountTraffic struct {
+	Upload        int64
+	Download      int64
+	TodayUpload   int64
+	TodayDownload int64
+	// RecentUpload/RecentDownload cover the node trend window (7 days).
+	RecentUpload   int64
+	RecentDownload int64
+	ClashNodeLiveTraffic
+}
+
 // ClashTrafficDay is one daily bucket.
 type ClashTrafficDay struct {
 	Date     string
@@ -80,11 +103,14 @@ type ClashNodeLiveTraffic struct {
 	Connections  int   `json:"conns"`
 }
 
-// ClashTrafficLive is one sampler's latest throughput, per node.
+// ClashTrafficLive is one sampler's latest throughput, per node and per
+// attributed account on a node.
 type ClashTrafficLive struct {
 	InstanceID string                         `json:"instance_id"`
 	UpdatedAt  time.Time                      `json:"updated_at"`
 	Nodes      map[int64]ClashNodeLiveTraffic `json:"nodes"`
+	// Accounts maps node ID to account ID to throughput (older samplers omit it).
+	Accounts map[int64]map[int64]ClashNodeLiveTraffic `json:"accounts,omitempty"`
 }
 
 // ClashNodeTraffic is the traffic summary attached to node listings.
@@ -132,6 +158,12 @@ type clashTrafficKey struct {
 	date   string
 }
 
+type clashAccountTrafficKey struct {
+	accountID int64
+	nodeID    int64
+	date      string
+}
+
 // clashTrafficSampler turns successive connection snapshots of one core into
 // per-node daily increments and throughput.
 type clashTrafficSampler struct {
@@ -139,15 +171,20 @@ type clashTrafficSampler struct {
 	// connection opened before it is only counted from its first observed
 	// counters, because its earlier bytes predate sampling or were counted by
 	// the previous owner of a shared core.
-	since   time.Time
-	seen    map[string]clashTrafficSeen
-	pending map[clashTrafficKey]*ClashTrafficIncrement
-	lastAt  time.Time
-	live    map[int64]ClashNodeLiveTraffic
+	since           time.Time
+	seen            map[string]clashTrafficSeen
+	pending         map[clashTrafficKey]*ClashTrafficIncrement
+	pendingAccounts map[clashAccountTrafficKey]*ClashAccountTrafficIncrement
+	lastAt          time.Time
+	live            map[int64]ClashNodeLiveTraffic
+	liveAccounts    map[int64]map[int64]ClashNodeLiveTraffic
 }
 
 func newClashTrafficSampler(now time.Time) *clashTrafficSampler {
-	s := &clashTrafficSampler{pending: make(map[clashTrafficKey]*ClashTrafficIncrement)}
+	s := &clashTrafficSampler{
+		pending:         make(map[clashTrafficKey]*ClashTrafficIncrement),
+		pendingAccounts: make(map[clashAccountTrafficKey]*ClashAccountTrafficIncrement),
+	}
 	s.reset(now)
 	return s
 }
@@ -158,6 +195,7 @@ func (s *clashTrafficSampler) reset(now time.Time) {
 	s.seen = make(map[string]clashTrafficSeen)
 	s.lastAt = time.Time{}
 	s.live = nil
+	s.liveAccounts = nil
 }
 
 // observe folds one snapshot into pending increments and live throughput.
@@ -165,6 +203,7 @@ func (s *clashTrafficSampler) observe(conns []ClashConnection, now time.Time) {
 	date := clashTrafficDate(now)
 	present := make(map[string]struct{}, len(conns))
 	window := make(map[int64]*ClashNodeLiveTraffic)
+	accountWindow := make(map[int64]map[int64]*ClashNodeLiveTraffic)
 	for _, conn := range conns {
 		nodeID, ok := ParseClashListenerName(conn.Inbound)
 		if !ok || conn.ID == "" {
@@ -188,8 +227,27 @@ func (s *clashTrafficSampler) observe(conns []ClashConnection, now time.Time) {
 		entry.Connections++
 		entry.UploadRate += up
 		entry.DownloadRate += down
+		accountID, attributed := ParseClashAccountProxyUsername(conn.User)
+		if attributed {
+			perNode := accountWindow[nodeID]
+			if perNode == nil {
+				perNode = make(map[int64]*ClashNodeLiveTraffic)
+				accountWindow[nodeID] = perNode
+			}
+			acc := perNode[accountID]
+			if acc == nil {
+				acc = &ClashNodeLiveTraffic{}
+				perNode[accountID] = acc
+			}
+			acc.Connections++
+			acc.UploadRate += up
+			acc.DownloadRate += down
+		}
 		if up == 0 && down == 0 {
 			continue
+		}
+		if attributed {
+			s.addAccount(ClashAccountTrafficIncrement{AccountID: accountID, NodeID: nodeID, Date: date, Upload: up, Download: down})
 		}
 		key := clashTrafficKey{nodeID: nodeID, date: date}
 		inc := s.pending[key]
@@ -215,17 +273,72 @@ func (s *clashTrafficSampler) observe(conns []ClashConnection, now time.Time) {
 	if !s.lastAt.IsZero() {
 		elapsed = now.Sub(s.lastAt).Seconds()
 	}
-	live := make(map[int64]ClashNodeLiveTraffic, len(window))
-	for nodeID, entry := range window {
+	toRate := func(entry *ClashNodeLiveTraffic) ClashNodeLiveTraffic {
 		rate := ClashNodeLiveTraffic{Connections: entry.Connections}
 		if elapsed > 0 {
 			rate.UploadRate = int64(float64(entry.UploadRate) / elapsed)
 			rate.DownloadRate = int64(float64(entry.DownloadRate) / elapsed)
 		}
-		live[nodeID] = rate
+		return rate
+	}
+	live := make(map[int64]ClashNodeLiveTraffic, len(window))
+	for nodeID, entry := range window {
+		live[nodeID] = toRate(entry)
+	}
+	liveAccounts := make(map[int64]map[int64]ClashNodeLiveTraffic, len(accountWindow))
+	for nodeID, perNode := range accountWindow {
+		rates := make(map[int64]ClashNodeLiveTraffic, len(perNode))
+		for accountID, entry := range perNode {
+			rates[accountID] = toRate(entry)
+		}
+		liveAccounts[nodeID] = rates
 	}
 	s.live = live
+	s.liveAccounts = liveAccounts
 	s.lastAt = now
+}
+
+// addAccount folds one attributed increment into the pending account buckets.
+func (s *clashTrafficSampler) addAccount(inc ClashAccountTrafficIncrement) {
+	key := clashAccountTrafficKey{accountID: inc.AccountID, nodeID: inc.NodeID, date: inc.Date}
+	existing := s.pendingAccounts[key]
+	if existing == nil {
+		if len(s.pendingAccounts) >= clashTrafficMaxPending {
+			return
+		}
+		copied := inc
+		s.pendingAccounts[key] = &copied
+		return
+	}
+	existing.Upload += inc.Upload
+	existing.Download += inc.Download
+}
+
+// drainAccounts returns and clears the pending account increments in a stable
+// order (account, node, day) so concurrent flushes lock rows consistently.
+func (s *clashTrafficSampler) drainAccounts() []ClashAccountTrafficIncrement {
+	out := make([]ClashAccountTrafficIncrement, 0, len(s.pendingAccounts))
+	for _, inc := range s.pendingAccounts {
+		out = append(out, *inc)
+	}
+	s.pendingAccounts = make(map[clashAccountTrafficKey]*ClashAccountTrafficIncrement)
+	sort.Slice(out, func(i, j int) bool {
+		if out[i].AccountID != out[j].AccountID {
+			return out[i].AccountID < out[j].AccountID
+		}
+		if out[i].NodeID != out[j].NodeID {
+			return out[i].NodeID < out[j].NodeID
+		}
+		return out[i].Date < out[j].Date
+	})
+	return out
+}
+
+// restoreAccounts puts back account increments whose flush failed.
+func (s *clashTrafficSampler) restoreAccounts(incs []ClashAccountTrafficIncrement) {
+	for _, inc := range incs {
+		s.addAccount(inc)
+	}
 }
 
 func clashNonNegative(v int64) int64 {
@@ -274,6 +387,21 @@ func (s *clashTrafficSampler) liveSnapshot() map[int64]ClashNodeLiveTraffic {
 	out := make(map[int64]ClashNodeLiveTraffic, len(s.live))
 	for id, rate := range s.live {
 		out[id] = rate
+	}
+	return out
+}
+
+func (s *clashTrafficSampler) liveAccountSnapshot() map[int64]map[int64]ClashNodeLiveTraffic {
+	if len(s.liveAccounts) == 0 {
+		return nil
+	}
+	out := make(map[int64]map[int64]ClashNodeLiveTraffic, len(s.liveAccounts))
+	for nodeID, perNode := range s.liveAccounts {
+		rates := make(map[int64]ClashNodeLiveTraffic, len(perNode))
+		for accountID, rate := range perNode {
+			rates[accountID] = rate
+		}
+		out[nodeID] = rates
 	}
 	return out
 }
@@ -392,7 +520,7 @@ func (m *ClashManager) sampleTraffic(ctx context.Context, sampler *clashTrafficS
 		return
 	}
 	sampler.observe(conns, now)
-	live := ClashTrafficLive{InstanceID: m.instanceID, UpdatedAt: now.UTC(), Nodes: sampler.liveSnapshot()}
+	live := ClashTrafficLive{InstanceID: m.instanceID, UpdatedAt: now.UTC(), Nodes: sampler.liveSnapshot(), Accounts: sampler.liveAccountSnapshot()}
 	m.setLocalTrafficLive(&live)
 	if m.notifier != nil {
 		if err := m.notifier.PublishTrafficLive(sampleCtx, live, clashTrafficLiveTTL); err != nil {
@@ -402,13 +530,18 @@ func (m *ClashManager) sampleTraffic(ctx context.Context, sampler *clashTrafficS
 }
 
 func (m *ClashManager) flushTraffic(ctx context.Context, sampler *clashTrafficSampler) {
-	incs := sampler.drain()
-	if len(incs) == 0 {
-		return
+	now := time.Now().UTC()
+	if incs := sampler.drain(); len(incs) > 0 {
+		if err := m.svc.repo.AddNodeTraffic(ctx, incs, now); err != nil {
+			sampler.restore(incs)
+			m.log().Warn("record clash node traffic failed", zap.Error(err))
+		}
 	}
-	if err := m.svc.repo.AddNodeTraffic(ctx, incs, time.Now().UTC()); err != nil {
-		sampler.restore(incs)
-		m.log().Warn("record clash node traffic failed", zap.Error(err))
+	if incs := sampler.drainAccounts(); len(incs) > 0 {
+		if err := m.svc.repo.AddAccountTraffic(ctx, incs, now); err != nil {
+			sampler.restoreAccounts(incs)
+			m.log().Warn("record clash account traffic failed", zap.Error(err))
+		}
 	}
 }
 
@@ -444,7 +577,11 @@ func (s *ClashService) attachNodeTraffic(ctx context.Context, views []ClashNodeV
 	if err != nil {
 		s.log().Warn("load clash node traffic failed", zap.Error(err))
 	}
-	live := s.liveTraffic(ctx, now)
+	live, liveAccounts := s.liveTraffic(ctx, now)
+	accountTraffic, err := s.repo.ListAccountTraffic(ctx, ids, dates[len(dates)-1], dates[0])
+	if err != nil {
+		s.log().Warn("load clash account traffic failed", zap.Error(err))
+	}
 	index := make(map[string]int, len(dates))
 	for i, date := range dates {
 		index[date] = i
@@ -466,11 +603,19 @@ func (s *ClashService) attachNodeTraffic(ctx context.Context, views []ClashNodeV
 		traffic.TodayUpload, traffic.TodayDownload = today.Upload, today.Download
 		traffic.ClashNodeLiveTraffic = live[views[i].ID]
 		views[i].Traffic = traffic
+		perNode := accountTraffic[views[i].ID]
+		for j := range views[i].Accounts {
+			acc := &views[i].Accounts[j]
+			stats := perNode[acc.ID]
+			stats.ClashNodeLiveTraffic = liveAccounts[views[i].ID][acc.ID]
+			acc.Traffic = stats
+		}
 	}
 }
 
-// liveTraffic sums the fresh throughput snapshots of every sampler.
-func (s *ClashService) liveTraffic(ctx context.Context, now time.Time) map[int64]ClashNodeLiveTraffic {
+// liveTraffic sums the fresh throughput snapshots of every sampler, per node
+// and per attributed account on each node.
+func (s *ClashService) liveTraffic(ctx context.Context, now time.Time) (map[int64]ClashNodeLiveTraffic, map[int64]map[int64]ClashNodeLiveTraffic) {
 	var snapshots []ClashTrafficLive
 	if s.notifier != nil {
 		list, err := s.notifier.ListTrafficLive(ctx)
@@ -484,20 +629,31 @@ func (s *ClashService) liveTraffic(ctx context.Context, now time.Time) map[int64
 			snapshots = []ClashTrafficLive{*local}
 		}
 	}
+	add := func(sum, rate ClashNodeLiveTraffic) ClashNodeLiveTraffic {
+		sum.UploadRate += rate.UploadRate
+		sum.DownloadRate += rate.DownloadRate
+		sum.Connections += rate.Connections
+		return sum
+	}
 	out := make(map[int64]ClashNodeLiveTraffic)
+	accounts := make(map[int64]map[int64]ClashNodeLiveTraffic)
 	for _, snapshot := range snapshots {
 		if now.Sub(snapshot.UpdatedAt) > clashTrafficLiveTTL {
 			continue
 		}
 		for id, rate := range snapshot.Nodes {
-			sum := out[id]
-			sum.UploadRate += rate.UploadRate
-			sum.DownloadRate += rate.DownloadRate
-			sum.Connections += rate.Connections
-			out[id] = sum
+			out[id] = add(out[id], rate)
+		}
+		for nodeID, perNode := range snapshot.Accounts {
+			if accounts[nodeID] == nil {
+				accounts[nodeID] = make(map[int64]ClashNodeLiveTraffic, len(perNode))
+			}
+			for accountID, rate := range perNode {
+				accounts[nodeID][accountID] = add(accounts[nodeID][accountID], rate)
+			}
 		}
 	}
-	return out
+	return out, accounts
 }
 
 // attachProfileTraffic adds the measured traffic of each profile's nodes.

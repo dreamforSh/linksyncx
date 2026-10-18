@@ -69,7 +69,8 @@ func requireClashReason(t *testing.T, err error, reason string) {
 func ptr64(v int64) *int64 { return &v }
 
 func TestClashGuardExclusivity(t *testing.T) {
-	env := newClashTestEnv(t, nil)
+	// Exclusivity is opt-in now: MaxAccountsPerExit = 1.
+	env := newClashTestEnv(t, withSettings(func(s *ClashPoolSettings) { s.MaxAccountsPerExit = 1 }))
 	profile := env.repo.addProfile("机场A", true)
 	nodeA := env.repo.addNode(profile.ID, "hk-01", "198.51.100.1")
 	sameExit := env.repo.addNode(profile.ID, "hk-02", "198.51.100.1") // another entry, same landing IP
@@ -96,8 +97,52 @@ func TestClashGuardExclusivity(t *testing.T) {
 	require.NoError(t, err)
 	unlock()
 
+	// Bulk binding is checked against the same limit instead of being refused.
 	_, err = env.svc.CheckAccountBinding(ctx, ClashBindingCheck{AccountIDs: []int64{1, 2}, NewProxyID: ptr64(free.ProxyID), Bulk: true})
-	requireClashReason(t, err, ClashErrCodeBulkUnsupported)
+	requireClashReason(t, err, ClashErrCodeExitOccupied)
+	unlock, err = env.svc.CheckAccountBinding(ctx, ClashBindingCheck{AccountIDs: []int64{1}, NewProxyID: ptr64(free.ProxyID), Bulk: true})
+	require.NoError(t, err)
+	unlock()
+}
+
+func TestClashGuardSharesExitsByDefault(t *testing.T) {
+	env := newClashTestEnv(t, nil)
+	profile := env.repo.addProfile("机场A", true)
+	node := env.repo.addNode(profile.ID, "hk-01", "198.51.100.1")
+	env.repo.bind("first", node.ProxyID, nil)
+	env.repo.bind("second", node.ProxyID, nil)
+	ctx := context.Background()
+
+	unlock, err := env.svc.CheckAccountBinding(ctx, ClashBindingCheck{NewAccounts: 3, NewProxyID: ptr64(node.ProxyID)})
+	require.NoError(t, err, "any number of accounts may share one exit by default")
+	unlock()
+	unlock, err = env.svc.CheckAccountBinding(ctx, ClashBindingCheck{AccountIDs: []int64{10, 11, 12}, NewProxyID: ptr64(node.ProxyID), Bulk: true})
+	require.NoError(t, err, "bulk binding to a shared exit is allowed")
+	unlock()
+
+	conflicts, err := env.svc.FindExitConflicts(ctx)
+	require.NoError(t, err)
+	require.Empty(t, conflicts, "unlimited sharing never reports conflicts")
+}
+
+func TestClashPoolSettingsLegacyExclusiveDefaultBecomesUnlimited(t *testing.T) {
+	settingRepo := &settingRepoStub{values: map[string]string{
+		SettingKeyClashPoolSettings: `{"max_accounts_per_exit":1,"health_test_url":"https://www.gstatic.com/generate_204","health_timeout_ms":5000,"bound_check_interval_seconds":60,"unbound_check_interval_seconds":600,"failure_threshold":3,"recovery_threshold":2,"exit_probe_interval_minutes":720,"exit_probe_per_minute":30,"exit_change_policy":"pause","pause_ttl_minutes":30,"missing_retention_days":7,"drop_protection_percent":50}`,
+	}}
+	svc := &SettingService{settingRepo: settingRepo}
+	got, err := svc.GetClashPoolSettings(context.Background())
+	require.NoError(t, err)
+	require.Equal(t, 0, got.MaxAccountsPerExit, "a pre-v2 stored 1 was the forced default")
+
+	// Once saved under v2, an explicit 1 (exclusive) is kept.
+	got.MaxAccountsPerExit = 1
+	raw, err := json.Marshal(got)
+	require.NoError(t, err)
+	require.Contains(t, string(raw), `"settings_version":2`)
+	settingRepo.values[SettingKeyClashPoolSettings] = string(raw)
+	again, err := svc.GetClashPoolSettings(context.Background())
+	require.NoError(t, err)
+	require.Equal(t, 1, again.MaxAccountsPerExit)
 }
 
 func TestClashGuardAvailabilityRules(t *testing.T) {
@@ -574,7 +619,8 @@ func TestClashDueSelection(t *testing.T) {
 }
 
 func TestClashAlertMetrics(t *testing.T) {
-	env := newClashTestEnv(t, nil)
+	// Conflicts only exist under an explicit per-exit limit.
+	env := newClashTestEnv(t, withSettings(func(s *ClashPoolSettings) { s.MaxAccountsPerExit = 1 }))
 	profile := env.repo.addProfile("A", true)
 	env.repo.profiles[profile.ID].LastRefreshStatus = ClashRefreshError
 	n1 := env.repo.addNode(profile.ID, "a", "198.51.100.1")
@@ -599,8 +645,11 @@ func TestValidateClashPoolSettings(t *testing.T) {
 	s := defaultClashPoolSettings()
 	require.NoError(t, validateClashPoolSettings(s))
 	bad := *s
-	bad.MaxAccountsPerExit = 0
+	bad.MaxAccountsPerExit = -1
 	require.Error(t, validateClashPoolSettings(&bad))
+	ok := *s
+	ok.MaxAccountsPerExit = 0
+	require.NoError(t, validateClashPoolSettings(&ok), "0 = unlimited sharing")
 	bad = *s
 	bad.ExitChangePolicy = "ignore"
 	require.Error(t, validateClashPoolSettings(&bad))

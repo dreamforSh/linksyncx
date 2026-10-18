@@ -376,6 +376,13 @@ export default {
         occupancy: 'Exit usage {used} / {max}',
         otherNodes: '{count} of them through other nodes with the same egress IP',
         current: 'Bound now',
+        trafficSummary: 'Today {today}, {attributed} attributed to accounts',
+        unattributed: '{value} unattributed: shared-credential probes, or requests sent before a new binding took effect',
+        accountToday: 'Today {value}',
+        accountRecent: '7 days {value}',
+        accountTotal: 'Total {value}',
+        accountLive: '{rate} · {count} connections',
+        accountNoTraffic: 'No traffic yet',
         none: 'No account uses this node',
         followsParent: 'Follows its parent',
         unbindConfirm: 'After unbinding, "{name}" uses no proxy and its requests leave this server directly.',
@@ -481,7 +488,7 @@ export default {
       fields: {
         max_accounts_per_exit: {
           label: 'Accounts per exit',
-          hint: 'Maximum accounts sharing one exit IP; 1 means exclusive'
+          hint: 'Maximum accounts sharing one exit IP; 0 means unlimited (default), 1 means exclusive'
         },
         allow_unprobed_exit_binding: {
           label: 'Allow unprobed exits',

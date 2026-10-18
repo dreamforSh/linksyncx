@@ -140,13 +140,22 @@ func RenderClashConfig(nodes []ClashRenderNode, opts ClashRenderOptions) (*Clash
 			proxyNodeIDs = append(proxyNodeIDs, node.NodeID)
 			target = ClashProxyName(node.NodeID)
 		}
+		users := make([]mihomoUser, 0, 1+len(node.AccountIDs))
+		users = append(users, mihomoUser{Username: node.Username, Password: node.Password})
+		if node.Username != "" {
+			accountIDs := append([]int64(nil), node.AccountIDs...)
+			sort.Slice(accountIDs, func(i, j int) bool { return accountIDs[i] < accountIDs[j] })
+			for _, id := range accountIDs {
+				users = append(users, mihomoUser{Username: ClashAccountProxyUsername(node.Username, id), Password: node.Password})
+			}
+		}
 		doc.Listeners = append(doc.Listeners, mihomoListener{
 			Name:   ClashListenerName(node.NodeID),
 			Type:   "mixed",
 			Listen: listen,
 			Port:   node.ListenPort,
 			Proxy:  target,
-			Users:  []mihomoUser{{Username: node.Username, Password: node.Password}},
+			Users:  users,
 		})
 	}
 

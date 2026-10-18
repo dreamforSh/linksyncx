@@ -4,8 +4,11 @@
  */
 
 import { useI18n } from 'vue-i18n'
+
+const LINE_BREAK = String.fromCharCode(10)
 import type { ClashNode, ClashNodeStatus, ClashPlatform, ClashPlatformCheckResult } from '@/types'
 import { formatDateTime } from '@/utils/format'
+import { clashAccountTrafficTotals, formatTrafficBytes } from '@/utils/clash'
 
 export const CLASH_CHECK_PLATFORMS: ClashPlatform[] = ['openai', 'anthropic', 'gemini', 'grok', 'perplexity']
 
@@ -166,7 +169,16 @@ export function useClashNodeDisplay() {
     return checkedAt ? `${label}\n${t('admin.clash.nodes.checkedAt', { time: formatDateTime(checkedAt) })}` : label
   }
 
-  const accountNames = (node: ClashNode) => node.accounts.map((account) => account.name).join(', ')
+  // One account per line, with today's attributed traffic when there is any.
+  const accountNames = (node: ClashNode) =>
+    node.accounts
+      .map((account) => {
+        const today = clashAccountTrafficTotals(account.traffic).today
+        return today > 0
+          ? `${account.name} · ${t('admin.clash.nodes.bindings.accountToday', { value: formatTrafficBytes(today) })}`
+          : account.name
+      })
+      .join(LINE_BREAK)
 
   return {
     statusLabel,

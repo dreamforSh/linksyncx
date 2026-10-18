@@ -56,7 +56,7 @@ func TestExternalRuntimeAgainstFakeController(t *testing.T) {
 			_, _ = io.WriteString(w, `{"message":"resource not found"}`)
 		case r.Method == http.MethodGet && r.URL.Path == "/connections":
 			_, _ = io.WriteString(w, `{"downloadTotal":9,"uploadTotal":9,"memory":0,"connections":[`+
-				`{"id":"c1","upload":120,"download":4096,"start":"2026-09-27T10:00:00.5Z","chains":["n-7"],"metadata":{"network":"tcp","type":"Socks5","inboundName":"l-7","inboundPort":"20001","specialProxy":"n-7"}},`+
+				`{"id":"c1","upload":120,"download":4096,"start":"2026-09-27T10:00:00.5Z","chains":["n-7"],"metadata":{"network":"tcp","type":"Socks5","inboundName":"l-7","inboundUser":"u~a42","inboundPort":"20001","specialProxy":"n-7"}},`+
 				`{"id":"c2","upload":1,"download":2,"start":"not-a-time","metadata":{"inboundName":"l-8"}},`+
 				`{"id":"dns","upload":5,"download":5,"start":"2026-09-27T10:00:00Z","metadata":{"type":"Inner","inboundName":""}}]}`)
 		case r.Method == http.MethodDelete && strings.HasPrefix(r.URL.Path, "/connections/"):
@@ -97,7 +97,7 @@ func TestExternalRuntimeAgainstFakeController(t *testing.T) {
 	conns, err := rt.Connections(ctx)
 	require.NoError(t, err)
 	require.Equal(t, []service.ClashConnection{
-		{ID: "c1", Inbound: "l-7", Upload: 120, Download: 4096, Start: time.Date(2026, 9, 27, 10, 0, 0, 500_000_000, time.UTC)},
+		{ID: "c1", Inbound: "l-7", User: "u~a42", Upload: 120, Download: 4096, Start: time.Date(2026, 9, 27, 10, 0, 0, 500_000_000, time.UTC)},
 		{ID: "c2", Inbound: "l-8", Upload: 1, Download: 2},
 	}, conns, "internal connections without an inbound are skipped; a bad start time is tolerated")
 
@@ -260,4 +260,75 @@ func TestEmbeddedRuntimeRendersWorkingExits(t *testing.T) {
 	resp, err = client(livePort, "sub2api-a", "pa").Get(upstream.URL)
 	require.NoError(t, err)
 	_ = resp.Body.Close()
+}
+
+// TestEmbeddedRuntimeAttributesAccountUsernames checks against the real core
+// that a shared exit accepts each bound account's tagged username next to the
+// shared credentials, and reports it on the connection for traffic splitting.
+func TestEmbeddedRuntimeAttributesAccountUsernames(t *testing.T) {
+	// HTTPS like real upstream APIs: the HTTP side of the listener tunnels via CONNECT.
+	upstream := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = io.WriteString(w, strings.Repeat("x", 4096))
+	}))
+	defer upstream.Close()
+	nodeHost, nodePort, _ := startConnectNode(t)
+
+	rt := &embeddedRuntime{dataDir: t.TempDir()}
+	ctx := context.Background()
+	require.NoError(t, rt.Start(ctx))
+	defer func() { require.NoError(t, rt.Stop(ctx)) }()
+
+	port := freeTCPPort(t)
+	rendered, err := service.RenderClashConfig([]service.ClashRenderNode{
+		{NodeID: 9, ListenPort: port, ProxyID: 90, AccountIDs: []int64{42, 7}, Username: "sub2api-n", Password: "pn", Config: map[string]any{
+			"name": "SG 01", "type": "http", "server": nodeHost, "port": nodePort,
+		}},
+	}, service.ClashRenderOptions{})
+	require.NoError(t, err)
+	require.NoError(t, rt.Apply(ctx, rendered.Payload))
+
+	fetch := func(scheme, user, pass string) (*http.Client, error) {
+		proxy := &url.URL{Scheme: scheme, User: url.UserPassword(user, pass), Host: fmt.Sprintf("127.0.0.1:%d", port)}
+		transport := upstream.Client().Transport.(*http.Transport).Clone()
+		transport.Proxy = http.ProxyURL(proxy)
+		c := &http.Client{Timeout: 5 * time.Second, Transport: transport}
+		resp, err := c.Get(upstream.URL)
+		if err != nil {
+			return c, err
+		}
+		_, _ = io.Copy(io.Discard, resp.Body)
+		_ = resp.Body.Close()
+		if resp.StatusCode != http.StatusOK {
+			return c, fmt.Errorf("status %d", resp.StatusCode)
+		}
+		return c, nil
+	}
+
+	// Shared credentials keep working; each bound account has its own tag over
+	// both the HTTP and SOCKS5 sides of the mixed listener.
+	shared, err := fetch("http", "sub2api-n", "pn")
+	require.NoError(t, err)
+	defer shared.CloseIdleConnections()
+	httpAcc, err := fetch("http", service.ClashAccountProxyUsername("sub2api-n", 42), "pn")
+	require.NoError(t, err)
+	defer httpAcc.CloseIdleConnections()
+	socksAcc, err := fetch("socks5", service.ClashAccountProxyUsername("sub2api-n", 7), "pn")
+	require.NoError(t, err)
+	defer socksAcc.CloseIdleConnections()
+	_, err = fetch("http", service.ClashAccountProxyUsername("sub2api-n", 99), "pn")
+	require.Error(t, err, "an account that is not bound to the exit has no username")
+
+	require.Eventually(t, func() bool {
+		conns, err := rt.Connections(ctx)
+		if err != nil {
+			return false
+		}
+		seen := map[int64]bool{}
+		for _, conn := range conns {
+			if id, ok := service.ParseClashAccountProxyUsername(conn.User); ok && conn.Download > 0 {
+				seen[id] = true
+			}
+		}
+		return seen[42] && seen[7]
+	}, 3*time.Second, 20*time.Millisecond, "connections carry the account tag")
 }

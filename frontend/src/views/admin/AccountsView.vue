@@ -503,6 +503,7 @@
       :selected-types="selTypes"
       :target="bulkEditTarget ?? undefined"
       :proxies="proxies"
+      :clash-exits="clashExits"
       :groups="groups"
       @close="showBulkEdit = false"
       @updated="handleBulkUpdated"
@@ -2188,6 +2189,7 @@ const openBulkEditSelected = () => {
     selectedTypes: [...selTypes.value]
   }
   showBulkEdit.value = true
+  void loadClashExits()
 }
 
 const openBulkEditFiltered = async () => {
@@ -2202,6 +2204,7 @@ const openBulkEditFiltered = async () => {
     selectedTypes
   }
   showBulkEdit.value = true
+  void loadClashExits()
 }
 
 const handleBulkUpdated = () => {
