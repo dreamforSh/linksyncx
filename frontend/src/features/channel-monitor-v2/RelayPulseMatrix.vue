@@ -34,6 +34,11 @@
         ref="scrollRef"
         class="matrix-scroll max-h-[min(42vh,420px)] max-w-full overflow-auto rounded-2xl bg-gray-50/60 p-2 dark:bg-dark-900/30"
         @wheel="onMatrixWheel"
+        @mouseover="onCellOver"
+        @mousemove="moveTooltip"
+        @mouseleave="hideTooltip"
+        @focusin="onCellOver"
+        @focusout="hideTooltip"
       >
         <div class="matrix-table w-full" :style="tableStyle">
           <div
@@ -51,7 +56,7 @@
             </span>
           </div>
           <div
-            v-for="entry in alignedRows"
+            v-for="(entry, rowIndex) in alignedRows"
             :key="rowKey(entry.row)"
             class="matrix-row border-b border-gray-100/80 dark:border-dark-700/60"
             :class="showThroughput ? 'matrix-row--with-tps' : ''"
@@ -82,42 +87,25 @@
               {{ formatMonitorCacheRate(entry.row.metrics) }}
             </strong>
             <div class="pulse-track grid items-stretch" :style="pulseStyle">
+              <!-- 色块数 = 行数 × 桶数（可达数千）：每格只绑类名和一个按时间缓存的 aria-label；
+                   悬停/聚焦明细由容器上的委托事件按需生成，渲染在独立的浮层组件里。
+                   色块不要设 position：每个定位元素都是独立绘制层，数千个会拖慢命中测试和滚动。
+                   v-memo 让缩放平移时数据未变的色块跳过重建（memo 依赖须覆盖模板里用到的全部值）。 -->
               <span
                 v-for="slot in entry.slots"
                 :key="slot.start"
-                class="pulse-cell relative rounded-sm border-0 p-0 outline-offset-1"
-                :class="[
-                  slot.bucket ? cellClass(slot.bucket.health, slot.bucket.metrics.request_count) : 'health-unknown',
-                  slot.bucket ? 'has-data' : 'is-empty',
-                ]"
+                v-memo="[slot.bucket, slot.label, healthMode, rowIndex]"
+                class="pulse-cell rounded-sm border-0 p-0 outline-offset-1"
+                :class="slot.bucket
+                  ? `${cellClass(slot.bucket.health, slot.bucket.metrics.request_count)} has-data`
+                  : 'health-unknown is-empty'"
                 tabindex="0"
                 role="img"
-                :title="slot.bucket ? bucketTooltip(slot.bucket) : t('channelMonitorV2.matrix.noTrafficAt', { time: formatBucketRange(slot.start) })"
-                :aria-label="slot.bucket ? bucketTooltip(slot.bucket) : t('channelMonitorV2.matrix.noTrafficAt', { time: formatBucketRange(slot.start) })"
-                @mouseenter="showTooltip($event, slot)"
-                @mousemove="moveTooltip($event)"
-                @mouseleave="hideTooltip"
-                @focus="showTooltip($event, slot)"
-                @blur="hideTooltip"
-              >
-                <span class="pulse-tooltip" role="tooltip">
-                  <template v-if="slot.bucket">
-                    <span class="pulse-tooltip-line pulse-tooltip-title">{{ formatBucketRange(slot.start) }}</span>
-                    <span class="pulse-tooltip-line">{{ t('channelMonitorV2.matrix.scoreLine', { score: formatScore(slot.bucket.health) }) }}</span>
-                    <span class="pulse-tooltip-line">{{ t('channelMonitorV2.metrics.successRateValue', { value: successRate(slot.bucket.metrics) }) }}</span>
-                    <span class="pulse-tooltip-line">{{ t('channelMonitorV2.metrics.ttftValue', { value: latencyPrivacy(slot.bucket.metrics.ttft) }) }}</span>
-                    <span v-if="showThroughput" class="pulse-tooltip-line">{{ t('channelMonitorV2.metrics.tpsValue', { value: formatTps(slot.bucket.metrics.tpm) }) }}</span>
-                    <span class="pulse-tooltip-line">{{ t('channelMonitorV2.metrics.cacheRateValue', { value: formatMonitorCacheRate(slot.bucket.metrics) }) }}</span>
-                    <span class="pulse-tooltip-line">{{ t('channelMonitorV2.metrics.errorRateValue', { value: formatPercent(slot.bucket.metrics.error_rate) }) }}</span>
-                    <span v-if="showThroughput" class="pulse-tooltip-line">{{ t('channelMonitorV2.metrics.rpmValue', { value: formatRate(slot.bucket.metrics.rpm) }) }}</span>
-                    <span class="pulse-tooltip-line">{{ t('channelMonitorV2.metrics.durationValue', { value: latencyPrivacy(slot.bucket.metrics.duration) }) }}</span>
-                  </template>
-                  <template v-else>
-                    <span class="pulse-tooltip-line pulse-tooltip-title">{{ formatBucketRange(slot.start) }}</span>
-                    <span class="pulse-tooltip-line">{{ t('channelMonitorV2.matrix.noTraffic') }}</span>
-                  </template>
-                </span>
-              </span>
+                :aria-label="slot.label"
+                :aria-describedby="tooltipId"
+                :data-row="rowIndex"
+                :data-start="slot.start"
+              ></span>
             </div>
           </div>
         </div>
@@ -144,30 +132,14 @@
       </div>
     </div>
 
-    <Teleport to="body">
-      <div
-        v-if="floatingTooltip.visible"
-        class="matrix-floating-tooltip"
-        :style="{ left: `${floatingTooltip.x}px`, top: `${floatingTooltip.y}px` }"
-        role="tooltip"
-      >
-        <span
-          v-for="(line, index) in floatingTooltip.lines"
-          :key="`${index}:${line}`"
-          class="matrix-floating-tooltip-line"
-          :class="index === 0 ? 'matrix-floating-tooltip-title' : ''"
-        >
-          {{ line }}
-        </span>
-      </div>
-    </Teleport>
+    <PulseFloatingTooltip :id="tooltipId" :state="floatingTooltip" />
   </section>
 </template>
 
 <script setup lang="ts">
 import { useI18n } from 'vue-i18n'
 import { formatMonitorCacheRate } from '@/features/channel-monitor-v2/monitorFormat'
-import { computed, reactive, ref, watch } from 'vue'
+import { computed, onBeforeUnmount, reactive, ref, useId, watch } from 'vue'
 import type {
   LatencyMetric,
   MonitorCoverage,
@@ -178,6 +150,7 @@ import type {
 } from '@/api/channelMonitorV2'
 import EmptyState from '@/components/common/EmptyState.vue'
 import Icon from '@/components/icons/Icon.vue'
+import PulseFloatingTooltip, { type PulseTooltipState } from '@/features/channel-monitor-v2/PulseFloatingTooltip.vue'
 import {
   formatLatencyPrivacy,
   formatMonitorMs,
@@ -212,14 +185,16 @@ const props = withDefaults(
   { showThroughput: true },
 )
 
-type AlignedSlot = { start: string; bucket?: MonitorMatrixBucket }
+type AlignedSlot = { start: string; label: string; bucket?: MonitorMatrixBucket }
 
-const floatingTooltip = reactive({
+/** Read only by PulseFloatingTooltip, so pointer moves never re-render the matrix. */
+const floatingTooltip = reactive<PulseTooltipState>({
   visible: false,
   x: 0,
   y: 0,
-  lines: [] as string[],
+  lines: [],
 })
+const tooltipId = `pulse-tooltip-${useId()}`
 
 const scrollRef = ref<HTMLElement | null>(null)
 const zoom = ref<ZoomState>(resetZoom())
@@ -247,8 +222,8 @@ const allBucketStarts = computed(() => {
 })
 /** Visible bucket window after X zoom (cursor-centered), not always the tail. */
 const bucketStarts = computed(() => sliceByZoom(allBucketStarts.value, zoom.value))
+// No inherited custom properties here: changing one on every zoom step restyles every cell below.
 const tableStyle = computed(() => ({
-  '--bucket-count': String(Math.max(1, bucketStarts.value.length)),
   minWidth: zoomed.value ? `calc(260px + ${pulseMinWidth.value})` : '0',
 }))
 const pulseMinWidth = computed(() => {
@@ -288,27 +263,55 @@ const bucketLabel = computed(() => {
   return t('channelMonitorV2.bucket.days', { count: hours / 24 })
 })
 
-/** Shared ISO start → column index for the visible window (rebuilt when zoom/coverage changes). */
-const bucketStartIndex = computed(() => {
-  const map = new Map<string, number>()
-  bucketStarts.value.forEach((start, index) => map.set(start, index))
-  return map
+/** Per-row buckets keyed by normalized ISO start; depends only on rows, so zoom never re-parses dates. */
+const rowBuckets = computed(() =>
+  props.rows.map((row) => {
+    const byStart = new Map<string, MonitorMatrixBucket>()
+    for (const bucket of row.buckets || []) byStart.set(new Date(bucket.bucket_start).toISOString(), bucket)
+    return byStart
+  })
+)
+
+/** Accessible names per column start, shared by every row (bucket-count strings, not rows × buckets). */
+const slotLabels = computed(() => {
+  const labels = new Map<string, { data: string; empty: string }>()
+  for (const start of allBucketStarts.value) {
+    const range = formatBucketRange(start)
+    labels.set(start, { data: range, empty: t('channelMonitorV2.matrix.noTrafficAt', { time: range }) })
+  }
+  return labels
 })
 
-/** Pre-aligned sparse slots per row so wheel zoom does not rebuild Maps every paint. */
+/** Pre-aligned sparse slots per row for the visible (zoomed) window. */
 const alignedRows = computed(() => {
   const starts = bucketStarts.value
-  const indexByStart = bucketStartIndex.value
-  return props.rows.map((row) => {
-    const slots: AlignedSlot[] = starts.map((start) => ({ start }))
-    for (const bucket of row.buckets || []) {
-      const key = new Date(bucket.bucket_start).toISOString()
-      const index = indexByStart.get(key)
-      if (index != null) slots[index] = { start: starts[index], bucket }
-    }
+  const labels = slotLabels.value
+  return props.rows.map((row, rowIndex) => {
+    const byStart = rowBuckets.value[rowIndex]
+    const slots: AlignedSlot[] = starts.map((start) => {
+      const bucket = byStart.get(start)
+      const label = labels.get(start)
+      return { start, label: (bucket ? label?.data : label?.empty) || start, bucket }
+    })
     return { row, slots }
   })
 })
+
+/** Wheel deltas are folded into one zoom commit per frame (one matrix re-render, not one per event). */
+let pendingZoom: ZoomState | null = null
+let zoomFrame = 0
+
+function commitPendingZoom() {
+  zoomFrame = 0
+  if (pendingZoom) zoom.value = pendingZoom
+  pendingZoom = null
+}
+
+function cancelPendingZoom() {
+  if (zoomFrame) cancelAnimationFrame(zoomFrame)
+  zoomFrame = 0
+  pendingZoom = null
+}
 
 function onMatrixWheel(event: WheelEvent) {
   const track = scrollRef.value
@@ -324,10 +327,12 @@ function onMatrixWheel(event: WheelEvent) {
   event.preventDefault()
   const ratioEl = pulse || track
   const ratio = clientXRatio(event.clientX, ratioEl)
-  zoom.value = applyWheelZoom(zoom.value, event, ratio)
+  pendingZoom = applyWheelZoom(pendingZoom ?? zoom.value, event, ratio)
+  if (!zoomFrame) zoomFrame = requestAnimationFrame(commitPendingZoom)
 }
 
 function resetMatrixZoom() {
+  cancelPendingZoom()
   zoom.value = resetZoom()
 }
 
@@ -340,9 +345,12 @@ watch(
     props.coverage.bucket_seconds,
   ],
   () => {
+    cancelPendingZoom()
     zoom.value = resetZoom()
   },
 )
+
+onBeforeUnmount(cancelPendingZoom)
 
 function cellClass(health: MonitorHealth, requestCount: number): string {
   return healthScoreClass(health, props.healthMode, requestCount)
@@ -374,10 +382,6 @@ function formatScore(health: MonitorHealth): string {
   return `${Math.round(score)}`
 }
 
-function bucketTooltip(bucket: MonitorMatrixBucket): string {
-  return bucketTooltipLines(bucket).join('\n')
-}
-
 function bucketTooltipLines(bucket: MonitorMatrixBucket): string[] {
   const metrics = bucket.metrics
   const lines = [
@@ -403,7 +407,21 @@ function emptyTooltipLines(start: string): string[] {
   return [formatBucketRange(start), t('channelMonitorV2.matrix.noTraffic')]
 }
 
-function showTooltip(event: MouseEvent | FocusEvent, slot: AlignedSlot) {
+function slotFromCell(cell: HTMLElement): Pick<AlignedSlot, 'start' | 'bucket'> | undefined {
+  const byStart = rowBuckets.value[Number(cell.dataset.row)]
+  const start = cell.dataset.start
+  if (!byStart || !start) return undefined
+  return { start, bucket: byStart.get(start) }
+}
+
+/** Delegated mouseover/focusin: show details for the cell under the pointer/focus, hide over gaps. */
+function onCellOver(event: MouseEvent | FocusEvent) {
+  const cell = (event.target as HTMLElement | null)?.closest<HTMLElement>('.pulse-cell')
+  const slot = cell ? slotFromCell(cell) : undefined
+  if (!slot) {
+    hideTooltip()
+    return
+  }
   floatingTooltip.lines = slot.bucket ? bucketTooltipLines(slot.bucket) : emptyTooltipLines(slot.start)
   floatingTooltip.visible = true
   positionTooltip(event)
@@ -447,9 +465,17 @@ function formatTps(tpm: number | null | undefined) {
   return formatMonitorTokensPerSecond(tpm)
 }
 
+const exactTpsFormat = computed(() => new Intl.NumberFormat(locale.value || undefined, { maximumFractionDigits: 3 }))
+const axisTimeFormat = computed(() => new Intl.DateTimeFormat(locale.value || undefined, {
+  month: '2-digit',
+  day: '2-digit',
+  hour: '2-digit',
+  minute: '2-digit',
+}))
+const clockFormat = computed(() => new Intl.DateTimeFormat(locale.value || undefined, { hour: '2-digit', minute: '2-digit' }))
+
 function exactTps(tpm: number | null | undefined) {
-  const tps = tokensPerSecondFromTpm(tpm)
-  return Intl.NumberFormat(locale.value || undefined, { maximumFractionDigits: 3 }).format(tps)
+  return exactTpsFormat.value.format(tokensPerSecondFromTpm(tpm))
 }
 
 function formatMs(value: number | null) {
@@ -457,18 +483,13 @@ function formatMs(value: number | null) {
 }
 
 function formatAxisTime(value: string) {
-  return new Intl.DateTimeFormat(locale.value || undefined, {
-    month: '2-digit',
-    day: '2-digit',
-    hour: '2-digit',
-    minute: '2-digit',
-  }).format(new Date(value))
+  return axisTimeFormat.value.format(new Date(value))
 }
 
 function formatBucketRange(value: string) {
   const start = new Date(value)
   const end = new Date(start.getTime() + props.coverage.bucket_seconds * 1000)
-  return `${formatAxisTime(start.toISOString())} - ${new Intl.DateTimeFormat(locale.value || undefined, { hour: '2-digit', minute: '2-digit' }).format(end)}`
+  return `${formatAxisTime(start.toISOString())} - ${clockFormat.value.format(end)}`
 }
 </script>
 
@@ -541,7 +562,6 @@ function formatBucketRange(value: string) {
 }
 
 .pulse-cell {
-  position: relative;
   min-width: 0;
 }
 .pulse-cell.has-data {
@@ -555,99 +575,8 @@ function formatBucketRange(value: string) {
 .pulse-cell.has-data:focus-visible {
   outline: 2px solid rgb(var(--color-primary-500, 99 102 241) / 0.55);
   outline-offset: 1px;
+  /* Grid items honor z-index without position, so the outline still paints above neighbors. */
   z-index: 5;
-}
-
-/* CSS-only hover tooltip — no click modal, no absolute request counts.
-   Native title is also provided so dense/scrolling layouts can always show the
-   full content even when a browser clips transformed children. */
-.pulse-tooltip {
-  pointer-events: none;
-  position: absolute;
-  bottom: calc(100% + 8px);
-  left: 50%;
-  z-index: 40;
-  min-width: 11.5rem;
-  max-width: 16rem;
-  transform: translateX(-50%) translateY(4px);
-  border-radius: 0.75rem;
-  border: 1px solid rgb(229 231 235);
-  background: rgb(255 255 255);
-  padding: 0.5rem 0.625rem;
-  box-shadow: 0 10px 25px -5px rgb(0 0 0 / 0.15);
-  opacity: 0;
-  visibility: hidden;
-  transition: opacity 0.12s ease, transform 0.12s ease, visibility 0.12s;
-  white-space: nowrap;
-}
-:global(.dark) .pulse-tooltip {
-  border-color: rgb(55 65 81);
-  background: rgb(17 24 39);
-  color: rgb(229 231 235);
-}
-.pulse-tooltip-line {
-  display: block;
-  font-size: 11px;
-  line-height: 1.45;
-  color: rgb(75 85 99);
-}
-:global(.dark) .pulse-tooltip-line {
-  color: rgb(209 213 219);
-}
-.pulse-tooltip-title {
-  margin-bottom: 0.2rem;
-  font-weight: 600;
-  color: rgb(17 24 39);
-}
-:global(.dark) .pulse-tooltip-title {
-  color: rgb(243 244 246);
-}
-.pulse-cell:hover .pulse-tooltip,
-.pulse-cell:focus-visible .pulse-tooltip {
-  opacity: 1;
-  visibility: visible;
-  transform: translateX(-50%) translateY(0);
-}
-/* Keep semantic/test text in-cell, but render the visible tooltip through body
-   Teleport so it cannot be clipped by the matrix viewport. */
-.pulse-tooltip {
-  display: none;
-}
-.matrix-floating-tooltip {
-  pointer-events: none;
-  position: fixed;
-  z-index: 9999;
-  min-width: 11.5rem;
-  max-width: min(18rem, calc(100vw - 1.5rem));
-  transform: translate(-50%, -100%);
-  border-radius: 0.75rem;
-  border: 1px solid rgb(229 231 235);
-  background: rgb(255 255 255);
-  padding: 0.5rem 0.625rem;
-  box-shadow: 0 18px 40px -12px rgb(0 0 0 / 0.28);
-  white-space: nowrap;
-}
-:global(.dark) .matrix-floating-tooltip {
-  border-color: rgb(55 65 81);
-  background: rgb(17 24 39);
-  color: rgb(229 231 235);
-}
-.matrix-floating-tooltip-line {
-  display: block;
-  font-size: 11px;
-  line-height: 1.45;
-  color: rgb(75 85 99);
-}
-:global(.dark) .matrix-floating-tooltip-line {
-  color: rgb(209 213 219);
-}
-.matrix-floating-tooltip-title {
-  margin-bottom: 0.2rem;
-  font-weight: 600;
-  color: rgb(17 24 39);
-}
-:global(.dark) .matrix-floating-tooltip-title {
-  color: rgb(243 244 246);
 }
 
 /* 窄屏只保留 维度 / 成功率 / 色块 三列：其余指标在悬停提示与下方明细表里仍可查看，

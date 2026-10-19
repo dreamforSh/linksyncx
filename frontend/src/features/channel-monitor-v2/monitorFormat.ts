@@ -18,15 +18,32 @@ export function monitorIntlLocale(): string {
   return 'zh-CN'
 }
 
+/**
+ * Constructing Intl formatters is far more expensive than formatting; the pulse
+ * matrix formats thousands of cells per render, so reuse one instance per
+ * locale + option set.
+ */
+const numberFormats = new Map<string, Intl.NumberFormat>()
+function cachedNumberFormat(locale: string, key: string, options: Intl.NumberFormatOptions): Intl.NumberFormat {
+  const cacheKey = `${locale}|${key}`
+  let format = numberFormats.get(cacheKey)
+  if (!format) {
+    format = new Intl.NumberFormat(locale, options)
+    numberFormats.set(cacheKey, format)
+  }
+  return format
+}
+
 export function formatMonitorNumber(value: number, compactAt = 10000, locale = monitorIntlLocale()): string {
-  return Intl.NumberFormat(locale, {
-    notation: value >= compactAt ? 'compact' : 'standard',
+  const notation = value >= compactAt ? 'compact' : 'standard'
+  return cachedNumberFormat(locale, `number:${notation}`, {
+    notation,
     maximumFractionDigits: 1,
   }).format(value || 0)
 }
 
 export function formatMonitorRate(value: number, locale = monitorIntlLocale()): string {
-  return Intl.NumberFormat(locale, { maximumFractionDigits: 1 }).format(value || 0)
+  return cachedNumberFormat(locale, 'rate', { maximumFractionDigits: 1 }).format(value || 0)
 }
 
 /**
@@ -37,7 +54,7 @@ export function formatMonitorThroughput(value: number | null | undefined): strin
   if (value == null || Number.isNaN(Number(value))) return '0'
   const n = Number(value)
   if (Math.abs(n) < 1000) {
-    return Intl.NumberFormat(monitorIntlLocale(), { maximumFractionDigits: 1 }).format(n)
+    return cachedNumberFormat(monitorIntlLocale(), 'rate', { maximumFractionDigits: 1 }).format(n)
   }
   return formatCompactNumber(n)
 }
@@ -57,9 +74,10 @@ export function formatMonitorTokensPerSecond(tpm: number | null | undefined): st
 
 
 export function formatMonitorPercent(value: number, locale = monitorIntlLocale()): string {
-  return `${new Intl.NumberFormat(locale, {
-    minimumFractionDigits: value < 0.01 ? 2 : 1,
-    maximumFractionDigits: value < 0.01 ? 2 : 1,
+  const digits = value < 0.01 ? 2 : 1
+  return `${cachedNumberFormat(locale, `percent:${digits}`, {
+    minimumFractionDigits: digits,
+    maximumFractionDigits: digits,
   }).format((value || 0) * 100)}%`
 }
 

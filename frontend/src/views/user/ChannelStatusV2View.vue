@@ -940,19 +940,25 @@ function drillModel(row: MonitorModelRow) {
   filter.value.platforms = [row.platform]
   filter.value.models = [row.model]
 }
+const exactRateFormat = computed(() => new Intl.NumberFormat(locale.value || undefined, { maximumFractionDigits: 2 }))
+const exactTpsFormat = computed(() => new Intl.NumberFormat(locale.value || undefined, { maximumFractionDigits: 3 }))
+const timeFormat = computed(() => new Intl.DateTimeFormat(locale.value || undefined, {
+  month: '2-digit',
+  day: '2-digit',
+  hour: '2-digit',
+  minute: '2-digit',
+}))
 function formatRate(value: number) {
   return formatMonitorThroughput(value)
 }
 function exactRate(value: number) {
-  return Intl.NumberFormat(locale.value || undefined, { maximumFractionDigits: 2 }).format(value || 0)
+  return exactRateFormat.value.format(value || 0)
 }
 function formatTps(tpm: number | null | undefined) {
   return formatMonitorTokensPerSecond(tpm)
 }
 function exactTps(tpm: number | null | undefined) {
-  return Intl.NumberFormat(locale.value || undefined, { maximumFractionDigits: 3 }).format(
-    tokensPerSecondFromTpm(tpm),
-  )
+  return exactTpsFormat.value.format(tokensPerSecondFromTpm(tpm))
 }
 function formatPercent(value: number) {
   return formatMonitorPercent(value)
@@ -980,12 +986,7 @@ function latencyKpiSecondary(metric: {
   return formatLatencyKpiSecondary(metric.avg_ms, metric.p90_ms, metric.p95_ms)
 }
 function formatTime(value: string) {
-  return new Intl.DateTimeFormat(locale.value || undefined, {
-    month: '2-digit',
-    day: '2-digit',
-    hour: '2-digit',
-    minute: '2-digit',
-  }).format(new Date(value))
+  return timeFormat.value.format(new Date(value))
 }
 function statusDot(health?: MonitorHealth | HealthState) {
   if (!health || typeof health === 'string') {

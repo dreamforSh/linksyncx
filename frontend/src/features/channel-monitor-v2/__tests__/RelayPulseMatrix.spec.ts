@@ -46,7 +46,8 @@ vi.mock('vue-i18n', async (importOriginal) => {
 })
 
 import { mount } from '@vue/test-utils'
-import { describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it } from 'vitest'
+import type { ComponentPublicInstance } from 'vue'
 import RelayPulseMatrix from '../RelayPulseMatrix.vue'
 import type { MonitorHealth, MonitorMetric } from '@/api/channelMonitorV2'
 
@@ -82,9 +83,27 @@ function metrics(requestCount: number): MonitorMetric {
   }
 }
 
+afterEach(() => {
+  document.body.innerHTML = ''
+})
+
+function floatingTooltipText(): string | null {
+  return document.body.querySelector('[role="tooltip"]')?.textContent ?? null
+}
+
 describe('RelayPulseMatrix', () => {
   it('shows privacy-safe hover tooltips and multi-band colors without click modal', async () => {
+    let matrixUpdates = 0
     const wrapper = mount(RelayPulseMatrix, {
+      attachTo: document.body,
+      global: {
+        mixins: [{
+          updated(this: ComponentPublicInstance) {
+            // mount() wraps the definition, so match by SFC name rather than identity.
+            if ((this.$.type as { __name?: string }).__name === 'RelayPulseMatrix') matrixUpdates++
+          },
+        }],
+      },
       props: {
         rows: [{
           platform: 'openai',
@@ -114,8 +133,15 @@ describe('RelayPulseMatrix', () => {
 
     const cells = wrapper.findAll('.pulse-cell')
     expect(cells).toHaveLength(3)
+    // Cells stay light: no per-cell tooltip subtree, only a per-column accessible name.
+    expect(cells[0].text()).toBe('')
+    expect(cells[0].attributes('aria-label')).toContain(' - ')
+    expect(cells[2].attributes('aria-label')).toMatch(/ - .*无流量$/)
+    expect(cells[0].attributes('aria-describedby')).toBeTruthy()
     // Hover tooltip content (privacy-safe: no absolute request/error counts)
-    const tip = cells[0].text()
+    const updatesBeforeHover = matrixUpdates
+    await cells[0].trigger('mouseover', { clientX: 40, clientY: 40 })
+    const tip = floatingTooltipText() ?? ''
     expect(tip).toContain('成功率')
     expect(tip).toContain('90.0%')
     expect(tip).toContain('首 Token')
@@ -137,9 +163,33 @@ describe('RelayPulseMatrix', () => {
     expect(cells[1].classes().some((c) => c.startsWith('health-score'))).toBe(true)
     expect(cells[2].classes()).toContain('health-unknown')
 
+    // Pointer moves only re-render the floating tooltip, never the matrix itself.
+    await cells[0].trigger('mousemove', { clientX: 60, clientY: 50 })
+    await cells[2].trigger('mouseover', { clientX: 80, clientY: 50 })
+    expect(floatingTooltipText()).toContain('无流量')
+    const updatesAfterHover = matrixUpdates
+    await wrapper.find('.pulse-track').trigger('mouseover')
+    expect(floatingTooltipText()).toBeNull()
+    expect(matrixUpdates).toBe(updatesBeforeHover)
+    expect(updatesAfterHover).toBe(updatesBeforeHover)
+
+    // Memoized cells must still follow the health mode and fresh data.
+    expect(cells[0].classes()).toContain('health-score5')
+    await wrapper.setProps({ healthMode: 'ttft' })
+    expect(wrapper.findAll('.pulse-cell')[0].classes()).toContain('health-score10')
+    const rows = wrapper.props('rows')
+    await wrapper.setProps({
+      rows: [{
+        ...rows[0],
+        buckets: rows[0].buckets.map((bucket) => ({ ...bucket, health: { ...bucket.health, ttft_score: 0 } })),
+      }],
+    })
+    expect(wrapper.findAll('.pulse-cell')[0].classes()).toContain('health-score0')
+
     // No click-to-open modal
     await cells[0].trigger('click')
     expect(wrapper.find('[role="dialog"]').exists()).toBe(false)
+    wrapper.unmount()
   })
 })
 

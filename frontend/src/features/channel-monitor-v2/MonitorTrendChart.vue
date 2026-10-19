@@ -59,7 +59,7 @@
 
 <script setup lang="ts">
 import { useI18n } from 'vue-i18n'
-import { computed, ref, watch } from 'vue'
+import { computed, onBeforeUnmount, ref, watch } from 'vue'
 import {
   Chart as ChartJS,
   CategoryScale,
@@ -111,17 +111,18 @@ const bucketLabel = computed(() => {
   return t('channelMonitorV2.bucket.days', { count: hours / 24 })
 })
 
+const labelFormat = computed(() => new Intl.DateTimeFormat(locale.value || undefined, {
+  month: '2-digit',
+  day: '2-digit',
+  hour: '2-digit',
+  minute: '2-digit',
+}))
+
 const chartData = computed(() => {
   const points = visibleTrend.value
   if (!points.length) return null
-  const labels = points.map((p) =>
-    new Intl.DateTimeFormat(locale.value || undefined, {
-      month: '2-digit',
-      day: '2-digit',
-      hour: '2-digit',
-      minute: '2-digit',
-    }).format(new Date(p.bucket_start))
-  )
+  const format = labelFormat.value
+  const labels = points.map((p) => format.format(new Date(p.bucket_start)))
   const errorRates = smoothTrend(points.map((p) => (p.metrics.error_rate || 0) * 100))
   const cacheRates = smoothTrend(points.map((p) => {
     const rate = monitorCacheRate(p.metrics)
@@ -181,20 +182,41 @@ const chartData = computed(() => {
 /** Window the series by zoom state around the cursor — not always the last N points. */
 const visibleTrend = computed(() => sliceByZoom(props.trend || [], zoom.value))
 
+/** Wheel deltas are folded into one zoom commit (one chart update) per frame. */
+let pendingZoom: ZoomState | null = null
+let zoomFrame = 0
+
+function commitPendingZoom() {
+  zoomFrame = 0
+  if (pendingZoom) zoom.value = pendingZoom
+  pendingZoom = null
+}
+
+function cancelPendingZoom() {
+  if (zoomFrame) cancelAnimationFrame(zoomFrame)
+  zoomFrame = 0
+  pendingZoom = null
+}
+
 function onChartWheel(event: WheelEvent) {
   // Plain vertical wheel zooms X (narrower time range); shift/horizontal pans.
   event.preventDefault()
   const ratio = clientXRatio(event.clientX, chartRef.value)
-  zoom.value = applyWheelZoom(zoom.value, event, ratio)
+  pendingZoom = applyWheelZoom(pendingZoom ?? zoom.value, event, ratio)
+  if (!zoomFrame) zoomFrame = requestAnimationFrame(commitPendingZoom)
 }
 
 function resetChartZoom() {
+  cancelPendingZoom()
   zoom.value = resetZoom()
 }
 
 watch(() => props.trend, () => {
+  cancelPendingZoom()
   zoom.value = resetZoom()
 })
+
+onBeforeUnmount(cancelPendingZoom)
 
 function smoothTrend(values: Array<number | null>): Array<number | null> {
   if (values.length <= 2) return values
