@@ -133,6 +133,12 @@
                         </span>
                         <span class="flex-1 text-left">{{ t('admin.tlsFingerprintProfiles.title') }}</span>
                       </button>
+                      <button class="account-tools-menu-item" @click="openBalanceAlert">
+                        <span class="account-tools-menu-icon bg-yellow-50 text-yellow-600 dark:bg-yellow-900/30 dark:text-yellow-300">
+                          <Icon name="bell" size="sm" />
+                        </span>
+                        <span class="flex-1 text-left">{{ t('admin.accounts.balanceAlert.title') }}</span>
+                      </button>
 
                       <div class="my-2 border-t border-gray-100 dark:border-dark-700"></div>
                       <div class="px-2 py-2">
@@ -327,6 +333,16 @@
               @usage-loaded="handleAccountUsageLoaded(row.id, $event)"
             />
           </template>
+          <template #cell-custom_usage="{ row }">
+            <CustomUsageCell
+              :key="row.id + ':' + customUsagePageKey"
+              :account="row"
+              :state="customUsageStates[row.id]"
+              @refresh="refreshCustomUsage(row.id)"
+              @configure="customUsageAccount = row"
+              @visibility="setCustomUsageVisible(row.id, $event)"
+            />
+          </template>
           <template #cell-proxy="{ row }">
             <div class="flex flex-col gap-1">
               <div v-if="row.proxy?.source === 'clash'" class="flex flex-col gap-0.5" data-testid="account-clash-proxy">
@@ -491,8 +507,24 @@
     <ReAuthAccountModal :show="showReAuth" :account="reAuthAcc" @close="closeReAuthModal" @reauthorized="handleAccountUpdated" />
     <AccountTestModal :show="showTest" :account="testingAcc" @close="closeTestModal" />
     <AccountStatsModal :show="showStats" :account="statsAcc" @close="closeStatsModal" />
+    <CustomUsageConfigModal
+      v-if="customUsageAccount !== null"
+      :show="customUsageAccount !== null"
+      :account="customUsageAccount"
+      @close="customUsageAccount = null"
+      @saved="handleCustomUsageSaved"
+    />
+    <BalanceAlertConfigModal
+      v-if="showBalanceAlert"
+      :show="showBalanceAlert"
+      :enabled="balanceAlertSettings.enabled"
+      :threshold="balanceAlertSettings.threshold"
+      :recharge-url="balanceAlertSettings.rechargeUrl"
+      @close="showBalanceAlert = false"
+      @saved="loadBalanceAlertSettings"
+    />
     <ScheduledTestsPanel :show="showSchedulePanel" :account-id="scheduleAcc?.id ?? null" :account-platform="scheduleAcc?.platform" :model-options="scheduleModelOptions" @close="closeSchedulePanel" />
-    <AccountActionMenu :show="menu.show" :account="menu.acc" :anchor-rect="menu.anchorRect" @close="menu.show = false" @test="handleTest" @stats="handleViewStats" @schedule="handleSchedule" @duplicate="handleDuplicateAccount" @reauth="handleReAuth" @refresh-token="handleRefresh" @reset-client-identity="handleResetClientIdentity" @recover-state="handleRecoverState" @reset-quota="handleResetQuota" @set-privacy="handleSetPrivacy" @create-spark-shadow="handleCreateSparkShadow" />
+    <AccountActionMenu :show="menu.show" :account="menu.acc" :anchor-rect="menu.anchorRect" @close="menu.show = false" @custom-usage="customUsageAccount = $event" @test="handleTest" @stats="handleViewStats" @schedule="handleSchedule" @duplicate="handleDuplicateAccount" @reauth="handleReAuth" @refresh-token="handleRefresh" @reset-client-identity="handleResetClientIdentity" @recover-state="handleRecoverState" @reset-quota="handleResetQuota" @set-privacy="handleSetPrivacy" @create-spark-shadow="handleCreateSparkShadow" />
     <SyncFromCrsModal :show="showSync" :groups="groups" @close="showSync = false" @synced="reload" />
     <ImportDataModal :show="showImportData" :groups="groups" @close="showImportData = false" @imported="handleDataImported" />
     <DeviceProfileBatchDialog :show="showDeviceProfileBatch" :account-ids="selIds" @close="showDeviceProfileBatch = false" />
@@ -558,6 +590,11 @@ import ScheduledTestsPanel from '@/components/admin/account/ScheduledTestsPanel.
 import type { SelectOption } from '@/components/common/Select.vue'
 import AccountStatusIndicator from '@/components/account/AccountStatusIndicator.vue'
 import AccountUsageCell from '@/components/account/AccountUsageCell.vue'
+import CustomUsageCell from '@/components/account/CustomUsageCell.vue'
+import CustomUsageConfigModal from '@/components/account/CustomUsageConfigModal.vue'
+import BalanceAlertConfigModal from '@/components/account/BalanceAlertConfigModal.vue'
+import { useCustomUsage } from '@/composables/useCustomUsage'
+import type { CustomUsageConfig } from '@/api/admin/customUsage'
 import AccountTodayStatsCell from '@/components/account/AccountTodayStatsCell.vue'
 import AccountGroupsCell from '@/components/account/AccountGroupsCell.vue'
 import AccountCapacityCell from '@/components/account/AccountCapacityCell.vue'
@@ -668,6 +705,9 @@ const resettingIdentityAcc = ref<Account | null>(null)
 const showReAuth = ref(false)
 const showTest = ref(false)
 const showStats = ref(false)
+const customUsageAccount = ref<AccountListItem | null>(null)
+const showBalanceAlert = ref(false)
+const balanceAlertSettings = ref({ enabled: false, threshold: 5, rechargeUrl: '' })
 const showErrorPassthrough = ref(false)
 const showTLSFingerprintProfiles = ref(false)
 const edAcc = ref<Account | null>(null)
@@ -1160,6 +1200,19 @@ const {
   }
 })
 
+const customUsagePageKey = computed(() => JSON.stringify([pagination.page, pagination.page_size, params]))
+const customUsageActive = computed(() => !loading.value && customUsageAccount.value === null && !hiddenColumns.has('custom_usage'))
+const {
+  states: customUsageStates,
+  setVisible: setCustomUsageVisible,
+  refresh: refreshCustomUsage,
+  configSaved: customUsageConfigSaved
+} = useCustomUsage(accounts, customUsageActive, customUsagePageKey)
+const handleCustomUsageSaved = (id: number, config: Pick<CustomUsageConfig, 'enabled' | 'interval_minutes'>) => {
+  customUsageConfigSaved(id, config)
+  appStore.showSuccess(t('admin.accounts.customUsage.saved'))
+}
+
 const {
   selectedSet,
   selectedIds: selIds,
@@ -1436,6 +1489,8 @@ const isAnyModalOpen = computed(() => {
     showReAuth.value ||
     showTest.value ||
     showStats.value ||
+    customUsageAccount.value !== null ||
+    showBalanceAlert.value ||
     showSchedulePanel.value ||
     showErrorPassthrough.value ||
     showTLSFingerprintProfiles.value
@@ -1887,6 +1942,7 @@ const allColumns = computed(() => {
     c.push({ key: 'groups', label: t('admin.accounts.columns.groups'), sortable: false })
   }
   c.push({ key: 'usage', label: t('admin.accounts.columns.usageWindows'), sortable: false })
+  c.push({ key: 'custom_usage', label: t('admin.accounts.customUsage.column'), sortable: false })
   c.push(
     { key: 'proxy', label: t('admin.accounts.columns.proxy'), sortable: false },
     { key: 'priority', label: t('admin.accounts.columns.priority'), sortable: true },
@@ -2469,6 +2525,22 @@ const handleExportData = async () => {
 const accountExportStepUp = useStepUp()
 const closeTestModal = () => { showTest.value = false; testingAcc.value = null }
 const closeStatsModal = () => { showStats.value = false; statsAcc.value = null }
+const loadBalanceAlertSettings = async () => {
+  try {
+    const settings = await adminAPI.settings.getSettings()
+    balanceAlertSettings.value = {
+      enabled: settings.balance_low_notify_enabled ?? false,
+      threshold: settings.balance_low_notify_threshold ?? 5,
+      rechargeUrl: settings.balance_low_notify_recharge_url ?? '',
+    }
+  } catch (error) {
+    console.error('Failed to load balance alert settings:', error)
+  }
+}
+const openBalanceAlert = async () => {
+  await loadBalanceAlertSettings()
+  showBalanceAlert.value = true
+}
 const closeReAuthModal = () => { showReAuth.value = false; reAuthAcc.value = null }
 const handleTest = async (a: AccountListItem) => {
   const account = await loadAccountDetails(a)

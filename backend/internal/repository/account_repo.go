@@ -675,7 +675,9 @@ func lockAndMergeAccountProbeExtra(
 				false
 			),
 			extra -> 'opencode_go_usage_auto_refresh',
-			extra -> 'opencode_go_usage_snapshot'
+			extra -> 'opencode_go_usage_snapshot',
+			COALESCE(extra, '{}'::jsonb),
+			credentials -> 'custom_usage_secrets'
 		FROM accounts
 		WHERE id = $1 AND deleted_at IS NULL
 		FOR NO KEY UPDATE
@@ -704,6 +706,8 @@ func lockAndMergeAccountProbeExtra(
 		currentOllamaSnapshot          []byte
 		currentOpenCodeAutoRefresh     []byte
 		currentOpenCodeSnapshot        []byte
+		currentExtraJSON               []byte
+		currentCustomUsageSecrets      []byte
 	)
 	if err := rows.Scan(
 		&identityUnchanged,
@@ -718,6 +722,8 @@ func lockAndMergeAccountProbeExtra(
 		&opencodeGroupIdentityUnchanged,
 		&currentOpenCodeAutoRefresh,
 		&currentOpenCodeSnapshot,
+		&currentExtraJSON,
+		&currentCustomUsageSecrets,
 	); err != nil {
 		return nil, err
 	}
@@ -726,6 +732,28 @@ func lockAndMergeAccountProbeExtra(
 	}
 
 	extra := copyJSONMap(normalizeJSONMap(account.Extra))
+
+	// Custom usage config/secrets are managed by their dedicated endpoints.
+	// Preserve the locked DB values so a generic account edit (whose DTO is
+	// redacted) can never erase or forge them.
+	var currentExtra map[string]any
+	if len(currentExtraJSON) > 0 {
+		_ = json.Unmarshal(currentExtraJSON, &currentExtra)
+	}
+	delete(extra, service.CustomUsageExtraKey)
+	if currentConfig, exists := currentExtra[service.CustomUsageExtraKey]; exists {
+		extra[service.CustomUsageExtraKey] = currentConfig
+	}
+	managedSecrets, _, err := decodeAccountExtraJSON(currentCustomUsageSecrets)
+	if err != nil {
+		return nil, err
+	}
+	account.Credentials = copyJSONMap(normalizeJSONMap(account.Credentials))
+	delete(account.Credentials, service.CustomUsageCredentialsKey)
+	if managedSecrets != nil {
+		account.Credentials[service.CustomUsageCredentialsKey] = managedSecrets
+	}
+
 	for _, key := range []string{
 		service.UpstreamBillingProbeEnabledExtraKey,
 		service.UpstreamBillingRateSyncEnabledExtraKey,
@@ -871,7 +899,10 @@ func (r *accountRepository) UpdateCredentials(ctx context.Context, id int64, cre
 	result, err := client.ExecContext(ctx, `
 		UPDATE accounts
 		SET
-			credentials = $1::jsonb,
+			credentials = ($1::jsonb - 'custom_usage_secrets')
+				|| CASE WHEN credentials ? 'custom_usage_secrets'
+					THEN jsonb_build_object('custom_usage_secrets', credentials -> 'custom_usage_secrets')
+					ELSE '{}'::jsonb END,
 			extra = CASE
 				-- 正确性依赖（非防御）：OpenCode 分支必须先于 Ollama 分支求值。两分支
 				-- 的 WHEN 并不互斥：Ollama 分支的守卫是宽谓词——NOT(ollamaMatch(old)
@@ -3312,6 +3343,29 @@ func (r *accountRepository) BulkUpdate(ctx context.Context, ids []int64, updates
 	if updates.ProbeEnabled != nil {
 		whereClause += " AND type = $" + itoa(idx)
 		args = append(args, service.AccountTypeAPIKey)
+		idx++
+	}
+	if updates.CustomUsageExpected != nil {
+		if len(ids) != 1 {
+			return 0, service.ErrCustomUsageConfig
+		}
+		expectedCredentials, err := json.Marshal(normalizeJSONMap(updates.CustomUsageExpected.Credentials))
+		if err != nil {
+			return 0, err
+		}
+		expectedConfigValue := updates.CustomUsageExpected.Config
+		if expectedConfigValue == nil {
+			expectedConfigValue = map[string]any{}
+		}
+		expectedConfig, err := json.Marshal(expectedConfigValue)
+		if err != nil {
+			return 0, err
+		}
+		whereClause += " AND type = 'apikey' AND COALESCE(credentials, '{}'::jsonb) = $" + itoa(idx) + "::jsonb"
+		args = append(args, expectedCredentials)
+		idx++
+		whereClause += " AND COALESCE(NULLIF(extra -> 'custom_usage_config', 'null'::jsonb), '{}'::jsonb) = $" + itoa(idx) + "::jsonb"
+		args = append(args, expectedConfig)
 	}
 	query := "UPDATE accounts SET " + joinClauses(setClauses, ", ") + whereClause
 

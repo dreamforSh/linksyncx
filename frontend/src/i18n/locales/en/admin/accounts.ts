@@ -1,5 +1,8 @@
+import customUsage from './customUsage'
+
 export default {
     accounts: {
+      customUsage,
       title: 'Account Management',
       description: 'Manage AI platform accounts and credentials',
       targetGroup: {
@@ -141,6 +144,7 @@ export default {
         deepseek: 'DeepSeek',
         minimax: 'MiniMax',
         opencode_go: 'OpenCode',
+        command_code: 'Command Code',
       },
       cnProviders: {
         accountMode: {
@@ -2037,7 +2041,16 @@ export default {
       linkCopied: 'Link Copied',
       needsReauth: 'Re-auth Required',
       rateLimited: 'Rate Limited',
-      usageError: 'Fetch Error'
+      usageError: 'Fetch Error',
+      balanceAlert: {
+        title: 'Balance Alert',
+        enabled: 'Enable Alert',
+        enabledHint: 'Send a notification email when an upstream account balance falls below the threshold',
+        threshold: 'Alert Threshold',
+        thresholdPlaceholder: 'e.g. 5',
+        thresholdHint: 'Trigger a notification when balance drops below this value (USD)',
+        rechargeUrl: 'Recharge URL',
+      }
     },
 
     // Scheduled Tests

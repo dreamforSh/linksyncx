@@ -133,14 +133,21 @@ func (s *OpenAIGatewayService) nativeAnthropicTargetURL(account *Account) (strin
 	if err != nil {
 		return "", fmt.Errorf("invalid base_url: %w", err)
 	}
-	if account.IsOpenCodeGo() {
-		// OpenCode Go 的 Chat Completions base 带 /v1；用版本感知拼接避免 /v1/v1/messages。
+	if account.IsOpenCodeGo() || account.IsCommandCode() {
+		// OpenCode Go / Command Code 的协议基址可能已带 /v1；用版本感知拼接
+		// 避免生成 /v1/v1/messages。
 		return buildOpenAIEndpointURL(validatedURL, "/v1/messages"), nil
 	}
 	return strings.TrimRight(validatedURL, "/") + "/v1/messages", nil
 }
 
 func resolveOpenCodeGoMappedModel(account *Account, body []byte, defaultMappedModel string) string {
+	original := strings.TrimSpace(gjson.GetBytes(body, "model").String())
+	billing := resolveOpenAIForwardModel(account, original, defaultMappedModel)
+	return normalizeOpenAIModelForUpstream(account, billing)
+}
+
+func resolveCommandCodeMappedModel(account *Account, body []byte, defaultMappedModel string) string {
 	original := strings.TrimSpace(gjson.GetBytes(body, "model").String())
 	billing := resolveOpenAIForwardModel(account, original, defaultMappedModel)
 	return normalizeOpenAIModelForUpstream(account, billing)

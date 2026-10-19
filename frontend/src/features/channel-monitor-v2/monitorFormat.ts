@@ -81,6 +81,32 @@ export function formatMonitorPercent(value: number, locale = monitorIntlLocale()
   }).format((value || 0) * 100)}%`
 }
 
+/**
+ * Color the user-facing availability status by the newest availability value.
+ * Boundaries are intentionally ordered from worst to best so that the bands
+ * do not overlap: <30 black, <50 red, <60 yellow, <80 pale yellow,
+ * <90 light green, and >=90 deep green.
+ */
+export function availabilityBarClass(value: number | null | undefined): string {
+  if (value == null || !Number.isFinite(value)) return 'bg-gray-300 dark:bg-dark-600'
+  if (value < 30) return 'bg-gray-950 dark:bg-black'
+  if (value < 50) return 'bg-red-500 dark:bg-red-400'
+  if (value < 60) return 'bg-amber-400 dark:bg-amber-300'
+  if (value < 80) return 'bg-yellow-300 dark:bg-yellow-200'
+  if (value < 90) return 'bg-emerald-400 dark:bg-emerald-300'
+  return 'bg-emerald-600 dark:bg-emerald-400'
+}
+
+export function availabilityTextClass(value: number | null | undefined): string {
+  if (value == null || !Number.isFinite(value)) return 'text-gray-900 dark:text-gray-100'
+  if (value < 30) return 'text-gray-950 dark:text-white'
+  if (value < 50) return 'text-red-600 dark:text-red-400'
+  if (value < 60) return 'text-amber-700 dark:text-amber-300'
+  if (value < 80) return 'text-yellow-700 dark:text-yellow-300'
+  if (value < 90) return 'text-emerald-700 dark:text-emerald-300'
+  return 'text-emerald-800 dark:text-emerald-300'
+}
+
 /** The explicit flag survives privacy redaction; legacy billing-only rates are unknown. */
 export function monitorCacheRate(metric: Pick<MonitorMetric, 'cache_rate' | 'cache_rate_known'>): number | null {
   return metric.cache_rate_known === true && Number.isFinite(metric.cache_rate) ? metric.cache_rate : null

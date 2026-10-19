@@ -24,6 +24,7 @@ export interface CNProviderQuotaProbeResult {
   fetched_at: number
   persisted: boolean
   error?: string
+  balance?: CNProviderBalanceResult
 }
 
 /** 单币种余额明细（deepseek 双币种账号含 CNY + USD 两条）。 */
