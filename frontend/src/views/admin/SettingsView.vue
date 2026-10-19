@@ -13439,9 +13439,10 @@ watch(
 </style>
 
 <style>
-/* Dark-mode overrides for the settings tabs shell. Kept in an UNSCOPED block
-   because Vue's scoped-CSS compiler was dropping the `:global(.dark) ...`
-   rules in the production build, leaving inactive tabs unreadable on dark. */
+/* Dark-mode overrides for the settings tabs shell, kept in an UNSCOPED block.
+   They used to be scoped with a `:global(.dark)` prefix, which Vue compiles to a
+   bare `.dark {}` rule (the selector tail is dropped), leaving inactive tabs
+   unreadable on dark. A scoped `.dark .x` selector would also work. */
 .dark .settings-tabs-shell {
   border-color: rgb(51 65 85 / 0.65);
   background: rgb(15 23 42 / 0.86);
