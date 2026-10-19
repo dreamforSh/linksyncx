@@ -89,12 +89,14 @@ func applyGrokCLIAccountHeaders(headers http.Header) {
 
 // applyGrokCLISamplerHeaders stamps the Grok Build sampler identity of an
 // inference turn: the client identity plus the per-turn x-grok-* ids captured
-// from Grok Build 1.0.46. convID is the request's x-grok-conv-id; Grok Build
+// from Grok Build 1.0.62. convID is the request's x-grok-conv-id; Grok Build
 // reuses its session id for both values and derives the group id from it.
 //
 // Left out on purpose: x-grok-turn-idx (unknown for relayed history), the
 // doom-loop and exact-repetition checks (they inject check events into the
-// stream), x-compaction-* (per-model remote config) and traceparent.
+// stream), x-compaction-* (per-model remote config), traceparent and
+// x-grok-experiments (sent only by machines with local [[experiments]]
+// config, which a default install has none of).
 func applyGrokCLISamplerHeaders(headers http.Header, account *Account, model, convID string) {
 	if headers == nil {
 		return

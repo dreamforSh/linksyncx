@@ -23,8 +23,8 @@ const grokCLI426Body = "{\"error\":\"Your Grok CLI version (0.2.120) is outdated
 func TestApplyGrokCLISamplerHeadersMatchesGrokBuildCapture(t *testing.T) {
 	t.Setenv(xai.CLIVersionEnv, "")
 
-	// Session and group ids captured from a Grok Build 1.0.46 TUI turn.
-	const sessionID = "01a0fadb-822e-7191-9137-38dcfe57ecc3"
+	// Session and group ids captured from a Grok Build 1.0.62 TUI turn.
+	const sessionID = "01a153a8-8189-7973-8471-54c6e56f1e22"
 	headers := http.Header{}
 	applyGrokCLISamplerHeaders(headers, &Account{ID: 42}, "grok-4.6", sessionID)
 
@@ -38,7 +38,7 @@ func TestApplyGrokCLISamplerHeadersMatchesGrokBuildCapture(t *testing.T) {
 	require.Equal(t, "grok-pager", headers.Get("x-grok-client-identifier"))
 	require.Equal(t, "grok-4.6", headers.Get("x-grok-model-override"))
 	require.Equal(t, sessionID, headers.Get("x-grok-session-id"))
-	require.Equal(t, "65f7d481-70a7-57de-a969-c6e50aa4094d", headers.Get("x-grok-conv-group-id"))
+	require.Equal(t, "e136e96d-0a53-5cce-b60e-9a4655094851", headers.Get("x-grok-conv-group-id"))
 
 	agentID, err := uuid.Parse(headers.Get("x-grok-agent-id"))
 	require.NoError(t, err)
@@ -48,8 +48,8 @@ func TestApplyGrokCLISamplerHeadersMatchesGrokBuildCapture(t *testing.T) {
 	require.Equal(t, uuid.Version(4), reqID.Version())
 
 	// Grok Build sends neither account identity nor stream-altering checks on
-	// inference turns.
-	for _, name := range []string{"X-UserID", "X-Email", "x-grok-doom-loop-check", "x-grok-exact-repetition-check", "x-grok-turn-idx"} {
+	// inference turns, and a default install has no experiment assignments.
+	for _, name := range []string{"X-UserID", "X-Email", "x-grok-doom-loop-check", "x-grok-exact-repetition-check", "x-grok-turn-idx", "x-grok-experiments"} {
 		require.Empty(t, headers.Get(name), name)
 	}
 
