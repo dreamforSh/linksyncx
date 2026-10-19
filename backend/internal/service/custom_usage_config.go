@@ -24,6 +24,7 @@ const (
 	customUsageMaxHeaderValueBytes = 8192
 	customUsageMaxHeaderBytes      = 32 * 1024
 	customUsageMaxHeaderNameBytes  = 128
+	customUsageMinSensitiveLen     = 8
 )
 
 var ErrCustomUsageConfig = infraerrors.BadRequest("INVALID_CUSTOM_USAGE_CONFIG", "invalid custom usage configuration")
@@ -100,7 +101,9 @@ func customUsageAccountDefaults(a *Account) (CustomUsageConfig, bool) {
 		return c, false
 	}
 	base := strings.TrimRight(strings.TrimSpace(a.GetCredential("base_url")), "/")
-	if base == "" {
+	// Official API roots (the create form fills them in for an empty base_url)
+	// have no usage endpoint; never poll them with the account key.
+	if base == "" || upstreamBillingProbeTargetIsOfficialAPI(base) {
 		return c, false
 	}
 	return CustomUsageConfig{

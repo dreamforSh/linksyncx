@@ -15,23 +15,44 @@ import (
 	"strings"
 	"time"
 
+	"github.com/Wei-Shaw/sub2api/internal/pkg/tlsfingerprint"
 	"github.com/Wei-Shaw/sub2api/internal/util/urlvalidator"
 )
 
 // The shared billing probe validates DNS before transport acquisition, but its
-// dialer resolves again and permits configured proxies. This small direct-only
-// adapter pins validated addresses at EACH dial, without altering gateway I/O.
+// dialer resolves again. This adapter pins validated addresses at EACH dial,
+// without altering gateway I/O.
 type customUsageNetwork struct {
 	lookup func(context.Context, string) ([]net.IPAddr, error)
 	dial   func(context.Context, string, string) (net.Conn, error)
 }
 
-func newCustomUsageClient() *http.Client {
-	n := customUsageNetwork{lookup: net.DefaultResolver.LookupIPAddr, dial: (&net.Dialer{Timeout: 10 * time.Second}).DialContext}
+// newCustomUsageClient builds a single-use client for one account. With an
+// assigned proxy the validated IP literal is tunnelled through it (CONNECT /
+// SOCKS5), so the proxy never resolves the host itself and cannot be steered at
+// its own loopback or LAN; an unusable proxy fails the dial, never goes direct.
+func newCustomUsageClient(proxyURL string) (*http.Client, error) {
+	return newCustomUsageClientWithLookup(proxyURL, net.DefaultResolver.LookupIPAddr)
+}
+
+func newCustomUsageClientWithLookup(proxyURL string, lookup func(context.Context, string) ([]net.IPAddr, error)) (*http.Client, error) {
+	var parsed *url.URL
+	if proxyURL != "" {
+		u, err := url.Parse(proxyURL)
+		if err != nil {
+			return nil, err
+		}
+		parsed = u
+	}
+	tunnel, err := tlsfingerprint.NewProxyDialer(nil, parsed, tlsfingerprint.DialOptions{})
+	if err != nil {
+		return nil, err
+	}
+	n := customUsageNetwork{lookup: lookup, dial: tunnel.DialContext}
 	return &http.Client{Timeout: 30 * time.Second, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }, Transport: &http.Transport{
 		Proxy: nil, DialContext: n.dialContext, TLSHandshakeTimeout: 10 * time.Second, ResponseHeaderTimeout: 30 * time.Second,
 		MaxResponseHeaderBytes: 16 * 1024, DisableKeepAlives: true, DisableCompression: true,
-	}}
+	}}, nil
 }
 
 // customUsagePublicIP 判断解析后的 IP 是否可安全出站。
@@ -108,6 +129,35 @@ type customUsagePrepared struct {
 	config    CustomUsageConfig
 	request   *http.Request
 	sensitive []string
+	// proxyID is part of the cache fingerprint; proxyURL/proxyErr are resolved
+	// only by Query, right before a fetch (Batch rows carry no proxy edge).
+	proxyID  int64
+	proxyURL string
+	proxyErr error
+}
+
+// customUsageUsesVariable reports whether the request template references {{key}}.
+func customUsageUsesVariable(c CustomUsageConfig, key string) bool {
+	placeholder := "{{" + key + "}}"
+	if strings.Contains(c.Request.URL, placeholder) {
+		return true
+	}
+	for _, v := range c.Request.Headers {
+		if strings.Contains(v, placeholder) {
+			return true
+		}
+	}
+	return false
+}
+
+// customUsageSameHost compares the request host with the account's own base_url host.
+func customUsageSameHost(u *url.URL, accountBaseURL string) bool {
+	base, err := url.Parse(strings.TrimSpace(accountBaseURL))
+	if err != nil {
+		return false
+	}
+	want := strings.TrimSuffix(strings.ToLower(base.Hostname()), ".")
+	return want != "" && want == strings.TrimSuffix(strings.ToLower(u.Hostname()), ".")
 }
 
 func prepareCustomUsage(a *Account, c CustomUsageConfig, secrets customUsageSecrets) (customUsagePrepared, error) {
@@ -119,6 +169,9 @@ func prepareCustomUsage(a *Account, c CustomUsageConfig, secrets customUsageSecr
 		return out, err
 	}
 	out.config = c
+	if a.ProxyID != nil {
+		out.proxyID = *a.ProxyID
+	}
 	base := strings.TrimRight(strings.TrimSpace(c.BaseURL), "/")
 	if base == "" {
 		base = strings.TrimRight(strings.TrimSpace(a.GetCredential("base_url")), "/")
@@ -190,6 +243,14 @@ func prepareCustomUsage(a *Account, c CustomUsageConfig, secrets customUsageSecr
 		if v != "" && (strings.Contains(u.Host+u.Path, v) || strings.Contains(base, v)) {
 			return out, ErrCustomUsageConfig
 		}
+	}
+	// The account's own credentials, which admins cannot read back, may only go to
+	// the host the account already sends them to. A usage endpoint elsewhere needs
+	// its own credential entered in this config.
+	accountKey := secrets.APIKey == "" && apiKey != "" && customUsageUsesVariable(c, "apiKey")
+	accountAccess := secrets.AccessToken == "" && access != "" && customUsageUsesVariable(c, "accessToken")
+	if (accountKey || accountAccess) && !customUsageSameHost(u, a.GetCredential("base_url")) {
+		return out, ErrCustomUsageConfig
 	}
 	headerBytes := len("Accept: application/json\r\nHost: \r\nUser-Agent: Go-http-client/1.1\r\nConnection: close\r\n\r\n") + len(u.Host)
 	for name, template := range c.Request.Headers {
@@ -352,9 +413,13 @@ func parseCustomUsage(body []byte, c CustomUsageConfig, sensitive []string) (Cus
 		if !customUsageSafeText(value, target.max) {
 			return CustomUsageResult{}, errCustomUsageResponse
 		}
-		for _, secret := range sensitive {
-			if secret != "" && strings.Contains(value, secret) {
-				return CustomUsageResult{}, errCustomUsageResponse
+		// Only text read from the response can echo a credential back; short
+		// values ("USD", a numeric user id) would reject legitimate units/plans.
+		if target.spec.Path != "" {
+			for _, secret := range sensitive {
+				if len(secret) >= customUsageMinSensitiveLen && strings.Contains(value, secret) {
+					return CustomUsageResult{}, errCustomUsageResponse
+				}
 			}
 		}
 		*target.dest = value
@@ -369,8 +434,16 @@ func (s *CustomUsageService) fetch(ctx context.Context, p customUsagePrepared) C
 	ctx, cancel := context.WithTimeout(ctx, time.Duration(p.config.TimeoutSeconds)*time.Second)
 	defer cancel()
 	result := customUsageEmpty(p.config, true)
-	req := p.request.WithContext(WithHTTPUpstreamPublicHostsOnly(WithHTTPUpstreamRedirectsDisabled(ctx)))
-	resp, err := s.client.Do(req)
+	if p.proxyErr != nil {
+		result.Error = "proxy_unavailable"
+		return result
+	}
+	client, err := s.newClient(p.proxyURL)
+	if err != nil {
+		result.Error = "proxy_unavailable"
+		return result
+	}
+	resp, err := client.Do(p.request.WithContext(ctx))
 	if err != nil {
 		result.Error = "request_failed"
 		return result

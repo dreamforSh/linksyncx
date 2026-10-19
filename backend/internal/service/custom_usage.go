@@ -63,22 +63,22 @@ type customUsageEntry struct {
 
 // CustomUsageService is admin-only and demand-driven: no background scans or gateway hooks.
 type CustomUsageService struct {
-	repo   CustomUsageRepository
-	client *http.Client
-	now    func() time.Time
-	mu     sync.Mutex
-	cache  map[int64]*customUsageEntry
-	slots  chan struct{}
-	writes [64]sync.Mutex
+	repo      CustomUsageRepository
+	newClient func(proxyURL string) (*http.Client, error)
+	now       func() time.Time
+	mu        sync.Mutex
+	cache     map[int64]*customUsageEntry
+	slots     chan struct{}
+	writes    [64]sync.Mutex
 }
 
-// NewCustomUsageService creates a bounded direct-public-only query service.
+// NewCustomUsageService creates a bounded public-only query service that honours account proxies.
 func NewCustomUsageService(repo CustomUsageRepository) *CustomUsageService {
-	return &CustomUsageService{repo: repo, client: newCustomUsageClient(), now: time.Now, cache: map[int64]*customUsageEntry{}, slots: make(chan struct{}, upstreamBillingProbeConcurrency)}
+	return &CustomUsageService{repo: repo, newClient: newCustomUsageClient, now: time.Now, cache: map[int64]*customUsageEntry{}, slots: make(chan struct{}, upstreamBillingProbeConcurrency)}
 }
 
 // NewCustomUsageService shares the billing probe's repository and sizing conventions.
-// Its hardened dial adapter is separate because the gateway client permits proxies.
+// Its hardened dial adapter is separate because the gateway client re-resolves DNS.
 func (s *UpstreamBillingProbeService) NewCustomUsageService() *CustomUsageService {
 	if s == nil {
 		return NewCustomUsageService(nil)
@@ -190,7 +190,8 @@ func customUsageFingerprint(p customUsagePrepared) [32]byte {
 		Config  CustomUsageConfig
 		URL     string
 		Headers http.Header
-	}{Config: p.config}
+		ProxyID int64
+	}{Config: p.config, ProxyID: p.proxyID}
 	if p.request != nil {
 		payload.URL = p.request.URL.String()
 		payload.Headers = p.request.Header
@@ -265,6 +266,8 @@ func (s *CustomUsageService) Query(ctx context.Context, id int64, force bool, dr
 		return empty, nil
 	}
 	fingerprint := customUsageFingerprint(p)
+	// Fail closed: an account with an unresolvable proxy never queries directly.
+	p.proxyURL, p.proxyErr = a.ProxyURLForOutbound()
 	if ctx.Err() != nil {
 		empty.Error = "request_cancelled"
 		return empty, nil
@@ -318,14 +321,21 @@ func (s *CustomUsageService) Query(ctx context.Context, id int64, force bool, dr
 	e.flight = f
 	e.lastAttempt = s.now()
 	s.mu.Unlock()
-	result := s.fetch(ctx, p)
+	// The admin page aborts queries when a row scrolls away or the tab hides. The
+	// fetch is already bounded by the config timeout, so finish it detached: a
+	// cancellation must not be cached as this fingerprint's result for a whole interval.
+	detached := context.WithoutCancel(ctx)
+	result := s.fetch(detached, p)
 	lock := &s.writes[uint64(id)%uint64(len(s.writes))]
 	lock.Lock()
 	defer lock.Unlock()
-	fresh, err := s.account(ctx, id)
+	fresh, err := s.account(detached, id)
 	if err != nil {
 		result = empty
 		result.Error = "account_changed"
+		if !errors.Is(err, ErrAccountNotFound) && !errors.Is(err, ErrUpstreamBillingProbeAccountInvalid) {
+			result.Error = "request_failed"
+		}
 	} else {
 		latest, creds, exists := readCustomUsage(fresh)
 		if draft != nil {

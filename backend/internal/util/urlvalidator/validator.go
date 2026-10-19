@@ -132,6 +132,11 @@ var globalUnicastV6Prefix = netip.MustParsePrefix("2000::/3")
 
 // IsPublicResolvedIP 判断一个解析后的 IP 是否属于可以安全出站的公网地址。
 //
+// 这是严格口径，供自定义用量查询这类「管理员可配置任意目标」的出站使用。
+// ValidateResolvedIP 刻意保持旧的宽口径：Turnstile / Gemini OAuth 等既有调用方
+// 在 Clash/mihomo fake-ip（198.18.0.0/15）、Tailscale（100.64.0.0/10）或 DNS64
+// 环境下解析到的正是这些段，收紧会直接打断登录与 OAuth。
+//
 // 返回 false 的包括：无效地址、带 zone 的地址、回环、私网、链路本地、
 // 组播、未指定地址、非 2000::/3 的 IPv6，以及 blockedResolvedPrefixes 中的任何段。
 func IsPublicResolvedIP(ip netip.Addr) bool {
@@ -175,7 +180,8 @@ func ValidateResolvedIP(host string) error {
 	}
 
 	for _, ip := range ips {
-		if !IsPublicNetIP(ip) {
+		if ip.IsLoopback() || ip.IsPrivate() || ip.IsLinkLocalUnicast() ||
+			ip.IsLinkLocalMulticast() || ip.IsUnspecified() {
 			return fmt.Errorf("resolved ip %s is not allowed", ip.String())
 		}
 	}
