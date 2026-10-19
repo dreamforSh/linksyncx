@@ -158,12 +158,18 @@ const truncatedError = computed(() => {
   return error.value.length > 80 ? `${error.value.slice(0, 80)}...` : error.value
 })
 
+// 单元格随分页/排序复用给别的账号：在途请求的结果只写回发起时的账号。
+let disposed = false
+const isCurrent = (accountId: number) => !disposed && accountId === props.account.id
+
 const handleProbe = async () => {
   if (loading.value) return
+  const accountId = props.account.id
   loading.value = true
   error.value = null
   try {
-    const result = await adminAPI.cnProviders.queryBalance(props.account.id)
+    const result = await adminAPI.cnProviders.queryBalance(accountId)
+    if (!isCurrent(accountId)) return
     // 失败时保留快照展示（仅显示错误行），成功才覆盖。
     if (result.success) {
       data.value = result
@@ -171,9 +177,9 @@ const handleProbe = async () => {
       error.value = result.error || t('common.error')
     }
   } catch (e) {
-    error.value = extractErrorMessage(e)
+    if (isCurrent(accountId)) error.value = extractErrorMessage(e)
   } finally {
-    loading.value = false
+    if (isCurrent(accountId)) loading.value = false
   }
 }
 
@@ -192,8 +198,10 @@ const pollTimer = ref<ReturnType<typeof setTimeout> | null>(null)
 
 const schedulePoll = (delayMs: number) => {
   if (pollTimer.value !== null) clearTimeout(pollTimer.value)
+  if (disposed) return
   pollTimer.value = setTimeout(async () => {
     pollTimer.value = null
+    if (disposed) return
     if (!visible.value || document.hidden) {
       // 页面不可见时跳过本次，延后再试
       schedulePoll(BALANCE_POLL_INTERVAL_MS)
@@ -204,13 +212,15 @@ const schedulePoll = (delayMs: number) => {
       schedulePoll(BALANCE_POLL_INTERVAL_MS)
       return
     }
+    const accountId = props.account.id
     try {
-      const result = await adminAPI.cnProviders.queryBalance(props.account.id)
-      if (result.success) data.value = result
+      const result = await adminAPI.cnProviders.queryBalance(accountId)
+      if (isCurrent(accountId) && result.success) data.value = result
     } catch {
       // 静默失败，不影响已展示的快照
     }
-    schedulePoll(BALANCE_POLL_INTERVAL_MS)
+    // 卸载后不再续约；账号已切换时 watch 已为新账号重排定时器。
+    if (isCurrent(accountId)) schedulePoll(BALANCE_POLL_INTERVAL_MS)
   }, delayMs)
 }
 
@@ -239,6 +249,7 @@ onMounted(() => {
 })
 
 onUnmounted(() => {
+  disposed = true
   if (pollTimer.value !== null) {
     clearTimeout(pollTimer.value)
     pollTimer.value = null

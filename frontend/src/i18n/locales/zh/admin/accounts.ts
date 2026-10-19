@@ -2011,17 +2011,7 @@ export default {
         todayCost: '今日费用',
         usageTrend: '30天费用与请求趋势',
         noData: '该账号暂无使用数据'
-      },
-
-      balanceAlert: {
-        title: '余额告危通知',
-        enabled: '启用告危通知',
-        enabledHint: '当上游账号余额低于阈值时发送通知邮件',
-        threshold: '告危阈值',
-        thresholdPlaceholder: '例如 5',
-        thresholdHint: '余额低于此值（美元）时触发通知',
-        rechargeUrl: '充值链接',
-      },
+      }
     },
 
     // Scheduled Tests

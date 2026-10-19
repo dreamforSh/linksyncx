@@ -595,6 +595,38 @@ describe('CreateAccountModal OpenAI long-context billing', () => {
     })
   })
 
+  it('keeps Command Code on its own adaptive endpoints for preview and submit', async () => {
+    const wrapper = mountModal()
+    await selectButtonByText(wrapper, 'Command Code')
+    await flushPromises()
+    await wrapper.get('form#create-account-form input[type="text"]').setValue('cc')
+    await wrapper.get('form#create-account-form input[type="password"]').setValue('sk-command-code')
+
+    expect(wrapper.text()).toContain('admin.accounts.cnProviders.apiProtocol.title')
+    expect(wrapper.find('[data-testid="cn-adaptive-base-url-responses"]').exists()).toBe(true)
+    // The platform watcher used to overwrite the base URL with the Anthropic default,
+    // so "sync upstream models" sent the Command Code key to api.anthropic.com.
+    expect(wrapper.getComponent(ModelWhitelistSelectorStub).props('syncCredentials')).toMatchObject({
+      platform: 'command_code',
+      base_url: 'https://api.commandcode.ai/provider/v1',
+      api_key: 'sk-command-code'
+    })
+
+    await wrapper.get('form#create-account-form').trigger('submit.prevent')
+    await flushPromises()
+
+    expect(createAccountMock).toHaveBeenCalledTimes(1)
+    expect(createAccountMock.mock.calls[0]?.[0]?.credentials).toMatchObject({
+      api_protocol: 'adaptive',
+      base_url: 'https://api.commandcode.ai/provider/v1',
+      api_base_urls: {
+        chat_completions: 'https://api.commandcode.ai/provider/v1',
+        anthropic: 'https://api.commandcode.ai/provider',
+        responses: 'https://api.commandcode.ai/provider/v1'
+      }
+    })
+  })
+
   it('uses the edited adaptive Chat endpoint when previewing upstream models', async () => {
     const wrapper = mountModal()
     await selectButtonByText(wrapper, 'Kimi')

@@ -2041,16 +2041,7 @@ export default {
       linkCopied: 'Link Copied',
       needsReauth: 'Re-auth Required',
       rateLimited: 'Rate Limited',
-      usageError: 'Fetch Error',
-      balanceAlert: {
-        title: 'Balance Alert',
-        enabled: 'Enable Alert',
-        enabledHint: 'Send a notification email when an upstream account balance falls below the threshold',
-        threshold: 'Alert Threshold',
-        thresholdPlaceholder: 'e.g. 5',
-        thresholdHint: 'Trigger a notification when balance drops below this value (USD)',
-        rechargeUrl: 'Recharge URL',
-      }
+      usageError: 'Fetch Error'
     },
 
     // Scheduled Tests

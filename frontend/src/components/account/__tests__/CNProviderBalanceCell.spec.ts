@@ -1,5 +1,5 @@
 import { flushPromises, mount } from '@vue/test-utils'
-import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import CNProviderBalanceCell from '../CNProviderBalanceCell.vue'
 import type { Account } from '@/types'
 
@@ -33,6 +33,10 @@ const account = {
 describe('CNProviderBalanceCell', () => {
   beforeEach(() => {
     queryBalance.mockReset()
+  })
+
+  afterEach(() => {
+    vi.useRealTimers()
   })
 
   it('renders the persisted balance as static text with an explicit query action', async () => {
@@ -72,5 +76,41 @@ describe('CNProviderBalanceCell', () => {
 
     expect(wrapper.text()).toContain('CNY 12.50')
     expect(wrapper.text()).toContain('HTTP 401')
+  })
+
+  it('stops background polling once unmounted, even with a poll in flight', async () => {
+    vi.useFakeTimers()
+    let resolve!: (value: unknown) => void
+    queryBalance
+      .mockImplementationOnce(() => new Promise((r) => { resolve = r }))
+      .mockResolvedValue({ success: true, balance: 2, currency: 'CNY' })
+    const wrapper = mount(CNProviderBalanceCell, { props: { account } })
+    await vi.advanceTimersByTimeAsync(60_000)
+    expect(queryBalance).toHaveBeenCalledTimes(1)
+
+    wrapper.unmount()
+    resolve({ success: true, balance: 1, currency: 'CNY' })
+    await flushPromises()
+    await vi.advanceTimersByTimeAsync(15 * 60_000)
+
+    expect(queryBalance).toHaveBeenCalledTimes(1)
+    expect(vi.getTimerCount()).toBe(0)
+  })
+
+  it('drops an in-flight poll result after the cell switches to another account', async () => {
+    vi.useFakeTimers()
+    let resolve!: (value: unknown) => void
+    queryBalance
+      .mockImplementationOnce(() => new Promise((r) => { resolve = r }))
+      .mockResolvedValue({ success: true, balance: 3, currency: 'CNY' })
+    const wrapper = mount(CNProviderBalanceCell, { props: { account } })
+    await vi.advanceTimersByTimeAsync(60_000)
+
+    await wrapper.setProps({ account: { ...account, id: 8, extra: {} } as Account })
+    resolve({ success: true, balance: 111, currency: 'OLD' })
+    await flushPromises()
+
+    expect(wrapper.text()).not.toContain('OLD')
+    wrapper.unmount()
   })
 })

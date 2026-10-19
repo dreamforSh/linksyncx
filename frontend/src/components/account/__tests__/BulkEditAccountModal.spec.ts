@@ -29,11 +29,7 @@ vi.mock('@/api/admin', () => ({
 }))
 
 vi.mock('@/api/admin/accounts', () => ({
-  getAntigravityDefaultModelMapping: vi.fn().mockResolvedValue({
-    'gemini-3.1-flash-image': 'gemini-3.1-flash-image',
-    'gemini-2.5-flash-image': 'gemini-2.5-flash-image',
-    'gpt-5.3-codex': 'gpt-5.3-codex'
-  })
+  getAntigravityDefaultModelMapping: vi.fn()
 }))
 
 vi.mock('vue-i18n', async () => {
@@ -134,7 +130,6 @@ describe('BulkEditAccountModal', () => {
     const selector = wrapper.findComponent(ModelWhitelistSelector)
     expect(selector.exists()).toBe(true)
 
-    await flushPromises()
     await selector.find('div.cursor-pointer').trigger('click')
 
     // Antigravity 模型目录来自账号「同步上游」，批量编辑没有单一账号可同步。

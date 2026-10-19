@@ -4260,6 +4260,7 @@ const apiKeyValuePlaceholder = computed(() => {
       return 'sk-...'
     case 'minimax':
     case 'opencode_go':
+    case 'command_code':
       return 'sk-...'
     default:
       return 'sk-ant-...'
@@ -4424,7 +4425,8 @@ const adaptiveBaseUrls = ref<Record<CnNativeApiProtocol, string>>({
 })
 const isCNPlatform = computed(() => isCNProviderPlatform(form.platform))
 const isOpenCodeGoPlatform = computed(() => form.platform === 'opencode_go')
-const isMultiProtocolPlatform = computed(() => isCNPlatform.value || isOpenCodeGoPlatform.value)
+const isCommandCodePlatform = computed(() => form.platform === 'command_code')
+const isMultiProtocolPlatform = computed(() => isCNPlatform.value || isOpenCodeGoPlatform.value || isCommandCodePlatform.value)
 function currentOpenCodeOrCNMode(): CnAccountMode | OpenCodeAccountMode {
   return isOpenCodeGoPlatform.value ? openCodeAccountMode.value : accountMode.value
 }
@@ -4481,6 +4483,8 @@ const cnAccentActiveClass = computed(() => {
       return 'border-rose-500 bg-rose-50 dark:bg-rose-900/20'
     case 'opencode_go':
       return 'border-amber-500 bg-amber-50 dark:bg-amber-900/20'
+    case 'command_code':
+      return 'border-slate-500 bg-slate-50 dark:bg-slate-900/20'
     default:
       return 'border-primary-500 bg-primary-50 dark:bg-primary-900/20'
   }
@@ -4497,6 +4501,8 @@ const cnAccentIconClass = computed(() => {
       return 'bg-rose-500 text-white'
     case 'opencode_go':
       return 'bg-amber-500 text-white'
+    case 'command_code':
+      return 'bg-slate-500 text-white'
     default:
       return 'bg-primary-500 text-white'
   }
@@ -4563,7 +4569,8 @@ watch(openCodeAccountMode, (mode, previousMode) => {
   }
 })
 watch(accountMode, (mode, previousMode) => {
-  if (!isMultiProtocolPlatform.value || isOpenCodeGoPlatform.value) return
+  // OpenCode 有自己的账号形态，Command Code 没有账号形态，均不跟随国产供应商的 accountMode。
+  if (!isMultiProtocolPlatform.value || isOpenCodeGoPlatform.value || isCommandCodePlatform.value) return
   if (apiProtocol.value === 'adaptive') {
     const previousDefaults = defaultCNAdaptiveBaseUrls(adaptivePresetPlatform.value, previousMode)
     const nextDefaults = defaultCNAdaptiveBaseUrls(adaptivePresetPlatform.value, mode)
@@ -5174,7 +5181,7 @@ watch(
   () => form.platform,
   (newPlatform) => {
     // Reset base URL based on platform
-    if (isCNProviderPlatform(newPlatform) || newPlatform === 'opencode_go') {
+    if (isCNProviderPlatform(newPlatform) || newPlatform === 'opencode_go' || newPlatform === 'command_code') {
       const mode = newPlatform === 'opencode_go' ? openCodeAccountMode.value : accountMode.value
       apiKeyBaseUrl.value = defaultCNBaseUrl(newPlatform, mode, apiProtocol.value)
     } else {
