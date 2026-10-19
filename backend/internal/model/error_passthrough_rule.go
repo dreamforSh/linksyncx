@@ -47,7 +47,6 @@ const (
 	PlatformDeepseek    = domain.PlatformDeepseek
 	PlatformMiniMax     = domain.PlatformMiniMax
 	PlatformOpenCodeGo  = domain.PlatformOpenCodeGo
-	PlatformCommandCode = domain.PlatformCommandCode
 )
 
 // AllPlatforms 返回所有支持的平台列表
@@ -64,7 +63,6 @@ func AllPlatforms() []string {
 		PlatformDeepseek,
 		PlatformMiniMax,
 		PlatformOpenCodeGo,
-		PlatformCommandCode,
 	}
 }
 

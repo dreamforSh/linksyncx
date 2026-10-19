@@ -411,15 +411,6 @@ func (s *RateLimitService) HandleUpstreamError(ctx context.Context, account *Acc
 		upstreamMsg = truncateForLog([]byte(upstreamMsg), 512)
 	}
 
-	// Command Code 的 402/403/429 同时承载窗口耗尽、积分耗尽和组织花费
-	// 上限；按响应文案分类，未识别的普通频率限制继续走默认处理。
-	if account.IsCommandCode() && (statusCode == http.StatusPaymentRequired ||
-		statusCode == http.StatusForbidden || statusCode == http.StatusTooManyRequests) {
-		if handled, disable := s.handleCommandCodeUsageError(ctx, account, statusCode, responseBody, upstreamMsg); handled {
-			return disable
-		}
-	}
-
 	switch statusCode {
 	case 400:
 		// "organization has been disabled" → 永久禁用

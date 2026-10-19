@@ -447,7 +447,7 @@ export interface PaginationConfig {
 
 // ==================== API Key & Group Types ====================
 
-export type GroupPlatform = 'anthropic' | 'openai' | 'gemini' | 'antigravity' | 'grok' | 'perplexity' | 'codebuddy' | 'kimi' | 'zhipu' | 'deepseek' | 'minimax' | 'opencode_go' | 'command_code' | 'composite'
+export type GroupPlatform = 'anthropic' | 'openai' | 'gemini' | 'antigravity' | 'grok' | 'perplexity' | 'codebuddy' | 'kimi' | 'zhipu' | 'deepseek' | 'minimax' | 'opencode_go' | 'composite'
 
 export type VideoModelPrices = Record<string, Record<string, number>>
 
@@ -890,7 +890,7 @@ export interface PerplexityModelProbeResult {
   persistence: 'stored' | 'stale' | 'failed' | 'unavailable'
 }
 
-export type AccountPlatform = 'anthropic' | 'openai' | 'gemini' | 'antigravity' | 'grok' | 'perplexity' | 'codebuddy' | 'kimi' | 'zhipu' | 'deepseek' | 'minimax' | 'opencode_go' | 'command_code'
+export type AccountPlatform = 'anthropic' | 'openai' | 'gemini' | 'antigravity' | 'grok' | 'perplexity' | 'codebuddy' | 'kimi' | 'zhipu' | 'deepseek' | 'minimax' | 'opencode_go'
 export type AccountType = 'oauth' | 'setup-token' | 'apikey' | 'upstream' | 'bedrock' | 'service_account'
 export type OAuthAddMethod = 'oauth' | 'setup-token'
 export type ProxyProtocol = 'http' | 'https' | 'socks5' | 'socks5h'

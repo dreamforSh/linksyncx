@@ -283,21 +283,8 @@
                 : 'text-gray-600 hover:text-gray-900 dark:text-gray-400 dark:hover:text-gray-200'
             ]"
           >
-           <PlatformIcon platform="opencode_go" size="sm" />
-           OpenCode
-          </button>
-          <button
-            type="button"
-            @click="selectCommandCodePlatform()"
-            :class="[
-              'flex flex-1 items-center justify-center gap-2 rounded-md px-3 py-2.5 text-sm font-medium transition-all',
-              form.platform === 'command_code'
-                ? 'bg-white text-slate-700 shadow-sm dark:bg-dark-600 dark:text-slate-300'
-                : 'text-gray-600 hover:text-gray-900 dark:text-gray-400 dark:hover:text-gray-200'
-            ]"
-          >
-            <PlatformIcon platform="command_code" size="sm" />
-            Command Code
+            <PlatformIcon platform="opencode_go" size="sm" />
+            OpenCode
           </button>
         </div>
       </div>
@@ -4436,9 +4423,8 @@ const cnPresetPlatform = computed<CnProviderPlatform>(() => {
   }
   return 'kimi'
 })
-const adaptivePresetPlatform = computed<CnProviderPlatform | 'opencode_go' | 'command_code'>(() => {
+const adaptivePresetPlatform = computed<CnProviderPlatform | 'opencode_go'>(() => {
   if (form.platform === 'opencode_go') return 'opencode_go'
-  if (form.platform === 'command_code') return 'command_code'
   return cnPresetPlatform.value
 })
 // 当前平台可选的协议档（responses 仅 deepseek / kimi）。
@@ -4463,7 +4449,7 @@ const cnAdaptiveProtocolOptions = computed<Array<{ value: CnNativeApiProtocol; l
 })
 
 function resetAdaptiveBaseUrls(
-  platform: CnProviderPlatform | 'opencode_go' | 'command_code',
+  platform: CnProviderPlatform | 'opencode_go',
   mode: CnAccountMode | OpenCodeAccountMode
 ) {
   adaptiveBaseUrls.value = defaultCNAdaptiveBaseUrls(platform, mode)
@@ -4523,14 +4509,6 @@ function selectOpenCodeGoPlatform() {
   apiKeyBaseUrl.value = defaultCNBaseUrl('opencode_go', openCodeAccountMode.value, 'adaptive')
   resetAdaptiveBaseUrls('opencode_go', openCodeAccountMode.value)
   openCodeGoProtocolRules.value = cloneOpenCodeGoProtocolRules(defaultOpenCodeProtocolRules(openCodeAccountMode.value))
-}
-function selectCommandCodePlatform() {
-  form.platform = 'command_code'
-  form.type = 'apikey'
-  accountCategory.value = 'apikey'
-  apiProtocol.value = 'adaptive'
-  apiKeyBaseUrl.value = defaultCNBaseUrl('command_code', 'payg', 'adaptive')
-  resetAdaptiveBaseUrls('command_code', 'payg')
 }
 // Perplexity 只有网页会话（apikey）一种账号形态：选中即锁定 apikey 类型，
 // base url 留空由后端回落 https://www.perplexity.ai。
@@ -5085,7 +5063,6 @@ const canExchangeCode = computed(() => {
 function selectPlatformForGroup(platform: string) {
   if (isCNProviderPlatform(platform)) selectCNPlatform(platform)
   else if (platform === 'opencode_go') selectOpenCodeGoPlatform()
-  else if (platform === 'command_code') selectCommandCodePlatform()
   else if (platform === 'perplexity') selectPerplexityPlatform()
   else form.platform = platform as AccountPlatform
 }
@@ -6242,10 +6219,8 @@ const handleSubmit = async () => {
   // 国产供应商：账号模式 + 协议 + 对应端点写入凭据；后端按 account_mode 路由
   // 额度/余额探测，按 api_protocol 路由转发端点与格式。注意 CN apikey 走本函数
   // 的通用路径（直接 doCreateAccount），不经过 createAccountAndFinish。
-  if (isCNProviderPlatform(form.platform) || form.platform === 'opencode_go' || form.platform === 'command_code') {
-    if (form.platform !== 'command_code') {
-      credentials.account_mode = form.platform === 'opencode_go' ? openCodeAccountMode.value : accountMode.value
-    }
+  if (isCNProviderPlatform(form.platform) || form.platform === 'opencode_go') {
+    credentials.account_mode = form.platform === 'opencode_go' ? openCodeAccountMode.value : accountMode.value
     credentials.api_protocol = apiProtocol.value
     if (apiProtocol.value === 'adaptive') {
       const defaults = defaultCNAdaptiveBaseUrls(

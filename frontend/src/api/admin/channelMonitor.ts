@@ -17,7 +17,6 @@ export type Provider =
   | 'deepseek'
   | 'minimax'
   | 'opencode_go'
-  | 'command_code'
 export type MonitorStatus = 'operational' | 'degraded' | 'failed' | 'error'
 export type BodyOverrideMode = 'off' | 'merge' | 'replace'
 export type APIMode = 'chat_completions' | 'responses'

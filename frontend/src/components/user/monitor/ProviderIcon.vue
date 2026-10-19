@@ -91,13 +91,6 @@ const PROVIDER_ICONS: Record<Provider, IconData> = {
       'M16 6H8v12h8V6zm4 16H4V2h16v20z',
     ],
   },
-  command_code: {
-    paths: [
-      'M3 4h18v16H3z',
-      'M7 9l3 3-3 3',
-      'M13 15h4',
-    ],
-  },
 }
 
 const props = withDefaults(defineProps<{

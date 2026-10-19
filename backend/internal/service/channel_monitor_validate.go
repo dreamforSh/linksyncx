@@ -224,7 +224,7 @@ func monitorAccountQuotaCapability(account *Account) error {
 			return ErrChannelMonitorAccountNotSupportable
 		}
 		return nil
-	case PlatformOpenCodeGo, PlatformCommandCode:
+	case PlatformOpenCodeGo:
 		return nil
 	case PlatformKimi, PlatformZhipu, PlatformDeepseek, PlatformMiniMax:
 		if account.IsCodingPlan() {

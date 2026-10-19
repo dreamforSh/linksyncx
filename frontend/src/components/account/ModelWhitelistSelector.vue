@@ -145,7 +145,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed, watch, onBeforeUnmount, onMounted } from 'vue'
+import { ref, computed, watch, onBeforeUnmount } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useAppStore } from '@/stores/app'
 import { accountsAPI } from '@/api/admin/accounts'
@@ -154,11 +154,7 @@ import { useClipboard } from '@/composables/useClipboard'
 import { extractApiErrorMessage } from '@/utils/apiError'
 import ModelIcon from '@/components/common/ModelIcon.vue'
 import Icon from '@/components/icons/Icon.vue'
-import {
-  allModels,
-  fetchAntigravityDefaultMappings,
-  getModelsByPlatform,
-} from '@/composables/useModelWhitelist'
+import { allModels, getModelsByPlatform } from '@/composables/useModelWhitelist'
 
 const { t } = useI18n()
 
@@ -221,12 +217,6 @@ const normalizedPlatforms = computed(() => {
   )
 })
 
-onMounted(() => {
-  if (normalizedPlatforms.value.includes('antigravity')) {
-    void fetchAntigravityDefaultMappings()
-  }
-})
-
 const upstreamSyncPlatforms = new Set([
   'anthropic',
   'openai',
@@ -239,8 +229,7 @@ const upstreamSyncPlatforms = new Set([
   'zhipu',
   'deepseek',
   'minimax',
-  'opencode_go',
-  'command_code'
+  'opencode_go'
 ])
 const canSyncUpstream = computed(() => {
   if (props.accountId) {

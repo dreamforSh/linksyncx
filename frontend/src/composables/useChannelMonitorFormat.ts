@@ -24,7 +24,6 @@ import {
   PROVIDER_DEEPSEEK,
   PROVIDER_MINIMAX,
   PROVIDER_OPENCODE_GO,
-  PROVIDER_COMMAND_CODE,
   PROVIDERS,
   STATUS_OPERATIONAL,
   STATUS_DEGRADED,
@@ -123,8 +122,6 @@ export function useChannelMonitorFormat() {
         return 'bg-rose-100 text-rose-700 dark:bg-rose-500/15 dark:text-rose-300'
       case PROVIDER_OPENCODE_GO:
         return 'bg-amber-100 text-amber-800 dark:bg-amber-500/15 dark:text-amber-300'
-      case PROVIDER_COMMAND_CODE:
-        return 'bg-slate-100 text-slate-800 dark:bg-slate-500/15 dark:text-slate-300'
       default:
         return NEUTRAL_BADGE
     }
@@ -194,10 +191,6 @@ export function useChannelMonitorFormat() {
         return active
           ? 'border-amber-500 bg-amber-50 text-amber-800 dark:bg-amber-500/15 dark:text-amber-300 dark:border-amber-400'
           : 'border-gray-200 bg-white text-gray-600 hover:border-amber-300 hover:text-amber-700 dark:border-dark-700 dark:bg-dark-800 dark:text-gray-400 dark:hover:border-amber-500/50'
-      case PROVIDER_COMMAND_CODE:
-        return active
-          ? 'border-slate-500 bg-slate-50 text-slate-800 dark:bg-slate-500/15 dark:text-slate-300 dark:border-slate-400'
-          : 'border-gray-200 bg-white text-gray-600 hover:border-slate-300 hover:text-slate-700 dark:border-dark-700 dark:bg-dark-800 dark:text-gray-400 dark:hover:border-slate-500/50'
       default:
         return active
           ? 'border-gray-400 bg-gray-50 text-gray-700 dark:border-dark-500 dark:bg-dark-700 dark:text-gray-200'
@@ -285,10 +278,8 @@ export function providerGradient(provider: string): string {
       return 'bg-gradient-to-br from-teal-50 to-teal-100 dark:from-teal-500/10 dark:to-teal-500/20'
     case PROVIDER_MINIMAX:
       return 'bg-gradient-to-br from-rose-50 to-rose-100 dark:from-rose-500/10 dark:to-rose-500/20'
-      case PROVIDER_OPENCODE_GO:
-        return 'bg-gradient-to-br from-amber-50 to-amber-100 dark:from-amber-500/10 dark:to-amber-500/20'
-      case PROVIDER_COMMAND_CODE:
-        return 'bg-gradient-to-br from-slate-50 to-slate-100 dark:from-slate-500/10 dark:to-slate-500/20'
+    case PROVIDER_OPENCODE_GO:
+      return 'bg-gradient-to-br from-amber-50 to-amber-100 dark:from-amber-500/10 dark:to-amber-500/20'
     default:
       return 'bg-gradient-to-br from-gray-100 to-gray-200 dark:from-dark-700 dark:to-dark-600'
   }
