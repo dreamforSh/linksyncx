@@ -173,7 +173,7 @@ describe('RelayPulseMatrix', () => {
     expect(matrixUpdates).toBe(updatesBeforeHover)
     expect(updatesAfterHover).toBe(updatesBeforeHover)
 
-    // Memoized cells must still follow the health mode and fresh data.
+    // Cells must still follow the health mode and fresh data.
     expect(cells[0].classes()).toContain('health-score5')
     await wrapper.setProps({ healthMode: 'ttft' })
     expect(wrapper.findAll('.pulse-cell')[0].classes()).toContain('health-score10')

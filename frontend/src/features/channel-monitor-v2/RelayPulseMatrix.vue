@@ -90,11 +90,10 @@
               <!-- 色块数 = 行数 × 桶数（可达数千）：每格只绑类名和一个按时间缓存的 aria-label；
                    悬停/聚焦明细由容器上的委托事件按需生成，渲染在独立的浮层组件里。
                    色块不要设 position：每个定位元素都是独立绘制层，数千个会拖慢命中测试和滚动。
-                   v-memo 让缩放平移时数据未变的色块跳过重建（memo 依赖须覆盖模板里用到的全部值）。 -->
+                   不要在这里加 v-memo：嵌套 v-for 的所有行共用同一个 memo 缓存槽，多行时永远不会命中（eslint vue/valid-v-memo 也会拦）。 -->
               <span
                 v-for="slot in entry.slots"
                 :key="slot.start"
-                v-memo="[slot.bucket, slot.label, healthMode, rowIndex]"
                 class="pulse-cell rounded-sm border-0 p-0 outline-offset-1"
                 :class="slot.bucket
                   ? `${cellClass(slot.bucket.health, slot.bucket.metrics.request_count)} has-data`
