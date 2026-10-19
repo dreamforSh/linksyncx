@@ -1,38 +1,126 @@
-import { describe, expect, it, vi, beforeEach } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { defineComponent, h } from 'vue'
-import { mount } from '@vue/test-utils'
+import { flushPromises, mount } from '@vue/test-utils'
+import { createPinia, setActivePinia } from 'pinia'
+import type { PublicSettings } from '@/types'
+import { useAppStore } from '@/stores/app'
+import ChannelStatusView from '../ChannelStatusView.vue'
+import ChannelStatusV1View from '../ChannelStatusV1View.vue'
 
-const isV1 = vi.fn(() => false)
+const { getPublicSettings, list } = vi.hoisted(() => ({ getPublicSettings: vi.fn(), list: vi.fn() }))
 
-vi.mock('@/utils/featureFlags', () => ({
-  isChannelMonitorV1Mode: () => isV1(),
+vi.mock('@/api/auth', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/api/auth')>()),
+  getPublicSettings,
 }))
-
-vi.mock('../ChannelStatusV1View.vue', () => ({
-  default: defineComponent({ name: 'ChannelStatusV1View', setup: () => () => h('div', { 'data-testid': 'v1' }) }),
+vi.mock('@/api/channelMonitor', () => ({ list, status: vi.fn() }))
+vi.mock('vue-i18n', async () => ({
+  ...(await vi.importActual<typeof import('vue-i18n')>('vue-i18n')),
+  useI18n: () => ({ t: (key: string) => key }),
 }))
+// V2 is heavy and irrelevant here; V1 stays real so its mount-time list request is observable.
 vi.mock('../ChannelStatusV2View.vue', () => ({
   default: defineComponent({ name: 'ChannelStatusV2View', setup: () => () => h('div', { 'data-testid': 'v2' }) }),
 }))
 
-import ChannelStatusView from '../ChannelStatusView.vue'
+const settings = (overrides: Partial<PublicSettings>) =>
+  ({ channel_monitor_enabled: true, ...overrides }) as PublicSettings
+
+function deferred<T>() {
+  let resolve!: (value: T) => void
+  let reject!: (reason: unknown) => void
+  const promise = new Promise<T>((res, rej) => {
+    resolve = res
+    reject = rej
+  })
+  return { promise, resolve, reject }
+}
+
+const mountView = () =>
+  mount(ChannelStatusView, {
+    global: {
+      stubs: {
+        AppLayout: { template: '<div><slot /></div>' },
+        MonitorHero: true,
+        MonitorCardGrid: true,
+        MonitorDetailDialog: true,
+      },
+    },
+  })
+
+let wrapper: ReturnType<typeof mountView> | undefined
 
 describe('ChannelStatusView mode switch', () => {
   beforeEach(() => {
-    isV1.mockReset()
+    delete window.__APP_CONFIG__
+    setActivePinia(createPinia())
+    getPublicSettings.mockReset()
+    list.mockReset().mockResolvedValue({ items: [] })
+    vi.spyOn(console, 'error').mockImplementation(() => {})
   })
 
-  it('renders V2 when not in v1 mode', () => {
-    isV1.mockReturnValue(false)
-    const wrapper = mount(ChannelStatusView)
-    expect(wrapper.find('[data-testid="v2"]').exists()).toBe(true)
-    expect(wrapper.find('[data-testid="v1"]').exists()).toBe(false)
+  afterEach(() => {
+    wrapper?.unmount()
+    wrapper = undefined
+    delete window.__APP_CONFIG__
+    vi.restoreAllMocks()
   })
 
-  it('renders V1 when in v1 mode', () => {
-    isV1.mockReturnValue(true)
-    const wrapper = mount(ChannelStatusView)
-    expect(wrapper.find('[data-testid="v1"]').exists()).toBe(true)
+  it('mounts neither implementation while settings are pending, then V2 without touching V1', async () => {
+    const pending = deferred<PublicSettings>()
+    getPublicSettings.mockReturnValue(pending.promise)
+
+    wrapper = mountView()
+    await flushPromises()
+
+    expect(wrapper.findComponent(ChannelStatusV1View).exists()).toBe(false)
+    expect(list).not.toHaveBeenCalled()
     expect(wrapper.find('[data-testid="v2"]').exists()).toBe(false)
+    expect(wrapper.find('[data-testid="channel-status-mode-loading"]').exists()).toBe(true)
+    expect(getPublicSettings).toHaveBeenCalledTimes(1)
+
+    pending.resolve(settings({ channel_monitor_mode: 'v2' }))
+    await flushPromises()
+
+    expect(wrapper.find('[data-testid="channel-status-mode-loading"]').exists()).toBe(false)
+    expect(wrapper.find('[data-testid="v2"]').exists()).toBe(true)
+    expect(wrapper.findComponent(ChannelStatusV1View).exists()).toBe(false)
+    expect(list).not.toHaveBeenCalled()
+  })
+
+  it('renders the injected mode on first paint without fetching', async () => {
+    window.__APP_CONFIG__ = settings({ channel_monitor_mode: 'v2' })
+    useAppStore().initFromInjectedConfig()
+
+    wrapper = mountView()
+    await flushPromises()
+
+    expect(getPublicSettings).not.toHaveBeenCalled()
+    expect(wrapper.find('[data-testid="v2"]').exists()).toBe(true)
+    expect(list).not.toHaveBeenCalled()
+  })
+
+  it.each([
+    ['v1 mode', settings({ channel_monitor_mode: 'v1' })],
+    ['a missing mode', settings({})],
+  ])('renders V1 once loaded settings carry %s', async (_, loaded) => {
+    getPublicSettings.mockResolvedValue(loaded)
+
+    wrapper = mountView()
+    await flushPromises()
+
+    expect(wrapper.findComponent(ChannelStatusV1View).exists()).toBe(true)
+    expect(wrapper.find('[data-testid="v2"]').exists()).toBe(false)
+    expect(list).toHaveBeenCalledTimes(1)
+  })
+
+  it('falls back to V1 when the settings request fails', async () => {
+    getPublicSettings.mockRejectedValue(new Error('network down'))
+
+    wrapper = mountView()
+    await flushPromises()
+
+    expect(wrapper.find('[data-testid="channel-status-mode-loading"]').exists()).toBe(false)
+    expect(wrapper.findComponent(ChannelStatusV1View).exists()).toBe(true)
   })
 })
