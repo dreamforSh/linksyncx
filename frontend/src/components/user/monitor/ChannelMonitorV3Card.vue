@@ -25,7 +25,7 @@
       </div>
       <div class="channel-signal-card__metric rounded-2xl border border-slate-200/80 bg-slate-50/85 p-3 dark:border-dark-700/50 dark:bg-dark-900/40">
         <div class="text-[10px] font-semibold uppercase tracking-wider text-gray-400">{{ t('channelMonitorV3.successRate') }}</div>
-        <div class="mt-1.5 font-mono text-lg font-bold tabular-nums" :class="availabilityClass">{{ successRate }}</div>
+        <div class="mt-1.5 font-mono text-lg font-bold tabular-nums" :class="availabilityClass" data-testid="channel-status-success-rate">{{ successRate }}</div>
       </div>
       <div class="channel-signal-card__metric rounded-2xl border border-slate-200/80 bg-slate-50/85 p-3 dark:border-dark-700/50 dark:bg-dark-900/40">
         <div class="text-[10px] font-semibold uppercase tracking-wider text-gray-400">{{ t('channelMonitorV3.ttft') }}</div>
@@ -36,8 +36,7 @@
     <ChannelMonitorV3Timeline
       class="channel-signal-card__timeline mt-4"
       :buckets="row.buckets"
-      :countdown-seconds="countdownSeconds"
-      :length="timelineLength"
+      :axis="axis"
     />
   </article>
 </template>
@@ -46,15 +45,23 @@
 import { computed } from 'vue'
 import { useI18n } from 'vue-i18n'
 import type { MonitorMatrixRow } from '@/api/channelMonitorV2'
-import { availabilityTextClass, formatMonitorCacheRate, formatMonitorMs, formatMonitorPercent } from '@/features/channel-monitor-v2/monitorFormat'
+import {
+  availabilityTextClass,
+  formatMonitorCacheRate,
+  formatMonitorMs,
+  formatMonitorPercent,
+  isKnownHealthState,
+  monitorHasTraffic,
+} from '@/features/channel-monitor-v2/monitorFormat'
+import type { ChannelStatusAxisSlot } from '@/features/channel-monitor-v2/channelStatusLayout'
 import { providerGradient, useChannelMonitorFormat } from '@/composables/useChannelMonitorFormat'
 import ProviderIcon from './ProviderIcon.vue'
 import ChannelMonitorV3Timeline from './ChannelMonitorV3Timeline.vue'
 
 const props = withDefaults(defineProps<{
   row: MonitorMatrixRow
-  countdownSeconds: number
-  timelineLength: number
+  /** Shared, page-level time axis; deliberately no per-second countdown prop (it would re-render every card). */
+  axis: ChannelStatusAxisSlot[]
   userRateMultiplier?: number | null
   showPlatformBadge?: boolean
 }>(), {
@@ -71,12 +78,19 @@ const formattedUserRate = computed(() => {
 // Metrics follow the currently selected range (e.g. 90m → the 90m aggregate),
 // matching the range tabs and the summary line above the board.
 const cacheRate = computed(() => formatMonitorCacheRate(props.row.metrics))
-const availabilityPercent = computed(() => (1 - props.row.metrics.error_rate) * 100)
-const successRate = computed(() => formatMonitorPercent(availabilityPercent.value / 100))
-const availabilityClass = computed(() => availabilityTextClass(availabilityPercent.value))
-const ttft = computed(() => formatMonitorMs(props.row.metrics.ttft.p50_ms))
-const showInsufficientSample = computed(() => {
-  const overall = props.row.health.overall
-  return overall !== 'healthy' && overall !== 'warning' && overall !== 'critical'
+// error_rate is 0 for a window without traffic, so 1 - error_rate alone would read as 100%.
+const availabilityPercent = computed(() => (
+  monitorHasTraffic(props.row.metrics, props.row.health) ? (1 - props.row.metrics.error_rate) * 100 : null
+))
+const successRate = computed(() => (
+  availabilityPercent.value == null ? '-' : formatMonitorPercent(availabilityPercent.value / 100)
+))
+const availabilityClass = computed(() => {
+  if (availabilityPercent.value == null) return 'text-gray-400 dark:text-gray-500'
+  // Too few samples for an error-rate band: show the measured rate without a good/bad colour.
+  if (!isKnownHealthState(props.row.health.error_rate)) return 'text-gray-900 dark:text-gray-100'
+  return availabilityTextClass(availabilityPercent.value)
 })
+const ttft = computed(() => formatMonitorMs(props.row.metrics.ttft.p50_ms))
+const showInsufficientSample = computed(() => !isKnownHealthState(props.row.health.overall))
 </script>

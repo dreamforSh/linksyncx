@@ -34,6 +34,26 @@ function cachedNumberFormat(locale: string, key: string, options: Intl.NumberFor
   return format
 }
 
+const dateTimeFormats = new Map<string, Intl.DateTimeFormat>()
+/**
+ * Same reuse rule for dates: never build an Intl.DateTimeFormat per bucket/cell/render.
+ * `key` names the option set (callers keep it stable per options object); an empty or
+ * missing locale uses the runtime default.
+ */
+export function cachedDateTimeFormat(
+  locale: string | undefined,
+  key: string,
+  options: Intl.DateTimeFormatOptions,
+): Intl.DateTimeFormat {
+  const cacheKey = `${locale || ''}|${key}`
+  let format = dateTimeFormats.get(cacheKey)
+  if (!format) {
+    format = new Intl.DateTimeFormat(locale || undefined, options)
+    dateTimeFormats.set(cacheKey, format)
+  }
+  return format
+}
+
 export function formatMonitorNumber(value: number, compactAt = 10000, locale = monitorIntlLocale()): string {
   const notation = value >= compactAt ? 'compact' : 'standard'
   return cachedNumberFormat(locale, `number:${notation}`, {
@@ -89,7 +109,8 @@ export function formatMonitorPercent(value: number, locale = monitorIntlLocale()
  */
 export function availabilityBarClass(value: number | null | undefined): string {
   if (value == null || !Number.isFinite(value)) return 'bg-gray-300 dark:bg-dark-600'
-  if (value < 30) return 'bg-gray-950 dark:bg-black'
+  // Outage band: black on light cards; black would vanish on dark cards, so a deep red there.
+  if (value < 30) return 'bg-gray-950 dark:bg-red-700'
   if (value < 50) return 'bg-red-500 dark:bg-red-400'
   if (value < 60) return 'bg-amber-400 dark:bg-amber-300'
   if (value < 80) return 'bg-yellow-300 dark:bg-yellow-200'
@@ -129,6 +150,33 @@ export function formatMonitorSuccessRate(successRequests: number, requestCount: 
 
 export function formatMonitorSuccessRateFromError(errorRate: number): string {
   return formatMonitorPercent(1 - (errorRate || 0))
+}
+
+const KNOWN_HEALTH_STATES: ReadonlySet<string> = new Set(['healthy', 'warning', 'critical'])
+
+/** True for a health band computed from enough samples (anything but `unknown`/missing). */
+export function isKnownHealthState(state: string | null | undefined): boolean {
+  return state != null && KNOWN_HEALTH_STATES.has(state)
+}
+
+/**
+ * Whether a metric saw any traffic. error_rate is 0 for an empty window, so
+ * `1 - error_rate` would read as a perfect 100% without this guard. User payloads
+ * zero request_count (privacy redaction) and may zero RPM/TPM, so also accept the
+ * signals that survive redaction: a non-zero error rate, latency percentiles and
+ * the health bands, which the backend scores from the real counts.
+ */
+export function monitorHasTraffic(
+  metric: Pick<MonitorMetric, 'request_count' | 'rpm' | 'tpm' | 'error_rate'> & {
+    ttft?: { p50_ms?: number | null } | null
+    duration?: { p50_ms?: number | null } | null
+  },
+  health?: Pick<MonitorHealth, 'overall' | 'error_rate'> | null,
+): boolean {
+  if ((metric.request_count || 0) > 0 || (metric.rpm || 0) > 0 || (metric.tpm || 0) > 0) return true
+  if ((metric.error_rate || 0) > 0) return true
+  if (metric.ttft?.p50_ms != null || metric.duration?.p50_ms != null) return true
+  return isKnownHealthState(health?.overall) || isKnownHealthState(health?.error_rate)
 }
 
 /**

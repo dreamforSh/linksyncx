@@ -11,6 +11,8 @@
             <div class="mt-1.5 flex flex-wrap items-center gap-2 text-xs text-gray-500 dark:text-gray-400">
               <span class="h-2 w-2 rounded-full" :class="refreshing ? 'bg-gray-400' : 'bg-emerald-500'" />
               <span>{{ snapshot ? t('channelMonitorV3.updatedTo', { time: formatTime(snapshot.coverage.data_through) }) : t('common.loading') }}</span>
+              <!-- The only per-second update on the page lives in this component; cards never get the countdown. -->
+              <ChannelMonitorV3Countdown :deadline="nextRefreshAt" class="text-gray-400 dark:text-gray-500" />
               <span v-if="snapshot && !snapshot.coverage.coverage_complete" class="badge badge-warning">{{ t('channelMonitorV3.partialCoverage') }}</span>
             </div>
           </div>
@@ -20,7 +22,7 @@
           <button v-for="option in ranges" :key="option.value" type="button" class="tab !px-2.5 !py-1 text-xs" :class="filter.range === option.value ? 'tab-active' : ''" @click="setRange(option.value)">{{ option.label }}</button>
           <span class="mx-1 hidden h-5 w-px bg-gray-200 dark:bg-dark-700 sm:block" />
           <span class="text-xs text-gray-500 dark:text-gray-400">{{ t('channelMonitorV3.description') }}</span>
-          <span v-if="snapshot" class="ml-auto text-xs font-medium tabular-nums text-gray-500 dark:text-gray-400">{{ t('channelMonitorV3.summary', { success: formatPercent(1 - snapshot.metrics.error_rate), cache: formatMonitorCacheRate(snapshot.metrics) }) }}</span>
+          <span v-if="snapshot" class="ml-auto text-xs font-medium tabular-nums text-gray-500 dark:text-gray-400">{{ t('channelMonitorV3.summary', { success: summarySuccessRate, cache: formatMonitorCacheRate(snapshot.metrics) }) }}</span>
         </div>
         <div
           class="signal-channel-platforms flex flex-wrap items-center gap-1.5 border-t border-gray-100 px-4 py-2.5 dark:border-dark-700 sm:px-5"
@@ -69,8 +71,7 @@
                 :key="row.group_id ?? `${row.platform}:${row.group_name ?? ''}`"
                 :row="row"
                 :user-rate-multiplier="getUserRateMultiplier(row.group_id)"
-                :countdown-seconds="countdownSeconds"
-                :timeline-length="timelineLength"
+                :axis="axis"
               />
             </div>
           </template>
@@ -87,19 +88,19 @@
               <ChannelMonitorV3Card
                 :row="item.row"
                 :user-rate-multiplier="getUserRateMultiplier(item.row.group_id)"
-                :countdown-seconds="countdownSeconds"
-                :timeline-length="timelineLength"
+                :axis="axis"
               />
             </div>
           </div>
         </section>
       </div>
+      <ChannelMonitorV3Tooltip :id="timelineTooltipId" :state="timelineTooltip" />
     </div>
   </AppLayout>
 </template>
 
 <script setup lang="ts">
-import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
+import { computed, onBeforeUnmount, onMounted, provide, reactive, ref, useId, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import AppLayout from '@/components/layout/AppLayout.vue'
 import EmptyState from '@/components/common/EmptyState.vue'
@@ -111,9 +112,27 @@ import userGroupsAPI from '@/api/groups'
 import type { MonitorDimensions, MonitorFilter, MonitorMatrixResponse, MonitorRange, MonitorSnapshot } from '@/api/channelMonitorV2'
 import type { Group } from '@/types'
 import ChannelMonitorV3Card from '@/components/user/monitor/ChannelMonitorV3Card.vue'
+import ChannelMonitorV3Countdown from '@/components/user/monitor/ChannelMonitorV3Countdown.vue'
+import ChannelMonitorV3Tooltip from '@/components/user/monitor/ChannelMonitorV3Tooltip.vue'
+import { createV3TooltipState, V3_TOOLTIP_HOST } from '@/components/user/monitor/v3TimelineTooltip'
 import { useChannelMonitorFormat } from '@/composables/useChannelMonitorFormat'
-import { formatMonitorCacheRate, formatMonitorPercent } from '@/features/channel-monitor-v2/monitorFormat'
-import { buildChannelStatusLayout, channelStatusLayoutBlockKey } from '@/features/channel-monitor-v2/channelStatusLayout'
+import {
+  cachedDateTimeFormat,
+  formatMonitorCacheRate,
+  formatMonitorPercent,
+  monitorHasTraffic,
+} from '@/features/channel-monitor-v2/monitorFormat'
+import {
+  buildChannelStatusAxis,
+  buildChannelStatusLayout,
+  channelStatusLayoutBlockKey,
+  labelChannelStatusAxis,
+} from '@/features/channel-monitor-v2/channelStatusLayout'
+
+const DEFAULT_REFRESH_SECONDS = 60
+const MIN_REFRESH_SECONDS = 10
+const BOOTSTRAP_REFRESH_SECONDS = 10
+const FAILURE_RETRY_SECONDS = 30
 
 const { t, locale } = useI18n()
 const appStore = useAppStore()
@@ -131,10 +150,17 @@ const dimensions = ref<MonitorDimensions | null>(null)
 const loading = ref(true)
 const refreshing = ref(false)
 const userGroupRates = ref<Record<number, number>>({})
-const countdownSeconds = ref(0)
+/** Epoch ms of the next auto refresh: arms the refresh timer and drives the countdown. */
+const nextRefreshAt = ref<number | null>(null)
 let controller: AbortController | null = null
 let refreshTimer: number | null = null
-let countdownTimer: number | null = null
+let refreshIntervalSeconds = DEFAULT_REFRESH_SECONDS
+let disposed = false
+
+// One tooltip for every timeline on the board (instead of a Teleport per bar or per card).
+const timelineTooltip = reactive(createV3TooltipState())
+const timelineTooltipId = `channel-status-tooltip-${useId()}`
+provide(V3_TOOLTIP_HOST, { id: timelineTooltipId, state: timelineTooltip })
 
 // platform_group is intentionally used here: the backend scopes it to the
 // monitor group_ids selected by the operator, so unrelated groups never appear.
@@ -162,10 +188,23 @@ const platformFilters = computed(() => (dimensions.value?.platforms ?? []).map(i
   value: item.value,
   label: providerLabel(item.value),
 })))
-const timelineLength = computed(() => ({ '90m': 18, '24h': 24, '7d': 14, '30d': 30 })[filter.value.range])
+// Time axis of the selected range, built once and shared by every card. The backend only
+// returns buckets that had traffic; cards place them on this axis by bucket_start.
+const axis = computed(() => labelChannelStatusAxis(
+  buildChannelStatusAxis(matrix.value?.coverage),
+  locale.value || undefined,
+  time => t('channelMonitorV2.matrix.noTrafficAt', { time }),
+))
+const summarySuccessRate = computed(() => {
+  const current = snapshot.value
+  if (!current || !monitorHasTraffic(current.metrics, current.health)) return '-'
+  return formatMonitorPercent(1 - current.metrics.error_rate, locale.value || 'zh-CN')
+})
 
-function formatPercent(value: number) { return formatMonitorPercent(value, locale.value || 'zh-CN') }
-function formatTime(value?: string) { if (!value) return '-'; return new Intl.DateTimeFormat(locale.value || undefined, { dateStyle: 'short', timeStyle: 'short' }).format(new Date(value)) }
+function formatTime(value?: string) {
+  if (!value) return '-'
+  return cachedDateTimeFormat(locale.value || undefined, 'short-date-time', { dateStyle: 'short', timeStyle: 'short' }).format(new Date(value))
+}
 function setRange(value: MonitorRange) { filter.value = { ...filter.value, range: value } }
 function setPlatform(value: string | null) {
   const next = value ? [value] : []
@@ -198,6 +237,9 @@ async function reload(silent = true) {
   controller?.abort()
   const request = new AbortController()
   controller = request
+  // Every reload ends by arming exactly one next refresh (success or failure).
+  clearRefreshTimer()
+  nextRefreshAt.value = null
   refreshing.value = true
   if (!silent) loading.value = true
   try {
@@ -212,34 +254,57 @@ async function reload(silent = true) {
     snapshot.value = nextSnapshot
     matrix.value = nextMatrix
     if (nextDimensions) dimensions.value = nextDimensions
-    scheduleRefresh(nextSnapshot.coverage.bootstrap?.active ? 10 : nextSnapshot.config.refresh_interval_seconds)
+    refreshIntervalSeconds = nextSnapshot.config.refresh_interval_seconds || refreshIntervalSeconds
+    scheduleRefresh(nextSnapshot.coverage.bootstrap?.active ? BOOTSTRAP_REFRESH_SECONDS : refreshIntervalSeconds)
   } catch (error) {
+    // Superseded by a newer reload (which owns the schedule) or torn down on unmount.
+    if (request.signal.aborted || controller !== request) return
     const e = error as { name?: string; code?: string }
     if (e.name !== 'AbortError' && e.code !== 'ERR_CANCELED') appStore.showError(extractApiErrorMessage(error, t('channelMonitorV3.loadFailed')))
+    // Retry failures too, including a failed first load, never later than the normal cadence.
+    scheduleRefresh(Math.min(refreshIntervalSeconds, FAILURE_RETRY_SECONDS))
   } finally {
     if (controller === request) { loading.value = false; refreshing.value = false }
   }
 }
 
+function clearRefreshTimer() {
+  if (refreshTimer != null) window.clearTimeout(refreshTimer)
+  refreshTimer = null
+}
+
+// A single deadline arms the timer and feeds the countdown, so they cannot drift apart.
 function scheduleRefresh(seconds: number) {
-  const interval = Math.max(10, seconds)
-  if (refreshTimer) window.clearInterval(refreshTimer)
-  if (countdownTimer) window.clearInterval(countdownTimer)
-  countdownSeconds.value = interval
-  countdownTimer = window.setInterval(() => {
-    if (!document.hidden && countdownSeconds.value > 0) countdownSeconds.value -= 1
-  }, 1000)
-  refreshTimer = window.setInterval(() => {
-    if (!loading.value && !refreshing.value && !document.hidden) void reload(true)
-  }, interval * 1000)
+  clearRefreshTimer()
+  if (disposed) return
+  const delay = Math.max(MIN_REFRESH_SECONDS, seconds) * 1000
+  nextRefreshAt.value = Date.now() + delay
+  refreshTimer = window.setTimeout(onRefreshDue, delay)
+}
+
+function onRefreshDue() {
+  refreshTimer = null
+  // A hidden tab does not poll; the due refresh runs as soon as the tab is visible again.
+  if (document.hidden) return
+  void reload(true)
+}
+
+function onVisibilityChange() {
+  if (document.hidden || refreshTimer != null || refreshing.value) return
+  if (nextRefreshAt.value != null && Date.now() >= nextRefreshAt.value) void reload(true)
 }
 
 watch(() => filter.value.range, () => void reload(false))
 watch(() => filter.value.platforms, () => void reload(false))
-onMounted(() => { void loadUserGroupRates(); void reload(false) })
+onMounted(() => {
+  document.addEventListener('visibilitychange', onVisibilityChange)
+  void loadUserGroupRates()
+  void reload(false)
+})
 onBeforeUnmount(() => {
+  disposed = true
+  document.removeEventListener('visibilitychange', onVisibilityChange)
   controller?.abort()
-  if (refreshTimer) window.clearInterval(refreshTimer)
-  if (countdownTimer) window.clearInterval(countdownTimer)
+  clearRefreshTimer()
 })
 </script>
