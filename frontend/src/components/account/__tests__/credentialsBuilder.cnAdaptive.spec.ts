@@ -7,6 +7,7 @@ describe('cnSupportsNativeResponses', () => {
     expect(cnSupportsNativeResponses('deepseek')).toBe(true)
     expect(cnSupportsNativeResponses('kimi')).toBe(true)
     expect(cnSupportsNativeResponses('minimax')).toBe(true)
+    expect(cnSupportsNativeResponses('command_code')).toBe(true)
     expect(cnSupportsNativeResponses('zhipu')).toBe(false)
     expect(cnSupportsNativeResponses('openai')).toBe(false)
   })
@@ -55,5 +56,13 @@ describe('defaultCNAdaptiveBaseUrls', () => {
     }
     expect(defaultCNAdaptiveBaseUrls('minimax', 'payg')).toEqual(expected)
     expect(defaultCNAdaptiveBaseUrls('minimax', 'coding')).toEqual(expected)
+  })
+
+  it('resolves Command Code provider endpoints', () => {
+    expect(defaultCNAdaptiveBaseUrls('command_code', 'payg')).toEqual({
+      chat_completions: 'https://api.commandcode.ai/provider/v1',
+      anthropic: 'https://api.commandcode.ai/provider',
+      responses: 'https://api.commandcode.ai/provider/v1'
+    })
   })
 })

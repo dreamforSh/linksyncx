@@ -107,6 +107,7 @@ func (s *CNProviderBalanceCheckService) runOnce() {
 	}
 	var quotaTargets []quotaTarget
 	var paygTargets []*Account
+	var commandTargets []*Account
 	collect := func(platform string, accounts []Account) {
 		for i := range accounts {
 			account := &accounts[i]
@@ -151,11 +152,22 @@ func (s *CNProviderBalanceCheckService) runOnce() {
 			}
 			collect(platform, accounts)
 		}
+		accounts, err := s.accountRepo.ListByPlatform(context.Background(), PlatformCommandCode)
+		if err != nil {
+			log.Printf("[CNBalance] list %s accounts failed: %v", PlatformCommandCode, err)
+		} else {
+			for i := range accounts {
+				account := &accounts[i]
+				if account.IsActive() && account.commandCodeUsageSupported() {
+					commandTargets = append(commandTargets, account)
+				}
+			}
+		}
 	}
 
 	// 预算按工作量放大：4 并发 × 15s/批 + payg 每账号 5s，下限 30s 上限 300s。
 	batches := (len(quotaTargets) + cnQuotaProbeConcurrency - 1) / cnQuotaProbeConcurrency
-	timeout := 30*time.Second + time.Duration(batches)*15*time.Second + time.Duration(len(paygTargets))*5*time.Second
+	timeout := 30*time.Second + time.Duration(batches+len(commandTargets))*15*time.Second + time.Duration(len(paygTargets))*5*time.Second
 	if timeout > 300*time.Second {
 		timeout = 300 * time.Second
 	}
@@ -186,6 +198,14 @@ func (s *CNProviderBalanceCheckService) runOnce() {
 			}(target)
 		}
 		wg.Wait()
+	}
+	for _, account := range commandTargets {
+		switch s.checkCommandCode(ctx, account, threshold) {
+		case cnBalancePaused:
+			paused++
+		case cnBalanceCleared:
+			cleared++
+		}
 	}
 
 	if paused > 0 || cleared > 0 {
@@ -225,6 +245,19 @@ func (s *CNProviderBalanceCheckService) checkOne(ctx context.Context, account *A
 		return cnBalanceNoChange
 	}
 
+	return s.applyBalanceResult(ctx, account, result, threshold)
+}
+
+// checkCommandCode 探测 Command Code 的积分余额，并复用余额型账号的停调/恢复逻辑。
+func (s *CNProviderBalanceCheckService) checkCommandCode(ctx context.Context, account *Account, threshold float64) cnBalanceCheckOutcome {
+	result, err := s.quotaService.QueryUsage(ctx, account.ID)
+	if err != nil || result == nil || !result.Success || result.Balance == nil {
+		return cnBalanceNoChange
+	}
+	return s.applyBalanceResult(ctx, account, result.Balance, threshold)
+}
+
+func (s *CNProviderBalanceCheckService) applyBalanceResult(ctx context.Context, account *Account, result *CNProviderBalanceResult, threshold float64) cnBalanceCheckOutcome {
 	// 双币种（deepseek CNY+USD）任一币种余额达标即可继续调度；仅当全部低于
 	// 阈值（或不可用）才停调。
 	low := !result.Available || allCNBalancesBelowThreshold(result, threshold)

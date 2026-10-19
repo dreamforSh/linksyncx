@@ -29,7 +29,11 @@ vi.mock('@/api/admin', () => ({
 }))
 
 vi.mock('@/api/admin/accounts', () => ({
-  getAntigravityDefaultModelMapping: vi.fn()
+  getAntigravityDefaultModelMapping: vi.fn().mockResolvedValue({
+    'gemini-3.1-flash-image': 'gemini-3.1-flash-image',
+    'gemini-2.5-flash-image': 'gemini-2.5-flash-image',
+    'gpt-5.3-codex': 'gpt-5.3-codex'
+  })
 }))
 
 vi.mock('vue-i18n', async () => {
@@ -130,6 +134,7 @@ describe('BulkEditAccountModal', () => {
     const selector = wrapper.findComponent(ModelWhitelistSelector)
     expect(selector.exists()).toBe(true)
 
+    await flushPromises()
     await selector.find('div.cursor-pointer').trigger('click')
 
     expect(wrapper.text()).toContain('gemini-3.1-flash-image')

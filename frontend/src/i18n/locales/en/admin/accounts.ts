@@ -144,6 +144,7 @@ export default {
         deepseek: 'DeepSeek',
         minimax: 'MiniMax',
         opencode_go: 'OpenCode',
+        command_code: 'Command Code',
       },
       cnProviders: {
         accountMode: {

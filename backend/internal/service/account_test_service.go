@@ -439,7 +439,7 @@ func (s *AccountTestService) TestAccountConnection(c *gin.Context, accountID int
 		return s.routeAntigravityTest(c, account, modelID, prompt)
 	}
 
-	if account.IsOpenCodeGo() {
+	if account.IsOpenCodeGo() || account.IsCommandCode() {
 		return s.testOpenCodeGoAccountConnection(c, account, modelID, prompt)
 	}
 
@@ -456,14 +456,22 @@ func (s *AccountTestService) TestAccountConnection(c *gin.Context, accountID int
 func (s *AccountTestService) testOpenCodeGoAccountConnection(c *gin.Context, account *Account, modelID string, prompt string) error {
 	testModelID := strings.TrimSpace(modelID)
 	if testModelID == "" {
-		testModelID = DefaultOpenCodeGoTestModel
+		if account.IsCommandCode() {
+			testModelID = DefaultCommandCodeTestModel
+		} else {
+			testModelID = DefaultOpenCodeGoTestModel
+		}
 	}
 	testModelID = account.GetMappedModel(testModelID)
 	proto := account.GetAPIProtocol()
 	switch proto {
 	case APIProtocolChatCompletions, APIProtocolAnthropic, APIProtocolResponses:
 	default:
-		proto = openCodeGoNativeProtocol(account, testModelID)
+		if account.IsCommandCode() {
+			proto = commandCodeNativeProtocol(account, testModelID)
+		} else {
+			proto = openCodeGoNativeProtocol(account, testModelID)
+		}
 	}
 	switch proto {
 	case APIProtocolAnthropic:

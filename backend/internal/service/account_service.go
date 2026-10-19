@@ -533,7 +533,7 @@ func (s *AccountService) TestCredentials(ctx context.Context, id int64) error {
 	case PlatformCodeBuddy:
 		// CodeBuddy 凭证经扫码登录/令牌刷新与网关测试连接验证。
 		return nil
-	case PlatformKimi, PlatformZhipu, PlatformDeepseek, PlatformMiniMax, PlatformOpenCodeGo:
+	case PlatformKimi, PlatformZhipu, PlatformDeepseek, PlatformMiniMax, PlatformOpenCodeGo, PlatformCommandCode:
 		// 国产 OpenAI 兼容供应商与 OpenCode：凭证为 API Key，实际可用性经余额/额度探测与转发路径验证。
 		return nil
 	default:
