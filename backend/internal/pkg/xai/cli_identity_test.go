@@ -17,7 +17,7 @@ func TestResolveCLIVersionDefaultsToPinnedClientVersion(t *testing.T) {
 
 func TestResolveCLIVersionAcceptsValidOverride(t *testing.T) {
 	for _, version := range []string{
-		"1.0.47-alpha.1",
+		"1.0.63-alpha.1",
 		"1.1.0",
 		// Overrides may sit below the pin as long as the proxy still accepts them.
 		"1.0.13",
@@ -35,7 +35,7 @@ func TestResolveCLIVersionRejectsUnsafeOrTooOld(t *testing.T) {
 		"0.2.120",
 		"1.0.12",
 		"1.0.13-beta.1",
-		"1.0.46\r\nX-Injected: true",
+		"1.0.62\r\nX-Injected: true",
 		"1.0.046",
 		"1.1",
 		"1",
@@ -48,9 +48,9 @@ func TestResolveCLIVersionRejectsUnsafeOrTooOld(t *testing.T) {
 }
 
 func TestCLIUserAgentMatchesGrokBuildTUI(t *testing.T) {
-	// Grok Build 1.0.46 TUI sends "grok-pager/1.0.46 grok-shell/1.0.46 (windows; x86_64)"
+	// Grok Build 1.0.62 TUI sends "grok-pager/1.0.62 grok-shell/1.0.62 (windows; x86_64)"
 	// on Windows; the gateway advertises the macOS build.
-	require.Equal(t, "grok-pager/1.0.46 grok-shell/1.0.46 (macos; aarch64)", CLIUserAgent("1.0.46"))
+	require.Equal(t, "grok-pager/1.0.62 grok-shell/1.0.62 (macos; aarch64)", CLIUserAgent("1.0.62"))
 	require.Equal(t, CLIUserAgent(CLIClientVersion), CLIUserAgent(" "))
 }
 

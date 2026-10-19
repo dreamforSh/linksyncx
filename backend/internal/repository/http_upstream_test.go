@@ -483,14 +483,14 @@ func TestApplyGrokCLIProxyHeaders(t *testing.T) {
 	})
 
 	t.Run("accepts a valid operator override", func(t *testing.T) {
-		t.Setenv("XAI_GROK_CLI_VERSION", "1.0.47-alpha.1")
+		t.Setenv("XAI_GROK_CLI_VERSION", "1.0.63-alpha.1")
 		req, err := http.NewRequest(http.MethodPost, "https://cli-chat-proxy.grok.com/v1/chat/completions", nil)
 		require.NoError(t, err)
 
 		applyGrokCLIProxyHeaders(req)
 
-		require.Equal(t, "1.0.47-alpha.1", req.Header.Get("x-grok-client-version"))
-		require.Equal(t, xai.CLIUserAgent("1.0.47-alpha.1"), req.Header.Get("User-Agent"))
+		require.Equal(t, "1.0.63-alpha.1", req.Header.Get("x-grok-client-version"))
+		require.Equal(t, xai.CLIUserAgent("1.0.63-alpha.1"), req.Header.Get("User-Agent"))
 	})
 
 	t.Run("accepts an override between the floor and the pin", func(t *testing.T) {
