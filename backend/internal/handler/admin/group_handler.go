@@ -187,7 +187,7 @@ func sanitizeUpdateGroupRequestForSimpleMode(req *UpdateGroupRequest) {
 type CreateGroupRequest struct {
 	Name        string `json:"name" binding:"required"`
 	Description string `json:"description"`
-	Platform    string `json:"platform" binding:"omitempty,oneof=anthropic openai gemini antigravity grok perplexity codebuddy kimi zhipu deepseek minimax opencode_go composite"`
+	Platform    string `json:"platform" binding:"omitempty,oneof=anthropic openai gemini antigravity grok perplexity codebuddy kimi zhipu deepseek minimax opencode_go command_code composite"`
 	// Kind 分组类型：channel（默认）渠道分组 / managed 管理分组；Category 仅管理分组使用。
 	Kind     string `json:"kind" binding:"omitempty,oneof=channel managed"`
 	Category string `json:"category" binding:"omitempty,oneof=enterprise team"`
@@ -266,7 +266,7 @@ type CreateGroupRequest struct {
 type UpdateGroupRequest struct {
 	Name        string  `json:"name"`
 	Description *string `json:"description"`
-	Platform    string  `json:"platform" binding:"omitempty,oneof=anthropic openai gemini antigravity grok perplexity codebuddy kimi zhipu deepseek minimax opencode_go composite"`
+	Platform    string  `json:"platform" binding:"omitempty,oneof=anthropic openai gemini antigravity grok perplexity codebuddy kimi zhipu deepseek minimax opencode_go command_code composite"`
 	// Kind 创建后不可修改，仅用于校验；Category 为 nil 表示不修改（由服务层校验取值）。
 	Kind                      string                         `json:"kind" binding:"omitempty,oneof=channel managed"`
 	Category                  *string                        `json:"category"`
@@ -344,7 +344,7 @@ type UpdateGroupRequest struct {
 type CompositeRouteRequest struct {
 	PublicModel    string `json:"public_model" binding:"required"`
 	MatchType      string `json:"match_type" binding:"omitempty,oneof=exact prefix"`
-	TargetPlatform string `json:"target_platform" binding:"required,oneof=anthropic openai gemini antigravity grok perplexity codebuddy kimi zhipu deepseek minimax opencode_go"`
+	TargetPlatform string `json:"target_platform" binding:"required,oneof=anthropic openai gemini antigravity grok perplexity codebuddy kimi zhipu deepseek minimax opencode_go command_code"`
 	UpstreamModel  string `json:"upstream_model"`
 	Endpoint       string `json:"endpoint" binding:"omitempty,oneof=any messages count_tokens responses chat_completions embeddings images gemini"`
 	Priority       int    `json:"priority"`

@@ -283,8 +283,21 @@
                 : 'text-gray-600 hover:text-gray-900 dark:text-gray-400 dark:hover:text-gray-200'
             ]"
           >
-            <PlatformIcon platform="opencode_go" size="sm" />
-            OpenCode
+           <PlatformIcon platform="opencode_go" size="sm" />
+           OpenCode
+          </button>
+          <button
+            type="button"
+            @click="selectCommandCodePlatform()"
+            :class="[
+              'flex flex-1 items-center justify-center gap-2 rounded-md px-3 py-2.5 text-sm font-medium transition-all',
+              form.platform === 'command_code'
+                ? 'bg-white text-slate-700 shadow-sm dark:bg-dark-600 dark:text-slate-300'
+                : 'text-gray-600 hover:text-gray-900 dark:text-gray-400 dark:hover:text-gray-200'
+            ]"
+          >
+            <PlatformIcon platform="command_code" size="sm" />
+            Command Code
           </button>
         </div>
       </div>
@@ -4247,6 +4260,7 @@ const apiKeyValuePlaceholder = computed(() => {
       return 'sk-...'
     case 'minimax':
     case 'opencode_go':
+    case 'command_code':
       return 'sk-...'
     default:
       return 'sk-ant-...'
@@ -4411,7 +4425,8 @@ const adaptiveBaseUrls = ref<Record<CnNativeApiProtocol, string>>({
 })
 const isCNPlatform = computed(() => isCNProviderPlatform(form.platform))
 const isOpenCodeGoPlatform = computed(() => form.platform === 'opencode_go')
-const isMultiProtocolPlatform = computed(() => isCNPlatform.value || isOpenCodeGoPlatform.value)
+const isCommandCodePlatform = computed(() => form.platform === 'command_code')
+const isMultiProtocolPlatform = computed(() => isCNPlatform.value || isOpenCodeGoPlatform.value || isCommandCodePlatform.value)
 function currentOpenCodeOrCNMode(): CnAccountMode | OpenCodeAccountMode {
   return isOpenCodeGoPlatform.value ? openCodeAccountMode.value : accountMode.value
 }
@@ -4423,8 +4438,9 @@ const cnPresetPlatform = computed<CnProviderPlatform>(() => {
   }
   return 'kimi'
 })
-const adaptivePresetPlatform = computed<CnProviderPlatform | 'opencode_go'>(() => {
+const adaptivePresetPlatform = computed<CnProviderPlatform | 'opencode_go' | 'command_code'>(() => {
   if (form.platform === 'opencode_go') return 'opencode_go'
+  if (form.platform === 'command_code') return 'command_code'
   return cnPresetPlatform.value
 })
 // 当前平台可选的协议档（responses 仅 deepseek / kimi）。
@@ -4449,7 +4465,7 @@ const cnAdaptiveProtocolOptions = computed<Array<{ value: CnNativeApiProtocol; l
 })
 
 function resetAdaptiveBaseUrls(
-  platform: CnProviderPlatform | 'opencode_go',
+  platform: CnProviderPlatform | 'opencode_go' | 'command_code',
   mode: CnAccountMode | OpenCodeAccountMode
 ) {
   adaptiveBaseUrls.value = defaultCNAdaptiveBaseUrls(platform, mode)
@@ -4467,6 +4483,8 @@ const cnAccentActiveClass = computed(() => {
       return 'border-rose-500 bg-rose-50 dark:bg-rose-900/20'
     case 'opencode_go':
       return 'border-amber-500 bg-amber-50 dark:bg-amber-900/20'
+    case 'command_code':
+      return 'border-slate-500 bg-slate-50 dark:bg-slate-900/20'
     default:
       return 'border-primary-500 bg-primary-50 dark:bg-primary-900/20'
   }
@@ -4483,6 +4501,8 @@ const cnAccentIconClass = computed(() => {
       return 'bg-rose-500 text-white'
     case 'opencode_go':
       return 'bg-amber-500 text-white'
+    case 'command_code':
+      return 'bg-slate-500 text-white'
     default:
       return 'bg-primary-500 text-white'
   }
@@ -4509,6 +4529,14 @@ function selectOpenCodeGoPlatform() {
   apiKeyBaseUrl.value = defaultCNBaseUrl('opencode_go', openCodeAccountMode.value, 'adaptive')
   resetAdaptiveBaseUrls('opencode_go', openCodeAccountMode.value)
   openCodeGoProtocolRules.value = cloneOpenCodeGoProtocolRules(defaultOpenCodeProtocolRules(openCodeAccountMode.value))
+}
+function selectCommandCodePlatform() {
+  form.platform = 'command_code'
+  form.type = 'apikey'
+  accountCategory.value = 'apikey'
+  apiProtocol.value = 'adaptive'
+  apiKeyBaseUrl.value = defaultCNBaseUrl('command_code', 'payg', 'adaptive')
+  resetAdaptiveBaseUrls('command_code', 'payg')
 }
 // Perplexity 只有网页会话（apikey）一种账号形态：选中即锁定 apikey 类型，
 // base url 留空由后端回落 https://www.perplexity.ai。
@@ -4541,7 +4569,8 @@ watch(openCodeAccountMode, (mode, previousMode) => {
   }
 })
 watch(accountMode, (mode, previousMode) => {
-  if (!isMultiProtocolPlatform.value || isOpenCodeGoPlatform.value) return
+  // OpenCode 有自己的账号形态，Command Code 没有账号形态，均不跟随国产供应商的 accountMode。
+  if (!isMultiProtocolPlatform.value || isOpenCodeGoPlatform.value || isCommandCodePlatform.value) return
   if (apiProtocol.value === 'adaptive') {
     const previousDefaults = defaultCNAdaptiveBaseUrls(adaptivePresetPlatform.value, previousMode)
     const nextDefaults = defaultCNAdaptiveBaseUrls(adaptivePresetPlatform.value, mode)
@@ -5063,6 +5092,7 @@ const canExchangeCode = computed(() => {
 function selectPlatformForGroup(platform: string) {
   if (isCNProviderPlatform(platform)) selectCNPlatform(platform)
   else if (platform === 'opencode_go') selectOpenCodeGoPlatform()
+  else if (platform === 'command_code') selectCommandCodePlatform()
   else if (platform === 'perplexity') selectPerplexityPlatform()
   else form.platform = platform as AccountPlatform
 }
@@ -5151,7 +5181,7 @@ watch(
   () => form.platform,
   (newPlatform) => {
     // Reset base URL based on platform
-    if (isCNProviderPlatform(newPlatform) || newPlatform === 'opencode_go') {
+    if (isCNProviderPlatform(newPlatform) || newPlatform === 'opencode_go' || newPlatform === 'command_code') {
       const mode = newPlatform === 'opencode_go' ? openCodeAccountMode.value : accountMode.value
       apiKeyBaseUrl.value = defaultCNBaseUrl(newPlatform, mode, apiProtocol.value)
     } else {
@@ -6219,8 +6249,10 @@ const handleSubmit = async () => {
   // 国产供应商：账号模式 + 协议 + 对应端点写入凭据；后端按 account_mode 路由
   // 额度/余额探测，按 api_protocol 路由转发端点与格式。注意 CN apikey 走本函数
   // 的通用路径（直接 doCreateAccount），不经过 createAccountAndFinish。
-  if (isCNProviderPlatform(form.platform) || form.platform === 'opencode_go') {
-    credentials.account_mode = form.platform === 'opencode_go' ? openCodeAccountMode.value : accountMode.value
+  if (isCNProviderPlatform(form.platform) || form.platform === 'opencode_go' || form.platform === 'command_code') {
+    if (form.platform !== 'command_code') {
+      credentials.account_mode = form.platform === 'opencode_go' ? openCodeAccountMode.value : accountMode.value
+    }
     credentials.api_protocol = apiProtocol.value
     if (apiProtocol.value === 'adaptive') {
       const defaults = defaultCNAdaptiveBaseUrls(

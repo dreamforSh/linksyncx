@@ -806,6 +806,9 @@ function syncQuery() {
       health_mode: healthMode.value,
       trend_view: trendView.value === 'line' ? 'line' : undefined,
       tab: activeTab.value,
+      // ChannelStatusView picks this legacy page by ?monitor_view=v2; dropping it would
+      // switch the page to V3 on the next query change.
+      monitor_view: route.query.monitor_view === 'v2' ? 'v2' : undefined,
     },
   })
 }

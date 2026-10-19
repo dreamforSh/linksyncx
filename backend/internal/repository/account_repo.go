@@ -635,7 +635,9 @@ func lockAndMergeAccountProbeExtra(
 		SELECT
 			platform = $2
 			AND type = $3
-			AND credentials = $4::jsonb
+			-- custom_usage_secrets 由专用端点管理，调用方传入的凭证通常不带它；
+			-- 不能把它的有无当成凭证身份变化（否则会误清计费探针快照）。
+			AND (credentials - 'custom_usage_secrets') = ($4::jsonb - 'custom_usage_secrets')
 			AND proxy_id IS NOT DISTINCT FROM $5,
 			COALESCE(
 				platform IN (`+ollamaCloudUsagePlatformsSQL+`)
@@ -675,7 +677,9 @@ func lockAndMergeAccountProbeExtra(
 				false
 			),
 			extra -> 'opencode_go_usage_auto_refresh',
-			extra -> 'opencode_go_usage_snapshot'
+			extra -> 'opencode_go_usage_snapshot',
+			COALESCE(extra, '{}'::jsonb),
+			credentials -> 'custom_usage_secrets'
 		FROM accounts
 		WHERE id = $1 AND deleted_at IS NULL
 		FOR NO KEY UPDATE
@@ -704,6 +708,8 @@ func lockAndMergeAccountProbeExtra(
 		currentOllamaSnapshot          []byte
 		currentOpenCodeAutoRefresh     []byte
 		currentOpenCodeSnapshot        []byte
+		currentExtraJSON               []byte
+		currentCustomUsageSecrets      []byte
 	)
 	if err := rows.Scan(
 		&identityUnchanged,
@@ -718,6 +724,8 @@ func lockAndMergeAccountProbeExtra(
 		&opencodeGroupIdentityUnchanged,
 		&currentOpenCodeAutoRefresh,
 		&currentOpenCodeSnapshot,
+		&currentExtraJSON,
+		&currentCustomUsageSecrets,
 	); err != nil {
 		return nil, err
 	}
@@ -726,6 +734,28 @@ func lockAndMergeAccountProbeExtra(
 	}
 
 	extra := copyJSONMap(normalizeJSONMap(account.Extra))
+
+	// Custom usage config/secrets are managed by their dedicated endpoints.
+	// Preserve the locked DB values so a generic account edit (whose DTO is
+	// redacted) can never erase or forge them.
+	var currentExtra map[string]any
+	if len(currentExtraJSON) > 0 {
+		_ = json.Unmarshal(currentExtraJSON, &currentExtra)
+	}
+	delete(extra, service.CustomUsageExtraKey)
+	if currentConfig, exists := currentExtra[service.CustomUsageExtraKey]; exists {
+		extra[service.CustomUsageExtraKey] = currentConfig
+	}
+	managedSecrets, _, err := decodeAccountExtraJSON(currentCustomUsageSecrets)
+	if err != nil {
+		return nil, err
+	}
+	account.Credentials = copyJSONMap(normalizeJSONMap(account.Credentials))
+	delete(account.Credentials, service.CustomUsageCredentialsKey)
+	if managedSecrets != nil {
+		account.Credentials[service.CustomUsageCredentialsKey] = managedSecrets
+	}
+
 	for _, key := range []string{
 		service.UpstreamBillingProbeEnabledExtraKey,
 		service.UpstreamBillingRateSyncEnabledExtraKey,
@@ -871,7 +901,10 @@ func (r *accountRepository) UpdateCredentials(ctx context.Context, id int64, cre
 	result, err := client.ExecContext(ctx, `
 		UPDATE accounts
 		SET
-			credentials = $1::jsonb,
+			credentials = ($1::jsonb - 'custom_usage_secrets')
+				|| CASE WHEN credentials ? 'custom_usage_secrets'
+					THEN jsonb_build_object('custom_usage_secrets', credentials -> 'custom_usage_secrets')
+					ELSE '{}'::jsonb END,
 			extra = CASE
 				-- 正确性依赖（非防御）：OpenCode 分支必须先于 Ollama 分支求值。两分支
 				-- 的 WHEN 并不互斥：Ollama 分支的守卫是宽谓词——NOT(ollamaMatch(old)
@@ -884,7 +917,7 @@ func (r *accountRepository) UpdateCredentials(ctx context.Context, id int64, cre
 				-- ollama.com 基址正则）：Ollama 行不会被 OpenCode 分支遮蔽；
 				-- opencode_go 平台行不在 Ollama 白名单内，与 Ollama 分支真互斥。
 				WHEN type = 'apikey'
-					AND credentials IS DISTINCT FROM $1::jsonb
+					AND (credentials - 'custom_usage_secrets') IS DISTINCT FROM ($1::jsonb - 'custom_usage_secrets')
 					AND (
 						-- 旧行按新谓词属于 OpenCode 用量身份
 						(platform = 'opencode_go'
@@ -915,7 +948,7 @@ func (r *accountRepository) UpdateCredentials(ctx context.Context, id int64, cre
 				-- 非 Ollama 账号的无变化持久化误清探测快照或重写 NULL extra。
 				WHEN platform IN (`+ollamaCloudUsagePlatformsSQL+`)
 					AND type = 'apikey'
-					AND credentials IS DISTINCT FROM $1::jsonb
+					AND (credentials - 'custom_usage_secrets') IS DISTINCT FROM ($1::jsonb - 'custom_usage_secrets')
 					AND (
 						credentials -> 'api_key' IS DISTINCT FROM $1::jsonb -> 'api_key'
 						OR NOT (
@@ -931,7 +964,7 @@ func (r *accountRepository) UpdateCredentials(ctx context.Context, id int64, cre
 				-- 上游倍率探测已放宽到全部 API-key 平台：凭证变化即视为探测
 				-- 身份变化，丢弃 stale 快照。
 				WHEN type = 'apikey'
-					AND credentials IS DISTINCT FROM $1::jsonb
+					AND (credentials - 'custom_usage_secrets') IS DISTINCT FROM ($1::jsonb - 'custom_usage_secrets')
 				THEN COALESCE(extra, '{}'::jsonb) - 'upstream_billing_probe'
 				ELSE extra
 			END,
@@ -3312,6 +3345,29 @@ func (r *accountRepository) BulkUpdate(ctx context.Context, ids []int64, updates
 	if updates.ProbeEnabled != nil {
 		whereClause += " AND type = $" + itoa(idx)
 		args = append(args, service.AccountTypeAPIKey)
+		idx++
+	}
+	if updates.CustomUsageExpected != nil {
+		if len(ids) != 1 {
+			return 0, service.ErrCustomUsageConfig
+		}
+		expectedCredentials, err := json.Marshal(normalizeJSONMap(updates.CustomUsageExpected.Credentials))
+		if err != nil {
+			return 0, err
+		}
+		expectedConfigValue := updates.CustomUsageExpected.Config
+		if expectedConfigValue == nil {
+			expectedConfigValue = map[string]any{}
+		}
+		expectedConfig, err := json.Marshal(expectedConfigValue)
+		if err != nil {
+			return 0, err
+		}
+		whereClause += " AND type = 'apikey' AND COALESCE(credentials, '{}'::jsonb) = $" + itoa(idx) + "::jsonb"
+		args = append(args, expectedCredentials)
+		idx++
+		whereClause += " AND COALESCE(NULLIF(extra -> 'custom_usage_config', 'null'::jsonb), '{}'::jsonb) = $" + itoa(idx) + "::jsonb"
+		args = append(args, expectedConfig)
 	}
 	query := "UPDATE accounts SET " + joinClauses(setClauses, ", ") + whereClause
 

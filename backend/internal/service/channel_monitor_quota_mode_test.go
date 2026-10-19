@@ -369,6 +369,7 @@ func TestProviderProbeCapabilityMatrix(t *testing.T) {
 	for _, p := range []string{
 		MonitorProviderOpenAI, MonitorProviderAnthropic, MonitorProviderGemini,
 		MonitorProviderGrok, MonitorProviderKimi, MonitorProviderZhipu, MonitorProviderDeepseek,
+		MonitorProviderOpenCodeGo, MonitorProviderCommandCode,
 	} {
 		require.True(t, providerSupportsProbe(p), p)
 	}
@@ -376,6 +377,7 @@ func TestProviderProbeCapabilityMatrix(t *testing.T) {
 		MonitorProviderOpenAI, MonitorProviderAnthropic, MonitorProviderGemini,
 		MonitorProviderGrok, MonitorProviderAntigravity,
 		MonitorProviderKimi, MonitorProviderZhipu, MonitorProviderDeepseek,
+		MonitorProviderOpenCodeGo, MonitorProviderCommandCode,
 	} {
 		require.NoError(t, validateProvider(p), p)
 	}
@@ -520,6 +522,27 @@ func TestMonitorAccountQuotaCapability_Matrix(t *testing.T) {
 		{
 			name:    "antigravity ok",
 			account: &Account{ID: 15, Platform: domain.PlatformAntigravity},
+		},
+		{
+			name:    "opencode go plan ok",
+			account: &Account{ID: 17, Platform: domain.PlatformOpenCodeGo, Type: AccountTypeAPIKey},
+		},
+		{
+			name: "opencode zen has no quota window",
+			account: &Account{ID: 18, Platform: domain.PlatformOpenCodeGo, Type: AccountTypeAPIKey,
+				Credentials: map[string]any{"account_mode": AccountModeZen}},
+			wantErr: ErrChannelMonitorAccountNotSupportable,
+		},
+		{
+			name:    "command code official host ok",
+			account: &Account{ID: 19, Platform: domain.PlatformCommandCode, Type: AccountTypeAPIKey},
+		},
+		{
+			// 自定义中转的 Key 不发往官方用量接口（运行期 CN_QUOTA_NO_ENDPOINT）。
+			name: "command code relay unsupported",
+			account: &Account{ID: 20, Platform: domain.PlatformCommandCode, Type: AccountTypeAPIKey,
+				Credentials: map[string]any{"api_protocol": APIProtocolChatCompletions, "base_url": "https://relay.example.com/v1"}},
+			wantErr: ErrChannelMonitorAccountNotSupportable,
 		},
 	}
 	for _, tc := range cases {

@@ -1,5 +1,8 @@
+import customUsage from './customUsage'
+
 export default {
     accounts: {
+      customUsage,
       title: 'Account Management',
       description: 'Manage AI platform accounts and credentials',
       targetGroup: {
@@ -141,6 +144,7 @@ export default {
         deepseek: 'DeepSeek',
         minimax: 'MiniMax',
         opencode_go: 'OpenCode',
+        command_code: 'Command Code',
       },
       cnProviders: {
         accountMode: {

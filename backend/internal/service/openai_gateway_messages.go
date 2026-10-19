@@ -74,6 +74,18 @@ func (s *OpenAIGatewayService) ForwardAsAnthropic(
 		default:
 			return s.forwardAnthropicViaRawChatCompletions(ctx, c, account, body, defaultMappedModel)
 		}
+	} else if account.IsCommandCode() {
+		// Command Code：同样按模型分流，必须先于下方 adaptive 分支（其默认协议即
+		// adaptive，否则所有模型都会被直通到原生 Anthropic 端点）。
+		mapped := resolveCommandCodeMappedModel(account, body, defaultMappedModel)
+		switch commandCodeNativeProtocol(account, mapped) {
+		case APIProtocolAnthropic:
+			return s.forwardAnthropicViaNativeAnthropicEndpoint(ctx, c, account, body, defaultMappedModel)
+		case APIProtocolResponses:
+			break
+		default:
+			return s.forwardAnthropicViaRawChatCompletions(ctx, c, account, body, defaultMappedModel)
+		}
 	} else if account.IsAnthropicProtocol() || account.IsAdaptiveAPIProtocol() {
 		// 入口分流（国产供应商 Anthropic 协议）：上游为供应商原生 Anthropic 端点时，
 		// /v1/messages 请求零转换直通（仅模型名映射 + 少量 body 清洗），完整保留

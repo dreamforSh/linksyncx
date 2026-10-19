@@ -76,6 +76,7 @@ func openCodeGoMergeMockColumns() []string {
 		"enabled", "rate_sync_enabled", "snapshot",
 		"ollama_session", "ollama_auto", "ollama_snapshot",
 		"opencode_group_unchanged", "opencode_auto", "opencode_snapshot",
+		"custom_usage_config", "custom_usage_secrets",
 	}
 }
 
@@ -188,7 +189,7 @@ func TestLockAndMergeAccountProbeExtraPreservesOpenCodeGoManagedState(t *testing
 			mock.ExpectQuery(`(?s)`+regexp.QuoteMeta("SELECT")+`.*`+regexp.QuoteMeta("FOR NO KEY UPDATE")).
 				WithArgs(tt.account.ID, tt.account.Platform, tt.account.Type, string(credentials), nil).
 				WillReturnRows(sqlmock.NewRows(openCodeGoMergeMockColumns()).
-					AddRow(false, false, tt.proxyUnchanged, nil, nil, nil, nil, nil, nil, tt.groupUnchanged, tt.databaseAuto, tt.databaseSnapshot))
+					AddRow(false, false, tt.proxyUnchanged, nil, nil, nil, nil, nil, nil, tt.groupUnchanged, tt.databaseAuto, tt.databaseSnapshot, nil, nil))
 
 			got, err := lockAndMergeAccountProbeExtra(context.Background(), client, tt.account, nil, nil)
 			require.NoError(t, err)
@@ -258,7 +259,7 @@ func TestUpdateCredentialsOpenCodeGoToOllamaCrossOverClearsManagedExtra(t *testi
 func TestUpdateCredentialsOpenCodeGoCleanupRequiresChangedCredentials(t *testing.T) {
 	client, mock := newOllamaCloudUsageRepositoryTestClient(t)
 	mock.ExpectBegin()
-	mock.ExpectExec(`(?s)UPDATE accounts.*CASE.*AND credentials IS DISTINCT FROM \$1::jsonb`).
+	mock.ExpectExec(`(?s)UPDATE accounts.*CASE.*AND \(credentials - 'custom_usage_secrets'\) IS DISTINCT FROM \(\$1::jsonb - 'custom_usage_secrets'\)`).
 		WithArgs(`{"api_key":"same-key","base_url":"https://relay.example.com/v1"}`, int64(17)).
 		WillReturnResult(sqlmock.NewResult(0, 1))
 	mock.ExpectExec(regexp.QuoteMeta("INSERT INTO scheduler_outbox")).

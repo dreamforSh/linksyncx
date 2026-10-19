@@ -156,6 +156,7 @@ security:
       - "open.bigmodel.cn"
       - "api.minimaxi.com"
       - "opencode.ai"
+      - "api.commandcode.ai"
       - "generativelanguage.googleapis.com"
       - "cloudcode-pa.googleapis.com"
       - "*.openai.azure.com"

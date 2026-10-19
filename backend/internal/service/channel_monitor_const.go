@@ -71,6 +71,9 @@ const (
 	MonitorProviderZhipu       = "zhipu"
 	MonitorProviderDeepseek    = "deepseek"
 	MonitorProviderMiniMax     = "minimax"
+	// OpenCode Go / Command Code：OpenAI 兼容 Chat Completions 探活 + 订阅额度配额。
+	MonitorProviderOpenCodeGo  = "opencode_go"
+	MonitorProviderCommandCode = "command_code"
 
 	// MonitorCheckMode 检测模式（channel_monitors.check_mode）。
 	//   probe       - LLM 探活（默认，原有行为）

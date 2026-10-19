@@ -150,7 +150,8 @@ func prepareNativeOpenAIInputTokensCountRequest(body []byte, account *Account) (
 }
 
 func shouldEstimateOpenAIInputTokensLocally(account *Account) bool {
-	if account == nil || account.IsGrok() || account.IsCNProvider() || account.Type == AccountTypeUpstream {
+	// Command Code 只提供推理端点，没有 OpenAI 专有的 /responses/input_tokens。
+	if account == nil || account.IsGrok() || account.IsCNProvider() || account.IsCommandCode() || account.Type == AccountTypeUpstream {
 		return true
 	}
 	if account.Type != AccountTypeAPIKey {
@@ -271,7 +272,8 @@ func (s *OpenAIGatewayService) ForwardCountTokensAsAnthropic(
 	// count_tokens 为 "Anthropic only"，Kimi/智谱亦无任何文档承诺。转发上游
 	// 只会常态 404，且错误还会流入账号处置逻辑误伤整账号调度；Claude Code
 	// 高频调用此端点，本地 tiktoken 估算是与 Grok 一致的既有方案。
-	if account.IsCNProvider() || account.IsOpenCodeGo() || account.IsCodeBuddy() {
+	// Command Code Provider API 同样没有 count_tokens 端点。
+	if account.IsCNProvider() || account.IsOpenCodeGo() || account.IsCodeBuddy() || account.IsCommandCode() {
 		estimated, err := estimateAnthropicCountTokensLocally(body)
 		if err != nil {
 			writeAnthropicCountTokensError(c, http.StatusBadRequest, "invalid_request_error", "Failed to parse request body")

@@ -188,6 +188,8 @@ func PlatformDefaultModelIDs(platform string) []string {
 		return xai.DefaultModelIDs()
 	case PlatformOpenCodeGo:
 		return DefaultOpenCodeGoModelIDs()
+	case PlatformCommandCode:
+		return []string{DefaultCommandCodeTestModel}
 	default:
 		return nil
 	}

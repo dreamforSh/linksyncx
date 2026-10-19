@@ -411,6 +411,15 @@ func (s *RateLimitService) HandleUpstreamError(ctx context.Context, account *Acc
 		upstreamMsg = truncateForLog([]byte(upstreamMsg), 512)
 	}
 
+	// Command Code 的 402/403/429 同时承载窗口耗尽、积分耗尽和组织花费
+	// 上限；按响应文案分类，未识别的普通频率限制继续走默认处理。
+	if account.IsCommandCode() && (statusCode == http.StatusPaymentRequired ||
+		statusCode == http.StatusForbidden || statusCode == http.StatusTooManyRequests) {
+		if handled, disable := s.handleCommandCodeUsageError(ctx, account, statusCode, responseBody, upstreamMsg); handled {
+			return disable
+		}
+	}
+
 	switch statusCode {
 	case 400:
 		// "organization has been disabled" → 永久禁用
@@ -529,7 +538,8 @@ func (s *RateLimitService) HandleUpstreamError(ctx context.Context, account *Acc
 	case 402:
 		// 国产供应商：余额不足是可恢复状态（充值/检测恢复后由周期任务自动解除），
 		// 不能走 handleAuthError 永久置 status=error。改为可恢复的临时停调。
-		if account.IsCNProvider() || account.IsOpenCodeZen() {
+		// Command Code 未按文案识别的 402 同样按积分不足处理。
+		if account.IsCNProvider() || account.IsOpenCodeZen() || account.IsCommandCode() {
 			s.handleCNProviderInsufficientBalance(ctx, account, upstreamMsg)
 			shouldDisable = true
 			break
@@ -1015,7 +1025,9 @@ func (s *RateLimitService) handle403(ctx context.Context, account *Account, upst
 	// 国产供应商与 openai 同口径:HTML 403(CDN/代理拦截页)不构成账号失效证据,
 	// 且 403 在 failover 状态集里会被逐账号重放——直接 SetError 会让一个坏请求/
 	// 一层坏代理连环永久禁用整组账号。走 HTML 豁免 + N 次累计 + 临时冷却。
-	if account.Platform == PlatformOpenAI || IsCNProvider(account.Platform) || account.IsOpenCodeGo() {
+	// Command Code 同样前置 Cloudflare（1010 / HTML 拦截页），未识别为用量超限的
+	// 403 走同一口径。
+	if account.Platform == PlatformOpenAI || IsCNProvider(account.Platform) || account.IsOpenCodeGo() || account.IsCommandCode() {
 		return s.handleOpenAI403(ctx, account, upstreamMsg, responseBody)
 	}
 	// 非 Antigravity 平台：保持原有行为

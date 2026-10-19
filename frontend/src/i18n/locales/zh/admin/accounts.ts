@@ -1,5 +1,8 @@
+import customUsage from './customUsage'
+
 export default {
     accounts: {
+      customUsage,
       title: '账号管理',
       description: '管理 AI 平台账号和 Cookie',
       targetGroup: {
@@ -347,6 +350,7 @@ export default {
         deepseek: 'DeepSeek',
         minimax: 'MiniMax',
         opencode_go: 'OpenCode',
+        command_code: 'Command Code',
       },
       cnProviders: {
         accountMode: {

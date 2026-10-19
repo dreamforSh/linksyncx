@@ -242,6 +242,38 @@ func TestRunCheckForModel_Grok_DefaultChatRequest(t *testing.T) {
 	}
 }
 
+// OpenCode Go / Command Code 探活走 OpenAI 兼容 Chat Completions；endpoint 已带 /v1 时
+// 不重复拼接，出站 UA 与推理一致收敛为规范客户端身份（官方上游前置 Cloudflare）。
+func TestRunCheckForModel_OpenCodeAndCommandCodeChatRequest(t *testing.T) {
+	for provider, wantUA := range map[string]string{
+		MonitorProviderOpenCodeGo:  openCodeUpstreamUserAgent,
+		MonitorProviderCommandCode: CodexCanonicalUserAgent(),
+	} {
+		t.Run(provider, func(t *testing.T) {
+			h := &openAICaptureHandler{}
+			endpoint := setupFakeOpenAI(t, h)
+
+			res := runCheckForModel(context.Background(), provider, endpoint+"/provider/v1", "sk-key", "deepseek-v4-flash", nil)
+
+			if res.Status != MonitorStatusOperational {
+				t.Fatalf("request should pass challenge, got status=%s message=%q", res.Status, res.Message)
+			}
+			if h.lastPath != "/provider/v1/chat/completions" {
+				t.Fatalf("expected chat completions path under endpoint, got %q", h.lastPath)
+			}
+			if h.lastHeaders.Get("Authorization") != "Bearer sk-key" {
+				t.Errorf("expected bearer auth header, got %q", h.lastHeaders.Get("Authorization"))
+			}
+			if got := h.lastHeaders.Get("User-Agent"); got != wantUA {
+				t.Errorf("expected User-Agent %q, got %q", wantUA, got)
+			}
+			if err := validateReplaceRequestBody(provider, MonitorAPIModeChatCompletions, map[string]any{}); err == nil {
+				t.Error("replace-mode body should require messages")
+			}
+		})
+	}
+}
+
 func TestRunCheckForModel_Grok_UpstreamFailure(t *testing.T) {
 	h := &openAICaptureHandler{status: http.StatusTooManyRequests}
 	endpoint := setupFakeOpenAI(t, h)

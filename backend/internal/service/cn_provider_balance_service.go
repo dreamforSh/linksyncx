@@ -123,6 +123,9 @@ func (s *CNProviderBalanceService) QueryBalanceForAccount(ctx context.Context, a
 }
 
 func (s *CNProviderBalanceService) queryBalanceForAccount(ctx context.Context, account *Account) (*CNProviderBalanceResult, error) {
+	if account.IsCommandCode() {
+		return s.queryCommandCodeBalance(ctx, account)
+	}
 	provider := account.Platform
 	if provider != PlatformKimi && provider != PlatformDeepseek {
 		return nil, infraerrors.New(http.StatusBadRequest, "CN_BALANCE_NO_ENDPOINT", "account provider has no balance endpoint")
@@ -264,6 +267,12 @@ func validatePayGAccount(account *Account) error {
 	if account == nil {
 		return infraerrors.New(http.StatusNotFound, "CN_BALANCE_ACCOUNT_NOT_FOUND", "account not found")
 	}
+	if account.IsCommandCode() {
+		if !account.commandCodeUsageSupported() {
+			return infraerrors.New(http.StatusBadRequest, "CN_BALANCE_NO_ENDPOINT", "command code balance is only available for api key accounts on the official host")
+		}
+		return nil
+	}
 	if !account.IsCNProvider() {
 		return infraerrors.New(http.StatusBadRequest, "CN_BALANCE_INVALID_PLATFORM", "account is not a CN provider account")
 	}
@@ -272,6 +281,25 @@ func validatePayGAccount(account *Account) error {
 		return infraerrors.New(http.StatusBadRequest, "CN_BALANCE_CODING_PLAN", "coding plan account has no balance endpoint; use quota probe")
 	}
 	return nil
+}
+
+// cnBalanceExtraUpdates 构造 provider 维度的余额快照更新。
+func cnBalanceExtraUpdates(provider string, result *CNProviderBalanceResult, now time.Time) map[string]any {
+	balanceUpdates := make([]any, 0, len(result.Balances))
+	for _, entry := range result.Balances {
+		balanceUpdates = append(balanceUpdates, map[string]any{
+			"currency": entry.Currency,
+			"balance":  entry.Balance,
+		})
+	}
+	return map[string]any{
+		cnExtraKey(provider, cnBalanceExtraSuffixBalance):   result.Balance,
+		cnExtraKey(provider, cnBalanceExtraSuffixCurrency):  result.Currency,
+		cnExtraKey(provider, cnBalanceExtraSuffixAvailable): result.Available,
+		cnExtraKey(provider, cnBalanceExtraSuffixUpdated):   now.Format(time.RFC3339),
+		cnExtraKey(provider, cnBalanceExtraSuffixBalances):  balanceUpdates,
+		cnExtraKey(provider, cnBalanceExtraSuffixLow):       false,
+	}
 }
 
 // resolveProxyURL fail-closed：账号分配了代理但既没预加载、也无法从 proxyRepo 补齐时

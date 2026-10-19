@@ -176,6 +176,10 @@ var providerAdapters = map[string]providerAdapter{
 	MonitorProviderZhipu:    providerZhipuChatAdapter,
 	MonitorProviderDeepseek: providerDeepseekChatAdapter,
 	MonitorProviderMiniMax:  providerMiniMaxChatAdapter,
+	// OpenCode Go / Command Code：按模型分流的多协议上游，探活统一走 OpenAI 兼容
+	// Chat Completions（未命中协议规则的模型均支持）。
+	MonitorProviderOpenCodeGo:  providerOpenCodeGoChatAdapter,
+	MonitorProviderCommandCode: providerCommandCodeChatAdapter,
 	MonitorProviderAnthropic: {
 		buildPath: func(string) string { return providerAnthropicPath },
 		buildBody: func(model, prompt string) ([]byte, error) {
@@ -229,6 +233,26 @@ var providerDeepseekChatAdapter = newOpenAICompatibleChatAdapter(providerOpenAIP
 
 //nolint:gochecknoglobals // 适配器表是只读静态数据，初始化后不变更。
 var providerMiniMaxChatAdapter = newOpenAICompatibleChatAdapter(providerOpenAIPath)
+
+// 官方 OpenCode / Command Code 上游前置 Cloudflare，编程库 UA 会被 1010 拦截：
+// 探活与推理一致收敛为规范客户端 UA（见 applyOpenCodeUpstreamUserAgent）。
+//
+//nolint:gochecknoglobals // 适配器表是只读静态数据，初始化后不变更。
+var providerOpenCodeGoChatAdapter = withMonitorUserAgent(newOpenAICompatibleChatAdapter(providerOpenAIPath), func() string { return openCodeUpstreamUserAgent })
+
+//nolint:gochecknoglobals // 适配器表是只读静态数据，初始化后不变更。
+var providerCommandCodeChatAdapter = withMonitorUserAgent(newOpenAICompatibleChatAdapter(providerOpenAIPath), CodexCanonicalUserAgent)
+
+// withMonitorUserAgent 在 adapter 默认头上追加固定 User-Agent（用户自定义头仍可覆盖）。
+func withMonitorUserAgent(adapter providerAdapter, userAgent func() string) providerAdapter {
+	buildHeaders := adapter.buildHeaders
+	adapter.buildHeaders = func(apiKey string) map[string]string {
+		headers := buildHeaders(apiKey)
+		headers["User-Agent"] = userAgent()
+		return headers
+	}
+	return adapter
+}
 
 func newOpenAICompatibleChatAdapter(path string) providerAdapter {
 	return providerAdapter{
@@ -463,6 +487,9 @@ var bodyMergeKeyDenyList = map[string]map[string]bool{
 	MonitorProviderZhipu:    {"model": true, "messages": true, "stream": true},
 	MonitorProviderDeepseek: {"model": true, "messages": true, "stream": true},
 	MonitorProviderMiniMax:  {"model": true, "messages": true, "stream": true},
+	// OpenCode Go / Command Code 探活同为 Chat Completions。
+	MonitorProviderOpenCodeGo:  {"model": true, "messages": true, "stream": true},
+	MonitorProviderCommandCode: {"model": true, "messages": true, "stream": true},
 }
 
 func checkAPIMode(opts *CheckOptions) string {
@@ -484,7 +511,8 @@ func bodyMergeDenyKey(provider, apiMode string) string {
 func isOpenAICompatibleChatProvider(provider string) bool {
 	switch provider {
 	case MonitorProviderOpenAI, MonitorProviderGrok,
-		MonitorProviderKimi, MonitorProviderZhipu, MonitorProviderDeepseek, MonitorProviderMiniMax:
+		MonitorProviderKimi, MonitorProviderZhipu, MonitorProviderDeepseek, MonitorProviderMiniMax,
+		MonitorProviderOpenCodeGo, MonitorProviderCommandCode:
 		return true
 	default:
 		return false
