@@ -9,7 +9,7 @@ import (
 // 渠道监控参数校验与归一化辅助函数。
 // 校验失败一律返回 channel_monitor_const.go 中预定义的 Err* 错误，错误信息不含具体 IP/hostname，避免泄露内网拓扑。
 
-// monitorProviders 渠道监控支持的全部 provider（与迁移 226 的 CHECK 约束一致）。
+// monitorProviders 渠道监控支持的全部 provider（与迁移 260 的 CHECK 约束一致）。
 // 不再以 adapter 表为唯一来源：antigravity 没有探活 adapter，但支持配额模式。
 //
 //nolint:gochecknoglobals // 静态查表，初始化后不变。
@@ -24,6 +24,8 @@ var monitorProviders = map[string]struct{}{
 	MonitorProviderZhipu:       {},
 	MonitorProviderDeepseek:    {},
 	MonitorProviderMiniMax:     {},
+	MonitorProviderOpenCodeGo:  {},
+	MonitorProviderCommandCode: {},
 }
 
 // probeCapableProviders 支持通用 adapter 或账号原生探活（probe / quota_probe）的 provider。
@@ -31,15 +33,17 @@ var monitorProviders = map[string]struct{}{
 //
 //nolint:gochecknoglobals // 静态查表，初始化后不变。
 var probeCapableProviders = map[string]struct{}{
-	MonitorProviderOpenAI:     {},
-	MonitorProviderAnthropic:  {},
-	MonitorProviderGemini:     {},
-	MonitorProviderGrok:       {},
-	MonitorProviderPerplexity: {},
-	MonitorProviderKimi:       {},
-	MonitorProviderZhipu:      {},
-	MonitorProviderDeepseek:   {},
-	MonitorProviderMiniMax:    {},
+	MonitorProviderOpenAI:      {},
+	MonitorProviderAnthropic:   {},
+	MonitorProviderGemini:      {},
+	MonitorProviderGrok:        {},
+	MonitorProviderPerplexity:  {},
+	MonitorProviderKimi:        {},
+	MonitorProviderZhipu:       {},
+	MonitorProviderDeepseek:    {},
+	MonitorProviderMiniMax:     {},
+	MonitorProviderOpenCodeGo:  {},
+	MonitorProviderCommandCode: {},
 }
 
 // validateProvider 校验 provider 字符串。
@@ -214,6 +218,7 @@ func normalizeMonitorPrimaryModel(provider, checkMode, model string) string {
 //   - kimi/zhipu/deepseek/minimax coding：GetCodingPlanProvider 须识别官方域名
 //     （deepseek coding、自定义中转、minimax payg 无法路由额度端点）
 //   - kimi/zhipu/deepseek/minimax payg：仅 kimi/deepseek 有公开余额端点
+//   - opencode_go/command_code：仅 Go 订阅 / 官方主机的 API Key 有额度端点
 //   - anthropic：OAuth / Setup Token（API-Key 型无 usage 通道，永久 error）
 //   - openai：OAuth（API-Key 型无 usage 通道）
 //   - gemini/grok/antigravity：本地统计/值通道降级，不会永久 error，放行
@@ -225,6 +230,11 @@ func monitorAccountQuotaCapability(account *Account) error {
 		}
 		return nil
 	case PlatformOpenCodeGo, PlatformCommandCode:
+		// 额度端点只对 OpenCode Go 订阅、官方主机的 Command Code API Key 开放
+		// （与 validateCodingPlanAccount 一致），Zen / 自定义中转运行期必然失败。
+		if account.GetCodingPlanProvider() != account.Platform {
+			return ErrChannelMonitorAccountNotSupportable
+		}
 		return nil
 	case PlatformKimi, PlatformZhipu, PlatformDeepseek, PlatformMiniMax:
 		if account.IsCodingPlan() {
