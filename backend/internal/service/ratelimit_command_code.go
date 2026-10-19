@@ -96,9 +96,9 @@ func commandCodeResetAt(body []byte, now time.Time, maxWait time.Duration) *time
 	return &until
 }
 
-// handleCommandCodeUsageError 处理已识别的 Command Code 用量超限；handled=false 时由
-// 调用方继续走默认逻辑。shouldDisable 与同类状态码的既有口径一致：429 不置位；
-// 只限单个模型时也不置位，避免调用方把整个账号拉黑。
+// handleCommandCodeUsageError 处理已识别的 Command Code 用量超限；handled=false（仅
+// 未识别的错误）时由调用方继续走默认逻辑。shouldDisable 与同类状态码的既有口径一致：
+// 429 不置位；只限单个模型时也不置位，避免调用方把整个账号拉黑。
 func (s *RateLimitService) handleCommandCodeUsageError(
 	ctx context.Context,
 	account *Account,
@@ -115,7 +115,11 @@ func (s *RateLimitService) handleCommandCodeUsageError(
 			until = cnProviderQuotaSnapshotReset(account, now)
 		}
 		if until == nil {
-			return false, false
+			// 文案与快照都给不出重置时间（或超出上限）：窗口用满已确认，不能交回默认
+			// 402/403 逻辑永久禁用。冷却覆盖到下一次周期额度探测，快照刷新后再次命中
+			// 即可冷却到真实重置点。
+			fallback := now.Add(s.cnBalanceCooldownDuration())
+			until = &fallback
 		}
 		reason := commandCodeUsageLimitReason
 		if msg := strings.TrimSpace(upstreamMsg); msg != "" {
@@ -123,8 +127,9 @@ func (s *RateLimitService) handleCommandCodeUsageError(
 		}
 		s.notifyAccountSchedulingBlocked(account, *until, commandCodeUsageLimitReason)
 		if err := s.accountRepo.SetTempUnschedulable(ctx, account.ID, *until, reason); err != nil {
+			// 写库失败也已通知调度层阻塞；不能回落默认逻辑把可恢复的窗口用满变成永久禁用。
 			slog.Warn("command_code_usage_limit_set_failed", "account_id", account.ID, "error", err)
-			return false, false
+			return true, accountWide
 		}
 		slog.Info("command_code_usage_limit", "account_id", account.ID, "status_code", statusCode, "reset_at", until.UTC())
 		return true, accountWide

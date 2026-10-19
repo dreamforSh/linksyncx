@@ -170,17 +170,22 @@ func (s *RateLimitService) cnBalanceCooldownDuration() time.Duration {
 // 重置时间（5h / weekly）。429 多数由 5h 滚动窗口触发，取较早的重置点可避免
 // 把账号冷却到 weekly 重置（可达数天）的过度停调；如果确是 weekly 窗口耗尽，
 // 周期额度探测刷新快照后阈值评估会再次停调到正确的时间点。
+// Command Code 有充值积分时窗口不限制请求（见 commandCodeWindowsBinding），不取快照。
 // 无快照或均已过期返回 nil。
 func cnProviderQuotaSnapshotReset(account *Account, now time.Time) *time.Time {
 	if account == nil || len(account.Extra) == 0 {
 		return nil
 	}
-	if !account.IsOpenCodeGo() && (!account.IsCNProvider() || !account.IsCodingPlan()) {
+	if account.IsCommandCode() {
+		if !commandCodeWindowsBinding(account.Extra) {
+			return nil
+		}
+	} else if !account.IsOpenCodeGo() && (!account.IsCNProvider() || !account.IsCodingPlan()) {
 		return nil
 	}
 	provider := account.Platform
 	suffixes := []string{cnExtraSuffix5hReset, cnExtraSuffixWeeklyReset}
-	if account.IsOpenCodeGo() {
+	if account.IsOpenCodeGo() || account.IsCommandCode() {
 		suffixes = append(suffixes, cnExtraSuffixMonthlyReset)
 	}
 	var earliest *time.Time

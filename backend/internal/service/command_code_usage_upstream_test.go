@@ -110,9 +110,10 @@ func TestCommandCodeQuotaProbeParsesWindowsAndBalance(t *testing.T) {
 	require.InDelta(t, 35.0, result.Balance.Balance, 1e-9)
 	require.Equal(t, "USD", result.Balance.Currency)
 
-	// 个人账户不带 orgId；本周期用量从订阅周期起点统计。
+	// 个人账户不带 orgId；本周期用量从订阅周期起点统计。用量接口与推理同一客户端身份。
 	for _, req := range upstream.requests {
 		require.Equal(t, "Bearer user_test_key", req.Header.Get("Authorization"))
+		require.Equal(t, CodexCanonicalUserAgent(), req.Header.Get("User-Agent"))
 		require.Equal(t, "api.commandcode.ai", req.URL.Host)
 		require.False(t, req.URL.Query().Has("orgId"), req.URL.String())
 	}
@@ -496,6 +497,60 @@ func TestHandleUpstreamError_CommandCodeWindowLimitFallsBackToSnapshot(t *testin
 
 	require.Equal(t, 1, repo.tempCalls)
 	require.WithinDuration(t, time.Now().Add(90*time.Minute), repo.tempUntil, time.Minute)
+}
+
+// 未识别为用量超限的 402/403、以及给不出重置时间的窗口用满都不能永久禁用账号：
+// Cloudflare / HTML 拦截不处罚账号；结构化 403 走累计 + 临时冷却；402 按积分不足
+// 临时停调；窗口用满但文案与快照都没有可用重置时间时冷却一个周期探测间隔。
+func TestHandleUpstreamError_CommandCodeRecoverable402403NeverSetError(t *testing.T) {
+	const weeklyNoReset = `{"error":{"message":"You've reached your weekly usage limit."}}`
+	balanceCooldown := 20 * time.Minute // 默认余额检测周期 10 分钟 × 2
+	cases := []struct {
+		name       string
+		status     int
+		body       string
+		wantTemp   int
+		wantReason string
+		wantUntil  time.Duration
+	}{
+		{"cloudflare 1010", http.StatusForbidden, "error code: 1010\n", 0, "", 0},
+		{"html block page", http.StatusForbidden, "<!DOCTYPE html><html><body>Forbidden</body></html>", 0, "", 0},
+		{"structured forbidden", http.StatusForbidden, `{"message":"forbidden"}`, 1, "OpenAI 403 temporary cooldown", time.Duration(openAI403CooldownMinutesDefault) * time.Minute},
+		{"403 window limit without reset", http.StatusForbidden, weeklyNoReset, 1, commandCodeUsageLimitReason, balanceCooldown},
+		{"402 window limit without reset", http.StatusPaymentRequired, weeklyNoReset, 1, commandCodeUsageLimitReason, balanceCooldown},
+		{"window reset beyond cap", http.StatusForbidden, `{"error":{"message":"You've reached your weekly usage limit. Resets in 30 days."}}`, 1, commandCodeUsageLimitReason, balanceCooldown},
+		{"402 payment required", http.StatusPaymentRequired, `{"error":{"message":"Payment required"}}`, 1, cnBalanceLowReasonPrefix, balanceCooldown},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			repo := &commandCodeRateLimitRepo{}
+			service := NewRateLimitService(repo, nil, &config.Config{}, nil, nil)
+			service.SetOpenAI403CounterCache(&openAI403CounterCacheStub{})
+
+			service.HandleUpstreamError(context.Background(), commandCodeUsageAccount(), tc.status, http.Header{}, []byte(tc.body))
+
+			require.Equal(t, 0, repo.setErrorCalls, repo.lastErrorMsg)
+			require.Equal(t, tc.wantTemp, repo.tempCalls)
+			if tc.wantTemp > 0 {
+				require.True(t, strings.HasPrefix(repo.lastTempReason, tc.wantReason), repo.lastTempReason)
+				require.WithinDuration(t, time.Now().Add(tc.wantUntil), repo.tempUntil, time.Minute)
+			}
+		})
+	}
+}
+
+// 窗口用满写库失败时仍按已处理返回，不能回落默认 403 逻辑把账号永久禁用。
+func TestHandleUpstreamError_CommandCodeWindowLimitWriteFailureDoesNotSetError(t *testing.T) {
+	repo := &commandCodeRateLimitRepo{}
+	repo.tempErr = errors.New("db unavailable")
+	service := NewRateLimitService(repo, nil, &config.Config{}, nil, nil)
+
+	shouldDisable := service.HandleUpstreamError(context.Background(), commandCodeUsageAccount(), http.StatusForbidden, http.Header{},
+		[]byte(`{"error":{"message":"You've reached your 5-hour usage limit. Resets in 2h 41m."}}`))
+
+	require.True(t, shouldDisable)
+	require.Equal(t, 1, repo.tempCalls)
+	require.Equal(t, 0, repo.setErrorCalls)
 }
 
 // 普通频率限制很快恢复：即使快照里有窗口重置点，也不冷却到窗口重置。

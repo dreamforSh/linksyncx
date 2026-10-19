@@ -238,10 +238,17 @@ func (s *AccountTestService) testCNProviderAnthropicConnection(c *gin.Context, a
 	if err != nil {
 		return s.sendErrorAndEnd(c, fmt.Sprintf("Invalid Anthropic base URL: %s", err.Error()))
 	}
-	if hint := cnAnthropicBaseURLMisconfigHint(baseURL); hint != "" {
-		return s.sendErrorAndEnd(c, hint)
+	var apiURL string
+	if account.IsOpenCodeGo() || account.IsCommandCode() {
+		// 与转发（nativeAnthropicTargetURL）同一拼接：按模型分流的平台，协议基址
+		// 带 /v1 也合法，版本感知拼接避免 /v1/v1/messages。
+		apiURL = buildOpenAIEndpointURL(baseURL, "/v1/messages")
+	} else {
+		if hint := cnAnthropicBaseURLMisconfigHint(baseURL); hint != "" {
+			return s.sendErrorAndEnd(c, hint)
+		}
+		apiURL = strings.TrimRight(baseURL, "/") + "/v1/messages"
 	}
-	apiURL := strings.TrimRight(baseURL, "/") + "/v1/messages"
 
 	c.Writer.Header().Set("Content-Type", "text/event-stream")
 	c.Writer.Header().Set("Cache-Control", "no-cache")

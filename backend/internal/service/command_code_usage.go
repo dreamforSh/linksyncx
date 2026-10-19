@@ -182,6 +182,8 @@ func (c *commandCodeUsageClient) get(ctx context.Context, path string, query url
 	}
 	req.Header.Set("Authorization", "Bearer "+c.apiKey)
 	req.Header.Set("Accept", "application/json")
+	// 与同一 Key 的推理请求保持同一客户端身份（官方主机收敛为规范 UA）。
+	applyOpenCodeUpstreamUserAgent(c.account, validatedURL, req.Header)
 	c.account.ApplyHeaderOverrides(req.Header)
 
 	resp, err := c.httpUpstream.Do(req, c.proxyURL, c.account.ID, maxInt(c.account.Concurrency, 1))
