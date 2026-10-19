@@ -125,15 +125,16 @@ describe('BulkEditAccountModal', () => {
     expect(showError).toHaveBeenCalledWith('admin.accounts.bulkEdit.rateSyncConflict')
   })
 
-  it('antigravity 白名单包含 Gemini 图片模型且过滤掉普通 GPT 模型', async () => {
+  it('antigravity 白名单不预置模型目录，也不回退到全量模型', async () => {
     const wrapper = mountModal()
     const selector = wrapper.findComponent(ModelWhitelistSelector)
     expect(selector.exists()).toBe(true)
 
     await selector.find('div.cursor-pointer').trigger('click')
 
-    expect(wrapper.text()).toContain('gemini-3.1-flash-image')
-    expect(wrapper.text()).toContain('gemini-2.5-flash-image')
+    // Antigravity 模型目录来自账号「同步上游」，批量编辑没有单一账号可同步。
+    expect(selector.findAll('[data-testid="model-option"]')).toHaveLength(0)
+    expect(wrapper.text()).toContain('admin.accounts.noMatchingModels')
     expect(wrapper.text()).not.toContain('gpt-5.3-codex')
   })
 
