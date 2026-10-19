@@ -156,6 +156,38 @@ func (s *OpenAIGatewayService) forwardAsChatCompletions(
 		}
 	}
 
+	if account.IsCommandCode() {
+		mapped := resolveCommandCodeMappedModel(account, body, defaultMappedModel)
+		proto := commandCodeNativeProtocol(account, mapped)
+		if proto != APIProtocolResponses {
+			if isResponsesShape {
+				if proto == APIProtocolAnthropic {
+					return s.forwardResponsesViaNativeAnthropic(ctx, c, account, body, "")
+				}
+				var responsesReq apicompat.ResponsesRequest
+				if err := json.Unmarshal(body, &responsesReq); err != nil {
+					return nil, fmt.Errorf("parse responses-shaped command code request: %w", err)
+				}
+				chatReq, err := apicompat.ResponsesToChatCompletionsRequestWithOptions(
+					&responsesReq,
+					&apicompat.ResponsesToChatOptions{ReasoningContentByID: s.reasoningContentByID},
+				)
+				if err != nil {
+					return nil, fmt.Errorf("convert responses-shaped command code request: %w", err)
+				}
+				chatBody, err := json.Marshal(chatReq)
+				if err != nil {
+					return nil, fmt.Errorf("marshal converted command code request: %w", err)
+				}
+				return s.forwardAsRawChatCompletions(ctx, c, account, chatBody, defaultMappedModel)
+			}
+			if proto == APIProtocolAnthropic {
+				return s.forwardChatCompletionsViaNativeAnthropic(ctx, c, account, body, defaultMappedModel)
+			}
+			return s.forwardAsRawChatCompletions(ctx, c, account, body, defaultMappedModel)
+		}
+	}
+
 	// 自适应账号的标准 Chat Completions 入站使用供应商原生 CC 端点。
 	// Responses 形状下，DeepSeek / Kimi 继续走下方原生 Responses 链；GLM
 	// 没有 Responses 端点，先转换成 Chat Completions 再直转。

@@ -63,7 +63,7 @@
             @select="editBaseUrl = $event"
           />
           <CnBaseUrlPresets
-            v-if="isCNApiKeyAccount && account.platform !== 'opencode_go'"
+            v-if="isCNApiKeyAccount && account.platform !== 'opencode_go' && account.platform !== 'command_code'"
             class="mt-2"
             :platform="cnPresetPlatform"
             :mode="editAccountMode"
@@ -139,7 +139,7 @@
           </div>
         </div>
         <!-- Account Mode Selection (CN providers) -->
-        <div v-if="isCNApiKeyAccount && account.platform !== 'opencode_go'">
+        <div v-if="isCNApiKeyAccount && account.platform !== 'opencode_go' && account.platform !== 'command_code'">
           <label class="input-label">{{ t('admin.accounts.cnProviders.accountMode.title') }}</label>
           <div class="mt-2 flex flex-wrap gap-2">
             <button
@@ -3494,7 +3494,7 @@ const editPerplexityOptions = ref(defaultPerplexityOptions())
 const isCNApiKeyAccount = computed(
   () =>
     props.account?.type === 'apikey' &&
-    (isCNProviderPlatform(props.account.platform) || props.account.platform === 'opencode_go')
+    (isCNProviderPlatform(props.account.platform) || props.account.platform === 'opencode_go' || props.account.platform === 'command_code')
 )
 // CnBaseUrlPresets 的 platform prop 是平台字面量联合类型，模板里不能写
 // `as` 断言（其中的 `|` 会被 eslint 误判为 Vue2 filter 语法），经此 computed 传递。
@@ -3505,8 +3505,9 @@ const cnPresetPlatform = computed<CnProviderPlatform>(() => {
   }
   return 'kimi'
 })
-const adaptivePresetPlatform = computed<CnProviderPlatform | 'opencode_go'>(() => {
+const adaptivePresetPlatform = computed<CnProviderPlatform | 'opencode_go' | 'command_code'>(() => {
   if (props.account?.platform === 'opencode_go') return 'opencode_go'
+  if (props.account?.platform === 'command_code') return 'command_code'
   return cnPresetPlatform.value
 })
 const editApiProtocol = ref<CnApiProtocol>('adaptive')
@@ -4149,7 +4150,8 @@ const defaultBaseUrl = computed(() => {
     props.account?.platform === 'kimi' ||
     props.account?.platform === 'zhipu' ||
     props.account?.platform === 'deepseek' ||
-    props.account?.platform === 'opencode_go'
+    props.account?.platform === 'opencode_go' ||
+    props.account?.platform === 'command_code'
   ) {
     return defaultCNBaseUrl(props.account.platform, currentOpenCodeOrCNMode(), editApiProtocol.value)
   }
@@ -4539,7 +4541,7 @@ const syncFormFromAccount = (newAccount: Account | null) => {
     const credentials = newAccount.credentials as Record<string, unknown>
     // 国产供应商：读取 account_mode 与 api_protocol 作为可编辑初始值
     // （编辑弹窗允许修正两者，用于修复早期存错默认值的账号）。
-    if (isCNProviderPlatform(newAccount.platform) || newAccount.platform === 'opencode_go') {
+    if (isCNProviderPlatform(newAccount.platform) || newAccount.platform === 'opencode_go' || newAccount.platform === 'command_code') {
       if (newAccount.platform === 'opencode_go') {
         editOpenCodeAccountMode.value = resolveOpenCodeAccountMode(credentials.account_mode)
       } else {
@@ -4610,7 +4612,8 @@ const syncFormFromAccount = (newAccount: Account | null) => {
               : newAccount.platform === 'kimi' ||
                   newAccount.platform === 'zhipu' ||
                   newAccount.platform === 'deepseek' ||
-                  newAccount.platform === 'opencode_go'
+                  newAccount.platform === 'opencode_go' ||
+                  newAccount.platform === 'command_code'
                 ? defaultCNBaseUrl(newAccount.platform, currentOpenCodeOrCNMode(), editApiProtocol.value)
                 : 'https://api.anthropic.com'
     editBaseUrl.value = isCNApiKeyAccount.value && editApiProtocol.value === 'adaptive'
@@ -5377,7 +5380,9 @@ const handleSubmit = async () => {
 
       // 国产供应商：模式与协议写入凭据（决定额度/余额探测与转发端点/格式）。
       if (isCNApiKeyAccount.value) {
-        newCredentials.account_mode = currentOpenCodeOrCNMode()
+        if (props.account.platform !== 'command_code') {
+          newCredentials.account_mode = currentOpenCodeOrCNMode()
+        }
         newCredentials.api_protocol = editApiProtocol.value
         if (editApiProtocol.value === 'adaptive') {
           const defaults = defaultCNAdaptiveBaseUrls(adaptivePresetPlatform.value, currentOpenCodeOrCNMode())

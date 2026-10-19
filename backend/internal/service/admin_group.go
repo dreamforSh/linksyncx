@@ -318,6 +318,8 @@ func defaultModelsListCandidateIDs(platform string) []string {
 		return append([]string(nil), codebuddy.DefaultModelIDs...)
 	case PlatformOpenCodeGo:
 		return DefaultOpenCodeGoModelIDs()
+	case PlatformCommandCode:
+		return []string{DefaultCommandCodeTestModel}
 	case PlatformComposite:
 		return compositeDefaultModelsListCandidateIDs()
 	default:
@@ -338,7 +340,7 @@ func defaultAllowImageGenerationForPlatform(platform string) bool {
 func compositeDefaultModelsListCandidateIDs() []string {
 	seen := make(map[string]struct{})
 	ids := make([]string, 0)
-	for _, platform := range []string{PlatformAnthropic, PlatformGemini, PlatformOpenAI, PlatformAntigravity, PlatformGrok, PlatformPerplexity, PlatformCodeBuddy, PlatformKimi, PlatformZhipu, PlatformDeepseek, PlatformMiniMax, PlatformOpenCodeGo} {
+	for _, platform := range []string{PlatformAnthropic, PlatformGemini, PlatformOpenAI, PlatformAntigravity, PlatformGrok, PlatformPerplexity, PlatformCodeBuddy, PlatformKimi, PlatformZhipu, PlatformDeepseek, PlatformMiniMax, PlatformOpenCodeGo, PlatformCommandCode} {
 		for _, id := range defaultModelsListCandidateIDs(platform) {
 			if _, ok := seen[id]; ok {
 				continue
