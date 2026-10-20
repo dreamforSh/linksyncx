@@ -314,8 +314,9 @@ type ClaudeUsageFetchOptions struct {
 	TLSProfile  *tlsfingerprint.Profile // TLS 指纹 Profile（nil 表示不启用）
 	Fingerprint *Fingerprint            // 缓存的指纹信息（User-Agent 等）
 	Query       string                  // 附加查询参数（如 cedar_ember=1&skip_spend=1），空表示普通读取
-	// AccountConcurrency 是账号并发上限，与转发请求传给 DoWithTLS 的值一致。连接池按并发
-	// 定池大小并据此校验能否复用，探测若传 0 会被当成池配置变更，把转发的热连接池整个拆掉重建。
+	// AccountConcurrency 是账号并发上限，与转发请求传给 DoWithTLS 的值一致。account / account_proxy
+	// （默认）隔离下连接池按并发定池大小并据此校验能否复用，探测若传 0 会被当成池配置变更，
+	// 把转发的热连接池整个拆掉重建（proxy 隔离不看并发，不受影响）。
 	AccountConcurrency int
 }
 

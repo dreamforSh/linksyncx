@@ -165,7 +165,8 @@ func TestClaudeOAuthAPIClientMapsUpstreamErrors(t *testing.T) {
 }
 
 // 用量 / 配额探测与正式转发共用账号的 TLS 连接池：探测必须带上账号并发，池配置键才与转发一致。
-// 旧实现传 0，被当成池配置变更，每次探测都把转发的热连接池拆掉重建，下一个真实请求被迫重新握手。
+// 旧实现传 0，在 account / account_proxy 隔离下被当成池配置变更，每次探测都把转发的热连接池
+// 拆掉重建，下一个真实请求被迫重新握手（各隔离模式的差异见 TestTLSTransportPoolSizeFollowsConcurrencyOnlyUnderAccountIsolation）。
 // 默认的 account_proxy 隔离下，转发 → 探测 → 转发三次都必须命中同一个池。
 func TestClaudeUsageProbeReusesForwardTLSPool(t *testing.T) {
 	pool, cert := newWireTestPKI(t)

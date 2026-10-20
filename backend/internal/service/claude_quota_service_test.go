@@ -226,7 +226,7 @@ func TestClaudeQuotaRefresh_PersistsSnapshotSubscriptionAndUsage(t *testing.T) {
 	require.NotContains(t, string(snapshotJSON), "grant_1")
 }
 
-// 用量 / 配额探测要带上账号并发：TLS 连接池按并发定池大小并据此判断能否复用，
+// 用量 / 配额探测要带上账号并发：默认的 account_proxy（及 account）隔离下 TLS 连接池按并发定池大小并据此判断能否复用，
 // 探测传 0 会把转发的热连接池拆掉重建。配额刷新复用 claudeFetchOptions，同样要带上。
 func TestClaudeQuotaRefresh_ProbeCarriesAccountConcurrency(t *testing.T) {
 	fetcher := &claudeQuotaFakeFetcher{body: claudeUsageBody(cedarEmberBlock(usableCedarGrant(1)), "")}

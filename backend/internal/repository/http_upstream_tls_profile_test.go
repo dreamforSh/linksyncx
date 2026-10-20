@@ -95,3 +95,42 @@ func TestTLSTransportPoolIsolationHonoursEachAccountsProfile(t *testing.T) {
 		require.NotSame(t, acct1, acct2, "per-account isolation is unchanged")
 	})
 }
+
+// 用量 / 配额探测曾经传并发 0，这个测试界定它影响的范围：account / account_proxy 隔离下
+// 池大小按账号并发定、并发是池配置键的一部分，同一账号换个并发就会拆池重建；proxy 隔离
+// 不看并发，换并发仍命中同一个池。所以探测补传并发只改变前两种模式的行为。
+func TestTLSTransportPoolSizeFollowsConcurrencyOnlyUnderAccountIsolation(t *testing.T) {
+	profile := &tlsfingerprint.Profile{Name: "node", Curves: []uint16{29}, KeyShareGroups: []uint16{29}}
+	cases := []struct {
+		isolation   string
+		rebuildsOn0 bool
+	}{
+		{config.ConnectionPoolIsolationAccountProxy, true},
+		{config.ConnectionPoolIsolationAccount, true},
+		{config.ConnectionPoolIsolationProxy, false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.isolation, func(t *testing.T) {
+			cfg := &config.Config{Gateway: config.GatewayConfig{ConnectionPoolIsolation: tc.isolation}}
+			upstream, ok := NewHTTPUpstream(cfg).(*httpUpstreamService)
+			require.True(t, ok)
+			forward, err := upstream.getClientEntryWithTLS("", 7, 3, profile, service.HTTPUpstreamProfileDefault, false, false)
+			require.NoError(t, err)
+			sameConcurrency, err := upstream.getClientEntryWithTLS("", 7, 3, profile, service.HTTPUpstreamProfileDefault, false, false)
+			require.NoError(t, err)
+			require.Same(t, forward, sameConcurrency, "the same concurrency always reuses the pool")
+
+			zero, err := upstream.getClientEntryWithTLS("", 7, 0, profile, service.HTTPUpstreamProfileDefault, false, false)
+			require.NoError(t, err)
+			if tc.rebuildsOn0 {
+				require.NotSame(t, forward, zero, "concurrency 0 changes the pool settings and rebuilds the pool")
+			} else {
+				require.Same(t, forward, zero, "proxy isolation ignores concurrency, so concurrency 0 reuses the pool")
+			}
+			upstream.mu.RLock()
+			cached := len(upstream.clients)
+			upstream.mu.RUnlock()
+			require.Equal(t, 1, cached, "a rebuild replaces the entry under the same key instead of adding one")
+		})
+	}
+}

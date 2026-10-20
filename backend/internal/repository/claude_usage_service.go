@@ -195,8 +195,10 @@ func setClaudeOAuthHeaders(req *http.Request, opts *service.ClaudeUsageFetchOpti
 func (s *claudeUsageService) do(req *http.Request, opts *service.ClaudeUsageFetchOptions, timeout time.Duration) (*http.Response, error) {
 	if opts.TLSProfile != nil && s.httpUpstream != nil {
 		ctx, cancel := context.WithTimeout(req.Context(), timeout)
-		// 传账号并发而不是 0：与转发请求的池配置键一致，探测才会复用转发的连接池，
-		// 而不是每次探测（后台账号列表刷新时每个账号最多 3 分钟一次）都把它拆掉、逼下一个真实请求重新握手。
+		// 传账号并发而不是 0：与转发请求的池配置键一致，探测才会复用转发的连接池。
+		// account / account_proxy（默认）隔离下池大小按账号并发定，传 0 会被当成池配置变更：每次探测
+		// （后台账号列表刷新时每个账号最多 3 分钟一次）都把热连接池拆掉、逼下一个真实请求重新握手。
+		// proxy 隔离不按并发定池大小，本来就复用，传并发对它没有影响。
 		resp, err := s.httpUpstream.DoWithTLS(req.WithContext(ctx), opts.ProxyURL, opts.AccountID, opts.AccountConcurrency, opts.TLSProfile)
 		if err != nil {
 			cancel()
