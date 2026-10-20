@@ -174,7 +174,9 @@
                               : value === 'opencode_go'
                                 ? 'bg-amber-100 text-amber-800 dark:bg-amber-900/30 dark:text-amber-300'
                               : value === 'command_code'
-                                ? 'bg-slate-100 text-slate-700 dark:bg-slate-800/60 dark:text-slate-300'
+                                ? 'bg-slate-100 text-slate-700 dark:bg-slate-500/25 dark:text-slate-300'
+                              : value === 'composite'
+                                ? 'bg-cyan-100 text-cyan-800 dark:bg-cyan-900/30 dark:text-cyan-300'
                                 : 'bg-blue-100 text-blue-700 dark:bg-blue-900/30 dark:text-blue-400',
               ]"
             >
@@ -3919,7 +3921,9 @@
                                   : group.platform === 'opencode_go'
                                     ? 'bg-amber-100 text-amber-800 dark:bg-amber-900/30 dark:text-amber-300'
                                   : group.platform === 'command_code'
-                                    ? 'bg-slate-100 text-slate-700 dark:bg-slate-800/60 dark:text-slate-300'
+                                    ? 'bg-slate-100 text-slate-700 dark:bg-slate-500/25 dark:text-slate-300'
+                                  : group.platform === 'composite'
+                                    ? 'bg-cyan-100 text-cyan-800 dark:bg-cyan-900/30 dark:text-cyan-300'
                                     : 'bg-blue-100 text-blue-700 dark:bg-blue-900/30 dark:text-blue-400',
                   ]"
                 >

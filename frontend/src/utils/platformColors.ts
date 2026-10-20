@@ -206,7 +206,8 @@ const DISCOUNT: Record<Platform, string> = {
   deepseek: 'bg-teal-100 text-teal-700 dark:bg-teal-900/40 dark:text-teal-300',
   minimax: 'bg-rose-100 text-rose-700 dark:bg-rose-900/40 dark:text-rose-300',
   opencode_go: 'bg-amber-100 text-amber-800 dark:bg-amber-900/40 dark:text-amber-300',
-  command_code: 'bg-slate-100 text-slate-800 dark:bg-slate-900/40 dark:text-slate-300',
+  // dark-* 即 slate 色阶，slate-900/40 叠在 dark-800 卡片上几乎看不出底色
+  command_code: 'bg-slate-100 text-slate-800 dark:bg-slate-500/25 dark:text-slate-300',
   composite: 'bg-cyan-100 text-cyan-800 dark:bg-cyan-900/40 dark:text-cyan-300',
 }
 const DISCOUNT_DEFAULT = 'bg-red-100 text-red-700 dark:bg-red-900/40 dark:text-red-300'

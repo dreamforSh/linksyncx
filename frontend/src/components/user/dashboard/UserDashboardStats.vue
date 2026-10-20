@@ -289,10 +289,14 @@ const PLATFORM_LABELS: Record<string, string> = {
   gemini: 'Gemini',
   antigravity: 'Antigravity',
   grok: 'Grok',
+  perplexity: 'Perplexity',
+  codebuddy: 'CodeBuddy',
   kimi: 'Kimi',
   zhipu: 'Zhipu GLM',
   deepseek: 'DeepSeek',
   minimax: 'MiniMax',
+  opencode_go: 'OpenCode',
+  command_code: 'Command Code',
 }
 
 const platformLabel = (p: string) => PLATFORM_LABELS[p] ?? p

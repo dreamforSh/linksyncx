@@ -266,12 +266,23 @@ import {
   type RemainingDurationParts
 } from '@/utils/subscriptionQuota'
 
+// grok 及之后的平台取 platformColors.ts 的 ACCENT 色
 function platformAccentDotClass(p: string): string {
   switch (p) {
     case 'anthropic': return 'bg-orange-500'
     case 'openai': return 'bg-emerald-500'
     case 'antigravity': return 'bg-purple-500'
     case 'gemini': return 'bg-blue-500'
+    case 'grok': return 'bg-zinc-500'
+    case 'perplexity': return 'bg-sky-500'
+    case 'codebuddy': return 'bg-violet-500'
+    case 'kimi': return 'bg-pink-500'
+    case 'zhipu': return 'bg-indigo-500'
+    case 'deepseek': return 'bg-teal-500'
+    case 'minimax': return 'bg-rose-500'
+    case 'opencode_go': return 'bg-amber-500'
+    case 'command_code': return 'bg-slate-500'
+    case 'composite': return 'bg-cyan-500'
     default: return 'bg-gray-400'
   }
 }

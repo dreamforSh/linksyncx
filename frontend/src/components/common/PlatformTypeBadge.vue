@@ -221,6 +221,13 @@ const platformClass = computed(() => {
   if (props.platform === 'minimax') {
     return 'bg-rose-100 text-rose-700 dark:bg-rose-900/30 dark:text-rose-400'
   }
+  if (props.platform === 'opencode_go') {
+    return 'bg-amber-100 text-amber-800 dark:bg-amber-900/30 dark:text-amber-300'
+  }
+  if (props.platform === 'command_code') {
+    // dark-* 就是 slate 色阶（卡片 dark-800、悬停 dark-700），暗色用更亮的半透明 slate-500 才有底色
+    return 'bg-slate-100 text-slate-700 dark:bg-slate-500/25 dark:text-slate-300'
+  }
   return 'bg-blue-100 text-blue-700 dark:bg-blue-900/30 dark:text-blue-400'
 })
 
@@ -254,6 +261,13 @@ const typeClass = computed(() => {
   }
   if (props.platform === 'minimax') {
     return 'bg-rose-100 text-rose-600 dark:bg-rose-900/30 dark:text-rose-400'
+  }
+  if (props.platform === 'opencode_go') {
+    // amber-600 在 amber-100 上对比度不足，类型段用 amber-700
+    return 'bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-300'
+  }
+  if (props.platform === 'command_code') {
+    return 'bg-slate-100 text-slate-600 dark:bg-slate-500/25 dark:text-slate-300'
   }
   return 'bg-blue-100 text-blue-600 dark:bg-blue-900/30 dark:text-blue-400'
 })
