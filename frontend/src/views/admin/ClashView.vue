@@ -322,7 +322,7 @@ async function loadSettings() {
   try {
     settings.value = await adminAPI.clash.getSettings()
   } catch {
-    // Only used for the "per exit" hint; the settings dialog reports its own errors.
+    // 设置只用于每出口账号数提示和「自动探测已暂停」徽标，加载失败时两者都静默隐藏；设置弹窗会自行报错。
     settings.value = null
   }
 }

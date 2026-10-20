@@ -245,8 +245,8 @@ func TestClashPausedProbesNeverProbedExitCheckRespectsBudget(t *testing.T) {
 	}
 }
 
-// A refresh that moved a bound node marks its exit stale; the exit change
-// policy and the own-IP check must still see it while probes are paused.
+// 订阅刷新改动已绑定节点后出口被标记为 stale；暂停时出口变更策略和本机 IP 自查仍须立即发现它，
+// 不等出口探测间隔。
 func TestClashPausedProbesStillVerifyStaleBoundExit(t *testing.T) {
 	for _, tc := range []struct {
 		name, newIP, reason string
@@ -295,8 +295,8 @@ func TestClashAutomaticProbesDefaultKeepsScheduling(t *testing.T) {
 	require.Positive(t, env.prober.calls)
 }
 
-// In-place rotation (same node config, new egress) is what exit_change_policy
-// exists for; bound nodes keep their exit probe interval while paused.
+// 原地换出口（节点配置不变、落地 IP 变化）正是 exit_change_policy 的主场景；暂停时已绑定节点
+// 仍按出口探测间隔复核，未到期则不探测。
 func TestClashPausedProbesStillCatchInPlaceExitRotation(t *testing.T) {
 	for _, tc := range []struct {
 		name    string
