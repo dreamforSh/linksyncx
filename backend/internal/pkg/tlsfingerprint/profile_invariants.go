@@ -43,8 +43,9 @@ func ValidateProfile(profile *Profile) error {
 // 或空闲回收才生效。Name 只是展示名，不进入摘要，改名不重建连接池。
 //
 // 每个 DoWithTLS 请求都会算一次，所以直接把字段喂进 FNV-1a 64，不经 JSON 编码、不做临时分配；
-// 键只在进程内比较、不受外部输入左右，抗碰撞性无关紧要。每个字段先写字段标记和长度，
-// 不同字段里放相同取值（如 curves 与 key_share_groups 都是 [29]）摘要也不同。
+// 键只在进程内比较、不受外部输入左右，抗碰撞性无关紧要。每个字段先写字段标记和长度：字段顺序
+// 固定，长度前缀已足以让编码无歧义，不同字段里放相同取值（如 curves 与 key_share_groups 都是 [29]）
+// 摘要也不同；字段标记只是冗余的第二道分隔，防止日后有字段漏写长度时与相邻字段混淆。
 // nil 与全默认 profile 的 ClientHello 相同，摘要也相同。
 //
 // 给 Profile 新增线级字段时必须同步加到这里，TestProfileCacheKeyCoversEveryWireField 会用反射兜底。
