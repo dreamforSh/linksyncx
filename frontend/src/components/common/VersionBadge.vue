@@ -252,12 +252,18 @@
                   </svg>
                   <template v-if="restarting">
                     <span>{{ t("version.restarting") }}</span>
-                    <span v-if="restartCountdown > 0" class="tabular-nums"
-                      >({{ restartCountdown }}s)</span
+                    <span v-if="restartElapsed > 0" class="tabular-nums"
+                      >({{ restartElapsed }}s)</span
                     >
                   </template>
                   <span v-else>{{ t("version.restartNow") }}</span>
                 </button>
+                <p
+                  v-if="restarting"
+                  class="text-center text-xs text-gray-500 dark:text-dark-400"
+                >
+                  {{ t("version.restartingHint", { minutes: restartWaitMinutes }) }}
+                </p>
               </div>
 
               <!-- Priority 3: Update available for source build - show git pull hint -->
@@ -710,6 +716,13 @@ import {
   type RollbackVersionInfo,
 } from "@/api/admin/system";
 import { useClipboard } from "@/composables/useClipboard";
+import {
+  probeServiceHealth,
+  RESTART_TOTAL_LIMIT_MS,
+  restartLimitMinutes,
+  restartTotalLimitMs,
+  waitForServiceRestart,
+} from "@/utils/serviceRestart";
 import Icon from "@/components/icons/Icon.vue";
 
 const GITHUB_REPO = "dreamforSh/linksyncx";
@@ -746,7 +759,16 @@ const restarting = ref(false);
 const needRestart = ref(false);
 const updateError = ref("");
 const updateSuccess = ref(false);
-const restartCountdown = ref(0);
+// 重启等待已用时（秒）。等待时长取决于后端排空进行中的请求，无法预知，所以显示已用时而非倒计时。
+const restartElapsed = ref(0);
+// 等新进程就绪的上限：后端随重启响应下发排空宽限，宽限调大时相应放宽，
+// 避免旧进程仍在排空时就刷新到错误页；拿到响应之前按默认上限提示。
+const restartLimitMs = ref(RESTART_TOTAL_LIMIT_MS);
+const restartWaitMinutes = computed(() =>
+  restartLimitMinutes(restartLimitMs.value),
+);
+let restartTicker: ReturnType<typeof setInterval> | null = null;
+let restartWaitCancelled = false;
 // Distinguishes the success + restart panel between update and rollback flows
 const successKind = ref<"update" | "rollback">("update");
 
@@ -927,57 +949,47 @@ async function handleRollback() {
   }
 }
 
+function stopRestartTicker() {
+  if (restartTicker !== null) {
+    clearInterval(restartTicker);
+    restartTicker = null;
+  }
+}
+
 async function handleRestart() {
   if (restarting.value) return;
 
   restarting.value = true;
-  restartCountdown.value = 8;
+  restartElapsed.value = 0;
+  restartLimitMs.value = RESTART_TOTAL_LIMIT_MS;
+  restartWaitCancelled = false;
+  stopRestartTicker();
+  restartTicker = setInterval(() => {
+    restartElapsed.value++;
+  }, 1000);
 
   try {
-    await restartService();
+    const restartResult = await restartService();
+    restartLimitMs.value = restartTotalLimitMs(
+      restartResult?.shutdown_timeout_seconds,
+    );
     // Service will restart, page will reload automatically or show disconnected
   } catch (error) {
     // Expected - connection will be lost during restart
     console.log("Service restarting...");
   }
 
-  // Start countdown
-  const countdownInterval = setInterval(() => {
-    restartCountdown.value--;
-    if (restartCountdown.value <= 0) {
-      clearInterval(countdownInterval);
-      // Try to check if service is back before reload
-      checkServiceAndReload();
-    }
-  }, 1000);
-}
-
-async function checkServiceAndReload() {
-  const maxRetries = 5;
-  const retryDelay = 1000;
-
-  for (let i = 0; i < maxRetries; i++) {
-    try {
-      const response = await fetch("/health", {
-        method: "GET",
-        cache: "no-cache",
-      });
-      if (response.ok) {
-        // Service is back, reload page
-        window.location.reload();
-        return;
-      }
-    } catch {
-      // Service not ready yet
-    }
-
-    if (i < maxRetries - 1) {
-      await new Promise((resolve) => setTimeout(resolve, retryDelay));
-    }
+  // 后端先排空进行中的请求再退出、由 systemd/Docker 拉起，耗时取决于配置的宽限：
+  // 先等旧进程下线，再等新进程健康后刷新，避免刷新到排空中的旧进程或错误页。
+  const result = await waitForServiceRestart({
+    probe: () => probeServiceHealth(),
+    isCancelled: () => restartWaitCancelled,
+    totalLimitMs: restartLimitMs.value,
+  });
+  stopRestartTicker();
+  if (result !== "cancelled") {
+    window.location.reload();
   }
-
-  // After retries, reload anyway
-  window.location.reload();
 }
 
 function handleClickOutside(event: MouseEvent) {
@@ -1002,6 +1014,8 @@ onMounted(() => {
 
 onBeforeUnmount(() => {
   document.removeEventListener("click", handleClickOutside);
+  restartWaitCancelled = true;
+  stopRestartTicker();
 });
 </script>
 

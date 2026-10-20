@@ -5,6 +5,7 @@ import (
 	"encoding/hex"
 	"fmt"
 	"strings"
+	"unicode/utf16"
 
 	"github.com/google/uuid"
 	"github.com/tidwall/gjson"
@@ -17,13 +18,21 @@ import (
 // 进一步触发 Anthropic 的第三方检测。
 const fingerprintSalt = "59cf53e54c78"
 
-// computeClaudeCodeFingerprint 复刻真实 Claude Code CLI 的 cc_version 指纹算法：
+// computeClaudeCodeFingerprint 复刻真实 Claude Code CLI 的 cc_version 指纹算法
+// （2.1.296 二进制 RY + cg：`[4,7,20].map(i=>e[i]||"0")`，sha256 取前 3 位 hex）：
 //
-//  1. 取 messages 中第一条 role=user 的纯文本（首块 text）
-//  2. 取该文本的第 4、7、20 字符（不足以 '0' 补齐）
+//  1. 取第一条非 isMeta 的 user 消息的纯文本（string content 或首个 text 块）
+//  2. 取该文本 JS 下标 4、7、20 处的字符（UTF-16 码元，越界以 '0' 补齐）
 //  3. SHA256(SALT + chars + cc_version) 取 hex 前 3 字符
 //
-// 算法来自 Parrot src/transform/cc_mimicry.py:compute_fingerprint，与官方 CLI 字节对齐。
+// 算法最初取自 Parrot src/transform/cc_mimicry.py:compute_fingerprint，但那份实现按字节
+// 取 API body 首个 text 块，与 CLI 有两处偏差，已按二进制修正：
+//   - CLI 在内部消息列表上计算：会话上下文（"<system-reminder>\nAs you answer ..."）是前置的
+//     isMeta 消息，RY 跳过它取用户真正的 prompt；发往 API 时两者合并成首条 user 消息的多个
+//     text 块。因此在 API body 上要跳过开头的 <system-reminder> 块，否则所有真实 CLI 请求
+//     都会落到同一个按版本恒定的后缀上。
+//   - JS 按 UTF-16 码元取下标，中文、emoji 等非 ASCII prompt 按字节取会算出不同的值。
+//
 // 任何偏差都会导致 cc_version=X.Y.Z.{fp} 在上游侧与真实 CLI 不一致。
 func computeClaudeCodeFingerprint(body []byte, version string) string {
 	return computeClaudeCodeFingerprintView(newJSONBodyView(body, nil), version)
@@ -31,18 +40,92 @@ func computeClaudeCodeFingerprint(body []byte, version string) string {
 
 // computeClaudeCodeFingerprintView 是 computeClaudeCodeFingerprint 作用于 jsonBodyView 的版本。
 func computeClaudeCodeFingerprintView(view *jsonBodyView, version string) string {
-	firstText := extractFirstUserTextView(view)
-	indices := []int{4, 7, 20}
-	chars := make([]byte, 0, 3)
-	for _, i := range indices {
-		if i < len(firstText) {
-			chars = append(chars, firstText[i])
+	return claudeCodeFingerprintForChars(claudeCodeFingerprintCharsView(view), version)
+}
+
+// claudeCodeFingerprintForChars 对已取出的 3 个指纹字符计算后缀。
+func claudeCodeFingerprintForChars(chars, version string) string {
+	sum := sha256.Sum256([]byte(fingerprintSalt + chars + version))
+	return hex.EncodeToString(sum[:])[:3]
+}
+
+// claudeCodeFingerprintChars 按 JS `[4,7,20].map(i=>e[i]||"0").join("")` 语义取指纹字符。
+//
+// JS 字符串按 UTF-16 码元下标：BMP 外的字符（emoji 等）占两个码元，下标可能落在其中一半，
+// 取到代理项。三个码元先 join 成一个字符串再交给 node crypto 的 update(string) 按 UTF-8
+// 编码，所以相邻两个取出位恰好是高代理 + 低代理时会重新配成一个完整字符（4 字节 UTF-8），
+// 只有落单的代理项才编成 U+FFFD（EF BF BD）。utf16.Decode 的语义与此完全一致。
+// 按字节取会让中文、emoji 等 prompt 与 CLI 算出不同的后缀。
+func claudeCodeFingerprintChars(text string) string {
+	// 只需前 21 个码元；长文本（如整段 CLAUDE.md）不必整体转换。
+	var units [21]uint16
+	n := 0
+	for _, r := range text {
+		if r >= 0x10000 {
+			hi, lo := utf16.EncodeRune(r)
+			units[n] = uint16(hi)
+			n++
+			if n < len(units) {
+				units[n] = uint16(lo)
+				n++
+			}
 		} else {
-			chars = append(chars, '0')
+			// Go 解码 string 时不会产出代理项码点（非法 UTF-8 得到 U+FFFD），这里都是 BMP 字符。
+			units[n] = uint16(r)
+			n++
+		}
+		if n == len(units) {
+			break
 		}
 	}
-	sum := sha256.Sum256([]byte(fingerprintSalt + string(chars) + version))
-	return hex.EncodeToString(sum[:])[:3]
+	picked := make([]uint16, 0, 3)
+	for _, i := range [...]int{4, 7, 20} {
+		if i < n {
+			picked = append(picked, units[i])
+		} else {
+			picked = append(picked, '0')
+		}
+	}
+	return string(utf16.Decode(picked))
+}
+
+// claudeCodeFingerprintCharsView 取 CLI 指纹的输入字符。输入文本是首条 user 消息中第一个
+// 不是 <system-reminder> meta 块的文本（string content 视为单个文本块）；首条 user 消息只剩
+// meta 块（如纯图片 prompt）时按空串计，与 CLI 在无 text 块时取 "" 一致。只返回取出的字符，
+// 不持有对请求体的引用。
+func claudeCodeFingerprintCharsView(view *jsonBodyView) string {
+	messages := view.get("messages")
+	source := ""
+	if !messages.IsArray() {
+		return claudeCodeFingerprintChars(source)
+	}
+	messages.ForEach(func(_, msg gjson.Result) bool {
+		if msg.Get("role").String() != "user" {
+			return true
+		}
+		content := msg.Get("content")
+		if content.Type == gjson.String {
+			if text := content.String(); !isAnthropicSystemReminderText(text) {
+				source = text
+			}
+			return false
+		}
+		if content.IsArray() {
+			content.ForEach(func(_, block gjson.Result) bool {
+				if block.Get("type").String() != "text" {
+					return true
+				}
+				text := block.Get("text").String()
+				if isAnthropicSystemReminderText(text) {
+					return true
+				}
+				source = text
+				return false
+			})
+		}
+		return false
+	})
+	return claudeCodeFingerprintChars(source)
 }
 
 // extractFirstUserText 提取 messages 中第一条 user 消息的首段 text 内容。
@@ -97,8 +180,11 @@ func extractFirstUserTextView(view *jsonBodyView) string {
 //     零种子/默认密钥/二进制全段 8 字节常量种子/字符串派生种子/字段派生种子，
 //     在 6 组输入跨度上全部不命中——密钥被混淆/加密保护（原 2.1.37 时代为
 //     xxh64+内嵌种子，当前版本已加固）。
-//   - JS 模板里的字面量 `cch=00000` 是签名不可用/vertex 的回退形态
-//     （`m==="firstParty"&&ni()||m==="vertex"` 分支），属客户端合法形态。
+//   - JS 模板里的字面量 `cch=00000` 是占位符，不是回退形态：JS 在正常的第一方分支
+//     （`m==="firstParty"&&wi()||m==="vertex"`，wi() 即 base URL 未设置或为
+//     api.anthropic.com）总是写入它，第一方请求再由 JS 之下的原生传输层替换成签名（2.1.296
+//     二进制里 `cch=` 只出现在两份模板中，JS 层没有替换代码）。线上出现字面量 00000 即未被
+//     替换的占位符；指向自定义 base URL 的客户端则与 cc_prompt_id 等字段一起整段省略 cch。
 //
 // 网关无签名模块，维持 00000 占位，属已知残留差异。
 // cc_prompt_id：2.1.283+ 第一方携带，与 x-claude-code-prompt-id 头同值

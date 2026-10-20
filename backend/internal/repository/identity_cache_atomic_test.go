@@ -4,6 +4,8 @@ package repository
 
 import (
 	"context"
+	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"sync"
@@ -88,6 +90,367 @@ func TestIdentityCorruptedRecordIsReplacedOnCreate(t *testing.T) {
 			require.Equal(t, fp.ClientID, again.ClientID)
 		})
 	}
+}
+
+// clientIdentityMemoryStore 按 client_identity_repo 的 SQL 语义实现条件写的内存身份库，
+// 让真实 Redis 脚本与数据库优先的身份路径（ProvideIdentityService，生产装配）一起测。
+type clientIdentityMemoryStore struct {
+	mu    sync.Mutex
+	rows  map[int64]service.ClientIdentityRecord
+	err   error
+	reads int // Get 调用次数（含失败的），用来断言缓存修好后热路径不再读库
+}
+
+var _ service.ClientIdentityStore = (*clientIdentityMemoryStore)(nil)
+
+func newClientIdentityMemoryStore() *clientIdentityMemoryStore {
+	return &clientIdentityMemoryStore{rows: map[int64]service.ClientIdentityRecord{}}
+}
+
+// fail 让之后的所有读写都返回 err（模拟数据库不可用）。
+func (m *clientIdentityMemoryStore) fail(err error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.err = err
+}
+
+func (m *clientIdentityMemoryStore) count() int {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return len(m.rows)
+}
+
+func (m *clientIdentityMemoryStore) readCount() int {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.reads
+}
+
+func (m *clientIdentityMemoryStore) row(accountID int64) *service.ClientIdentityRecord {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.rowLocked(accountID)
+}
+
+func (m *clientIdentityMemoryStore) rowLocked(accountID int64) *service.ClientIdentityRecord {
+	rec, ok := m.rows[accountID]
+	if !ok {
+		return nil
+	}
+	return &rec
+}
+
+func (m *clientIdentityMemoryStore) Get(_ context.Context, accountID int64) (*service.ClientIdentityRecord, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.reads++
+	if m.err != nil {
+		return nil, m.err
+	}
+	return m.rowLocked(accountID), nil
+}
+
+func (m *clientIdentityMemoryStore) Insert(_ context.Context, rec *service.ClientIdentityRecord) (*service.ClientIdentityRecord, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.err != nil {
+		return nil, m.err
+	}
+	if _, ok := m.rows[rec.AccountID]; !ok {
+		m.rows[rec.AccountID] = *rec
+	}
+	return m.rowLocked(rec.AccountID), nil
+}
+
+func (m *clientIdentityMemoryStore) UpdateHeaders(_ context.Context, accountID, epoch int64, deviceID, ownerRef, userAgent string, headers service.ClientIdentityHeaders) (*service.ClientIdentityRecord, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.err != nil {
+		return nil, m.err
+	}
+	if rec, ok := m.rows[accountID]; ok && rec.IdentityEpoch == epoch && rec.DeviceID == deviceID {
+		rec.UserAgent, rec.Headers = userAgent, headers
+		if rec.OwnerRef == "" {
+			rec.OwnerRef = ownerRef
+		}
+		m.rows[accountID] = rec
+	}
+	return m.rowLocked(accountID), nil
+}
+
+func (m *clientIdentityMemoryStore) Rotate(_ context.Context, expectedEpoch int64, next *service.ClientIdentityRecord) (*service.ClientIdentityRecord, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.err != nil {
+		return nil, m.err
+	}
+	if rec, ok := m.rows[next.AccountID]; !ok || rec.IdentityEpoch == expectedEpoch {
+		stored := *next
+		stored.IdentityEpoch = expectedEpoch + 1
+		m.rows[next.AccountID] = stored
+	}
+	return m.rowLocked(next.AccountID), nil
+}
+
+func corruptRecordTestAccount(id int64) *service.Account {
+	return &service.Account{ID: id, Platform: service.PlatformAnthropic, Type: service.AccountTypeOAuth, Extra: map[string]any{"account_uuid": "owner-a"}}
+}
+
+// 没有可恢复 ClientID 的缓存记录（与 storedClientIDLua 的判定一致）。
+var unrecoverableFingerprintPayloads = []string{"invalid-json", "null", "{}", `{"ClientID":""}`, `{"ClientID":42}`}
+
+// 损坏判定必须与 storedClientIDLua 一致：只看区分大小写的 "ClientID" 是否为非空字符串。
+// 其它字段类型不对的记录在 Lua 里仍是合法身份，Go 侧也必须解出同一个 ClientID 而不是报损坏。
+// 代次同理要与 replaceFingerprintScript 的代次保护对齐：用 Go 解出的代次回写必须能覆盖这条记录
+// （否则收编后缓存永远修不好），低一代则被拒（说明没有凭空抬高代次）。
+// Lua 一侧跑在 miniredis 的 cjson 上（真实 Redis 遇到非法 JSON 会抛错，脚本用 pcall 兜住，结果相同）。
+// 字符串代次只选 gopher-lua 与 Redis 的 Lua 5.1 读法一致的写法：gopher-lua 的 tonumber 不认
+// "1e2" 这类不带小数点的指数字符串（Lua 5.1 读作 100），放进来测的就是 miniredis 而不是 Redis。
+func TestDecodeFingerprintAgreesWithStoredClientIDLua(t *testing.T) {
+	server := miniredis.RunT(t)
+	client := redis.NewClient(&redis.Options{Addr: server.Addr()})
+	t.Cleanup(func() { _ = client.Close() })
+	cache := NewIdentityCache(client)
+	luaClientID := redis.NewScript(storedClientIDLua + `return storedClientID(ARGV[1]) or false`)
+
+	cases := []struct {
+		payload  string
+		clientID string // 空表示损坏
+		epoch    int64
+		os       string
+	}{
+		{payload: "invalid-json"},
+		{payload: "null"},
+		{payload: "{}"},
+		{payload: "[]"},
+		{payload: `"legacy"`},
+		{payload: `{"ClientID":""}`},
+		{payload: `{"ClientID":42}`},
+		{payload: `{"ClientID":null}`},
+		{payload: `{"ClientID":["legacy"]}`},
+		{payload: `{"ClientID":"legacy"}`, clientID: "legacy"},
+		{payload: `{"ClientID":"legacy","IdentityEpoch":3}`, clientID: "legacy", epoch: 3},
+		// Go 的严格解码按不区分大小写匹配键，后出现的 "clientid" 会覆盖 ClientID（清空或换成别的值）；
+		// Lua 只认 "ClientID"，只有大小写变体键的记录在它看来没有身份。
+		{payload: `{"ClientID":"legacy","clientid":""}`, clientID: "legacy"},
+		{payload: `{"ClientID":"a","clientid":"b"}`, clientID: "a"},
+		{payload: `{"clientid":"legacy"}`},
+		// 完全相同的重复键两边都是后者胜。
+		{payload: `{"ClientID":"a","ClientID":"b"}`, clientID: "b"},
+		{payload: `{"ClientID":"legacy","UserAgent":5}`, clientID: "legacy"},
+		{payload: `{"ClientID":"legacy","UserAgent":5,"IdentityEpoch":3}`, clientID: "legacy", epoch: 3},
+		{payload: `{"ClientID":"legacy","Persisted":"yes","StainlessOS":"MacOS"}`, clientID: "legacy", os: "MacOS"},
+		// 代次类型不对：Lua 用 tonumber(...) or 0 读，Go 侧必须读出能通过代次保护的最小整数。
+		{payload: `{"ClientID":"legacy","IdentityEpoch":"3"}`, clientID: "legacy", epoch: 3},
+		{payload: `{"ClientID":"legacy","IdentityEpoch":" 3 "}`, clientID: "legacy", epoch: 3},
+		{payload: `{"ClientID":"legacy","IdentityEpoch":3.5}`, clientID: "legacy", epoch: 4},
+		{payload: `{"ClientID":"legacy","IdentityEpoch":1e2}`, clientID: "legacy", epoch: 100},
+		{payload: `{"ClientID":"legacy","IdentityEpoch":"-2.5"}`, clientID: "legacy", epoch: -2},
+		{payload: `{"ClientID":"legacy","IdentityEpoch":"abc"}`, clientID: "legacy"},
+		{payload: `{"ClientID":"legacy","IdentityEpoch":true}`, clientID: "legacy"},
+		{payload: `{"ClientID":"legacy","IdentityEpoch":null}`, clientID: "legacy"},
+		{payload: `{"ClientID":"legacy","IdentityEpoch":[3]}`, clientID: "legacy"},
+		// Lua 只读区分大小写的 "IdentityEpoch"，大小写不同的键在它看来不存在（代次 0）。
+		{payload: `{"ClientID":"legacy","UserAgent":5,"identityepoch":-5}`, clientID: "legacy"},
+		// 严格解码本身成功时也一样：后出现的大小写变体键不能把代次读低（回写被拒）或读高（代次虚涨）。
+		{payload: `{"ClientID":"legacy","IdentityEpoch":5,"identityepoch":1}`, clientID: "legacy", epoch: 5},
+		{payload: `{"ClientID":"legacy","IdentityEpoch":1,"identityepoch":5}`, clientID: "legacy", epoch: 1},
+	}
+	for i, tc := range cases {
+		t.Run(tc.payload, func(t *testing.T) {
+			fromLua, err := luaClientID.Run(t.Context(), client, nil, tc.payload).Text()
+			if errors.Is(err, redis.Nil) {
+				fromLua, err = "", nil
+			}
+			require.NoError(t, err)
+			require.Equal(t, tc.clientID, fromLua, "precondition: storedClientIDLua")
+
+			fp, err := decodeFingerprint(tc.payload)
+			if tc.clientID == "" {
+				require.ErrorIs(t, err, service.ErrCorruptClientIdentity)
+				require.Nil(t, fp)
+				return
+			}
+			require.NoError(t, err)
+			require.Equal(t, tc.clientID, fp.ClientID)
+			require.Equal(t, tc.epoch, fp.IdentityEpoch)
+			require.Equal(t, tc.os, fp.StainlessOS, "well-typed fields are still decoded")
+
+			accountID := int64(1000 + i)
+			key := fingerprintKey(accountID)
+			require.NoError(t, server.Set(key, tc.payload))
+			lower := *fp
+			lower.IdentityEpoch--
+			_, err = cache.ReplaceFingerprint(t.Context(), accountID, &lower)
+			require.NoError(t, err)
+			raw, err := server.Get(key)
+			require.NoError(t, err)
+			require.Equal(t, tc.payload, raw, "the epoch guard refuses one epoch below the decoded epoch")
+
+			stored, err := cache.ReplaceFingerprint(t.Context(), accountID, fp)
+			require.NoError(t, err)
+			require.Equal(t, tc.epoch, stored.IdentityEpoch)
+			raw, err = server.Get(key)
+			require.NoError(t, err)
+			var repaired service.Fingerprint
+			require.NoError(t, json.Unmarshal([]byte(raw), &repaired), "the decoded epoch passes the guard and repairs the record")
+			require.Equal(t, tc.clientID, repaired.ClientID)
+			require.Equal(t, tc.epoch, repaired.IdentityEpoch)
+		})
+	}
+}
+
+// 数据库优先路径（生产装配）上，没有可恢复 ClientID 的缓存记录按缓存缺失处理：在库中新建身份并
+// 覆盖损坏的键。不能当成「Redis 暂时读不到」失败关闭，否则账号在键过期前一直身份不可用。
+func TestPersistedIdentityReplacesCorruptCacheRecord(t *testing.T) {
+	for _, payload := range unrecoverableFingerprintPayloads {
+		t.Run(payload, func(t *testing.T) {
+			server, cache := newIdentityCacheForTest(t)
+			store := newClientIdentityMemoryStore()
+			svc := service.ProvideIdentityService(cache, store)
+			require.NoError(t, server.Set(fingerprintKey(7), payload))
+			_, err := cache.GetFingerprint(t.Context(), 7)
+			require.ErrorIs(t, err, service.ErrCorruptClientIdentity)
+
+			fp, err := svc.GetOrCreateAccountFingerprint(t.Context(), corruptRecordTestAccount(7), http.Header{})
+			require.NoError(t, err)
+			require.NotEmpty(t, fp.ClientID)
+			require.Equal(t, 1, store.count())
+			require.Equal(t, fp.ClientID, store.row(7).DeviceID)
+
+			stored, err := cache.GetFingerprint(t.Context(), 7)
+			require.NoError(t, err)
+			require.Equal(t, fp.ClientID, stored.ClientID)
+			require.True(t, stored.Persisted)
+			require.Equal(t, fingerprintTTL, server.TTL(fingerprintKey(7)))
+
+			// 之后由修好的缓存服务：数据库不可用时也拿到同一身份。
+			store.fail(errors.New("database down"))
+			again, err := svc.GetOrCreateAccountFingerprint(t.Context(), corruptRecordTestAccount(7), http.Header{})
+			require.NoError(t, err)
+			require.Equal(t, fp.ClientID, again.ClientID)
+		})
+	}
+}
+
+// ClientID 完好、只是其它字段类型不对的记录在 storedClientIDLua 看来是合法身份：必须原样收编进库
+// （device_id 不变、代次沿用），不能另起一台新设备；收编后缓存被规范记录覆盖，后续请求不再依赖数据库。
+// 代次本身类型不对、或被大小写变体键遮住时按 Lua 代次保护读到的值收编，否则覆盖缓存的写入一直被拒、
+// 每个请求都去读库。
+func TestPersistedIdentityAdoptsSalvageableCacheRecord(t *testing.T) {
+	cases := []struct {
+		name    string
+		payload string
+		epoch   int64
+	}{
+		{name: "wrong-typed field", payload: `{"ClientID":"legacy","UserAgent":5}`},
+		{name: "wrong-typed field with epoch", payload: `{"ClientID":"legacy","UserAgent":5,"IdentityEpoch":3}`, epoch: 3},
+		{name: "numeric-string epoch", payload: `{"ClientID":"legacy","IdentityEpoch":"3"}`, epoch: 3},
+		{name: "fractional epoch", payload: `{"ClientID":"legacy","IdentityEpoch":3.5}`, epoch: 4},
+		{name: "exponent epoch", payload: `{"ClientID":"legacy","IdentityEpoch":1e2}`, epoch: 100},
+		{name: "case-variant epoch key", payload: `{"ClientID":"legacy","IdentityEpoch":5,"identityepoch":1}`, epoch: 5},
+		{name: "case-variant client ID key", payload: `{"ClientID":"legacy","clientid":"other"}`},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			server, cache := newIdentityCacheForTest(t)
+			store := newClientIdentityMemoryStore()
+			svc := service.ProvideIdentityService(cache, store)
+			require.NoError(t, server.Set(fingerprintKey(8), tc.payload))
+
+			fp, err := svc.GetOrCreateAccountFingerprint(t.Context(), corruptRecordTestAccount(8), http.Header{})
+			require.NoError(t, err)
+			require.Equal(t, "legacy", fp.ClientID)
+			require.Equal(t, tc.epoch, fp.IdentityEpoch)
+			rec := store.row(8)
+			require.NotNil(t, rec)
+			require.Equal(t, "legacy", rec.DeviceID)
+			require.Equal(t, tc.epoch, rec.IdentityEpoch)
+
+			raw, err := server.Get(fingerprintKey(8))
+			require.NoError(t, err)
+			var repaired service.Fingerprint
+			require.NoError(t, json.Unmarshal([]byte(raw), &repaired), "the cache now holds a well-formed record")
+			require.Equal(t, "legacy", repaired.ClientID)
+			require.Equal(t, tc.epoch, repaired.IdentityEpoch)
+			require.True(t, repaired.Persisted)
+			require.NotEmpty(t, repaired.UserAgent)
+
+			reads := store.readCount()
+			for i := 0; i < 2; i++ {
+				again, err := svc.GetOrCreateAccountFingerprint(t.Context(), corruptRecordTestAccount(8), http.Header{})
+				require.NoError(t, err)
+				require.Equal(t, "legacy", again.ClientID)
+				require.Equal(t, tc.epoch, again.IdentityEpoch)
+			}
+			require.Equal(t, reads, store.readCount(), "the repaired cache serves later requests without reading the DB")
+
+			store.fail(errors.New("database down"))
+			for i := 0; i < 2; i++ {
+				again, err := svc.GetOrCreateAccountFingerprint(t.Context(), corruptRecordTestAccount(8), http.Header{})
+				require.NoError(t, err)
+				require.Equal(t, "legacy", again.ClientID)
+				require.Equal(t, tc.epoch, again.IdentityEpoch)
+			}
+		})
+	}
+}
+
+// 管理员重置遇到损坏记录：没有可收编的身份，等同账号还没有身份，返回 (nil, nil) 而不是报错；
+// 下次请求照常新建。ClientID 完好的记录则先收编，再从它的代次往上轮换。
+func TestResetClientIdentityWithCorruptCacheRecord(t *testing.T) {
+	for _, payload := range unrecoverableFingerprintPayloads {
+		t.Run(payload, func(t *testing.T) {
+			server, cache := newIdentityCacheForTest(t)
+			store := newClientIdentityMemoryStore()
+			svc := service.ProvideIdentityService(cache, store)
+			require.NoError(t, server.Set(fingerprintKey(10), payload))
+
+			fp, err := svc.ResetClientIdentity(t.Context(), corruptRecordTestAccount(10))
+			require.NoError(t, err)
+			require.Nil(t, fp)
+			require.Zero(t, store.count())
+
+			created, err := svc.GetOrCreateAccountFingerprint(t.Context(), corruptRecordTestAccount(10), http.Header{})
+			require.NoError(t, err)
+			require.Equal(t, created.ClientID, store.row(10).DeviceID)
+		})
+	}
+
+	t.Run("salvageable record", func(t *testing.T) {
+		server, cache := newIdentityCacheForTest(t)
+		store := newClientIdentityMemoryStore()
+		svc := service.ProvideIdentityService(cache, store)
+		require.NoError(t, server.Set(fingerprintKey(11), `{"ClientID":"legacy","UserAgent":5,"IdentityEpoch":3}`))
+
+		fp, err := svc.ResetClientIdentity(t.Context(), corruptRecordTestAccount(11))
+		require.NoError(t, err)
+		require.NotNil(t, fp)
+		require.NotEqual(t, "legacy", fp.ClientID)
+		require.Equal(t, int64(4), fp.IdentityEpoch, "the rotation continues from the adopted epoch")
+		require.Equal(t, fp.ClientID, store.row(11).DeviceID)
+		stored, err := cache.GetFingerprint(t.Context(), 11)
+		require.NoError(t, err)
+		require.Equal(t, fp.ClientID, stored.ClientID)
+	})
+}
+
+// 纯 Redis 路径同理：CreateFingerprint 的 Lua 会把 ClientID 完好的记录当作合法胜者返回，
+// Go 侧解不出来就只能报身份不可用；能解出时沿用它，并在续写时被规范记录覆盖。
+func TestIdentityCacheOnlyPathKeepsSalvageableRecord(t *testing.T) {
+	server, cache := newIdentityCacheForTest(t)
+	require.NoError(t, server.Set(fingerprintKey(12), `{"ClientID":"legacy","UserAgent":5}`))
+
+	fp, err := service.NewIdentityService(cache).GetOrCreateFingerprint(t.Context(), 12, http.Header{})
+	require.NoError(t, err)
+	require.Equal(t, "legacy", fp.ClientID)
+
+	raw, err := server.Get(fingerprintKey(12))
+	require.NoError(t, err)
+	var repaired service.Fingerprint
+	require.NoError(t, json.Unmarshal([]byte(raw), &repaired))
+	require.Equal(t, "legacy", repaired.ClientID)
+	require.NotEmpty(t, repaired.UserAgent)
 }
 
 func TestIdentityCreateKeepsExistingWinner(t *testing.T) {

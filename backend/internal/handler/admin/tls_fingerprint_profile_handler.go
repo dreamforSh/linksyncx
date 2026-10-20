@@ -77,7 +77,7 @@ func (h *TLSFingerprintProfileHandler) GetByID(c *gin.Context) {
 		return
 	}
 	if profile == nil {
-		response.NotFound(c, "Profile not found")
+		response.ErrorFrom(c, service.ErrTLSFingerprintProfileNotFound)
 		return
 	}
 
@@ -113,10 +113,7 @@ func (h *TLSFingerprintProfileHandler) Create(c *gin.Context) {
 
 	created, err := h.service.Create(c.Request.Context(), profile)
 	if err != nil {
-		if _, ok := err.(*model.ValidationError); ok {
-			response.BadRequest(c, err.Error())
-			return
-		}
+		// 校验失败由服务层转成带 reason / metadata 的 400，重名是 409，统一交给 ErrorFrom。
 		response.ErrorFrom(c, err)
 		return
 	}
@@ -145,7 +142,8 @@ func (h *TLSFingerprintProfileHandler) Update(c *gin.Context) {
 		return
 	}
 	if existing == nil {
-		response.NotFound(c, "Profile not found")
+		// 与仓储 Update / Delete 找不到记录时同一个错误：前端只需按一个 reason 显示“模板不存在”。
+		response.ErrorFrom(c, service.ErrTLSFingerprintProfileNotFound)
 		return
 	}
 
@@ -205,10 +203,6 @@ func (h *TLSFingerprintProfileHandler) Update(c *gin.Context) {
 
 	updated, err := h.service.Update(c.Request.Context(), profile)
 	if err != nil {
-		if _, ok := err.(*model.ValidationError); ok {
-			response.BadRequest(c, err.Error())
-			return
-		}
 		response.ErrorFrom(c, err)
 		return
 	}

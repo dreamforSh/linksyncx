@@ -725,7 +725,7 @@ func (s *OpenAIGatewayService) ForwardGrokMedia(
 
 	proxyURL, proxyErr := account.ProxyURLForOutbound()
 	if proxyErr != nil {
-		return nil, proxyErr
+		return nil, s.handleOpenAIUpstreamTransportError(ctx, c, account, proxyErr, false)
 	}
 	upstreamStart := time.Now()
 	resp, err := s.httpUpstream.Do(upstreamReq, proxyURL, account.ID, account.Concurrency)
@@ -828,7 +828,7 @@ func (s *OpenAIGatewayService) forwardGrokMediaVideoContent(
 
 	proxyURL, proxyErr := account.ProxyURLForOutbound()
 	if proxyErr != nil {
-		return nil, proxyErr
+		return nil, s.handleOpenAIUpstreamTransportError(ctx, c, account, proxyErr, false)
 	}
 	upstreamStart := time.Now()
 	statusResp, err := s.httpUpstream.Do(statusReq, proxyURL, account.ID, account.Concurrency)

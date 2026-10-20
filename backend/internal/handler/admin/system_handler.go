@@ -20,6 +20,12 @@ import (
 type SystemHandler struct {
 	updateSvc systemUpdateService
 	lockSvc   *service.SystemOperationLockService
+	// shutdownTimeoutSeconds 是 server.shutdown_timeout_seconds。重启会先排空进行中的
+	// 请求最多这么久，随重启响应下发后，前端据此放宽等待新进程就绪的上限，宽限调大时
+	// 不会在旧进程仍在排空时就刷新到错误页。
+	shutdownTimeoutSeconds int
+	// scheduleRestart 在重启响应发出后发起重启；测试替换它，避免真的走 sysutil 退出进程。
+	scheduleRestart func()
 }
 
 // systemUpdateTimeout bounds a full in-place update or rollback: the release
@@ -52,11 +58,24 @@ type systemUpdateService interface {
 }
 
 // NewSystemHandler creates a new SystemHandler
-func NewSystemHandler(updateSvc systemUpdateService, lockSvc *service.SystemOperationLockService) *SystemHandler {
+func NewSystemHandler(updateSvc systemUpdateService, lockSvc *service.SystemOperationLockService, shutdownTimeoutSeconds int) *SystemHandler {
 	return &SystemHandler{
-		updateSvc: updateSvc,
-		lockSvc:   lockSvc,
+		updateSvc:              updateSvc,
+		lockSvc:                lockSvc,
+		shutdownTimeoutSeconds: shutdownTimeoutSeconds,
+		scheduleRestart:        scheduleServiceRestart,
 	}
+}
+
+// scheduleServiceRestart schedules the service restart in the background after
+// the response is sent, so the client receives the success response before the
+// service restarts.
+func scheduleServiceRestart() {
+	go func() {
+		// Wait a moment to ensure the response is sent
+		time.Sleep(500 * time.Millisecond)
+		sysutil.RestartServiceAsync()
+	}()
 }
 
 // GetVersion returns the current version
@@ -214,18 +233,18 @@ func (h *SystemHandler) RestartService(c *gin.Context) {
 			release("", succeeded)
 		}()
 
-		// Schedule service restart in background after sending response
-		// This ensures the client receives the success response before the service restarts
-		go func() {
-			// Wait a moment to ensure the response is sent
-			time.Sleep(500 * time.Millisecond)
-			sysutil.RestartServiceAsync()
-		}()
+		h.scheduleRestart()
 		succeeded = true
-		return gin.H{
+		data := gin.H{
 			"message":      "Service restart initiated",
 			"operation_id": lock.OperationID(),
-		}, nil
+		}
+		if h.shutdownTimeoutSeconds > 0 {
+			// 同一 Idempotency-Key 的重试拿到的是这份已存储的结果，宽限随之一起重放；
+			// 字段缺失时前端退回固定上限。
+			data["shutdown_timeout_seconds"] = h.shutdownTimeoutSeconds
+		}
+		return data, nil
 	})
 }
 

@@ -88,3 +88,47 @@ func TestClaudeOAuthExchangeCodeEmitsAxiosLoginShape(t *testing.T) {
 		`","client_id":"` + oauth.ClientID + `","code_verifier":"verifier-xyz","state":"STATEVAL"}`
 	require.Equal(t, wantBody, string(bodies[0]), "exchange body field order must match the real client")
 }
+
+// 控制面（token 交换 / 刷新）配了 https:// 代理时，先校验代理自己的证书：不受信就报错，
+// 不向一个没验明身份的代理发 CONNECT，更不能回退直连——账号分配了代理就必须全程走代理，
+// 直连会暴露网关真实出口 IP。证书受信时正常建隧道，请求只经隧道到达上游一次。
+func TestControlPlaneHTTPSProxyVerifiesProxyCertAndNeverFallsBackDirect(t *testing.T) {
+	pool, cert := newWireTestPKI(t)
+	upstream := startWireCaptureServer(t, cert)
+	proxyAddr, tunnels := startWireConnectProxy(t, &cert)
+	proxyURL := "https://" + proxyAddr
+
+	untrusted, err := newControlPlaneReqClient(proxyURL, nil)
+	require.NoError(t, err)
+	_, err = untrusted.R().SetContext(t.Context()).Get("https://" + upstream.addr)
+	require.ErrorContains(t, err, "certificate")
+	require.Zero(t, tunnels.Load(), "an unverified HTTPS proxy must receive no CONNECT")
+	require.Zero(t, upstream.accepted.Load(), "a proxy failure must not fall back to a direct connection")
+
+	trusted, err := newControlPlaneReqClient(proxyURL, pool)
+	require.NoError(t, err)
+	_, err = trusted.R().SetContext(t.Context()).Get("https://" + upstream.addr)
+	require.NoError(t, err)
+	require.EqualValues(t, 1, tunnels.Load(), "the request must travel through the verified proxy tunnel")
+	require.Len(t, upstream.capturedHeads(), 1)
+}
+
+// claude.ai cookie 步骤用的浏览器客户端（Chrome persona）同样要对 https:// 代理 fail-closed：
+// 代理证书不受信时，https 与 http 目标都直接报错，代理收不到 CONNECT，上游收不到任何直连。
+func TestBrowserClientUntrustedHTTPSProxyFailsClosed(t *testing.T) {
+	_, cert := newWireTestPKI(t)
+	upstream := startWireCaptureServer(t, cert)
+	proxyAddr, tunnels := startWireConnectProxy(t, &cert)
+
+	client, err := createBrowserReqClient("https://" + proxyAddr)
+	require.NoError(t, err)
+	for _, target := range []string{
+		"https://" + upstream.addr + "/api/organizations",
+		"http://" + upstream.addr + "/api/organizations",
+	} {
+		_, err = client.R().SetContext(t.Context()).Get(target)
+		require.ErrorContains(t, err, "certificate", "target=%s", target)
+	}
+	require.Zero(t, tunnels.Load(), "an unverified HTTPS proxy must receive no CONNECT")
+	require.Zero(t, upstream.accepted.Load(), "a proxy failure must not fall back to a direct connection")
+}

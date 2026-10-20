@@ -75,7 +75,7 @@ func (s *AntigravityGatewayService) ForwardUpstream(ctx context.Context, c *gin.
 	// 代理 URL（fail-closed：分配了代理但不可用时拒绝直连，避免出口 IP 泄漏）
 	proxyURL, proxyErr := account.ProxyURLForOutbound()
 	if proxyErr != nil {
-		return nil, proxyErr
+		return nil, antigravityProxyUnavailableFailover(c, account, proxyErr, gatewayTransportFailoverBody)
 	}
 
 	// 发送请求

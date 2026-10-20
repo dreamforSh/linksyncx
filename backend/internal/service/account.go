@@ -4,6 +4,7 @@ package service
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 	"hash/fnv"
 	"log/slog"
 	"net/url"
@@ -21,6 +22,7 @@ import (
 	"github.com/Wei-Shaw/sub2api/internal/pkg/geminicli"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/openai_compat"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/perplexity"
+	"github.com/Wei-Shaw/sub2api/internal/pkg/proxyurl"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/xai"
 )
 
@@ -2552,7 +2554,7 @@ func (a *Account) GetTLSFingerprintProfileID() int64 {
 }
 
 // ErrAccountProxyUnavailable 表示账号分配了代理，但运行时无法解析出可用的代理 URL
-// （关系未加载 / 与 ProxyID 错配 / 代理被删 / clash 节点缺失）。出站调用方遇到它必须
+// （关系未加载 / 与 ProxyID 错配 / 代理被删 / URL 无效 / clash 节点缺失）。出站调用方遇到它必须
 // fail-closed（报错或 failover），**绝不能回退直连**——否则会泄漏网关真实出口 IP。
 var ErrAccountProxyUnavailable = errors.New("assigned proxy is currently unavailable; refusing to connect directly")
 
@@ -2562,11 +2564,16 @@ var ErrAccountProxyUnavailable = errors.New("assigned proxy is currently unavail
 //   - 未分配代理（ProxyID == nil）→ ("", nil)：直连是预期行为。
 //   - 分配了代理但关系缺失 / 与 ProxyID 错配 / URL 为空 → ("", ErrAccountProxyUnavailable)：
 //     调用方必须据此拒绝直连（数据面走 failover，其余路径上抛错误）。
+//   - URL 无效（scheme 不受支持 / 缺少 host / 无法解析）同样视为不可用 → ("", 包装
+//     ErrAccountProxyUnavailable 的错误)。
 //   - 正常 → (proxy.URL(), nil)。
 //
 // 传输层只把"非空且不可解析"的代理判为错误、把空串当直连，无法区分"未分配"与"分配了但丢失"，
-// 因此账号级的判定必须在这里完成。clash 出口是 socks5://127.0.0.1:<port> 的 Proxy 行，核心/节点
-// 不健康时连接会被拒绝（REJECT 占位监听 / connection-refused），只要真的使用该 URL 即天然 fail-closed。
+// 因此账号级的判定必须在这里完成。无效 URL 虽然传输层也会拒绝，但那只是一次普通传输错误
+// （不带 AccountUnavailable），粘性会话会一直重试同一个注定失败的账号，token 刷新与 relay
+// 的 &proxy= 参数也会拿到它；在这里拦下才能按"账号不可用"切号。clash 出口是
+// socks5://127.0.0.1:<port> 的 Proxy 行，核心/节点不健康时连接会被拒绝（REJECT 占位监听 /
+// connection-refused），只要真的使用该 URL 即天然 fail-closed。
 func (a *Account) ProxyURLForOutbound() (string, error) {
 	proxyURL, err := a.ProxyEgressIdentityURL()
 	if err != nil || proxyURL == "" {
@@ -2591,8 +2598,15 @@ func (a *Account) ProxyEgressIdentityURL() (string, error) {
 		return "", ErrAccountProxyUnavailable
 	}
 	proxyURL := a.Proxy.URL()
+	// 空串检查不能省：proxyurl.Parse("") 返回 nil 错误（表示直连）。
 	if proxyURL == "" {
 		return "", ErrAccountProxyUnavailable
+	}
+	// 只校验、仍返回原 URL（socks5→socks5h 的升级留给传输层，线上行为不变）。Clash 的
+	// 带账号标签 URL 与这里同 scheme、同 host，校验一次即可。错误只带代理 ID、不带 Parse
+	// 的原因文本：它会出现在账号测试结果与 ops 日志里，不应回显代理配置的任何片段（含凭据）。
+	if _, _, err := proxyurl.Parse(proxyURL); err != nil {
+		return "", fmt.Errorf("%w: proxy %d has an invalid url", ErrAccountProxyUnavailable, a.Proxy.ID)
 	}
 	return proxyURL, nil
 }

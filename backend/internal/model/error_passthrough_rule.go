@@ -90,11 +90,20 @@ func (r *ErrorPassthroughRule) Validate() error {
 }
 
 // ValidationError 表示验证错误
+//
+// Cause 可选，保存底层原因（如 tlsfingerprint 的类型化错误）并经 Unwrap 暴露给 errors.Is / errors.As，
+// 上层据此给出稳定的 reason 与 metadata；Error() 仍只由 Field 与 Message 组成。
 type ValidationError struct {
 	Field   string
 	Message string
+	Cause   error
 }
 
 func (e *ValidationError) Error() string {
 	return e.Field + ": " + e.Message
+}
+
+// Unwrap 返回底层原因，没有时为 nil。
+func (e *ValidationError) Unwrap() error {
+	return e.Cause
 }

@@ -168,6 +168,47 @@ Kubernetes, use a PostgreSQL readiness probe and retain the Sub2API startup
 retry behavior; configure the application liveness probe separately so a
 database recovery period is not treated as a permanent process failure.
 
+### 优雅关停与重启（Graceful Shutdown）
+
+收到 SIGTERM/SIGINT，或在管理后台点击“重启”（包括在线更新/回滚后的重启）时，
+Sub2API 按以下顺序退出：
+
+1. 立即关闭监听，新请求被拒绝（经反向代理时返回 502）；WebSocket 会话立即断开。
+2. 进行中的 HTTP/SSE 请求最多再等 `server.shutdown_timeout_seconds`（环境变量
+   `SERVER_SHUTDOWN_TIMEOUT_SECONDS`，默认 30 秒）自然结束，流式请求得以拿到完整 usage 并计费。
+3. 宽限期结束后取消剩余请求（包括多数与客户端解耦的上游流）、断开连接，再最多等 5 秒让
+   handler 收尾；被截断的流式请求走既有的部分 usage 计费逻辑（按已观测到的 usage 入账）。
+4. 执行依赖清理：usage 记录池、计费缓存写队列、配额 flusher 落盘，最后关闭 Redis/数据库，最多 30 秒。
+5. 以退出码 0 退出，由 systemd `Restart=always` / Docker `restart: unless-stopped` 重新拉起。
+
+因此部署侧的停止超时必须不小于“宽限 + 35 秒”，否则进程会在计费落盘之前被 SIGKILL：
+
+| 部署方式 | 设置项 | 默认值 |
+|----------|--------|--------|
+| Docker Compose | `stop_grace_period`（`.env` 中的 `SUB2API_STOP_GRACE_PERIOD`） | `90s` |
+| `docker run` | `--stop-timeout` | 无（Docker 默认 10 秒，需显式设为 `90`） |
+| systemd | `sub2api.service` 中的 `TimeoutStopSec` | `90` |
+| Kubernetes | Pod 的 `terminationGracePeriodSeconds` | 无（Kubernetes 默认 30 秒，需显式设为不小于宽限 + 35） |
+| Apple container | `.env` 中的 `APPLE_CONTAINER_STOP_TIMEOUT_SECONDS` | 留空时取 max(90, `.env` 中的宽限 + 60) |
+
+把宽限调到 55 秒以上时请同步调大 Docker Compose、`docker run`、systemd 与 Kubernetes 的值；
+Apple container 会跟随 `.env` 中的 `SERVER_SHUTDOWN_TIMEOUT_SECONDS` 自动调整，宽限只写在
+`config.yaml` 里时需显式设置 `APPLE_CONTAINER_STOP_TIMEOUT_SECONDS`。宽限期内服务不接受
+新请求，宽限越长，每次重启的不可用窗口也越长；管理后台“重启”后等待新进程就绪的时间会按
+宽限自动放宽。
+
+systemd unit 同时设置 `KillMode=mixed`：SIGTERM 只发给主进程，传输插件等子进程由主进程
+在清理阶段按序停止；默认的 `control-group` 会让插件在宽限一开始就退出，经插件转发的请求
+因此拿不到宽限。早先安装的 unit 需要手动加上这一行并执行 `systemctl daemon-reload`。
+
+**升级已有 Docker 部署**：停止超时不会跟着镜像一起更新。`docker compose pull && docker compose up -d`
+只拉取新镜像、不替换 compose 文件，而早先下载的 compose 文件里 `sub2api` 服务没有
+`stop_grace_period`，`.env` 中的 `SUB2API_STOP_GRACE_PERIOD` 因此不起作用，停止超时仍是
+Docker 默认的 10 秒。请改用仓库当前的 compose 文件（保留自己的改动），或手动给 `sub2api`
+服务加上 `stop_grace_period: 90s`（值必须带单位），再执行 `docker compose up -d` 重建容器。
+`docker run` 部署在重新创建容器时加上 `--stop-timeout 90`（以及 `--restart unless-stopped`，
+后台“重启”后容器才会被拉起）；Kubernetes 把 `terminationGracePeriodSeconds` 设为不小于宽限 + 35。
+
 ### Database Migration Notes (PostgreSQL)
 
 - Migrations are applied in lexicographic order (e.g. `001_...sql`, `002_...sql`).
@@ -257,6 +298,8 @@ docker compose down -v
 | `JWT_SECRET` | **Recommended** | *(auto-generated)* | JWT secret (fixed for persistent sessions) |
 | `TOTP_ENCRYPTION_KEY` | **Recommended** | *(auto-generated)* | TOTP encryption key (fixed for persistent 2FA) |
 | `SERVER_PORT` | No | `8080` | Server port |
+| `SERVER_SHUTDOWN_TIMEOUT_SECONDS` | No | *(empty)* | Grace for in-flight HTTP/SSE requests on stop/restart (1-3600). Empty keeps `server.shutdown_timeout_seconds` from a mounted config.yaml (default `30`); a value overrides it. See 优雅关停与重启. |
+| `SUB2API_STOP_GRACE_PERIOD` | No | `90s` | Compose `stop_grace_period`; must be at least the shutdown grace + 35s. |
 | `ADMIN_EMAIL` | No | `admin@sub2api.local` | Admin email |
 | `ADMIN_PASSWORD` | No | *(auto-generated)* | Admin password |
 | `TZ` | No | `Asia/Shanghai` | Timezone |

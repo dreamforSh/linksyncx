@@ -418,7 +418,7 @@ func TestRewriteSystemForNonClaudeCode(t *testing.T) {
 			require.Contains(t, billingBlock["text"], "x-anthropic-billing-header:")
 			require.Contains(t, billingBlock["text"], "cc_version=")
 			require.Contains(t, billingBlock["text"], "cc_entrypoint=cli")
-			// 2.1.280 实证：cch 是字面量占位符（无签名），第一方请求恒带。
+			// mimic 合成块带 cch=00000 占位符（真实 CLI 第一方请求由原生层替换成签名，网关无签名实现）。
 			require.Contains(t, billingBlock["text"], "cch=00000;")
 
 			systemBlock, ok := systemArr[1].(map[string]any)

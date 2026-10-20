@@ -28,7 +28,9 @@ func classifyOpenAIAPIKeyHealthFailure(err error) (int, []byte, bool) {
 	if errors.As(err, &failoverErr) {
 		// These failures already have dedicated recovery/state handling or are not
 		// attributable to the selected account.
+		// 代理绑定失效时请求根本没出站：只换号，不计入熔断窗口，否则冷却期内修好绑定也恢复不了调度。
 		if failoverErr.IsCredentialFailure() ||
+			failoverErr.ProxyBindingUnavailable ||
 			failoverErr.RequestScopedTransient ||
 			failoverErr.RetryableOnSameAccount ||
 			failoverErr.Scope == GatewayFailureScopeRequest ||

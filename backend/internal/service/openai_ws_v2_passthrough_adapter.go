@@ -858,7 +858,7 @@ func (s *OpenAIGatewayService) proxyResponsesWebSocketV2Passthrough(
 	}
 	proxyURL, proxyErr := account.ProxyURLForOutbound()
 	if proxyErr != nil {
-		return proxyErr
+		return s.handleOpenAIWSUpstreamTransportError(ctx, c, account, proxyErr, true)
 	}
 
 	dialer := s.getOpenAIWSPassthroughDialer()

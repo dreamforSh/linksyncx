@@ -2,6 +2,7 @@
 package model
 
 import (
+	"errors"
 	"time"
 
 	"github.com/Wei-Shaw/sub2api/internal/pkg/tlsfingerprint"
@@ -28,9 +29,34 @@ type TLSFingerprintProfile struct {
 }
 
 // Validate 验证模板配置的有效性
+//
+// 除名称外还要求最终生效的 ClientHello 自洽（tlsfingerprint.ValidateProfile）：这样的模板在
+// DoWithTLS 建池前一定会被拒绝，存进去只会让直接绑定它的账号每个请求都失败；“随机”模式只能
+// 在加载时把它排除在候选之外（TLSFingerprintProfileService.setLocalCache），救不了直接绑定的账号。
+// 目前唯一的检查是 key_share 必须是 supported_groups 的子集，
+// 典型踩坑是自定义了 curves 却没填 key_share_groups，于是继承内置默认的 [4588, 29]，
+// 所以错误挂在 key_share_groups 上，并提示空字段会回落到内置默认值。
+// 例外是自定义 extensions 带了 key_share（51）却漏了 supported_groups（10）：curves 根本发不出去，
+// 改 curves 无济于事，错误挂在 extensions 上并说明怎么补。
+// 两种情况都把 ValidateProfile 的原始错误挂在 Cause 上，服务层据此给出稳定的 reason 与 metadata
+// （见 tlsProfileValidationError），前端用表单上的字段名显示本地化原因；这里的英文 Message 只是兜底。
 func (p *TLSFingerprintProfile) Validate() error {
 	if p.Name == "" {
 		return &ValidationError{Field: "name", Message: "name is required"}
+	}
+	if err := tlsfingerprint.ValidateProfile(p.ToTLSProfile()); err != nil {
+		if errors.Is(err, tlsfingerprint.ErrKeyShareWithoutSupportedGroups) {
+			return &ValidationError{
+				Field:   "extensions",
+				Message: err.Error() + "; add supported_groups (10) to extensions, or leave extensions empty to use the built-in order",
+				Cause:   err,
+			}
+		}
+		return &ValidationError{
+			Field:   "key_share_groups",
+			Message: err.Error() + "; every key share group must also be listed in curves (empty fields fall back to the built-in defaults)",
+			Cause:   err,
+		}
 	}
 	return nil
 }

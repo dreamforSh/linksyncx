@@ -7,6 +7,8 @@ import (
 	"net/url"
 	"strconv"
 	"time"
+
+	"github.com/Wei-Shaw/sub2api/internal/pkg/proxyurl"
 )
 
 // 代理过期回退策略。曾经的 "direct"（过期后把账号改投直连）已移除（迁移 251）：
@@ -80,7 +82,7 @@ func (p *Proxy) URL() string {
 // 一致（fail-closed）：
 //
 //   - proxyID 为 nil → ("", nil)：未指定代理，直连是预期。
-//   - repo 缺失 / 查询失败 / 代理不存在 / URL 为空 → 包装 ErrAccountProxyUnavailable 的错误，
+//   - repo 缺失 / 查询失败 / 代理不存在 / URL 为空或无效 → 包装 ErrAccountProxyUnavailable 的错误，
 //     调用方绝不能回退直连（否则泄漏网关真实出口 IP）。
 //
 // 用于只持有代理 ID 的出站路径：OAuth 授权流程（管理员为待建账号选定的代理）、
@@ -102,6 +104,10 @@ func resolveProxyURLByID(ctx context.Context, repo ProxyRepository, proxyID *int
 	proxyURL := proxy.URL()
 	if proxyURL == "" {
 		return "", fmt.Errorf("%w: proxy %d has an empty url", ErrAccountProxyUnavailable, *proxyID)
+	}
+	// 与 Account.ProxyEgressIdentityURL 同一校验：无效 URL 视为不可用，错误不带 Parse 的原因文本。
+	if _, _, err := proxyurl.Parse(proxyURL); err != nil {
+		return "", fmt.Errorf("%w: proxy %d has an invalid url", ErrAccountProxyUnavailable, *proxyID)
 	}
 	return proxyURL, nil
 }

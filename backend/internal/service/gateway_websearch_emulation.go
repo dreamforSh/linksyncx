@@ -145,6 +145,14 @@ func (s *GatewayService) handleWebSearchEmulation(
 ) (*ForwardResult, error) {
 	startTime := time.Now()
 
+	// 先查代理绑定（fail-closed）：这个分支在 Forward 的“先查代理绑定”之前就返回，搜索请求
+	// 同样经账号代理出站。绑定失效（关系缺失 / URL 无效）按传输层故障转成 AccountUnavailable 的
+	// failover 换号；原样返回 ErrAccountProxyUnavailable 会被 handler 当终态错误，请求直接判死。
+	proxyURL, proxyErr := resolveAccountProxyURL(account)
+	if proxyErr != nil {
+		return nil, s.handleUpstreamTransportError(ctx, c, account, proxyErr, OpsUpstreamErrorEvent{})
+	}
+
 	// Release the serial queue lock immediately — we don't need upstream.
 	if parsed.OnUpstreamAccepted != nil {
 		parsed.OnUpstreamAccepted()
@@ -158,7 +166,7 @@ func (s *GatewayService) handleWebSearchEmulation(
 	slog.Info("web search emulation: executing search",
 		"account_id", account.ID, "account_name", account.Name, "query", query)
 
-	resp, providerName, err := doWebSearch(ctx, account, query)
+	resp, providerName, err := doWebSearch(ctx, proxyURL, query)
 	if err != nil {
 		// Proxy unavailable → trigger account switch via UpstreamFailoverError
 		if errors.Is(err, websearch.ErrProxyUnavailable) {
@@ -184,11 +192,9 @@ func (s *GatewayService) handleWebSearchEmulation(
 	return writeWebSearchNonStreamResponse(c, query, resp, model, startTime)
 }
 
-func doWebSearch(ctx context.Context, account *Account, query string) (*websearch.SearchResponse, string, error) {
-	proxyURL, err := resolveAccountProxyURL(account)
-	if err != nil {
-		return nil, "", fmt.Errorf("web search emulation: %w", err)
-	}
+// doWebSearch 只接收调用方已解析好的账号代理 URL：解析失败必须在调用方（GatewayService 的方法）
+// 里转成 failover，这样数据面代理错误护栏能看到它。
+func doWebSearch(ctx context.Context, proxyURL string, query string) (*websearch.SearchResponse, string, error) {
 	mgr := getWebSearchManager()
 	if mgr == nil {
 		return nil, "", fmt.Errorf("web search emulation: manager not initialized")

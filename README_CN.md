@@ -455,6 +455,8 @@ docker compose -f docker-compose.local.yml pull
 docker compose -f docker-compose.local.yml up -d
 ```
 
+> **注意：** `pull` 只更新镜像，不会替换 compose 文件。早先下载的 compose 文件里 `sub2api` 服务没有 `stop_grace_period`，停止超时仍是 Docker 默认的 10 秒，进程可能在进行中的请求结束、usage/计费落盘之前就被 SIGKILL。请换成与部署时同一版本的当前文件（把自己的改动迁移过去），或手动给 `sub2api` 服务加上 `stop_grace_period: 90s`（值必须带单位），再执行 `up -d`，让容器按新的停止超时重建。一键脚本（保存为 `docker-compose.yml`）和本地目录版使用 [`deploy/docker-compose.local.yml`](deploy/docker-compose.local.yml)，命名卷版使用 [`deploy/docker-compose.yml`](deploy/docker-compose.yml)（克隆部署执行 `git pull` 即可更新）。替换时不要换成另一个版本：两者的数据存放位置不同（本地目录与命名卷），换用后服务会以空数据库启动，原有数据仍留在原处。`docker run` 部署需要带上 `--stop-timeout 90` 重新创建容器。停止超时与关停宽限的关系见 [优雅关停与重启](deploy/README.md#优雅关停与重启graceful-shutdown)。
+
 #### 轻松迁移（本地目录版）
 
 使用 `docker-compose.local.yml` 时，可以轻松迁移到新服务器：

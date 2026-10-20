@@ -27,6 +27,10 @@ assert_missing() {
     [[ ! -e "$1" ]] || fail "Expected path to be absent: $1"
 }
 
+assert_stop_time() {
+    [[ "$(<"${STATE_DIR}/stop-times/sub2api-apple")" == "$1" ]] || fail "$2"
+}
+
 export FAKE_CONTAINER_STATE="${STATE_DIR}"
 export PATH="${TEST_DIR}/fixtures/bin:${PATH}"
 export SUB2API_ENV_FILE="${ENV_FILE}"
@@ -68,6 +72,7 @@ assert_exists "${STATE_DIR}/running/sub2api-apple"
 assert_missing "${STATE_DIR}/running/sub2api-apple"
 assert_missing "${STATE_DIR}/running/sub2api-apple-postgres"
 assert_missing "${STATE_DIR}/running/sub2api-apple-redis"
+assert_stop_time 90 "down did not give the default 30s shutdown grace a 90s stop timeout"
 
 "${SCRIPT}" destroy --yes
 assert_missing "${STATE_DIR}/containers/sub2api-apple"
@@ -96,6 +101,24 @@ assert_exists "${STATE_DIR}/containers/sub2api-apple"
 assert_missing "${STATE_DIR}/volumes/sub2api-apple-data"
 assert_missing "${STATE_DIR}/volumes/sub2api-apple-postgres-data"
 assert_missing "${STATE_DIR}/volumes/sub2api-apple-redis-data"
+
+# 停止超时跟随 .env 中的关停宽限，显式设置优先；无效的显式值必须拒绝而不是悄悄回落。
+printf 'SERVER_SHUTDOWN_TIMEOUT_SECONDS=100\n' >>"${ENV_FILE}"
+"${SCRIPT}" up >/dev/null
+"${SCRIPT}" down >/dev/null
+assert_stop_time 160 "down did not raise the stop timeout to the shutdown grace plus 60s"
+printf 'APPLE_CONTAINER_STOP_TIMEOUT_SECONDS=200\n' >>"${ENV_FILE}"
+"${SCRIPT}" up >/dev/null
+"${SCRIPT}" down >/dev/null
+assert_stop_time 200 "down ignored APPLE_CONTAINER_STOP_TIMEOUT_SECONDS"
+printf 'APPLE_CONTAINER_STOP_TIMEOUT_SECONDS=soon\n' >>"${ENV_FILE}"
+if "${SCRIPT}" up >/dev/null 2>&1; then
+    fail "up accepted a non-numeric APPLE_CONTAINER_STOP_TIMEOUT_SECONDS"
+fi
+"${SCRIPT}" destroy --volumes --yes 2>/dev/null && \
+    fail "destroy accepted a non-numeric APPLE_CONTAINER_STOP_TIMEOUT_SECONDS"
+printf 'APPLE_CONTAINER_STOP_TIMEOUT_SECONDS=\n' >>"${ENV_FILE}"
+"${SCRIPT}" destroy --volumes --yes
 
 touch "${STATE_DIR}/system-running"
 touch "${STATE_DIR}/containers/sub2api-apple"

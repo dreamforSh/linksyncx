@@ -10,6 +10,7 @@ import (
 	"github.com/Wei-Shaw/sub2api/internal/config"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/ctxkey"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/logger"
+	"github.com/Wei-Shaw/sub2api/internal/pkg/shutdownctx"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/timezone"
 )
 
@@ -439,7 +440,12 @@ func finalizePostUsageBilling(ctx context.Context, p *postUsageBillingParams, de
 			deps.billingCacheService.IncrementUserPlatformQuotaUsage(p.User.ID, p.Platform, p.Cost.ActualCost)
 			if deps.cfg == nil || !deps.cfg.Database.UserPlatformQuotaFlusherEnabled {
 				// 降级路径:flusher 未启用时保留原有异步直写 DB
-				dbCtx, dbCancel := detachUpstreamContext(ctx)
+				// 这是计费写入而非上游请求：只剥离请求取消，不能用 detachUpstreamContext——
+				// 它会响应关停硬停止，在关停强制阶段把这笔写入一并取消。
+				dbCtx := context.Background()
+				if ctx != nil {
+					dbCtx = context.WithoutCancel(ctx)
+				}
 				userID, platform, cost := p.User.ID, p.Platform, p.Cost.ActualCost
 				go func() {
 					defer func() {
@@ -447,7 +453,6 @@ func finalizePostUsageBilling(ctx context.Context, p *postUsageBillingParams, de
 							logger.LegacyPrintf("service.gateway", "ALERT: panic in user platform quota incr goroutine user=%d platform=%s: %v", userID, platform, r)
 						}
 					}()
-					defer dbCancel()
 					if err := deps.userPlatformQuotaRepo.IncrementUsageWithReset(dbCtx, userID, platform, cost, time.Now().UTC()); err != nil {
 						// 失败计数器:暴露给 GatewayUserPlatformQuotaIncrStats(),由 ops 面板做斜率告警。
 						userPlatformQuotaDBIncrErrorTotal.Add(1)
@@ -565,6 +570,11 @@ func detachedBillingContext(ctx context.Context) (context.Context, context.Cance
 	return context.WithTimeout(base, postUsageBillingTimeout)
 }
 
+// detachStreamUpstreamContext/detachUpstreamContext 让上游请求不随客户端断开而取消
+// （断开后继续读完上游以拿到完整 usage 计费），但仍响应主服务挂在请求 context 上的
+// 关停硬停止：关停强制阶段这些流会以 context.Canceled 结束，走既有的部分 usage
+// 计费分支，而不是挂到进程退出、连部分 usage 都丢掉。只能用于上游请求，计费写入
+// 等必须在关停后完成的工作不要用它们。
 func detachStreamUpstreamContext(ctx context.Context, stream bool) (context.Context, context.CancelFunc) {
 	if ctx == nil {
 		return context.Background(), func() {}
@@ -572,14 +582,14 @@ func detachStreamUpstreamContext(ctx context.Context, stream bool) (context.Cont
 	if !stream {
 		return ctx, func() {}
 	}
-	return context.WithoutCancel(ctx), func() {}
+	return shutdownctx.Detach(ctx), func() {}
 }
 
 func detachUpstreamContext(ctx context.Context) (context.Context, context.CancelFunc) {
 	if ctx == nil {
 		return context.Background(), func() {}
 	}
-	return context.WithoutCancel(ctx), func() {}
+	return shutdownctx.Detach(ctx), func() {}
 }
 
 // billingDeps 扣费逻辑依赖的服务（由各 gateway service 提供）

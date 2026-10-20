@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -94,6 +95,79 @@ func TestHTTPUpstreamDoWithTLSPlainHTTPUsesConfiguredSOCKSProxy(t *testing.T) {
 	require.NoError(t, resp.Body.Close())
 	require.Equal(t, int64(1), proxyCalls.Load())
 	require.Equal(t, int64(1), upstreamCalls.Load())
+}
+
+// 代理 URL 的 userinfo 是代理账号密码：日志里的代理字段只能是 scheme://host:port，
+// 畸形 URL 不回显任何片段。
+func TestProxyLogLabelOmitsCredentials(t *testing.T) {
+	cases := []struct {
+		raw  string
+		want string
+	}{
+		{"", "direct"},
+		{directProxyKey, "direct"},
+		{"http://user:s3cr3tpw@proxy.example:8080", "http://proxy.example:8080"},
+		{"socks5://user:s3cr3tpw@127.0.0.1:7891", "socks5h://127.0.0.1:7891"},
+		{"socks5h://u%40x:s3cr3tpw%2F@[2001:db8::1]:1080", "socks5h://[2001:db8::1]:1080"},
+		{"http://user:s3cr3tpw@bad%20host:8080", "invalid"},
+		{"user:s3cr3tpw@proxy.example:8080", "invalid"},
+	}
+	for _, tc := range cases {
+		require.Equal(t, tc.want, proxyLogLabel(tc.raw), tc.raw)
+		require.Equal(t, tc.want, proxyLogValue(tc.raw).LogValue().String(), tc.raw)
+	}
+}
+
+// proxy / account_proxy 隔离模式下连接池缓存键里含规范化代理键，打日志前去掉 userinfo。
+func TestCacheKeyLogValueOmitsProxyCredentials(t *testing.T) {
+	proxyKey, _, err := normalizeProxyURL("http://u%40x:p%40ss%3Aw%2Frd@Proxy.Example:8080")
+	require.NoError(t, err)
+	require.Contains(t, proxyKey, "p%40ss", "fixture: the normalized key carries the credentials")
+	for isolation, want := range map[string]string{
+		config.ConnectionPoolIsolationProxy:        "tls:proxy:http://proxy.example:8080",
+		config.ConnectionPoolIsolationAccountProxy: "tls:account:7|proxy:http://proxy.example:8080",
+		config.ConnectionPoolIsolationAccount:      "tls:account:7",
+	} {
+		key := "tls:" + buildCacheKey(isolation, proxyKey, 7, upstreamProtocolModeDefault)
+		require.Equal(t, want, cacheKeyLogValue(key).LogValue().String(), isolation)
+	}
+	require.Equal(t, "proxy:direct", cacheKeyLogValue("proxy:"+directProxyKey).LogValue().String())
+}
+
+// DoWithTLS 的调试日志（含建连、复用连接池与请求失败）不得带出代理密码。
+func TestHTTPUpstreamDoWithTLSDebugLogOmitsProxyCredentials(t *testing.T) {
+	previousLogger := slog.Default()
+	var logOutput bytes.Buffer
+	slog.SetDefault(slog.New(slog.NewTextHandler(&logOutput, &slog.HandlerOptions{Level: slog.LevelDebug})))
+	t.Cleanup(func() {
+		slog.SetDefault(previousLogger)
+	})
+
+	// 已关闭的本地端口：代理拨号立即被拒绝，请求不会离开本机。
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	require.NoError(t, err)
+	proxyHost := listener.Addr().String()
+	require.NoError(t, listener.Close())
+	proxyURL := "http://user:s3cr3tpw@" + proxyHost
+
+	client := NewHTTPUpstream(nil)
+	for range 2 { // 第二次走连接池复用分支
+		req, err := http.NewRequest(http.MethodGet, "https://api.example.invalid/v1/messages", nil)
+		require.NoError(t, err)
+		resp, err := client.DoWithTLS(req, proxyURL, 43, 1, &tlsfingerprint.Profile{Name: "log-redaction-test"})
+		if resp != nil {
+			_ = resp.Body.Close()
+		}
+		require.Error(t, err)
+	}
+
+	logs := logOutput.String()
+	require.Contains(t, logs, "msg=tls_fingerprint_enabled")
+	require.Contains(t, logs, "msg=tls_fingerprint_creating_new_client")
+	require.Contains(t, logs, "msg=tls_fingerprint_reusing_client")
+	require.Contains(t, logs, "proxy=http://"+proxyHost)
+	require.NotContains(t, logs, "s3cr3tpw")
+	require.NotContains(t, logs, "user:")
 }
 
 // 所有代理类型都由指纹 dialer 自建隧道：Transport.Proxy 一旦设置，net/http 会对

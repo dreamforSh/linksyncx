@@ -7,8 +7,10 @@
 package proxyurl
 
 import (
+	"errors"
 	"fmt"
 	"net/url"
+	"regexp"
 	"strings"
 )
 
@@ -29,8 +31,8 @@ var allowedSchemes = map[string]bool{
 //
 // 验证规则:
 //   - TrimSpace 后为空视为直连
-//   - url.Parse 失败返回 error（不含原始 URL，防凭据泄露）
-//   - Host 为空返回 error（用 Redacted() 脱敏）
+//   - url.Parse 失败返回 error（不含原始 URL 及其片段，防凭据泄露）
+//   - Host 为空返回 error（不回显 URL，防凭据泄露）
 //   - Scheme 必须为 http/https/socks5/socks5h
 //   - socks5:// 自动升级为 socks5h://（确保 DNS 由代理端解析，防止 DNS 泄漏）
 func Parse(raw string) (trimmed string, parsed *url.URL, err error) {
@@ -41,12 +43,16 @@ func Parse(raw string) (trimmed string, parsed *url.URL, err error) {
 
 	parsed, err = url.Parse(trimmed)
 	if err != nil {
-		// 不使用 %w 包装，避免 url.Parse 的底层错误消息泄漏原始 URL（可能含凭据）
-		return "", nil, fmt.Errorf("invalid proxy URL: %v", err)
+		// 不使用 %w 包装，也不直接格式化 err：*url.Error 的 Error() 会带上完整原始 URL
+		// （含账号密码），这类错误会一路进入传输层错误、ops 日志与管理端提示。
+		return "", nil, fmt.Errorf("invalid proxy URL: %s", parseFailureReason(err))
 	}
 
 	if parsed.Host == "" || parsed.Hostname() == "" {
-		return "", nil, fmt.Errorf("proxy URL missing host: %s", parsed.Redacted())
+		// 不回显 URL：Redacted() 只遮住 userinfo 里的密码，而漏写 "//" 的
+		// "user:pass@host:port" 会被解析成 scheme=user、opaque=pass@host:port，
+		// "http:///user:pass@host" 会把凭据解析进 path，Redacted() 都会原样输出。
+		return "", nil, errors.New("proxy URL missing host (expected scheme://host:port)")
 	}
 
 	scheme := strings.ToLower(parsed.Scheme)
@@ -63,4 +69,19 @@ func Parse(raw string) (trimmed string, parsed *url.URL, err error) {
 	}
 
 	return trimmed, parsed, nil
+}
+
+// quotedInputFragment 匹配 net/url 错误里经 strconv.Quote 回显的输入片段
+// （非法转义、非法 host 字符、端口等）。
+var quotedInputFragment = regexp.MustCompile(` ?"(?:[^"\\]|\\.)*"`)
+
+// parseFailureReason 返回 url.Parse 失败的原因，不含原始 URL 及其任何片段：
+// 只取 *url.Error 的内层错误，并去掉其中回显的输入片段——畸形 URL 里这些片段
+// 可能截自密码（如密码含未转义的 "/" 时，"/" 之前的密码段会被当作端口报错）。
+func parseFailureReason(err error) string {
+	var urlErr *url.Error
+	if errors.As(err, &urlErr) && urlErr.Err != nil {
+		err = urlErr.Err
+	}
+	return quotedInputFragment.ReplaceAllString(err.Error(), "")
 }

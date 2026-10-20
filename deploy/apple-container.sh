@@ -15,6 +15,13 @@ APP_VOLUME="sub2api-apple-data"
 POSTGRES_VOLUME="sub2api-apple-postgres-data"
 REDIS_VOLUME="sub2api-apple-redis-data"
 PLATFORM="linux/arm64"
+# 停止容器时等待进程自行退出的秒数，超时后强制结束。Sub2API 收到 SIGTERM 后先给
+# 进行中的请求 SERVER_SHUTDOWN_TIMEOUT_SECONDS（默认 30）秒，再强制取消约 5 秒、
+# 执行依赖清理（最多 30 秒）把 usage/计费落盘；停止超时必须 >= 宽限 + 35 秒。
+# 实际值由 resolve_container_stop_timeout 从 .env 解析，见该函数。
+DEFAULT_CONTAINER_STOP_TIMEOUT_SECONDS=90
+CONTAINER_STOP_MARGIN_SECONDS=60
+CONTAINER_STOP_TIMEOUT_SECONDS="${DEFAULT_CONTAINER_STOP_TIMEOUT_SECONDS}"
 
 TEMP_DIR=""
 LOCK_DIR="${TMPDIR:-/tmp}/sub2api-apple-container.lock"
@@ -314,6 +321,36 @@ read_env_value() {
             else { print fallback }
         }
     ' "${ENV_FILE}"
+}
+
+# 宽限在 .env 里调（整份 .env 会复制进应用容器），停止超时必须跟着变：写死在脚本里的
+# 常量既容易忘改，脚本更新时也会被覆盖，进程就会在 usage/计费落盘前被强杀。
+# APPLE_CONTAINER_STOP_TIMEOUT_SECONDS 显式指定时优先（宽限写在数据卷的 config.yaml
+# 里时只能这样调）；否则取 max(默认 90, SERVER_SHUTDOWN_TIMEOUT_SECONDS + 60)。
+resolve_container_stop_timeout() {
+    local configured grace
+
+    CONTAINER_STOP_TIMEOUT_SECONDS="${DEFAULT_CONTAINER_STOP_TIMEOUT_SECONDS}"
+    # down/destroy 不要求 .env 存在，缺失时沿用默认值。
+    [[ -r "${ENV_FILE}" ]] || return 0
+
+    configured="$(read_env_value APPLE_CONTAINER_STOP_TIMEOUT_SECONDS)"
+    if [[ -n "${configured}" ]]; then
+        [[ "${configured}" =~ ^[0-9]+$ ]] && (( 10#${configured} >= 1 )) || \
+            die "APPLE_CONTAINER_STOP_TIMEOUT_SECONDS must be a positive number of seconds: ${configured}"
+        CONTAINER_STOP_TIMEOUT_SECONDS=$((10#${configured}))
+        return 0
+    fi
+
+    grace="$(read_env_value SERVER_SHUTDOWN_TIMEOUT_SECONDS)"
+    [[ -n "${grace}" ]] || return 0
+    if [[ ! "${grace}" =~ ^[0-9]+$ ]]; then
+        warn "SERVER_SHUTDOWN_TIMEOUT_SECONDS is not a number (${grace}); stopping with the default ${CONTAINER_STOP_TIMEOUT_SECONDS}s timeout."
+        return 0
+    fi
+    if (( 10#${grace} + CONTAINER_STOP_MARGIN_SECONDS > CONTAINER_STOP_TIMEOUT_SECONDS )); then
+        CONTAINER_STOP_TIMEOUT_SECONDS=$((10#${grace} + CONTAINER_STOP_MARGIN_SECONDS))
+    fi
 }
 
 replace_env_value() {
@@ -621,7 +658,7 @@ stop_container_if_running() {
     assert_resource_owned container "${container_name}"
     if container_is_running "${container_name}"; then
         info "Stopping ${container_name}..."
-        container stop --time 30 "${container_name}" >/dev/null
+        container stop --time "${CONTAINER_STOP_TIMEOUT_SECONDS}" "${container_name}" >/dev/null
     fi
 }
 
@@ -633,7 +670,7 @@ delete_container_if_present() {
     fi
     assert_resource_owned container "${container_name}"
     if container_is_running "${container_name}"; then
-        container stop --time 30 "${container_name}" >/dev/null
+        container stop --time "${CONTAINER_STOP_TIMEOUT_SECONDS}" "${container_name}" >/dev/null
     fi
     info "Deleting ${container_name}..."
     container delete "${container_name}" >/dev/null
@@ -954,16 +991,19 @@ main() {
             ;;
         up)
             acquire_lock
+            resolve_container_stop_timeout
             cmd_up "$@"
             ;;
         down)
             [[ $# -eq 0 ]] || { usage; exit 2; }
             acquire_lock
+            resolve_container_stop_timeout
             cmd_down
             ;;
         restart)
             [[ $# -eq 0 ]] || { usage; exit 2; }
             acquire_lock
+            resolve_container_stop_timeout
             cmd_restart
             ;;
         status)
@@ -981,6 +1021,7 @@ main() {
             ;;
         destroy)
             acquire_lock
+            resolve_container_stop_timeout
             cmd_destroy "$@"
             ;;
         help|-h|--help)

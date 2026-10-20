@@ -654,7 +654,7 @@ func (s *GeminiMessagesCompatService) Forward(ctx context.Context, c *gin.Contex
 
 	proxyURL, proxyErr := account.ProxyURLForOutbound()
 	if proxyErr != nil {
-		return nil, proxyErr
+		return nil, s.handleUpstreamTransportError(ctx, c, account, proxyErr)
 	}
 
 	var requestIDHeader string
@@ -1164,6 +1164,38 @@ func isGeminiSignatureRelatedError(respBody []byte) bool {
 	return strings.Contains(msg, "thought_signature") || strings.Contains(msg, "signature")
 }
 
+// forwardNativeTransportFailure 处理 ForwardNative 的链路故障：Do 的传输层失败，或出站前
+// ProxyURLForOutbound 发现代理绑定失效（ErrAccountProxyUnavailable）。两者统一经
+// handleUpstreamTransportError 转成 failover；countTokens 不因上游链路故障而失败：本地估算兜底，
+// 不换号。绑定失效若原样返回，v1beta handler 会把它当成“已写过响应”的终态错误，客户端拿到空响应。
+func (s *GeminiMessagesCompatService) forwardNativeTransportFailure(
+	ctx context.Context,
+	c *gin.Context,
+	account *Account,
+	err error,
+	action string,
+	body []byte,
+	originalModel, mappedModel string,
+	startTime time.Time,
+) (*ForwardResult, error) {
+	transportErr := s.handleUpstreamTransportError(ctx, c, account, err)
+	var failoverErr *UpstreamFailoverError
+	if action == "countTokens" && errors.As(transportErr, &failoverErr) {
+		estimated := estimateGeminiCountTokens(body)
+		c.JSON(http.StatusOK, map[string]any{"totalTokens": estimated})
+		return &ForwardResult{
+			RequestID:     "",
+			Usage:         ClaudeUsage{},
+			Model:         originalModel,
+			UpstreamModel: mappedModel,
+			Stream:        false,
+			Duration:      time.Since(startTime),
+			FirstTokenMs:  nil,
+		}, nil
+	}
+	return nil, transportErr
+}
+
 func (s *GeminiMessagesCompatService) ForwardNative(ctx context.Context, c *gin.Context, account *Account, originalModel string, action string, stream bool, body []byte) (*ForwardResult, error) {
 	beginUpstreamResponseModelObservation(c)
 	beginGeminiImageOutputObservation(c)
@@ -1202,7 +1234,7 @@ func (s *GeminiMessagesCompatService) ForwardNative(ctx context.Context, c *gin.
 
 	proxyURL, proxyErr := account.ProxyURLForOutbound()
 	if proxyErr != nil {
-		return nil, proxyErr
+		return s.forwardNativeTransportFailure(ctx, c, account, proxyErr, action, body, originalModel, mappedModel, startTime)
 	}
 
 	useUpstreamStream := stream
@@ -1361,23 +1393,7 @@ func (s *GeminiMessagesCompatService) ForwardNative(ctx context.Context, c *gin.
 
 		resp, err = s.httpUpstream.Do(upstreamReq, proxyURL, account.ID, account.Concurrency)
 		if err != nil {
-			transportErr := s.handleUpstreamTransportError(ctx, c, account, err)
-			// countTokens 不因上游链路故障而失败：本地估算兜底，不换号。
-			var failoverErr *UpstreamFailoverError
-			if action == "countTokens" && errors.As(transportErr, &failoverErr) {
-				estimated := estimateGeminiCountTokens(body)
-				c.JSON(http.StatusOK, map[string]any{"totalTokens": estimated})
-				return &ForwardResult{
-					RequestID:     "",
-					Usage:         ClaudeUsage{},
-					Model:         originalModel,
-					UpstreamModel: mappedModel,
-					Stream:        false,
-					Duration:      time.Since(startTime),
-					FirstTokenMs:  nil,
-				}, nil
-			}
-			return nil, transportErr
+			return s.forwardNativeTransportFailure(ctx, c, account, err, action, body, originalModel, mappedModel, startTime)
 		}
 
 		// 错误策略优先：匹配则跳过重试直接处理。

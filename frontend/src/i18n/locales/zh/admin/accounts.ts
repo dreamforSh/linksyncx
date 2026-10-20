@@ -1431,7 +1431,7 @@ export default {
           label: 'TLS 指纹模拟',
           hint: '模拟 Node.js/Claude Code 客户端的 TLS 指纹',
           defaultProfile: '内置默认',
-          randomProfile: '随机'
+          randomProfile: '随机（按账号固定）'
         },
         sessionIdMasking: {
           label: '单会话模式',

@@ -192,23 +192,58 @@ func TestVertexServiceAccountDeadProxyTokenExchangeFailsOver(t *testing.T) {
 	}
 }
 
-// 分配了代理但关系缺失时，token 交换阶段同样 fail-closed 并 failover（标记账号不可用），
-// 不依赖 Forward 里 ProxyURLForOutbound 检查与 GetAccessToken 的先后顺序。
-func TestVertexServiceAccountMissingProxyBindingAtTokenStepFailsOver(t *testing.T) {
-	for _, entry := range vertexSATokenTestEntries {
-		t.Run(entry.name, func(t *testing.T) {
-			svc, upstream, _ := newVertexSAGatewayServiceForTokenTest()
-			account := newVertexSAAccountForTokenTest(t, vertexSATestPrivateKeyPEM(t), nil)
-			c := newVertexSATokenTestGin(entry.path)
+// 取 token 阶段报出 ErrAccountProxyUnavailable（关系缺失 / URL 无效）时同样按账号不可用 failover。
+// 三个 Forward 入口现在先查绑定、后取 token，这个分支在它们身上走不到（入口级行为由
+// TestGatewayForwardBrokenProxyBindingFailsOverBeforeCredentials 覆盖）；保留它是为了不依赖调用点的
+// 先后顺序，所以直接对它做单元测试，删掉这个分支必须让测试变红。
+func TestHandleAccessTokenTransportErrorProxyUnavailableFailsOver(t *testing.T) {
+	repo := &transportTempUnschedRepoStub{}
+	svc := &GatewayService{accountRepo: repo}
+	proxyID := int64(9104)
+	account := &Account{ID: 9104, Name: "vertex-sa", Platform: PlatformAnthropic, Type: AccountTypeServiceAccount, ProxyID: &proxyID}
+	c := newVertexSATokenTestGin("/v1/messages")
 
-			err := entry.call(t, svc, c, account)
+	got := svc.handleAccessTokenTransportError(t.Context(), c, account, fmt.Errorf("%w: x", ErrAccountProxyUnavailable))
 
-			var failoverErr *UpstreamFailoverError
-			require.ErrorAs(t, err, &failoverErr, "got %T: %v", err, err)
-			require.True(t, failoverErr.AccountUnavailable)
-			require.Zero(t, upstream.calls)
-		})
-	}
+	var failoverErr *UpstreamFailoverError
+	require.ErrorAs(t, got, &failoverErr, "got %T: %v", got, got)
+	require.Equal(t, http.StatusBadGateway, failoverErr.StatusCode)
+	require.True(t, failoverErr.AccountUnavailable)
+	require.True(t, failoverErr.ProxyBindingUnavailable)
+	require.True(t, failoverErr.ShouldRetryNextAccount())
+	require.Equal(t, string(gatewayTransportFailoverBody), string(failoverErr.ResponseBody))
+	require.Zero(t, repo.calls, "绑定失效不是持久传输故障：不临时下线，修好绑定即可恢复调度")
+	require.False(t, c.Writer.Written(), "响应由 handler 负责")
+
+	raw, ok := c.Get(OpsUpstreamErrorsKey)
+	require.True(t, ok, "绑定失效也要记 Ops 上游错误")
+	events, ok := raw.([]*OpsUpstreamErrorEvent)
+	require.True(t, ok)
+	require.Len(t, events, 1)
+	require.Equal(t, "request_error", events[0].Kind)
+}
+
+// 关系未加载时取 token 的步骤会按 ID 回查代理（accountProxyURLWithRepo）。数据库拒连时，这个查询错误被包进
+// ErrAccountProxyUnavailable，错误链里同时带着 ECONNREFUSED；若落到传输错误的持久故障分类，账号会因为
+// 数据库故障被临时下线。请求根本没出站：只按绑定失效换号。
+func TestHandleAccessTokenTransportErrorProxyLookupFailureDoesNotEvict(t *testing.T) {
+	repo := &transportTempUnschedRepoStub{}
+	svc := &GatewayService{accountRepo: repo}
+	proxyID := int64(9105)
+	account := &Account{ID: 9105, Name: "claude-oauth", Platform: PlatformAnthropic, Type: AccountTypeOAuth, ProxyID: &proxyID}
+	_, lookupErr := accountProxyURLWithRepo(t.Context(), &grokCredentialProxyRepoStub{
+		err: &net.OpError{Op: "dial", Net: "tcp", Err: syscall.ECONNREFUSED},
+	}, account)
+	require.ErrorIs(t, lookupErr, ErrAccountProxyUnavailable)
+	require.ErrorIs(t, lookupErr, syscall.ECONNREFUSED, "前提：错误链里确实带着会被判为持久故障的拒连")
+
+	got := svc.handleAccessTokenTransportError(t.Context(), newVertexSATokenTestGin("/v1/messages"), account, lookupErr)
+
+	var failoverErr *UpstreamFailoverError
+	require.ErrorAs(t, got, &failoverErr, "got %T: %v", got, got)
+	require.True(t, failoverErr.AccountUnavailable)
+	require.True(t, failoverErr.ProxyBindingUnavailable)
+	require.Zero(t, repo.calls, "数据库拒连不是这个账号的故障，不能临时下线")
 }
 
 // 坏的 SA 私钥是凭据问题，换代理/换时间都不会好：必须保持终止错误，不能伪装成传输失败去 failover，

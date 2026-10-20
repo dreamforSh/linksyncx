@@ -6,6 +6,7 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -83,4 +84,46 @@ func TestClaudeCodeMimicRequestWireOrderMatchesBunCapture(t *testing.T) {
 	require.Contains(t, lines, "Connection: keep-alive")
 	require.Contains(t, lines, "Host: api.anthropic.com")
 	require.Contains(t, lines, "Accept-Encoding: gzip, deflate, br, zstd")
+}
+
+// 真实 Claude Code 透传（非 mimic）时，Go server 已把入站的 x-claude-code-prompt-id /
+// x-claude-code-request-class 规范化成 Title-Case；出站必须恢复成二进制里的小写常量，
+// 否则 httpwire 按字节序会把它们排进大写块（X-Claude-Code-Session-Id 之前）。
+func TestClaudeCodePassthroughTracingHeadersKeepWireCasing(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	c, _ := gin.CreateTestContext(httptest.NewRecorder())
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/messages", nil)
+	c.Request.Header.Set("User-Agent", "claude-cli/2.1.296 (external, cli)")
+	c.Request.Header.Set("X-App", "cli")
+	c.Request.Header.Set("X-Claude-Code-Prompt-Id", "0d9c4d0e-8f1a-4a43-9a51-2f7c3f4f0c11")
+	c.Request.Header.Set("X-Claude-Code-Request-Class", "main")
+	svc := &GatewayService{cfg: &config.Config{}}
+	account := &Account{Platform: PlatformAnthropic, Type: AccountTypeOAuth}
+
+	req, _, err := svc.buildUpstreamRequest(context.Background(), c, account,
+		[]byte(`{"model":"claude-sonnet-4-6","messages":[{"role":"user","content":"hi"}],"stream":true}`),
+		"test-token", "oauth", "claude-sonnet-4-6", true, false)
+	require.NoError(t, err)
+
+	rec := &wireRecorder{}
+	require.NoError(t, req.Write(httpwire.NewConn(rec)))
+	head, _, ok := strings.Cut(rec.String(), "\r\n\r\n")
+	require.True(t, ok)
+	lines := strings.Split(head, "\r\n")
+	names := make([]string, 0, len(lines)-1)
+	for _, line := range lines[1:] {
+		name, _, found := strings.Cut(line, ": ")
+		require.True(t, found, line)
+		names = append(names, name)
+	}
+
+	require.NotContains(t, names, "X-Claude-Code-Prompt-Id")
+	require.NotContains(t, names, "X-Claude-Code-Request-Class")
+	appAt := slices.Index(names, "x-app")
+	require.GreaterOrEqual(t, appAt, 0, "names=%v", names)
+	require.Less(t, appAt+2, len(names), "names=%v", names)
+	require.Equal(t, []string{"x-app", "x-claude-code-prompt-id", "x-claude-code-request-class"},
+		names[appAt:appAt+3], "names=%v", names)
+	require.Contains(t, lines, "x-claude-code-prompt-id: 0d9c4d0e-8f1a-4a43-9a51-2f7c3f4f0c11")
+	require.Contains(t, lines, "x-claude-code-request-class: main")
 }

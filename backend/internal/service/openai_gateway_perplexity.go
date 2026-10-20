@@ -351,7 +351,7 @@ func (s *OpenAIGatewayService) sendPerplexityCCUpstreamRequest(
 		return nil, fmt.Errorf("account %d missing perplexity session token (credentials.api_key)", account.ID)
 	}
 	if _, err := account.ProxyURLForOutbound(); err != nil {
-		return nil, err
+		return nil, s.handleOpenAIUpstreamTransportError(ctx, c, account, err, false)
 	}
 	modelPref, mode := perplexity.ResolveModelPreference(upstreamModel)
 	// 死模型自愈：目录快照显示该 preference 已下线且存在同族更新版本时自动升级

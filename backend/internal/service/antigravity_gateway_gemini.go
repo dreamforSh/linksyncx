@@ -120,7 +120,7 @@ func (s *AntigravityGatewayService) ForwardGemini(ctx context.Context, c *gin.Co
 	// 代理 URL（fail-closed：分配了代理但不可用时拒绝直连，避免出口 IP 泄漏）
 	proxyURL, proxyErr := account.ProxyURLForOutbound()
 	if proxyErr != nil {
-		return nil, proxyErr
+		return nil, antigravityProxyUnavailableFailover(c, account, proxyErr, geminiTransportFailoverBody)
 	}
 
 	// Antigravity 上游要求必须包含身份提示词，注入到请求中

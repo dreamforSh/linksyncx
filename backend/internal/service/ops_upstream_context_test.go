@@ -102,6 +102,7 @@ func TestOpsUpstreamProxyFieldAccessors(t *testing.T) {
 
 	boundID := int64(7)
 	backupID := int64(8)
+	zeroID := int64(0)
 	tests := []struct {
 		name     string
 		account  *Account
@@ -109,10 +110,11 @@ func TestOpsUpstreamProxyFieldAccessors(t *testing.T) {
 		wantName string
 	}{
 		{
-			name:     "actual proxy object is authoritative",
+			// ProxyURLForOutbound 拒绝与 ProxyID 对不上的关系，这次请求没有用 backup-uk：归到分配的绑定。
+			name:     "mismatched proxy object is not the route; the assigned binding is",
 			account:  &Account{ProxyID: &boundID, Proxy: &Proxy{ID: backupID, Name: "backup-uk"}},
-			wantID:   &backupID,
-			wantName: "backup-uk",
+			wantID:   &boundID,
+			wantName: opsProxyNameUnknown,
 		},
 		{
 			name:     "proxy object without binding id is not a configured route",
@@ -120,8 +122,19 @@ func TestOpsUpstreamProxyFieldAccessors(t *testing.T) {
 			wantName: opsProxyNameDirect,
 		},
 		{
-			name:     "hydrated proxy without durable id is unknown, never id=null plus a real name",
+			name:     "proxy object without durable id under a real binding names the binding, never the transient name",
 			account:  &Account{ProxyID: &boundID, Proxy: &Proxy{Name: "transient-proxy"}},
+			wantID:   &boundID,
+			wantName: opsProxyNameUnknown,
+		},
+		{
+			name:     "hydrated proxy without durable id is unknown, never id=null plus a real name",
+			account:  &Account{ProxyID: &zeroID, Proxy: &Proxy{Name: "transient-proxy"}},
+			wantName: opsProxyNameUnknown,
+		},
+		{
+			name:     "non-positive binding without a matching proxy is unknown",
+			account:  &Account{ProxyID: &zeroID},
 			wantName: opsProxyNameUnknown,
 		},
 		{
@@ -136,9 +149,11 @@ func TestOpsUpstreamProxyFieldAccessors(t *testing.T) {
 			wantName: opsProxyNameDirect,
 		},
 		{
-			name:     "configured proxy was not hydrated and transport is direct",
+			// 关系缺失时 ProxyURLForOutbound fail-closed，请求不会直连：记 direct 会误导排查。
+			name:     "configured proxy was not hydrated: refused, never direct",
 			account:  &Account{ProxyID: &backupID},
-			wantName: opsProxyNameDirect,
+			wantID:   &backupID,
+			wantName: opsProxyNameUnknown,
 		},
 		{
 			name:     "missing attempt account",

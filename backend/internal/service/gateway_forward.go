@@ -40,6 +40,12 @@ func (s *GatewayService) shouldRetryUpstreamError(account *Account, statusCode i
 		return false
 	}
 
+	// Anthropic 其余账号（API Key/Bedrock）的 401/403 同理：凭证或权限被拒，原地重发结果不变。
+	// 未被自定义错误码选中的 401/403 直接 failover 且不标记账号；池模式的同账号重试仍由 pool_mode_retry_status_codes 决定。
+	if account.Platform == PlatformAnthropic && (statusCode == http.StatusUnauthorized || statusCode == http.StatusForbidden) {
+		return false
+	}
+
 	// API Key 账号：未配置的错误码重试
 	return !account.ShouldHandleErrorCode(statusCode)
 }
@@ -352,6 +358,15 @@ func (s *GatewayService) Forward(ctx context.Context, c *gin.Context, account *A
 		}
 	}
 
+	// 解析出站代理（fail-closed）：账号分配了代理但当前不可用时，绝不回退直连
+	// （会泄漏真实出口 IP）——按传输层故障处理，触发 failover 切换到其它账号。
+	// 先查代理绑定、后取凭证：绑定缺失 / 无效时根本不进入取 token 这一步（刷新 / 交换 token
+	// 本身就是一次出站请求），这类失败固定由这里的 failover 处理，不依赖取凭证那一步的错误怎么上抛。
+	resolvedProxyURL, proxyErr := account.ProxyURLForOutbound()
+	if proxyErr != nil {
+		return nil, s.handleUpstreamTransportError(ctx, c, account, proxyErr, OpsUpstreamErrorEvent{})
+	}
+
 	// 获取凭证
 	token, tokenType, err := s.GetAccessToken(ctx, account)
 	if err != nil {
@@ -362,12 +377,6 @@ func (s *GatewayService) Forward(ctx context.Context, c *gin.Context, account *A
 		return nil, err
 	}
 
-	// 解析出站代理（fail-closed）：账号分配了代理但当前不可用时，绝不回退直连
-	// （会泄漏真实出口 IP）——按传输层故障处理，触发 failover 切换到其它账号。
-	resolvedProxyURL, proxyErr := account.ProxyURLForOutbound()
-	if proxyErr != nil {
-		return nil, s.handleUpstreamTransportError(ctx, c, account, proxyErr, OpsUpstreamErrorEvent{})
-	}
 	// 自定义 base URL relay 模式：代理已在上面校验可用，此处由 buildCustomRelayURL 作为
 	// &proxy= 查询参数交给 relay 携带，传输层本身不设置代理。
 	proxyURL := resolvedProxyURL
@@ -434,7 +443,7 @@ func (s *GatewayService) Forward(ctx context.Context, c *gin.Context, account *A
 		if err != nil {
 			return nil, err
 		}
-		// 记录本次实际发送的 wire body；只有请求成功后才写回 ParsedRequest，避免 400 retry 基于已签名 CCH 再改写。
+		// 记录本次实际发送的 wire body；只有请求成功后才写回 ParsedRequest，避免 400 retry 基于已改写的 wire body 再改写。
 		lastWireBody = wireBody
 		lastWireIndex = wireIndex
 
@@ -853,7 +862,7 @@ func (s *GatewayService) Forward(ctx context.Context, c *gin.Context, account *A
 		parsed.OnUpstreamAccepted()
 	}
 
-	// 成功后再同步最终 wire body，避免失败重试从已签名 CCH 的 body 继续派生；usage
+	// 成功后再同步最终 wire body，避免失败重试从已改写的 wire body 继续派生；usage
 	// 指纹与日志也要看到上游实际接受的请求体。同步是一次全量重解析，放到响应转发
 	// 之后执行，不卡在上游响应头与客户端首字节之间。此后不再从 body 派生重试，
 	// 同步失败只影响 usage 指纹，记录日志即可。

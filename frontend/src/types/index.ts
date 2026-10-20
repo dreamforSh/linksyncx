@@ -1318,6 +1318,7 @@ export interface ClashRuntimeStatus {
 export interface ClashPoolSettings {
   max_accounts_per_exit: number
   allow_unprobed_exit_binding: boolean
+  pause_automatic_probes: boolean
   health_test_url: string
   health_timeout_ms: number
   bound_check_interval_seconds: number

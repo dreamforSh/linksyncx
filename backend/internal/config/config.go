@@ -52,6 +52,7 @@ const (
 const (
 	// ConnectionPoolIsolationProxy: 按代理隔离
 	// 同一代理地址共享连接池，适合代理数量少、账户数量多的场景
+	// 带 TLS 指纹的请求再按模板细分：同代理、同模板共享一个池，账号不会借用别的模板的 ClientHello
 	ConnectionPoolIsolationProxy = "proxy"
 	// ConnectionPoolIsolationAccount: 按账户隔离
 	// 每个账户独立连接池，适合账户数量少、需要严格隔离的场景
@@ -764,6 +765,10 @@ type ServerConfig struct {
 	TrustedProxiesConfigured bool      `mapstructure:"-" json:"-" yaml:"-"`   // 是否显式配置了可信代理列表
 	MaxRequestBodySize       int64     `mapstructure:"max_request_body_size"` // 全局最大请求体限制
 	H2C                      H2CConfig `mapstructure:"h2c"`                   // HTTP/2 Cleartext 配置
+	// ShutdownTimeoutSeconds 是关停时等待进行中 HTTP/SSE 请求自然结束的宽限（秒）。
+	// 流式请求被截断就拿不到完整 usage，宽限过短会让每次重启都漏计费；
+	// 宽限期内监听已关闭、新请求被拒绝，所以也不宜过长。
+	ShutdownTimeoutSeconds int `mapstructure:"shutdown_timeout_seconds"`
 }
 
 // H2CConfig HTTP/2 Cleartext 配置
@@ -2114,6 +2119,7 @@ func setDefaults() {
 	viper.SetDefault("server.max_header_bytes", 64*1024)
 	viper.SetDefault("server.idle_timeout", 120) // 120秒空闲超时
 	viper.SetDefault("server.max_request_body_size", int64(256*1024*1024))
+	viper.SetDefault("server.shutdown_timeout_seconds", 30) // 30秒优雅关停宽限
 	// H2C 默认配置
 	viper.SetDefault("server.h2c.enabled", false)
 	viper.SetDefault("server.h2c.max_concurrent_streams", uint32(50))      // 50 个并发流
@@ -2820,6 +2826,9 @@ func (c *Config) Validate() error {
 	}
 	if c.Server.MaxRequestBodySize < 0 {
 		return fmt.Errorf("server.max_request_body_size must be non-negative")
+	}
+	if c.Server.ShutdownTimeoutSeconds < 1 || c.Server.ShutdownTimeoutSeconds > 3600 {
+		return fmt.Errorf("server.shutdown_timeout_seconds must be between 1 and 3600 seconds")
 	}
 	if c.Server.H2C.Enabled {
 		if c.Server.H2C.MaxConcurrentStreams == 0 {

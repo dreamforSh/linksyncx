@@ -157,6 +157,20 @@ func (s *GatewayService) ForwardCountTokens(ctx context.Context, c *gin.Context,
 		}
 	}
 
+	// 解析出站代理（fail-closed）：分配了代理但不可用时拒绝直连，避免出口 IP 泄漏。
+	// 先于取凭证（与 Forward 一致）：count_tokens 不切号，但绑定失效时不应先去刷新 token。
+	resolvedProxyURL, proxyErr := account.ProxyURLForOutbound()
+	if proxyErr != nil {
+		setOpsUpstreamError(c, 0, sanitizeUpstreamErrorMessage(proxyErr.Error()), "")
+		s.countTokensError(c, http.StatusBadGateway, "upstream_error", "Request failed")
+		return proxyErr
+	}
+	// 自定义 base URL relay 模式：代理已校验可用，由 buildCustomRelayURL 作为 &proxy= 携带。
+	proxyURL := resolvedProxyURL
+	if account.IsCustomBaseURLEnabled() && account.GetCustomBaseURL() != "" {
+		proxyURL = ""
+	}
+
 	// 获取凭证
 	token, tokenType, err := s.GetAccessToken(ctx, account)
 	if err != nil {
@@ -174,21 +188,8 @@ func (s *GatewayService) ForwardCountTokens(ctx context.Context, c *gin.Context,
 		s.countTokensError(c, http.StatusInternalServerError, "api_error", "Failed to build request")
 		return err
 	}
-	// 先记录首发 wire body；如果后面进入 400 retry，retry 会基于未签名的逻辑 body 重新构建。
+	// 先记录首发 wire body；如果后面进入 400 retry，retry 会基于未改写的逻辑 body 重新构建。
 	acceptedWireBody := wireBody
-
-	// 解析出站代理（fail-closed）：分配了代理但不可用时拒绝直连，避免出口 IP 泄漏。
-	resolvedProxyURL, proxyErr := account.ProxyURLForOutbound()
-	if proxyErr != nil {
-		setOpsUpstreamError(c, 0, sanitizeUpstreamErrorMessage(proxyErr.Error()), "")
-		s.countTokensError(c, http.StatusBadGateway, "upstream_error", "Request failed")
-		return proxyErr
-	}
-	// 自定义 base URL relay 模式：代理已校验可用，由 buildCustomRelayURL 作为 &proxy= 携带。
-	proxyURL := resolvedProxyURL
-	if account.IsCustomBaseURLEnabled() && account.GetCustomBaseURL() != "" {
-		proxyURL = ""
-	}
 
 	// 发送请求
 	resp, err := s.httpUpstream.DoWithTLS(upstreamReq, proxyURL, account.ID, account.Concurrency, s.tlsFPProfileService.ResolveTLSProfile(account))
@@ -238,7 +239,7 @@ func (s *GatewayService) ForwardCountTokens(ctx context.Context, c *gin.Context,
 	}
 
 	if resp.StatusCode < 400 && !bytes.Equal(acceptedWireBody, body) {
-		// count_tokens 成功后再同步最终 wire body，避免 retry 从已签名 body 派生。
+		// count_tokens 成功后再同步最终 wire body，避免 retry 从已改写的 wire body 派生。
 		if err := replaceBody(acceptedWireBody); err != nil {
 			return err
 		}
@@ -274,14 +275,7 @@ func (s *GatewayService) ForwardCountTokens(ctx context.Context, c *gin.Context,
 		}
 
 		// 返回简化的错误响应
-		errMsg := "Upstream request failed"
-		switch resp.StatusCode {
-		case 429:
-			errMsg = "Rate limit exceeded"
-		case 529:
-			errMsg = "Service overloaded"
-		}
-		s.countTokensError(c, resp.StatusCode, "upstream_error", errMsg)
+		s.writeCountTokensUpstreamError(c, account, resp.StatusCode, respBody)
 		if upstreamMsg == "" {
 			return fmt.Errorf("upstream error: %d", resp.StatusCode)
 		}
@@ -294,6 +288,14 @@ func (s *GatewayService) ForwardCountTokens(ctx context.Context, c *gin.Context,
 }
 
 func (s *GatewayService) forwardCountTokensAnthropicAPIKeyPassthrough(ctx context.Context, c *gin.Context, account *Account, body []byte) error {
+	// 与 ForwardCountTokens 一致先查代理绑定、后取凭证。
+	proxyURL, proxyErr := account.ProxyURLForOutbound()
+	if proxyErr != nil {
+		setOpsUpstreamError(c, 0, sanitizeUpstreamErrorMessage(proxyErr.Error()), "")
+		s.countTokensError(c, http.StatusBadGateway, "upstream_error", "Request failed")
+		return proxyErr
+	}
+
 	token, tokenType, err := s.GetAccessToken(ctx, account)
 	if err != nil {
 		s.countTokensError(c, http.StatusBadGateway, "upstream_error", "Failed to get access token")
@@ -308,13 +310,6 @@ func (s *GatewayService) forwardCountTokensAnthropicAPIKeyPassthrough(ctx contex
 	if err != nil {
 		s.countTokensError(c, http.StatusInternalServerError, "api_error", "Failed to build request")
 		return err
-	}
-
-	proxyURL, proxyErr := account.ProxyURLForOutbound()
-	if proxyErr != nil {
-		setOpsUpstreamError(c, 0, sanitizeUpstreamErrorMessage(proxyErr.Error()), "")
-		s.countTokensError(c, http.StatusBadGateway, "upstream_error", "Request failed")
-		return proxyErr
 	}
 
 	resp, err := s.httpUpstream.DoWithTLS(upstreamReq, proxyURL, account.ID, account.Concurrency, s.tlsFPProfileService.ResolveTLSProfile(account))
@@ -391,14 +386,7 @@ func (s *GatewayService) forwardCountTokensAnthropicAPIKeyPassthrough(ctx contex
 			Detail:             upstreamDetail,
 		})
 
-		errMsg := "Upstream request failed"
-		switch resp.StatusCode {
-		case 429:
-			errMsg = "Rate limit exceeded"
-		case 529:
-			errMsg = "Service overloaded"
-		}
-		s.countTokensError(c, resp.StatusCode, "upstream_error", errMsg)
+		s.writeCountTokensUpstreamError(c, account, resp.StatusCode, respBody)
 		if upstreamMsg == "" {
 			return fmt.Errorf("upstream error: %d", resp.StatusCode)
 		}
@@ -549,10 +537,10 @@ func (s *GatewayService) buildCountTokensRequest(ctx context.Context, c *gin.Con
 	// User-Agent 头共用这一个字符串（同 buildUpstreamRequest）。
 	ctMimicUserAgent := claude.DefaultUserAgent()
 	if billingUA := effectiveBillingUserAgent(ctMimicUserAgent, tokenType, mimicClaudeCode, billingFingerprint); billingUA != "" {
-		body = syncBillingHeaderVersion(body, billingUA)
+		body = syncBillingHeaderVersion(body, billingUA, billingFingerprintSourceFor(tokenType, mimicClaudeCode))
 	}
 
-	// === 计算最终 anthropic-beta header（先于 body sanitize 与 CCH 签名）===
+	// === 计算最终 anthropic-beta header（先于 body sanitize）===
 	// 顺序约束同 buildUpstreamRequest。
 	ctEffectiveDropSet := mergeDropSets(s.getBetaPolicyFilterSet(ctx, c, account, modelID))
 	finalBetaHeader, finalBetaShouldSet := s.computeFinalCountTokensAnthropicBeta(
@@ -714,6 +702,31 @@ func stripCountTokensOAuthOnlyFields(body []byte) []byte {
 		}
 	}
 	return out
+}
+
+// writeCountTokensUpstreamError 把 count_tokens 的上游错误写回下游。
+//
+// 上游 401/403 说明的是网关所用账号的凭据或权限出了问题，不是客户端的网关 key。原样回给
+// 下游时，客户端会误以为自己的 key 失效（Claude Code 会提示重新登录），而 /v1/messages
+// 对同样的上游状态回 502（见 handleErrorResponse 与 handler 的 mapUpstreamError）。
+// 这里与之对齐；管理员配置的错误透传规则优先。其余状态码保持原样，不扩大改动面。
+func (s *GatewayService) writeCountTokensUpstreamError(c *gin.Context, account *Account, upstreamStatus int, respBody []byte) {
+	status := upstreamStatus
+	errMsg := "Upstream request failed"
+	switch upstreamStatus {
+	case http.StatusUnauthorized:
+		status = http.StatusBadGateway
+		errMsg = "Upstream authentication failed, please contact administrator"
+	case http.StatusForbidden:
+		status = http.StatusBadGateway
+		errMsg = "Upstream access forbidden, please contact administrator"
+	case http.StatusTooManyRequests:
+		errMsg = "Rate limit exceeded"
+	case 529:
+		errMsg = "Service overloaded"
+	}
+	status, errType, errMsg, _ := applyErrorPassthroughRule(c, account.Platform, upstreamStatus, respBody, status, "upstream_error", errMsg)
+	s.countTokensError(c, status, errType, errMsg)
 }
 
 // countTokensError 返回 count_tokens 错误响应

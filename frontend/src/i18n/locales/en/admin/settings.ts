@@ -1404,8 +1404,10 @@ export default {
         alpnProtocolsHint: 'Comma-separated, e.g. h2, http/1.1',
         supportedVersions: 'Supported TLS Versions',
         keyShareGroups: 'Key Share Groups',
+        keyShareGroupsHint: 'Comma-separated group IDs; each must also appear in Elliptic Curves. Empty fields use the built-in defaults (curves 4588, 29, 23, 24; key shares 4588, 29), so custom curves without key share groups must include 4588 and 29',
         pskModes: 'PSK Modes',
-        extensions: 'Extensions'
+        extensions: 'Extensions',
+        extensionsHint: 'Comma-separated extension IDs in ClientHello order; leave empty for the built-in order. If you include key_share (51 / 0x0033), also include supported_groups (10 / 0x000a)'
       },
 
       deleteConfirm: 'Delete Profile',
@@ -1415,6 +1417,14 @@ export default {
       deleteSuccess: 'Profile deleted successfully',
       loadFailed: 'Failed to load profiles',
       saveFailed: 'Failed to save profile',
-      deleteFailed: 'Failed to delete profile'
+      deleteFailed: 'Failed to delete profile',
+
+      // Save / delete failure reasons, keyed by the backend reason
+      errors: {
+        TLS_PROFILE_NAME_EXISTS: 'A profile with this name already exists; choose another Profile Name',
+        TLS_PROFILE_NOT_FOUND: 'This profile no longer exists; another admin may have deleted it',
+        TLS_PROFILE_KEY_SHARE_NOT_IN_CURVES: 'Key share group {group} is not listed in Elliptic Curves. Every Key Share Group must also appear in Elliptic Curves; empty fields use the built-in defaults (curves 4588, 29, 23, 24; key shares 4588, 29)',
+        TLS_PROFILE_KEY_SHARE_WITHOUT_SUPPORTED_GROUPS: 'Extensions include key_share (51) but not supported_groups (10), so Elliptic Curves cannot be sent. Add 10 to Extensions, or leave Extensions empty to use the built-in order'
+      }
     }
 }

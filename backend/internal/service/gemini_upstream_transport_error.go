@@ -14,7 +14,8 @@ var geminiTransportFailoverBody = []byte(`{"error":{"code":502,"message":"Upstre
 
 // handleUpstreamTransportError 处理 Gemini 三条转发路径（原生 / Claude 兼容 /
 // Chat Completions 兼容）上的传输层失败：Do 返回非 HTTP 错误（代理 / DNS / TCP / TLS /
-// 响应头超时），没有拿到任何上游状态码。
+// 响应头超时），没有拿到任何上游状态码；出站前 ProxyURLForOutbound 报出的
+// ErrAccountProxyUnavailable 也经这里转成 failover，而不是原样返回成终态错误。
 //
 //   - 记录 Ops 错误事件（status 0，kind=request_error）；
 //   - 持久性故障（代理凭据失效、端点拒绝连接、DNS/路由不可达）临时摘除账号；
@@ -39,6 +40,17 @@ func (s *GeminiMessagesCompatService) handleUpstreamTransportError(ctx context.C
 
 	if errors.Is(err, context.Canceled) || (errors.Is(err, context.DeadlineExceeded) && errors.Is(ctx.Err(), context.DeadlineExceeded)) {
 		return err
+	}
+
+	// 分配了代理却解析不出可用 URL：账号本身已不可用，换号（AccountUnavailable）；请求从未出站，
+	// 不临时摘号，绑定修好后立即恢复调度（ProxyBindingUnavailable 供各健康统计识别并排除）。
+	if errors.Is(err, ErrAccountProxyUnavailable) {
+		return &UpstreamFailoverError{
+			StatusCode:              http.StatusBadGateway,
+			ResponseBody:            geminiTransportFailoverBody,
+			AccountUnavailable:      true,
+			ProxyBindingUnavailable: true,
+		}
 	}
 
 	if classifyUpstreamTransportError(err).Persistent {

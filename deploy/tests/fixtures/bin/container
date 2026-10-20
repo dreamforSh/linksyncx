@@ -11,6 +11,7 @@ mkdir -p \
     "${STATE_DIR}/volumes" \
     "${STATE_DIR}/create-arguments" \
     "${STATE_DIR}/env-files" \
+    "${STATE_DIR}/stop-times" \
     "${STATE_DIR}/unowned/container" \
     "${STATE_DIR}/unowned/network" \
     "${STATE_DIR}/unowned/volume"
@@ -172,11 +173,21 @@ case "${command}" in
         touch "${STATE_DIR}/running/${1}"
         ;;
     stop)
-        for argument in "$@"; do
-            case "${argument}" in
-                --time|--signal) skip_next=true ;;
-                [0-9]*|SIG*) ;;
-                *) rm -f "${STATE_DIR}/running/${argument}" ;;
+        stop_time=""
+        while [[ $# -gt 0 ]]; do
+            case "$1" in
+                --time)
+                    stop_time=$2
+                    shift 2
+                    ;;
+                --signal)
+                    shift 2
+                    ;;
+                *)
+                    rm -f "${STATE_DIR}/running/$1"
+                    printf '%s\n' "${stop_time}" >"${STATE_DIR}/stop-times/$1"
+                    shift
+                    ;;
             esac
         done
         ;;

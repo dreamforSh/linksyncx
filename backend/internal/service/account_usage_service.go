@@ -314,6 +314,10 @@ type ClaudeUsageFetchOptions struct {
 	TLSProfile  *tlsfingerprint.Profile // TLS 指纹 Profile（nil 表示不启用）
 	Fingerprint *Fingerprint            // 缓存的指纹信息（User-Agent 等）
 	Query       string                  // 附加查询参数（如 cedar_ember=1&skip_spend=1），空表示普通读取
+	// AccountConcurrency 是账号并发上限，与转发请求传给 DoWithTLS 的值一致。account / account_proxy
+	// （默认）隔离下连接池按并发定池大小并据此校验能否复用，探测若传 0 会被当成池配置变更，
+	// 把转发的热连接池整个拆掉重建（proxy 隔离不看并发，不受影响）。
+	AccountConcurrency int
 }
 
 // ClaudeUsageFetcher fetches usage data from Anthropic OAuth API
@@ -1732,15 +1736,17 @@ func (s *AccountUsageService) GetAccountUsageStats(ctx context.Context, accountI
 // 如果账号开启了 TLS 指纹，则使用 TLS 指纹伪装
 // 如果有缓存的 Fingerprint，则使用缓存的 User-Agent 等信息
 func (s *AccountUsageService) fetchOAuthUsageRaw(ctx context.Context, account *Account) (*ClaudeUsageResponse, error) {
+	// 先校验代理绑定、后取 token（与 ClaudeQuotaService.fetchOptions 一致）：token provider
+	// 临近过期会刷新，刷新本身就是一次上游请求，不能为注定发不出去的用量查询去做。
+	opts, err := s.claudeFetchOptions(ctx, account, "")
+	if err != nil {
+		return nil, err
+	}
 	accessToken := s.claudeUsageAccessToken(ctx, account)
 	if accessToken == "" {
 		return nil, fmt.Errorf("no access token available")
 	}
-
-	opts, err := s.claudeFetchOptions(ctx, account, accessToken)
-	if err != nil {
-		return nil, err
-	}
+	opts.AccessToken = accessToken
 	return s.usageFetcher.FetchUsageWithOptions(ctx, opts)
 }
 
@@ -1769,10 +1775,11 @@ func (s *AccountUsageService) claudeFetchOptions(ctx context.Context, account *A
 	}
 
 	opts := &ClaudeUsageFetchOptions{
-		AccessToken: accessToken,
-		ProxyURL:    proxyURL,
-		AccountID:   account.ID,
-		TLSProfile:  s.tlsFPProfileService.ResolveTLSProfile(account),
+		AccessToken:        accessToken,
+		ProxyURL:           proxyURL,
+		AccountID:          account.ID,
+		AccountConcurrency: account.Concurrency,
+		TLSProfile:         s.tlsFPProfileService.ResolveTLSProfile(account),
 	}
 
 	if s.identityCache != nil {

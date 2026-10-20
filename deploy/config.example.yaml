@@ -50,6 +50,23 @@ server:
   # Applies to all requests, especially important for h2c first request memory protection
   # 适用于所有请求，对 h2c 第一请求的内存保护尤为重要
   max_request_body_size: 268435456
+  # Graceful shutdown grace in seconds (1-3600, default 30). On SIGTERM or an
+  # in-app restart the listener closes at once and in-flight HTTP/SSE requests
+  # get this long to finish; WebSocket sessions are closed immediately. After
+  # the grace, request contexts are cancelled (streams cut there are billed for
+  # the usage observed so far), ~5s more is allowed, then dependency cleanup
+  # runs (bounded at 30s). Env: SERVER_SHUTDOWN_TIMEOUT_SECONDS (overrides this
+  # value when set and non-empty).
+  # 优雅关停宽限（秒，1-3600，默认 30）。收到 SIGTERM 或后台重启时监听立即关闭，
+  # 进行中的 HTTP/SSE 请求有这么长时间自然结束（流式请求被截断会拿不到完整
+  # usage，导致少计费）；WebSocket 会话立即断开。宽限结束后取消请求 context
+  # （被截断的流按已观测到的 usage 计费）、再等约 5 秒，然后执行依赖清理
+  # （最多 30 秒）。宽限期内新请求会被拒绝，所以调大它也会拉长重启的不可用窗口。
+  # Docker 的 stop_grace_period / systemd 的 TimeoutStopSec 必须不小于
+  # 宽限 + 5 + 30 秒，否则会在清理完成前被 SIGKILL。
+  # 环境变量：SERVER_SHUTDOWN_TIMEOUT_SECONDS，非空时覆盖本值；仓库自带的 compose
+  # 默认把它留空透传，因此挂载的 config.yaml 里的这个值会生效。
+  shutdown_timeout_seconds: 30
   # HTTP/2 Cleartext (h2c) configuration
   # HTTP/2 Cleartext (h2c) 配置
   h2c:
@@ -256,8 +273,10 @@ gateway:
   gemini_debug_response_headers: false
   # Connection pool isolation strategy:
   # 连接池隔离策略：
-  # - proxy: Isolate by proxy, same proxy shares connection pool (suitable for few proxies, many accounts)
-  # - proxy: 按代理隔离，同一代理共享连接池（适合代理少、账户多）
+  # - proxy: Isolate by proxy, same proxy shares connection pool (suitable for few proxies, many accounts);
+  #   TLS-fingerprinted requests are further split per template (same proxy + same template share one pool)
+  # - proxy: 按代理隔离，同一代理共享连接池（适合代理少、账户多）；
+  #   带 TLS 指纹的请求再按模板细分（同代理、同模板共享一个池）
   # - account: Isolate by account, same account shares connection pool (suitable for few accounts, strict isolation)
   # - account: 按账户隔离，同一账户共享连接池（适合账户少、需严格隔离）
   # - account_proxy: Isolate by account+proxy combination (default, finest granularity)

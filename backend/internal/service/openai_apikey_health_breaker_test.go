@@ -80,6 +80,8 @@ func TestClassifyOpenAIAPIKeyHealthFailureExclusions(t *testing.T) {
 		{name: "provider scoped overload", err: &UpstreamFailoverError{StatusCode: 529, Scope: GatewayFailureScopeProvider}},
 		{name: "dedicated same account retry", err: &UpstreamFailoverError{StatusCode: http.StatusTooManyRequests, RetryableOnSameAccount: true}},
 		{name: "credential disable path", err: &UpstreamFailoverError{StatusCode: http.StatusUnauthorized, Stage: GatewayFailureStageAccountAuth, Scope: GatewayFailureScopeAccount}},
+		{name: "broken proxy binding never left", err: &UpstreamFailoverError{StatusCode: http.StatusBadGateway, AccountUnavailable: true, ProxyBindingUnavailable: true}},
+		{name: "persistent transport fault is still account health", err: &UpstreamFailoverError{StatusCode: http.StatusBadGateway, AccountUnavailable: true}, eligible: true},
 		{name: "client request", err: &UpstreamFailoverError{StatusCode: http.StatusBadRequest}},
 	}
 	for _, tt := range tests {

@@ -791,7 +791,7 @@ func (s *OpenAIGatewayService) ProxyResponsesWebSocketFromClient(
 	// fail-closed：分配了代理但不可用时拒绝直连（避免出口 IP 泄漏）。
 	proxyURL, proxyErr := account.ProxyURLForOutbound()
 	if proxyErr != nil {
-		return proxyErr
+		return s.handleOpenAIWSUpstreamTransportError(ctx, c, account, proxyErr, false)
 	}
 	baseAcquireReq := openAIWSAcquireRequest{
 		Account: account,

@@ -475,11 +475,13 @@ func appendOpsUpstreamError(c *gin.Context, ev OpsUpstreamErrorEvent) {
 
 // opsUpstreamProxyAttribution derives both attribution fields from one
 // decision so they can never disagree. The event is assembled at the failure
-// site; forwarding code builds managed proxy routes from Proxy only when the
-// binding ID is also set, so the same rule decides the label here:
+// site and follows the same rule as Account.ProxyURLForOutbound, which builds
+// the route from Proxy only when it matches the binding ID:
 //
 //   - nil account                     -> (nil, unknown)
-//   - no binding or no hydrated Proxy -> (nil, direct/no_proxy)
+//   - no binding (ProxyID == nil)     -> (nil, direct/no_proxy)
+//   - binding whose Proxy is missing or does not match ProxyID ->
+//     (ProxyID, unknown); a non-positive ProxyID -> (nil, unknown)
 //   - hydrated Proxy without durable ID -> (nil, unknown): the transport did
 //     use that proxy, but nothing durable identifies it
 //   - otherwise                       -> (Proxy.ID, Proxy.Name or "proxy")
@@ -489,8 +491,18 @@ func opsUpstreamProxyAttribution(account *Account) (*int64, string) {
 	if account == nil {
 		return nil, opsProxyNameUnknown
 	}
-	if account.ProxyID == nil || account.Proxy == nil {
+	if account.ProxyID == nil {
 		return nil, opsProxyNameDirect
+	}
+	// 分配了代理却没有可用的关系（缺失 / 与 ProxyID 错配）：ProxyURLForOutbound 对它 fail-closed，请求恰恰
+	// 是因为拒绝直连才失败的。记成 direct 会让管理员以为有账号绕过代理出站了，与 proxy-never-direct 的排查
+	// 目的相反；关系对不上时 Proxy 也不是这次请求用的代理，不能归到它头上。归到分配的 ProxyID，名称未知。
+	if account.Proxy == nil || account.Proxy.ID != *account.ProxyID {
+		if *account.ProxyID <= 0 {
+			return nil, opsProxyNameUnknown
+		}
+		proxyID := *account.ProxyID
+		return &proxyID, opsProxyNameUnknown
 	}
 	if account.Proxy.ID <= 0 {
 		return nil, opsProxyNameUnknown

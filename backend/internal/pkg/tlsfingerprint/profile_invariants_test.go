@@ -3,8 +3,10 @@ package tlsfingerprint
 import (
 	"context"
 	"errors"
+	"fmt"
 	"net"
 	"net/url"
+	"reflect"
 	"testing"
 
 	utls "github.com/refraction-networking/utls"
@@ -44,6 +46,59 @@ func TestValidateProfileRejectsKeyShareOutsideSupportedGroupsBeforeDial(t *testi
 	}
 }
 
+// 自定义扩展列表带了 key_share（51）却漏了 supported_groups（10）时，curves 根本不会发出去，
+// key share 写得再对也不自洽。这必须是一个能用 errors.Is 认出的独立错误：保存校验据此把错误挂到
+// extensions 上，而不是让管理员去改本来就写对了的 curves。
+func TestValidateProfileNamesMissingSupportedGroupsExtension(t *testing.T) {
+	for name, profile := range map[string]*Profile{
+		"key share listed in curves": {Curves: []uint16{29}, KeyShareGroups: []uint16{29}, Extensions: []uint16{0, 43, 51}},
+		"all other fields default":   {Extensions: []uint16{0, 43, 51}},
+	} {
+		t.Run(name, func(t *testing.T) {
+			err := ValidateProfile(profile)
+			require.ErrorIs(t, err, ErrKeyShareWithoutSupportedGroups)
+			require.NotContains(t, err.Error(), "absent from supported groups")
+		})
+	}
+
+	require.NoError(t, ValidateProfile(&Profile{Curves: []uint16{29}, KeyShareGroups: []uint16{29}, Extensions: []uint16{0, 10, 43, 51}}))
+	require.NoError(t, ValidateProfile(&Profile{Extensions: []uint16{0, 10, 43}}), "no key_share extension, nothing to check")
+
+	// supported_groups 在列表里时仍是原来的错误，不能被新错误吞掉。
+	err := ValidateProfile(&Profile{Curves: []uint16{29}, KeyShareGroups: []uint16{23}, Extensions: []uint16{0, 10, 43, 51}})
+	require.ErrorContains(t, err, "key share 23 is absent from supported groups")
+	require.NotErrorIs(t, err, ErrKeyShareWithoutSupportedGroups)
+}
+
+// 保存校验要知道是哪个组不在 supported_groups 里（作为 metadata 交给前端拼本地化提示），
+// 所以这个错误必须能用 errors.As 取出组号；英文原文不能变，dialer 报错与“随机”候选的排除日志依赖它。
+func TestValidateProfileReportsOffendingKeyShareGroup(t *testing.T) {
+	for name, tc := range map[string]struct {
+		profile *Profile
+		group   uint16
+	}{
+		"custom curves inherit the default key shares": {profile: &Profile{Curves: []uint16{29, 23, 24}}, group: 4588},
+		"explicit key share outside curves":            {profile: &Profile{Curves: []uint16{29}, KeyShareGroups: []uint16{29, 23}}, group: 23},
+		"supported_groups present in custom extensions": {
+			profile: &Profile{Curves: []uint16{29}, KeyShareGroups: []uint16{24}, Extensions: []uint16{0, 10, 43, 51}},
+			group:   24,
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			err := ValidateProfile(tc.profile)
+			var keyShareErr *KeyShareNotInSupportedGroupsError
+			require.ErrorAs(t, err, &keyShareErr)
+			require.Equal(t, tc.group, keyShareErr.Group)
+			require.EqualError(t, err, fmt.Sprintf("TLS key share %d is absent from supported groups", tc.group))
+			require.NotErrorIs(t, err, ErrKeyShareWithoutSupportedGroups)
+		})
+	}
+
+	var keyShareErr *KeyShareNotInSupportedGroupsError
+	require.False(t, errors.As(ValidateProfile(&Profile{Extensions: []uint16{0, 43, 51}}), &keyShareErr),
+		"a missing supported_groups extension is reported by its own sentinel, not as an absent group")
+}
+
 // 每个 dialer 独占一份会话票据缓存，不同账号/代理的 TLS 会话不会互相复用。
 func TestTLSSessionTicketsAreScopedToDialer(t *testing.T) {
 	proxyURL, err := url.Parse("http://127.0.0.1:1080")
@@ -60,5 +115,113 @@ func TestTLSSessionTicketsAreScopedToDialer(t *testing.T) {
 		cache.Put("same.example", &utls.ClientSessionState{})
 		_, found = cache.Get("same.example")
 		require.True(t, found, "dialer %d must retain its own ticket", i)
+	}
+}
+
+// ProfileCacheKey 是手写的逐字段摘要。Profile 以后新增线级字段却忘了加进摘要的话，
+// 只改了该字段的模板会悄悄沿用旧连接池（旧 ClientHello）。这里用反射逐个设置每个字段：
+// 非 Name 字段的每种取值都必须得到互不相同的摘要（同样的值放进不同字段也不能撞），
+// Name 只是展示名，不能影响摘要。
+func TestProfileCacheKeyCoversEveryWireField(t *testing.T) {
+	base := ProfileCacheKey(&Profile{})
+	require.Equal(t, base, ProfileCacheKey(nil), "nil and an all-default profile produce the same ClientHello")
+
+	seen := map[string]string{base: "<zero profile>"}
+	profileType := reflect.TypeOf(Profile{})
+	for i := 0; i < profileType.NumField(); i++ {
+		field := profileType.Field(i)
+		for variant := 1; variant <= 2; variant++ {
+			var p Profile
+			if !setProfileFieldForDigestTest(t, field, reflect.ValueOf(&p).Elem().Field(i), variant) {
+				continue
+			}
+			key := ProfileCacheKey(&p)
+			label := fmt.Sprintf("%s variant %d", field.Name, variant)
+			if field.Name == "Name" {
+				require.Equal(t, base, key, "Name is a display label and must not change the digest")
+				continue
+			}
+			prev, dup := seen[key]
+			require.False(t, dup, "%s has the same digest as %s; add the field to ProfileCacheKey", label, prev)
+			seen[key] = label
+		}
+	}
+}
+
+// setProfileFieldForDigestTest 给字段填第 variant 种非零取值；bool 只有一种非零取值，第二轮跳过。
+// 遇到摘要尚未覆盖的字段类型直接失败，提醒同时扩展 ProfileCacheKey 与本测试。
+func setProfileFieldForDigestTest(t *testing.T, field reflect.StructField, value reflect.Value, variant int) bool {
+	t.Helper()
+	switch value.Kind() {
+	case reflect.Bool:
+		if variant > 1 {
+			return false
+		}
+		value.SetBool(true)
+	case reflect.String:
+		value.SetString(fmt.Sprintf("value-%d", variant))
+	case reflect.Slice:
+		elem := reflect.New(value.Type().Elem()).Elem()
+		switch elem.Kind() {
+		case reflect.Uint16:
+			elem.SetUint(uint64(variant))
+		case reflect.String:
+			elem.SetString(fmt.Sprintf("value-%d", variant))
+		default:
+			t.Fatalf("Profile.%s has unsupported element type %s; extend ProfileCacheKey and this test", field.Name, elem.Type())
+		}
+		value.Set(reflect.Append(reflect.MakeSlice(value.Type(), 0, 1), elem))
+	default:
+		t.Fatalf("Profile.%s has unsupported type %s; extend ProfileCacheKey and this test", field.Name, value.Type())
+	}
+	return true
+}
+
+// 真实模板里最常见的几种改动都要换键：只改名不换键；curves 与 key_share_groups 互换同一取值、
+// 扩展顺序调换（ClientHello 的扩展顺序本身就是指纹的一部分）都要换键。
+func TestProfileCacheKeyTracksWireConfiguration(t *testing.T) {
+	before := &Profile{Name: "before", Curves: []uint16{29}, KeyShareGroups: []uint16{29}}
+	renamed := *before
+	renamed.Name = "renamed"
+	require.Equal(t, ProfileCacheKey(before), ProfileCacheKey(&renamed))
+
+	renamed.KeyShareGroups = []uint16{23}
+	require.NotEqual(t, ProfileCacheKey(before), ProfileCacheKey(&renamed))
+
+	require.NotEqual(t,
+		ProfileCacheKey(&Profile{Curves: []uint16{29}}),
+		ProfileCacheKey(&Profile{KeyShareGroups: []uint16{29}}),
+		"the same values in different fields are different ClientHellos")
+	require.NotEqual(t,
+		ProfileCacheKey(&Profile{Extensions: []uint16{0, 10, 11}}),
+		ProfileCacheKey(&Profile{Extensions: []uint16{0, 11, 10}}),
+		"extension order is part of the fingerprint")
+	require.NotEqual(t,
+		ProfileCacheKey(&Profile{ALPNProtocols: []string{"h2", "http/1.1"}}),
+		ProfileCacheKey(&Profile{ALPNProtocols: []string{"h2h", "ttp/1.1"}}),
+		"ALPN entries are length-delimited")
+	require.Equal(t,
+		ProfileCacheKey(&Profile{Curves: nil}),
+		ProfileCacheKey(&Profile{Curves: []uint16{}}),
+		"nil and empty slices both fall back to the built-in default")
+}
+
+func BenchmarkProfileCacheKey(b *testing.B) {
+	profile := &Profile{
+		Name:                "bench",
+		EnableGREASE:        true,
+		CipherSuites:        []uint16{4865, 4866, 4867, 49195, 49199, 49196, 49200, 52393, 52392, 49171, 49172, 156, 157, 47, 53},
+		Curves:              []uint16{4588, 29, 23, 24},
+		PointFormats:        []uint16{0},
+		SignatureAlgorithms: []uint16{1027, 2052, 1025, 1283, 2053, 1281, 2054, 1537},
+		ALPNProtocols:       []string{"h2", "http/1.1"},
+		SupportedVersions:   []uint16{772, 771},
+		KeyShareGroups:      []uint16{4588, 29},
+		PSKModes:            []uint16{1},
+		Extensions:          []uint16{0, 23, 65281, 10, 11, 35, 16, 5, 13, 18, 51, 45, 43, 27, 17513},
+	}
+	b.ReportAllocs()
+	for i := 0; i < b.N; i++ {
+		_ = ProfileCacheKey(profile)
 	}
 }

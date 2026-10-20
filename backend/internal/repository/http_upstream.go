@@ -16,6 +16,7 @@ import (
 	"net"
 	"net/http"
 	"net/url"
+	"regexp"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -262,11 +263,7 @@ func (s *httpUpstreamService) DoWithTLS(req *http.Request, proxyURL string, acco
 	if req != nil && req.URL != nil {
 		targetHost = req.URL.Host
 	}
-	proxyInfo := "direct"
-	if proxyURL != "" {
-		proxyInfo = proxyURL
-	}
-	slog.Debug("tls_fingerprint_enabled", "account_id", accountID, "target", targetHost, "proxy", proxyInfo, "profile", profile.Name)
+	slog.Debug("tls_fingerprint_enabled", "account_id", accountID, "target", targetHost, "proxy", proxyLogValue(proxyURL), "profile", profile.Name)
 
 	if err := s.validateRequestHost(req); err != nil {
 		return nil, err
@@ -542,7 +539,11 @@ func (s *httpUpstreamService) getClientEntryWithTLS(proxyURL string, accountID i
 	settings := s.resolvePoolSettings(isolation, accountConcurrency)
 	settings = s.applyProfilePoolSettings(settings, upstreamProfile)
 	// TLS 指纹客户端使用独立的缓存键，加 "tls:" 前缀
-	cacheKey := "tls:" + buildCacheKey(isolation, proxyKey, accountID, upstreamProtocolModeDefault)
+	// 末尾再拼 profile 线级配置摘要：模板被编辑或账号改绑后 ClientHello 变了，键随之变化，
+	// 下一个请求就按新模板建池，不必等重启或空闲回收。前半段仍按配置的隔离模式组成——
+	// proxy 模式下同代理、同模板的账号继续共享一个池，不同模板各用各的池，不会再借用别的
+	// 账号的 ClientHello。旧摘要的池没人再用，由 evictIdleLocked / LRU 淘汰。
+	cacheKey := "tls:" + buildCacheKey(isolation, proxyKey, accountID, upstreamProtocolModeDefault) + "|fp:" + tlsfingerprint.ProfileCacheKey(profile)
 	poolKey := buildPoolKey(settings, upstreamProtocolModeDefault) + ":tls"
 
 	now := time.Now()
@@ -556,7 +557,7 @@ func (s *httpUpstreamService) getClientEntryWithTLS(proxyURL string, accountID i
 			atomic.AddInt64(&entry.inFlight, 1)
 		}
 		s.mu.RUnlock()
-		slog.Debug("tls_fingerprint_reusing_client", "account_id", accountID, "cache_key", cacheKey)
+		slog.Debug("tls_fingerprint_reusing_client", "account_id", accountID, "cache_key", cacheKeyLogValue(cacheKey))
 		return entry, nil
 	}
 	s.mu.RUnlock()
@@ -570,12 +571,12 @@ func (s *httpUpstreamService) getClientEntryWithTLS(proxyURL string, accountID i
 				atomic.AddInt64(&entry.inFlight, 1)
 			}
 			s.mu.Unlock()
-			slog.Debug("tls_fingerprint_reusing_client", "account_id", accountID, "cache_key", cacheKey)
+			slog.Debug("tls_fingerprint_reusing_client", "account_id", accountID, "cache_key", cacheKeyLogValue(cacheKey))
 			return entry, nil
 		}
 		slog.Debug("tls_fingerprint_evicting_stale_client",
 			"account_id", accountID,
-			"cache_key", cacheKey,
+			"cache_key", cacheKeyLogValue(cacheKey),
 			"proxy_changed", entry.proxyKey != proxyKey,
 			"pool_changed", entry.poolKey != poolKey)
 		s.removeClientLocked(cacheKey, entry)
@@ -593,7 +594,7 @@ func (s *httpUpstreamService) getClientEntryWithTLS(proxyURL string, accountID i
 	}
 
 	// 创建带 TLS 指纹的 Transport
-	slog.Debug("tls_fingerprint_creating_new_client", "account_id", accountID, "cache_key", cacheKey, "proxy", proxyKey)
+	slog.Debug("tls_fingerprint_creating_new_client", "account_id", accountID, "cache_key", cacheKeyLogValue(cacheKey), "proxy", proxyLogValue(proxyKey))
 	transport, err := buildUpstreamTransportWithTLSFingerprint(settings, parsedProxy, profile, s.tlsDialOptions())
 	if err != nil {
 		s.mu.Unlock()
@@ -1165,7 +1166,7 @@ func (s *httpUpstreamService) recordOpenAIHTTP2Failure(profile service.HTTPUpstr
 	activated, until := state.recordFailure(time.Now(), settings.fallbackErrorThreshold, settings.fallbackWindow, settings.fallbackTTL)
 	if activated {
 		slog.Warn("openai_http2_proxy_fallback_activated",
-			"proxy", proxyKey,
+			"proxy", proxyLogValue(proxyKey),
 			"fallback_until", until.Format(time.RFC3339))
 	}
 }
@@ -1283,6 +1284,40 @@ func normalizeProxyURL(raw string) (string, *url.URL, error) {
 		}
 	}
 	return parsed.String(), parsed, nil
+}
+
+// proxyLogValue 是日志里的代理字段：代理 URL 与规范化后的代理键都带 userinfo（代理账号
+// 密码），原样打印会把凭据写进日志，因此只输出 proxyLogLabel。实现 slog.LogValuer，
+// 脱敏推迟到日志真正输出时，Debug 关闭时不做任何解析。
+type proxyLogValue string
+
+func (v proxyLogValue) LogValue() slog.Value {
+	return slog.StringValue(proxyLogLabel(string(v)))
+}
+
+// proxyLogLabel 返回代理的日志标识：空串 / direct → "direct"，无法解析 → "invalid"
+// （不回显原串，畸形 URL 的任何片段都可能截自密码），否则 scheme://host:port。
+func proxyLogLabel(raw string) string {
+	if raw == "" || raw == directProxyKey {
+		return directProxyKey
+	}
+	_, parsed, err := proxyurl.Parse(raw)
+	if err != nil || parsed == nil {
+		return "invalid"
+	}
+	return parsed.Scheme + "://" + parsed.Host
+}
+
+// proxyKeyUserinfo 匹配缓存键里规范化代理键的 userinfo。代理键由 url.String() 生成，
+// userinfo 中的 '@' '/' '?' '|' 都已转义，所以 "://" 到第一个 '@' 之间就是完整的 userinfo。
+var proxyKeyUserinfo = regexp.MustCompile(`://[^@/|]*@`)
+
+// cacheKeyLogValue 是日志里的连接池缓存键：proxy / account_proxy 隔离模式下键里含规范化
+// 代理键（带凭据），输出时去掉其中的 userinfo。
+type cacheKeyLogValue string
+
+func (v cacheKeyLogValue) LogValue() slog.Value {
+	return slog.StringValue(proxyKeyUserinfo.ReplaceAllString(string(v), "://"))
 }
 
 // defaultPoolSettings 获取默认连接池配置

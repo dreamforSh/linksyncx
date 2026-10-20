@@ -40,6 +40,16 @@
           <span :class="totals.unhealthy > 0 ? 'text-red-600 dark:text-red-400' : ''">
             {{ t('admin.clash.stats.healthyHint', { count: totals.unhealthy }) }}
           </span>
+          <!-- 暂停自动探测后健康状态不再定时更新，挂在健康节点数旁边提醒这个数字可能过时 -->
+          <template v-if="settings?.pause_automatic_probes" #footer>
+            <span
+              class="badge badge-warning"
+              :title="t('admin.clash.stats.probesPausedHint')"
+              data-testid="clash-probes-paused"
+            >
+              {{ t('admin.clash.stats.probesPaused') }}
+            </span>
+          </template>
         </StatTile>
         <StatTile
           :label="t('admin.clash.stats.bound')"
@@ -312,7 +322,7 @@ async function loadSettings() {
   try {
     settings.value = await adminAPI.clash.getSettings()
   } catch {
-    // Only used for the "per exit" hint; the settings dialog reports its own errors.
+    // 设置只用于每出口账号数提示和「自动探测已暂停」徽标，加载失败时两者都静默隐藏；设置弹窗会自行报错。
     settings.value = null
   }
 }

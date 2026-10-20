@@ -2,8 +2,8 @@ package service
 
 // 国产供应商 Anthropic 协议转换路径的上游 SSE 行泵。
 //
-// 这两条转换链（CC×anthropic / Responses×anthropic）的上游 ctx 是
-// WithoutCancel（detachStreamUpstreamContext）、http.Client 无整体 Timeout，
+// 这两条转换链（CC×anthropic / Responses×anthropic）的上游 ctx 不随客户端断开
+// 取消（detachStreamUpstreamContext，只在关停强制阶段被硬停止）、http.Client 无整体 Timeout，
 // 客户端断开后的排水阶段若上游挂住 SSE（不发数据也不断连），
 // scanner.Scan() 将永久阻塞：goroutine 钉死、resp.Body 不归还、连接池位
 // 被占用、usage 永不落库。

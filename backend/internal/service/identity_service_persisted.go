@@ -33,7 +33,8 @@ func (s *IdentityService) GetOrCreateAccountFingerprint(ctx context.Context, acc
 //   - Redis 命中且已入库：直接使用（热路径不访问数据库）；
 //   - Redis 命中但未入库（第二阶段之前写入的存量身份）：原样收编进数据库，不生成新 device_id；
 //   - Redis 未命中：读数据库，命中后回填缓存；库中也没有时新建，必须先写库成功；
-//   - Redis 读失败且库中无记录：失败关闭，不新建（存量身份可能只在暂时读不到的 Redis 里）。
+//   - Redis 读失败且库中无记录：失败关闭，不新建（存量身份可能只在暂时读不到的 Redis 里）；
+//     Redis 记录损坏（没有可恢复的 ClientID）不算读失败，按未命中处理。
 //
 // 账号主人（owner）与身份记录的主人都已知且不同时，轮换身份（identity_epoch + 1、新 device_id）。
 func (s *IdentityService) getOrCreatePersistedFingerprint(ctx context.Context, accountID int64, owner string, headers http.Header) (*Fingerprint, error) {
@@ -44,6 +45,12 @@ func (s *IdentityService) getOrCreatePersistedFingerprint(ctx context.Context, a
 	if cacheErr != nil {
 		logger.LegacyPrintf("service.identity", "Warning: failed to read fingerprint for account %d: %v", accountID, cacheErr)
 		cached = nil
+		// 失败关闭只针对暂时读不到的情况（存量身份可能稍后又能读到）。损坏记录里没有可恢复的
+		// ClientID，等多久都不会好转，按缓存缺失处理：读库、库中没有时新建，replaceCachedIdentity
+		// 会覆盖损坏的键（storedClientIDLua 同样视其为缺失）。否则账号会一直卡在身份不可用上。
+		if errors.Is(cacheErr, ErrCorruptClientIdentity) {
+			cacheErr = nil
+		}
 	}
 
 	fp := cached
@@ -210,7 +217,7 @@ func (s *IdentityService) rotatePersistedIdentity(ctx context.Context, accountID
 }
 
 // ResetClientIdentity 由管理员触发，把账号换成一台新「设备」（identity_epoch + 1、新 device_id、
-// 默认 UA 与头）。账号还没有任何身份时返回 (nil, nil)：下次请求会直接新建。
+// 默认 UA 与头）。账号还没有任何身份（缓存里只有损坏记录也算）时返回 (nil, nil)：下次请求会直接新建。
 func (s *IdentityService) ResetClientIdentity(ctx context.Context, account *Account) (*Fingerprint, error) {
 	if s == nil || s.store == nil {
 		return nil, errors.New("client identity store is not configured")
@@ -227,6 +234,10 @@ func (s *IdentityService) ResetClientIdentity(ctx context.Context, account *Acco
 	if rec == nil {
 		// 只在 Redis 里的存量身份先收编，保证 epoch 从它的代次往上走。
 		cached, cacheErr := s.cache.GetFingerprint(ctx, account.ID)
+		if errors.Is(cacheErr, ErrCorruptClientIdentity) {
+			// 损坏记录里没有可收编的身份，等同账号还没有身份；下次请求新建时会覆盖它。
+			cached, cacheErr = nil, nil
+		}
 		if cacheErr != nil {
 			return nil, fmt.Errorf("read cached client identity: %w", cacheErr)
 		}

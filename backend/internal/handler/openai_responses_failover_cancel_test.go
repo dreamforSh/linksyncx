@@ -75,6 +75,13 @@ func newOpenAIResponsesFailoverTestHandler(t *testing.T, upstream service.HTTPUp
 			Credentials: map[string]any{"access_token": "token-2"},
 		},
 	}
+	return newOpenAIResponsesFailoverTestHandlerWithAccounts(t, upstream, accounts)
+}
+
+// newOpenAIResponsesFailoverTestHandlerWithAccounts 与 newOpenAIResponsesFailoverTestHandler
+// 相同，但由调用方提供账号池（例如让首选账号带上失效的代理绑定）。
+func newOpenAIResponsesFailoverTestHandlerWithAccounts(t *testing.T, upstream service.HTTPUpstream, accounts []service.Account) *OpenAIGatewayHandler {
+	t.Helper()
 	accountRepo := openAIImagesFailoverAccountRepo{accounts: accounts}
 	cfg := &config.Config{RunMode: config.RunModeSimple}
 	gatewayService := service.NewOpenAIGatewayService(

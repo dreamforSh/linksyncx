@@ -229,6 +229,17 @@ describe('ClashView', () => {
     expect(wrapper.find('[data-testid="clash-disabled-banner"]').exists()).toBe(false)
   })
 
+  it('flags paused automatic probes next to the health stats', async () => {
+    const probing = await mountView()
+    expect(probing.find('[data-testid="clash-probes-paused"]').exists()).toBe(false)
+
+    api.getSettings.mockResolvedValue({ max_accounts_per_exit: 1, pause_automatic_probes: true })
+    const paused = await mountView()
+    const badge = paused.get('[data-testid="clash-probes-paused"]')
+    expect(badge.text()).toBe('admin.clash.stats.probesPaused')
+    expect(badge.attributes('title')).toBe('admin.clash.stats.probesPausedHint')
+  })
+
   it('shows the disabled banner and blocks write actions when the pool is off', async () => {
     api.getRuntime.mockResolvedValue(runtime('disabled'))
     const wrapper = await mountView()

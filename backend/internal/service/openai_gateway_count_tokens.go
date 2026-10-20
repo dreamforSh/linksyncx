@@ -86,6 +86,10 @@ func (s *OpenAIGatewayService) ForwardResponsesInputTokens(
 
 	proxyURL, proxyErr := account.ProxyURLForOutbound()
 	if proxyErr != nil {
+		// count_tokens 没有换号循环：绑定失效与传输失败一样回 502（fail-closed）。不写响应就返回的话
+		// handler 只记日志，客户端会拿到空的 200。
+		setOpsUpstreamError(c, 0, sanitizeUpstreamErrorMessage(proxyErr.Error()), "")
+		writeOpenAIResponsesInputTokensError(c, http.StatusBadGateway, "upstream_error", "Upstream request failed")
 		return proxyErr
 	}
 	resp, err := s.doOpenAIUpstream(upstreamReq, proxyURL, account)
@@ -337,6 +341,9 @@ func (s *OpenAIGatewayService) ForwardCountTokensAsAnthropic(
 
 	proxyURL, proxyErr := account.ProxyURLForOutbound()
 	if proxyErr != nil {
+		// 同 ForwardResponsesInputTokens：没有换号循环，绑定失效直接回 502，不能留空响应。
+		setOpsUpstreamError(c, 0, sanitizeUpstreamErrorMessage(proxyErr.Error()), "")
+		writeAnthropicCountTokensError(c, http.StatusBadGateway, "upstream_error", "Upstream request failed")
 		return proxyErr
 	}
 	resp, err := s.doOpenAIUpstream(upstreamReq, proxyURL, account)
