@@ -6,8 +6,13 @@ import (
 	"log"
 	"net"
 	"net/http"
+	"os"
+	"os/signal"
 	"sync"
+	"syscall"
 	"time"
+
+	"github.com/Wei-Shaw/sub2api/internal/pkg/sysutil"
 )
 
 const (
@@ -21,6 +26,73 @@ const (
 )
 
 type requestConnKey struct{}
+
+// shutdownTrigger 汇总两类关停请求：SIGINT/SIGTERM，以及进程内重启（管理后台的
+// “重启”按钮、在线更新/回滚后的重启）。两者必须走同一条排空 + Cleanup 路径，
+// 否则进程内重启的 os.Exit 会丢掉 usage 记录池、计费缓存与配额 flusher 中的计费。
+type shutdownTrigger struct {
+	signals    chan os.Signal
+	restart    chan struct{}
+	stopped    chan struct{}
+	stopOnce   sync.Once
+	unregister func()
+}
+
+// newShutdownTrigger 开始监听终止信号并向 sysutil 注册进程内重启；
+// 必须在开始接收请求之前调用，否则早到的重启请求会退化成直接退出。
+func newShutdownTrigger() *shutdownTrigger {
+	trigger := newShutdownTriggerWith(make(chan os.Signal, 1))
+	signal.Notify(trigger.signals, syscall.SIGINT, syscall.SIGTERM)
+	return trigger
+}
+
+func newShutdownTriggerWith(signals chan os.Signal) *shutdownTrigger {
+	trigger := &shutdownTrigger{
+		signals: signals,
+		restart: make(chan struct{}, 1),
+		stopped: make(chan struct{}),
+	}
+	trigger.unregister = sysutil.RegisterGracefulRestart(trigger.requestRestart)
+	return trigger
+}
+
+func (t *shutdownTrigger) requestRestart() {
+	select {
+	case t.restart <- struct{}{}:
+	default: // 已有未处理的重启请求，合并
+	}
+}
+
+// wait 阻塞到第一个关停请求，返回用于日志的原因。
+func (t *shutdownTrigger) wait() string {
+	select {
+	case sig := <-t.signals:
+		// 第一个信号之后立即恢复默认处理：排空可能持续数十秒，第二次 Ctrl+C/SIGTERM
+		// 必须能直接结束进程。docker/systemd 只发一次 SIGTERM，随后是 SIGKILL，不受影响。
+		signal.Stop(t.signals)
+		return "signal " + sig.String()
+	case <-t.restart:
+		// 进程内重启时继续监听信号：排空期间到来的第一个 SIGTERM（如 systemctl stop）
+		// 不应跳过排空与 Cleanup，收到后再恢复默认处理，下一个信号即可强制结束。
+		go func() {
+			select {
+			case <-t.signals:
+				signal.Stop(t.signals)
+			case <-t.stopped:
+			}
+		}()
+		return "in-app restart requested"
+	}
+}
+
+// stop 注销进程内重启与信号监听。
+func (t *shutdownTrigger) stop() {
+	t.stopOnce.Do(func() {
+		t.unregister()
+		signal.Stop(t.signals)
+		close(t.stopped)
+	})
+}
 
 // httpDrain 统计正在执行的 handler，让关停流程能等它们真正返回后再拆依赖。
 //

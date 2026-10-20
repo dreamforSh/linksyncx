@@ -7,12 +7,15 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"strings"
 	"sync"
 	"sync/atomic"
+	"syscall"
 	"testing"
 	"time"
 
+	"github.com/Wei-Shaw/sub2api/internal/pkg/sysutil"
 	"github.com/coder/websocket"
 	"github.com/stretchr/testify/require"
 	"golang.org/x/net/http2"
@@ -486,4 +489,88 @@ func TestCleanupWithinStopsWaitingAfterTimeout(t *testing.T) {
 		t.Fatal("blocked cleanup unexpectedly finished")
 	default:
 	}
+}
+
+// 管理后台“重启”（sysutil.RestartService → RequestRestart）必须走与 SIGTERM 相同的
+// 排空 + Cleanup 路径，而不是 os.Exit 直接丢掉进行中的流与未落盘的计费。
+func TestInAppRestartRequestDrivesGracefulShutdown(t *testing.T) {
+	trigger := newShutdownTriggerWith(make(chan os.Signal, 1))
+	t.Cleanup(trigger.stop)
+
+	started, release := make(chan struct{}), make(chan struct{})
+	releaseStream := sync.OnceFunc(func() { close(release) })
+	server := startDrainTestServer(t, func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		_, _ = io.WriteString(w, "data: first\n\n")
+		_ = http.NewResponseController(w).Flush()
+		close(started)
+		<-release
+		_, _ = io.WriteString(w, "data: done\n\n")
+	})
+	t.Cleanup(releaseStream)
+	resp, err := http.Get(server.URL)
+	require.NoError(t, err)
+	defer func() { _ = resp.Body.Close() }()
+	waitForDrainSignal(t, started)
+
+	var cleanups atomic.Int32
+	reasons := make(chan string, 1)
+	reports := make(chan shutdownReport, 1)
+	go func() {
+		reasons <- trigger.wait()
+		reports <- runShutdownWith(server.Config, shutdownTimings{
+			grace:   2 * time.Second,
+			forced:  time.Second,
+			cleanup: time.Second,
+		}, func() { cleanups.Add(1) })
+	}()
+
+	sysutil.RequestRestart()
+	select {
+	case reason := <-reasons:
+		require.Equal(t, "in-app restart requested", reason)
+	case <-time.After(2 * time.Second):
+		t.Fatal("restart request did not reach the shutdown trigger (would have fallen back to os.Exit)")
+	}
+	drain := drainOf(t, server.Config)
+	require.Eventually(t, func() bool {
+		drain.mu.Lock()
+		defer drain.mu.Unlock()
+		return drain.stopping
+	}, 2*time.Second, time.Millisecond, "restart must start the HTTP drain")
+	require.Zero(t, cleanups.Load(), "cleanup must wait for the in-flight stream")
+
+	releaseStream()
+	var report shutdownReport
+	select {
+	case report = <-reports:
+	case <-time.After(5 * time.Second):
+		t.Fatal("graceful shutdown did not finish")
+	}
+	require.True(t, report.drained)
+	require.True(t, report.cleanedUp)
+	require.Equal(t, int32(1), cleanups.Load())
+	body, err := io.ReadAll(resp.Body)
+	require.NoError(t, err)
+	require.Equal(t, "data: first\n\ndata: done\n\n", string(body))
+}
+
+func TestShutdownTriggerReturnsOnFirstSignal(t *testing.T) {
+	signals := make(chan os.Signal, 1)
+	trigger := newShutdownTriggerWith(signals)
+	t.Cleanup(trigger.stop)
+
+	signals <- syscall.SIGTERM
+	require.Equal(t, "signal "+syscall.SIGTERM.String(), trigger.wait())
+}
+
+func TestShutdownTriggerMergesRepeatedRestartRequests(t *testing.T) {
+	trigger := newShutdownTriggerWith(make(chan os.Signal, 1))
+	t.Cleanup(trigger.stop)
+
+	for range 3 {
+		sysutil.RequestRestart() // 不得阻塞调用方（handler 的后台 goroutine）
+	}
+	require.Equal(t, "in-app restart requested", trigger.wait())
+	require.Empty(t, trigger.restart)
 }
