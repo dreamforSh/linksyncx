@@ -40,6 +40,12 @@ func (s *GatewayService) shouldRetryUpstreamError(account *Account, statusCode i
 		return false
 	}
 
+	// Anthropic 其余账号（API Key/Bedrock）的 401/403 同理：凭证或权限被拒，原地重发结果不变。
+	// 未被自定义错误码选中的 401/403 直接 failover 且不标记账号；池模式的同账号重试仍由 pool_mode_retry_status_codes 决定。
+	if account.Platform == PlatformAnthropic && (statusCode == http.StatusUnauthorized || statusCode == http.StatusForbidden) {
+		return false
+	}
+
 	// API Key 账号：未配置的错误码重试
 	return !account.ShouldHandleErrorCode(statusCode)
 }
