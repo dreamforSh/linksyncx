@@ -1159,7 +1159,8 @@ func (s *GatewayService) handleStreamingResponse(ctx context.Context, resp *http
 
 		// Cache TTL Override: 重写 SSE 事件中的 cache_creation 分类。
 		// 账号级设置优先；全局 1h 请求注入开启时，默认把 usage 计费归回 5m。
-		if overrideTarget, ok := s.resolveCacheTTLUsageOverrideTarget(ctx, account); ok {
+		// 全局开关取 Forward 构建请求时的快照，与实际发出的请求体一致。
+		if overrideTarget, ok := s.resolveCacheTTLUsageOverrideTarget(ctx, account, cacheTTL1hInjectionSnapshotFromContext(ctx)); ok {
 			if eventType == "message_start" {
 				if msg, ok := event["message"].(map[string]any); ok {
 					if u, ok := msg["usage"].(map[string]any); ok {
@@ -1551,14 +1552,62 @@ func rewriteCacheCreationJSON(usageObj map[string]any, target string) bool {
 	return true
 }
 
-func (s *GatewayService) resolveCacheTTLUsageOverrideTarget(ctx context.Context, account *Account) (string, bool) {
+// cacheTTL1hInjectionSnapshot 是"全局 1h cache TTL 注入"开关在单个请求内的一次性快照。
+// 该开关来自进程级设置缓存，管理员切换开关、或设置读取失败（缓存回落默认值 5s）都可能
+// 落在"构建上游请求"与"改写响应 usage / 计费"之间；各环节若各自实时读取，就会出现
+// 网关注入了 1h 却按 1h 计费、或客户端自己要的 1h 被改写成 5m 少收。因此只在构建请求时
+// 决策一次，后续环节一律复用这份快照。
+type cacheTTL1hInjectionSnapshot uint8
+
+const (
+	// cacheTTL1hInjectionUndecided 表示该转发路径没有在构建请求时做这项决策（目前只有原生
+	// /v1/messages 的 Forward 会注入 1h），此时保持原有行为：回退到实时读取开关。
+	cacheTTL1hInjectionUndecided cacheTTL1hInjectionSnapshot = iota
+	cacheTTL1hInjectionSkipped
+	cacheTTL1hInjectionApplied
+)
+
+func newCacheTTL1hInjectionSnapshot(inject bool) cacheTTL1hInjectionSnapshot {
+	if inject {
+		return cacheTTL1hInjectionApplied
+	}
+	return cacheTTL1hInjectionSkipped
+}
+
+type cacheTTL1hInjectionContextKey struct{}
+
+// withCacheTTL1hInjectionSnapshot 把构建请求时的决策挂到 ctx 上，供同一次 Forward 内的
+// 流式 / 非流式响应 usage 改写复用。计费在 usage worker 里以独立 ctx 执行，拿不到这里的值，
+// 所以另经 ForwardResult 传递。
+func withCacheTTL1hInjectionSnapshot(ctx context.Context, snapshot cacheTTL1hInjectionSnapshot) context.Context {
+	return context.WithValue(ctx, cacheTTL1hInjectionContextKey{}, snapshot)
+}
+
+func cacheTTL1hInjectionSnapshotFromContext(ctx context.Context) cacheTTL1hInjectionSnapshot {
+	if ctx == nil {
+		return cacheTTL1hInjectionUndecided
+	}
+	snapshot, _ := ctx.Value(cacheTTL1hInjectionContextKey{}).(cacheTTL1hInjectionSnapshot)
+	return snapshot
+}
+
+// resolveCacheTTLUsageOverrideTarget 解析 usage 中 cache_creation 应归入的 TTL 类别。
+// 全局开关部分以 snapshot 为准，只有 snapshot 未决策时才实时读取开关。
+func (s *GatewayService) resolveCacheTTLUsageOverrideTarget(ctx context.Context, account *Account, snapshot cacheTTL1hInjectionSnapshot) (string, bool) {
 	if account == nil {
 		return "", false
 	}
 	if account.IsCacheTTLOverrideEnabled() {
 		return account.GetCacheTTLOverrideTarget(), true
 	}
-	if account.IsAnthropicOAuthOrSetupToken() && s != nil && s.settingService != nil && s.settingService.IsAnthropicCacheTTL1hInjectionEnabled(ctx) {
+	if !account.IsAnthropicOAuthOrSetupToken() {
+		return "", false
+	}
+	injected := snapshot == cacheTTL1hInjectionApplied
+	if snapshot == cacheTTL1hInjectionUndecided {
+		injected = s != nil && s.settingService != nil && s.settingService.IsAnthropicCacheTTL1hInjectionEnabled(ctx)
+	}
+	if injected {
 		return cacheTTLTarget5m, true
 	}
 	return "", false
@@ -1610,7 +1659,8 @@ func (s *GatewayService) handleNonStreamingResponse(ctx context.Context, resp *h
 
 	// Cache TTL Override: 重写 non-streaming 响应中的 cache_creation 分类。
 	// 账号级设置优先；全局 1h 请求注入开启时，默认把 usage 计费归回 5m。
-	if overrideTarget, ok := s.resolveCacheTTLUsageOverrideTarget(ctx, account); ok {
+	// 全局开关取 Forward 构建请求时的快照，与实际发出的请求体一致。
+	if overrideTarget, ok := s.resolveCacheTTLUsageOverrideTarget(ctx, account, cacheTTL1hInjectionSnapshotFromContext(ctx)); ok {
 		if applyCacheTTLOverride(&response.Usage, overrideTarget) {
 			// 同步更新 body JSON 中的嵌套 cache_creation 对象
 			if newBody, err := sjson.SetBytes(body, "usage.cache_creation.ephemeral_5m_input_tokens", response.Usage.CacheCreation5mTokens); err == nil {

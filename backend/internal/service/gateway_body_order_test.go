@@ -190,15 +190,26 @@ func TestGatewayCacheTTLGlobalSetting_TargetResolution(t *testing.T) {
 	}
 	account := &Account{Platform: PlatformAnthropic, Type: AccountTypeOAuth}
 
-	target, ok := svc.resolveCacheTTLUsageOverrideTarget(context.Background(), account)
+	// 未决策：回退实时读取开关。
+	target, ok := svc.resolveCacheTTLUsageOverrideTarget(context.Background(), account, cacheTTL1hInjectionUndecided)
 	require.True(t, ok)
 	require.Equal(t, cacheTTLTarget5m, target)
 
+	// 已决策：以构建期快照为准，不看当前开关。
+	_, ok = svc.resolveCacheTTLUsageOverrideTarget(context.Background(), account, cacheTTL1hInjectionSkipped)
+	require.False(t, ok)
+	repo.data[SettingKeyEnableAnthropicCacheTTL1hInjection] = "false"
+	gatewayForwardingCache.Store(&cachedGatewayForwardingSettings{})
+	target, ok = svc.resolveCacheTTLUsageOverrideTarget(context.Background(), account, cacheTTL1hInjectionApplied)
+	require.True(t, ok)
+	require.Equal(t, cacheTTLTarget5m, target)
+
+	// 账号级设置优先于快照。
 	account.Extra = map[string]any{
 		"cache_ttl_override_enabled": true,
 		"cache_ttl_override_target":  "1h",
 	}
-	target, ok = svc.resolveCacheTTLUsageOverrideTarget(context.Background(), account)
+	target, ok = svc.resolveCacheTTLUsageOverrideTarget(context.Background(), account, cacheTTL1hInjectionApplied)
 	require.True(t, ok)
 	require.Equal(t, cacheTTLTarget1h, target)
 }

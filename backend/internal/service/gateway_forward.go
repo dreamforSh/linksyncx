@@ -341,7 +341,12 @@ func (s *GatewayService) Forward(ctx context.Context, c *gin.Context, account *A
 		logger.LegacyPrintf("service.gateway", "Model mapping applied: %s -> %s (account: %s, source=%s)", originalModel, mappedModel, account.Name, mappingSource)
 	}
 
-	if s.shouldInjectAnthropicCacheTTL1h(ctx, account) {
+	// 1h TTL 注入只在这里读一次开关：响应 usage 改写（经 ctx）与计费（经 ForwardResult）
+	// 都复用这份快照。管理员切换开关或设置读取失败若落在请求发出之后，各环节重读会让
+	// 计费 TTL 与实际发出的请求不一致。
+	cacheTTL1hInjection := newCacheTTL1hInjectionSnapshot(s.shouldInjectAnthropicCacheTTL1h(ctx, account))
+	ctx = withCacheTTL1hInjectionSnapshot(ctx, cacheTTL1hInjection)
+	if cacheTTL1hInjection == cacheTTL1hInjectionApplied {
 		if err := replaceBody(injectAnthropicCacheControlTTL1h(body)); err != nil {
 			return nil, err
 		}
@@ -920,6 +925,7 @@ func (s *GatewayService) Forward(ctx context.Context, c *gin.Context, account *A
 			// 流中断（缺失 terminal 事件、读错误、数据间隔超时等）时保留已观测到的
 			// usage 与错误一起返回，handler 在错误处理完成后照常提交 usage 记录。
 			if partial := partialStreamUsageResult(c, resp, streamResult, originalModel, mappedModel, startTime, err); partial != nil {
+				partial.cacheTTL1hInjection = cacheTTL1hInjection
 				return partial, err
 			}
 			return nil, err
@@ -947,6 +953,7 @@ func (s *GatewayService) Forward(ctx context.Context, c *gin.Context, account *A
 		Duration:                      time.Since(startTime),
 		FirstTokenMs:                  firstTokenMs,
 		ClientDisconnect:              clientDisconnect,
+		cacheTTL1hInjection:           cacheTTL1hInjection,
 	}, nil
 }
 
