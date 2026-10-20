@@ -262,12 +262,27 @@ func TestTLSFingerprintProfileFailedReloadAlsoClearsRandomCandidates(t *testing.
 
 // 保存时就拦住不自洽的模板（key_share 必须是 supported_groups 的子集，空字段按内置默认值补齐后再查），
 // 否则它存进库后绑定它的账号每个请求都失败。错误必须是 *model.ValidationError（handler 据此返回 400），
-// 字段挂在 key_share_groups 上；自洽的模板（含全默认、curves 已包含默认 key share 的）照常保存。
+// 字段指向真正要改的输入：key share 不在 curves 里挂 key_share_groups；自定义扩展列表有 key_share（51）
+// 却漏了 supported_groups（10）时 curves 本身没写错，挂 extensions。自洽的模板（含全默认、curves 已包含
+// 默认 key share 的）照常保存。
 func TestTLSFingerprintProfileSaveRejectsInconsistentClientHello(t *testing.T) {
 	ctx := context.Background()
-	invalid := map[string]*model.TLSFingerprintProfile{
-		"custom curves without key shares": {Name: "node-like", Curves: []uint16{29, 23, 24}},
-		"key share missing from curves":    {Name: "mismatch", Curves: []uint16{29, 23}, KeyShareGroups: []uint16{29, 24}},
+	type invalidCase struct {
+		profile *model.TLSFingerprintProfile
+		field   string
+		reason  string
+	}
+	keyShareCase := func(p *model.TLSFingerprintProfile) invalidCase {
+		return invalidCase{profile: p, field: "key_share_groups", reason: "absent from supported groups"}
+	}
+	invalid := map[string]invalidCase{
+		"custom curves without key shares": keyShareCase(&model.TLSFingerprintProfile{Name: "node-like", Curves: []uint16{29, 23, 24}}),
+		"key share missing from curves":    keyShareCase(&model.TLSFingerprintProfile{Name: "mismatch", Curves: []uint16{29, 23}, KeyShareGroups: []uint16{29, 24}}),
+		"key_share without supported_groups extension": {
+			profile: &model.TLSFingerprintProfile{Name: "no-groups", Curves: []uint16{29}, KeyShareGroups: []uint16{29}, Extensions: []uint16{0, 43, 51}},
+			field:   "extensions",
+			reason:  "supported_groups (10)",
+		},
 	}
 	valid := map[string]*model.TLSFingerprintProfile{
 		"all defaults":                      {Name: "defaults"},
@@ -276,20 +291,21 @@ func TestTLSFingerprintProfileSaveRejectsInconsistentClientHello(t *testing.T) {
 		"key shares within default curves":  {Name: "x25519-only", KeyShareGroups: []uint16{29}},
 	}
 
-	requireKeyShareValidationError := func(t *testing.T, err error) {
+	requireValidationError := func(t *testing.T, err error, want invalidCase) {
 		t.Helper()
 		var validationErr *model.ValidationError
 		require.ErrorAs(t, err, &validationErr)
-		require.Equal(t, "key_share_groups", validationErr.Field)
-		require.Contains(t, validationErr.Message, "absent from supported groups")
+		require.Equal(t, want.field, validationErr.Field)
+		require.Contains(t, validationErr.Message, want.reason)
 	}
 
-	for name, profile := range invalid {
+	for name, tc := range invalid {
+		profile := tc.profile
 		t.Run("create rejects "+name, func(t *testing.T) {
 			repo := newTLSProfileRepoStub()
 			svc := NewTLSFingerprintProfileService(repo, nil)
 			created, err := svc.Create(ctx, profile)
-			requireKeyShareValidationError(t, err)
+			requireValidationError(t, err, tc)
 			require.Nil(t, created)
 			require.Zero(t, repo.creates)
 		})
@@ -300,7 +316,7 @@ func TestTLSFingerprintProfileSaveRejectsInconsistentClientHello(t *testing.T) {
 			edited := *profile
 			edited.ID = 7
 			updated, err := svc.Update(ctx, &edited)
-			requireKeyShareValidationError(t, err)
+			requireValidationError(t, err, tc)
 			require.Nil(t, updated)
 			require.Zero(t, repo.updates)
 			require.Same(t, original, repo.profiles[7])

@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/Wei-Shaw/sub2api/internal/model"
@@ -104,4 +105,12 @@ func TestTLSFingerprintProfileHandlerRejectsInconsistentKeyShares(t *testing.T) 
 		`{"curves":[29,23,24]}`)
 	require.Equal(t, http.StatusOK, status)
 	require.Equal(t, 2, repo.writes)
+
+	// 自定义扩展列表有 key_share（51）却漏了 supported_groups（10）：curves 本身没写错，原因要指向 extensions。
+	status, resp = doTLSProfileHandlerRequest(t, router, http.MethodPost, "/admin/tls-fingerprint-profiles",
+		`{"name":"no-groups","curves":[29],"key_share_groups":[29],"extensions":[0,43,51]}`)
+	require.Equal(t, http.StatusBadRequest, status)
+	require.True(t, strings.HasPrefix(resp.Message, "extensions: "), resp.Message)
+	require.Contains(t, resp.Message, "supported_groups (10)")
+	require.Equal(t, 2, repo.writes, "rejected templates must not be stored")
 }

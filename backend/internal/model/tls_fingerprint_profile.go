@@ -2,6 +2,7 @@
 package model
 
 import (
+	"errors"
 	"time"
 
 	"github.com/Wei-Shaw/sub2api/internal/pkg/tlsfingerprint"
@@ -35,11 +36,19 @@ type TLSFingerprintProfile struct {
 // 目前唯一的检查是 key_share 必须是 supported_groups 的子集，
 // 典型踩坑是自定义了 curves 却没填 key_share_groups，于是继承内置默认的 [4588, 29]，
 // 所以错误挂在 key_share_groups 上，并提示空字段会回落到内置默认值。
+// 例外是自定义 extensions 带了 key_share（51）却漏了 supported_groups（10）：curves 根本发不出去，
+// 改 curves 无济于事，错误挂在 extensions 上并说明怎么补。
 func (p *TLSFingerprintProfile) Validate() error {
 	if p.Name == "" {
 		return &ValidationError{Field: "name", Message: "name is required"}
 	}
 	if err := tlsfingerprint.ValidateProfile(p.ToTLSProfile()); err != nil {
+		if errors.Is(err, tlsfingerprint.ErrKeyShareWithoutSupportedGroups) {
+			return &ValidationError{
+				Field:   "extensions",
+				Message: err.Error() + "; add supported_groups (10) to extensions, or leave extensions empty to use the built-in order",
+			}
+		}
 		return &ValidationError{
 			Field:   "key_share_groups",
 			Message: err.Error() + "; every key share group must also be listed in curves (empty fields fall back to the built-in defaults)",

@@ -46,6 +46,30 @@ func TestValidateProfileRejectsKeyShareOutsideSupportedGroupsBeforeDial(t *testi
 	}
 }
 
+// 自定义扩展列表带了 key_share（51）却漏了 supported_groups（10）时，curves 根本不会发出去，
+// key share 写得再对也不自洽。这必须是一个能用 errors.Is 认出的独立错误：保存校验据此把错误挂到
+// extensions 上，而不是让管理员去改本来就写对了的 curves。
+func TestValidateProfileNamesMissingSupportedGroupsExtension(t *testing.T) {
+	for name, profile := range map[string]*Profile{
+		"key share listed in curves": {Curves: []uint16{29}, KeyShareGroups: []uint16{29}, Extensions: []uint16{0, 43, 51}},
+		"all other fields default":   {Extensions: []uint16{0, 43, 51}},
+	} {
+		t.Run(name, func(t *testing.T) {
+			err := ValidateProfile(profile)
+			require.ErrorIs(t, err, ErrKeyShareWithoutSupportedGroups)
+			require.NotContains(t, err.Error(), "absent from supported groups")
+		})
+	}
+
+	require.NoError(t, ValidateProfile(&Profile{Curves: []uint16{29}, KeyShareGroups: []uint16{29}, Extensions: []uint16{0, 10, 43, 51}}))
+	require.NoError(t, ValidateProfile(&Profile{Extensions: []uint16{0, 10, 43}}), "no key_share extension, nothing to check")
+
+	// supported_groups 在列表里时仍是原来的错误，不能被新错误吞掉。
+	err := ValidateProfile(&Profile{Curves: []uint16{29}, KeyShareGroups: []uint16{23}, Extensions: []uint16{0, 10, 43, 51}})
+	require.ErrorContains(t, err, "key share 23 is absent from supported groups")
+	require.NotErrorIs(t, err, ErrKeyShareWithoutSupportedGroups)
+}
+
 // 每个 dialer 独占一份会话票据缓存，不同账号/代理的 TLS 会话不会互相复用。
 func TestTLSSessionTicketsAreScopedToDialer(t *testing.T) {
 	proxyURL, err := url.Parse("http://127.0.0.1:1080")
