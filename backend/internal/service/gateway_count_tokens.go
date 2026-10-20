@@ -157,6 +157,20 @@ func (s *GatewayService) ForwardCountTokens(ctx context.Context, c *gin.Context,
 		}
 	}
 
+	// 解析出站代理（fail-closed）：分配了代理但不可用时拒绝直连，避免出口 IP 泄漏。
+	// 先于取凭证（与 Forward 一致）：count_tokens 不切号，但绑定失效时不应先去刷新 token。
+	resolvedProxyURL, proxyErr := account.ProxyURLForOutbound()
+	if proxyErr != nil {
+		setOpsUpstreamError(c, 0, sanitizeUpstreamErrorMessage(proxyErr.Error()), "")
+		s.countTokensError(c, http.StatusBadGateway, "upstream_error", "Request failed")
+		return proxyErr
+	}
+	// 自定义 base URL relay 模式：代理已校验可用，由 buildCustomRelayURL 作为 &proxy= 携带。
+	proxyURL := resolvedProxyURL
+	if account.IsCustomBaseURLEnabled() && account.GetCustomBaseURL() != "" {
+		proxyURL = ""
+	}
+
 	// 获取凭证
 	token, tokenType, err := s.GetAccessToken(ctx, account)
 	if err != nil {
@@ -176,19 +190,6 @@ func (s *GatewayService) ForwardCountTokens(ctx context.Context, c *gin.Context,
 	}
 	// 先记录首发 wire body；如果后面进入 400 retry，retry 会基于未改写的逻辑 body 重新构建。
 	acceptedWireBody := wireBody
-
-	// 解析出站代理（fail-closed）：分配了代理但不可用时拒绝直连，避免出口 IP 泄漏。
-	resolvedProxyURL, proxyErr := account.ProxyURLForOutbound()
-	if proxyErr != nil {
-		setOpsUpstreamError(c, 0, sanitizeUpstreamErrorMessage(proxyErr.Error()), "")
-		s.countTokensError(c, http.StatusBadGateway, "upstream_error", "Request failed")
-		return proxyErr
-	}
-	// 自定义 base URL relay 模式：代理已校验可用，由 buildCustomRelayURL 作为 &proxy= 携带。
-	proxyURL := resolvedProxyURL
-	if account.IsCustomBaseURLEnabled() && account.GetCustomBaseURL() != "" {
-		proxyURL = ""
-	}
 
 	// 发送请求
 	resp, err := s.httpUpstream.DoWithTLS(upstreamReq, proxyURL, account.ID, account.Concurrency, s.tlsFPProfileService.ResolveTLSProfile(account))
@@ -294,6 +295,14 @@ func (s *GatewayService) ForwardCountTokens(ctx context.Context, c *gin.Context,
 }
 
 func (s *GatewayService) forwardCountTokensAnthropicAPIKeyPassthrough(ctx context.Context, c *gin.Context, account *Account, body []byte) error {
+	// 与 ForwardCountTokens 一致先查代理绑定、后取凭证。
+	proxyURL, proxyErr := account.ProxyURLForOutbound()
+	if proxyErr != nil {
+		setOpsUpstreamError(c, 0, sanitizeUpstreamErrorMessage(proxyErr.Error()), "")
+		s.countTokensError(c, http.StatusBadGateway, "upstream_error", "Request failed")
+		return proxyErr
+	}
+
 	token, tokenType, err := s.GetAccessToken(ctx, account)
 	if err != nil {
 		s.countTokensError(c, http.StatusBadGateway, "upstream_error", "Failed to get access token")
@@ -308,13 +317,6 @@ func (s *GatewayService) forwardCountTokensAnthropicAPIKeyPassthrough(ctx contex
 	if err != nil {
 		s.countTokensError(c, http.StatusInternalServerError, "api_error", "Failed to build request")
 		return err
-	}
-
-	proxyURL, proxyErr := account.ProxyURLForOutbound()
-	if proxyErr != nil {
-		setOpsUpstreamError(c, 0, sanitizeUpstreamErrorMessage(proxyErr.Error()), "")
-		s.countTokensError(c, http.StatusBadGateway, "upstream_error", "Request failed")
-		return proxyErr
 	}
 
 	resp, err := s.httpUpstream.DoWithTLS(upstreamReq, proxyURL, account.ID, account.Concurrency, s.tlsFPProfileService.ResolveTLSProfile(account))

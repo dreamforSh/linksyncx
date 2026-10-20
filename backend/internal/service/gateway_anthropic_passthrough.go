@@ -59,18 +59,19 @@ func (s *GatewayService) forwardAnthropicAPIKeyPassthroughWithInput(
 	account *Account,
 	input anthropicPassthroughForwardInput,
 ) (*ForwardResult, error) {
+	// fail-closed：分配了代理但不可用时拒绝直连，按传输层故障 failover。
+	// 与 Forward 一致先查代理绑定、后取凭证（API Key 读凭据本身不出站，这里只为顺序统一）。
+	proxyURL, proxyErr := account.ProxyURLForOutbound()
+	if proxyErr != nil {
+		return nil, s.handleUpstreamTransportError(ctx, c, account, proxyErr, OpsUpstreamErrorEvent{})
+	}
+
 	token, tokenType, err := s.GetAccessToken(ctx, account)
 	if err != nil {
 		return nil, err
 	}
 	if tokenType != "apikey" {
 		return nil, fmt.Errorf("anthropic api key passthrough requires apikey token, got: %s", tokenType)
-	}
-
-	// fail-closed：分配了代理但不可用时拒绝直连，按传输层故障 failover。
-	proxyURL, proxyErr := account.ProxyURLForOutbound()
-	if proxyErr != nil {
-		return nil, s.handleUpstreamTransportError(ctx, c, account, proxyErr, OpsUpstreamErrorEvent{})
 	}
 
 	logger.LegacyPrintf("service.gateway", "[Anthropic 自动透传] 命中 API Key 透传分支: account=%d name=%s model=%s stream=%v",

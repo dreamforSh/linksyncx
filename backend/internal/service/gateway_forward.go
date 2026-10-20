@@ -358,6 +358,16 @@ func (s *GatewayService) Forward(ctx context.Context, c *gin.Context, account *A
 		}
 	}
 
+	// 解析出站代理（fail-closed）：账号分配了代理但当前不可用时，绝不回退直连
+	// （会泄漏真实出口 IP）——按传输层故障处理，触发 failover 切换到其它账号。
+	// 先查代理绑定、后取凭证：绑定失效时不刷新 / 交换 token（那本身就是一次出站请求），
+	// 也保证这类失败一定走 failover——GetAccessToken 的错误原样上抛、不会切号，
+	// Vertex service account 冷缓存换 token 时撞上失效绑定曾因此变成终态 502。
+	resolvedProxyURL, proxyErr := account.ProxyURLForOutbound()
+	if proxyErr != nil {
+		return nil, s.handleUpstreamTransportError(ctx, c, account, proxyErr, OpsUpstreamErrorEvent{})
+	}
+
 	// 获取凭证
 	token, tokenType, err := s.GetAccessToken(ctx, account)
 	if err != nil {
@@ -368,12 +378,6 @@ func (s *GatewayService) Forward(ctx context.Context, c *gin.Context, account *A
 		return nil, err
 	}
 
-	// 解析出站代理（fail-closed）：账号分配了代理但当前不可用时，绝不回退直连
-	// （会泄漏真实出口 IP）——按传输层故障处理，触发 failover 切换到其它账号。
-	resolvedProxyURL, proxyErr := account.ProxyURLForOutbound()
-	if proxyErr != nil {
-		return nil, s.handleUpstreamTransportError(ctx, c, account, proxyErr, OpsUpstreamErrorEvent{})
-	}
 	// 自定义 base URL relay 模式：代理已在上面校验可用，此处由 buildCustomRelayURL 作为
 	// &proxy= 查询参数交给 relay 携带，传输层本身不设置代理。
 	proxyURL := resolvedProxyURL

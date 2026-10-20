@@ -118,7 +118,14 @@ func (s *GatewayService) ForwardAsChatCompletions(
 	// 7. Enforce cache_control block limit
 	anthropicBody = enforceCacheControlLimit(anthropicBody)
 
-	// 8. Get access token
+	// 8. Get proxy URL (fail-closed：分配了代理但不可用时拒绝直连，按传输层故障 failover)
+	// 先于取凭证：绑定失效时不刷新 / 交换 token，且失败一定走 failover（见 Forward）。
+	resolvedProxyURL, proxyErr := account.ProxyURLForOutbound()
+	if proxyErr != nil {
+		return nil, s.handleUpstreamTransportError(ctx, c, account, proxyErr, OpsUpstreamErrorEvent{})
+	}
+
+	// 9. Get access token
 	token, tokenType, err := s.GetAccessToken(ctx, account)
 	if err != nil {
 		// Vertex SA 取 token 时已经过账号代理：代理失效是这个账号的出口故障，换号而不是判死请求。
@@ -128,11 +135,6 @@ func (s *GatewayService) ForwardAsChatCompletions(
 		return nil, fmt.Errorf("get access token: %w", err)
 	}
 
-	// 9. Get proxy URL (fail-closed：分配了代理但不可用时拒绝直连，按传输层故障 failover)
-	resolvedProxyURL, proxyErr := account.ProxyURLForOutbound()
-	if proxyErr != nil {
-		return nil, s.handleUpstreamTransportError(ctx, c, account, proxyErr, OpsUpstreamErrorEvent{})
-	}
 	proxyURL := resolvedProxyURL
 	if account.IsCustomBaseURLEnabled() && account.GetCustomBaseURL() != "" {
 		proxyURL = "" // relay 通过 &proxy= 携带代理
