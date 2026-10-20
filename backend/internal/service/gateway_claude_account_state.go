@@ -31,11 +31,15 @@ func claudeIdentityUnavailableFailover(account *Account, err error) error {
 	}
 }
 
-// claudeUpstreamSessionID 选出 OAuth 请求的上游会话 ID，供 X-Claude-Code-Session-Id 使用：
-// 请求体 metadata.user_id 已带（已映射的）会话时用它，并记为账号最近活跃会话；
-// 否则按 IdentityService.ResolveSessionIDWithoutMetadata 选择，绝不逐请求随机。
+// claudeUpstreamSessionID 选出 OAuth 请求的上游会话 ID，供 X-Claude-Code-Session-Id 使用。
+// messages 与 count_tokens 共用这一个规则，顺序：
+//  1. 请求体 metadata.user_id 带会话时用它（透传关闭时已映射，开启时是客户端原值），
+//     并记为账号最近活跃会话；
+//  2. metadata 透传开启且客户端带了会话头：原样使用，不映射；
+//  3. 否则按 IdentityService.ResolveSessionIDWithoutMetadata 选择，绝不逐请求随机。
+//
 // identityEpoch 是账号当前身份代次，客户端会话头按同一代次映射。
-func (s *GatewayService) claudeUpstreamSessionID(ctx context.Context, account *Account, identityEpoch int64, clientHeaders http.Header, metadataSessionID string) string {
+func (s *GatewayService) claudeUpstreamSessionID(ctx context.Context, account *Account, identityEpoch int64, clientHeaders http.Header, metadataSessionID string, metadataPassthrough bool) string {
 	if metadataSessionID != "" {
 		sessionID := strings.Clone(metadataSessionID)
 		if s.identityService != nil && account != nil {
@@ -47,6 +51,16 @@ func (s *GatewayService) claudeUpstreamSessionID(ctx context.Context, account *A
 	if clientHeaders != nil {
 		clientSession = getHeaderRaw(clientHeaders, "X-Claude-Code-Session-Id")
 	}
+	// 为什么透传时不映射会话头：透传开启后 messages 的 metadata.user_id 原样上游，会话头
+	// 必须与它一致，只能是客户端原值；真实 CLI 的 count_tokens 不带 metadata、只带会话头，
+	// 这里若仍按映射走，上游会看到同一个客户端在同一对话里用两个会话 ID。
+	// 为什么排在单会话模式之前：透传承诺不改写客户端身份，messages 本来就不套伪装 ID，
+	// 旁路请求跟随它才一致；伪装 ID 只在客户端完全没给会话时兜底（2026-10-19 用户确认透传优先）。
+	if metadataPassthrough {
+		if passthrough := normalizeClientSessionID(clientSession); passthrough != "" {
+			return passthrough
+		}
+	}
 	if s.identityService == nil {
 		return uuid.NewString()
 	}
@@ -56,14 +70,14 @@ func (s *GatewayService) claudeUpstreamSessionID(ctx context.Context, account *A
 // syncClaudeSessionHeader 写入 X-Claude-Code-Session-Id：真实 CLI 每个请求都带，且与
 // metadata.user_id 的 session_id 一致。先删除任意大小写的残留值（白名单透传可能写入
 // 未映射的客户端原值），再写入选出的上游会话 ID。
-func (s *GatewayService) syncClaudeSessionHeader(ctx context.Context, account *Account, identityEpoch int64, header, clientHeaders http.Header, metadataUserID string) {
+func (s *GatewayService) syncClaudeSessionHeader(ctx context.Context, account *Account, identityEpoch int64, header, clientHeaders http.Header, metadataUserID string, metadataPassthrough bool) {
 	metadataSessionID := ""
 	if metadataUserID != "" {
 		if parsed := ParseMetadataUserID(metadataUserID); parsed != nil {
 			metadataSessionID = parsed.SessionID
 		}
 	}
-	sessionID := s.claudeUpstreamSessionID(ctx, account, identityEpoch, clientHeaders, metadataSessionID)
+	sessionID := s.claudeUpstreamSessionID(ctx, account, identityEpoch, clientHeaders, metadataSessionID, metadataPassthrough)
 	deleteHeaderAllForms(header, "X-Claude-Code-Session-Id")
 	setHeaderRaw(header, "X-Claude-Code-Session-Id", sessionID)
 }

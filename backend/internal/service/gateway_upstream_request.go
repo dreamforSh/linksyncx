@@ -215,10 +215,10 @@ func (s *GatewayService) buildUpstreamRequestIndexed(ctx context.Context, c *gin
 	// 同步 X-Claude-Code-Session-Id 头：真实 CLI 每个请求都带，且与
 	// metadata.user_id 的 session_id 一致。OAuth 路径无条件从 body 重建
 	// （mimic 路径下客户端可能根本没发该头）。body 里没有可用 session 时，
-	// 按 ResolveSessionIDWithoutMetadata 选账号作用域的会话，覆盖透传来的客户端
-	// 原始会话头（未映射的原值会和本对话 messages 请求的会话对不上）。
+	// metadata 透传开启则沿用客户端会话头原值，否则按 ResolveSessionIDWithoutMetadata
+	// 选账号作用域的会话；规则与 count_tokens 共用，见 claudeUpstreamSessionID。
 	if tokenType == "oauth" {
-		s.syncClaudeSessionHeader(ctx, account, identityEpoch, req.Header, clientHeaders, view.get("metadata.user_id").String())
+		s.syncClaudeSessionHeader(ctx, account, identityEpoch, req.Header, clientHeaders, view.get("metadata.user_id").String(), enableMPT)
 		// 同步 x-claude-code-prompt-id 头：2.1.283+ 第一方默认携带，值与 billing 块
 		// cc_prompt_id 一致（2026-10-05 抓包实证）。mimic 路径的 billing 块由本网关
 		// 生成，从此镜像到头；透传路径客户端已自带（白名单放行），仅在缺失时补齐。

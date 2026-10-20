@@ -653,14 +653,15 @@ func (s *GatewayService) buildCountTokensRequest(ctx context.Context, c *gin.Con
 	}
 
 	// 同步 X-Claude-Code-Session-Id（真实 CLI 恒带，即使 count_tokens body 无 metadata）。
-	// 真实 CLI 的 count_tokens body 不带 metadata：用客户端会话头映射成本账号的会话，
-	// 与该对话 messages 请求一致；都没有时复用账号最近活跃会话或环境会话。
+	// 真实 CLI 的 count_tokens body 不带 metadata：用客户端会话头选会话，与该对话
+	// messages 请求一致（透传关闭时映射成本账号的会话，开启时沿用原值，因为 messages
+	// 此时发的就是原值）；都没有时复用账号最近活跃会话或环境会话。
 	if tokenType == "oauth" {
 		var identityEpoch int64
 		if ctFingerprint != nil {
 			identityEpoch = ctFingerprint.IdentityEpoch
 		}
-		sessionID := s.claudeUpstreamSessionID(ctx, account, identityEpoch, clientHeaders, ctSessionID)
+		sessionID := s.claudeUpstreamSessionID(ctx, account, identityEpoch, clientHeaders, ctSessionID, ctEnableMPT)
 		deleteHeaderAllForms(req.Header, "X-Claude-Code-Session-Id")
 		setHeaderRaw(req.Header, "X-Claude-Code-Session-Id", sessionID)
 	}
