@@ -211,7 +211,7 @@ func (s *TLSFingerprintProfileService) ResolveTLSProfile(account *Account) *tlsf
 	}
 	if id == -1 {
 		// “随机”按账号固定：每个账号确定性地落在一个模板上，而不是每个请求重新抽取。
-		// 只在本分支内访问 s，未绑定（id = 0）的路径对 nil 接收者仍然安全。
+		// 未绑定（id = 0）的路径不访问 s，对 nil 接收者仍然安全；本分支与 id > 0 分支一样需要已初始化的服务。
 		if p := s.stickyProfileForAccount(account.ID); p != nil {
 			return p
 		}
