@@ -65,9 +65,10 @@ func deadLocalProxyPort(t *testing.T) int {
 	t.Helper()
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
 	require.NoError(t, err)
-	port := ln.Addr().(*net.TCPAddr).Port
+	addr, ok := ln.Addr().(*net.TCPAddr)
+	require.True(t, ok)
 	require.NoError(t, ln.Close())
-	return port
+	return addr.Port
 }
 
 func newVertexSAAccountForTokenTest(t *testing.T, privateKeyPEM string, proxy *Proxy) *Account {
@@ -180,7 +181,8 @@ func TestVertexServiceAccountDeadProxyTokenExchangeFailsOver(t *testing.T) {
 
 			raw, ok := c.Get(OpsUpstreamErrorsKey)
 			require.True(t, ok, "token 交换的传输失败也要记 Ops 上游错误")
-			events := raw.([]*OpsUpstreamErrorEvent)
+			events, ok := raw.([]*OpsUpstreamErrorEvent)
+			require.True(t, ok)
 			require.Len(t, events, 1)
 			require.Equal(t, "request_error", events[0].Kind)
 			require.Equal(t, vertexDefaultTokenURL, events[0].UpstreamURL)
