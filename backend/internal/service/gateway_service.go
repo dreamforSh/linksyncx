@@ -713,7 +713,11 @@ type UpstreamFailoverError struct {
 	SameAccountRetryMax      int           // 可选的错误级同账号重试上限，低于 handler 默认预算时优先采用
 	RequestScopedTransient   bool          // 故障因素与账号无关（如上游按客户端身份/模型容量降载）：可同账号重试，但不得据此对账号做临时封禁
 	AccountUnavailable       bool          // 账号自身已不可用（代理无法解析、代理/网络持续故障）：已绑定对话也应换号
-	SafeToFailoverAfterWrite bool          // 仅写出 SSE 注释等非语义字节时，仍可在同一客户端流中切换账号
+	// ProxyBindingUnavailable：分配了代理却解析不出可用 URL（ErrAccountProxyUnavailable）。请求根本没有出站，
+	// 不是账号健康信号：只换号（同时置 AccountUnavailable），不得计入健康熔断、不得临时摘号，绑定修好后应立即
+	// 恢复调度。单独用布尔而不复用 Reason：WS 换号耗尽时 Reason 会被当成客户端可见的 errorCode。
+	ProxyBindingUnavailable  bool
+	SafeToFailoverAfterWrite bool // 仅写出 SSE 注释等非语义字节时，仍可在同一客户端流中切换账号
 	Stage                    GatewayFailureStage
 	Scope                    GatewayFailureScope
 	Reason                   GatewayFailureReason
@@ -1382,8 +1386,8 @@ func (s *GatewayService) DoGrokNativeResponsesJSON(ctx context.Context, account 
 	account.ApplyHeaderOverrides(upstreamReq.Header)
 	proxyURL, proxyErr := account.ProxyURLForOutbound()
 	if proxyErr != nil {
-		// 绑定失效是账号自身不可用：与其它数据面一致标 AccountUnavailable。
-		return nil, &UpstreamFailoverError{StatusCode: http.StatusBadGateway, Reason: GatewayFailureReason("grok_search_proxy_unavailable"), AccountUnavailable: true}
+		// 绑定失效是账号自身不可用：与其它数据面一致标 AccountUnavailable；请求没有出站，不计入健康统计。
+		return nil, &UpstreamFailoverError{StatusCode: http.StatusBadGateway, Reason: GatewayFailureReason("grok_search_proxy_unavailable"), AccountUnavailable: true, ProxyBindingUnavailable: true}
 	}
 	resp, err := s.httpUpstream.Do(upstreamReq, proxyURL, account.ID, account.Concurrency)
 	if err != nil {

@@ -5,6 +5,7 @@ package service
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"net/http"
 	"net/http/httptest"
@@ -74,6 +75,8 @@ func requireProxyBindingFailover(t *testing.T, err error, account *Account, c *g
 	require.ErrorAs(t, err, &failoverErr, "broken proxy binding must fail over, got %v", err)
 	require.Equal(t, http.StatusBadGateway, failoverErr.StatusCode)
 	require.True(t, failoverErr.AccountUnavailable, "a broken binding makes the account itself unavailable")
+	require.True(t, failoverErr.ProxyBindingUnavailable, "health breakers must be able to tell that the request never left")
+	require.False(t, IsClaudeStickySoftFailure(failoverErr) || IsAntigravityStickySoftFailure(failoverErr), "a bound session must switch, not hold")
 	require.True(t, failoverErr.ShouldRetryNextAccount())
 	require.NotEmpty(t, failoverErr.ResponseBody, "failover body feeds passthrough rules once failover is exhausted")
 	require.Zero(t, upstream.calls, "no outbound request may be made")
@@ -389,7 +392,81 @@ func TestGrokNativeWebSearchBrokenProxyBindingIsAccountUnavailable(t *testing.T)
 			require.ErrorAs(t, err, &failoverErr)
 			require.Equal(t, http.StatusBadGateway, failoverErr.StatusCode)
 			require.True(t, failoverErr.AccountUnavailable)
+			require.True(t, failoverErr.ProxyBindingUnavailable)
 			require.Zero(t, upstream.calls)
+		})
+	}
+}
+
+// proxyBindingHealthSettingRepo：ReportOpenAIAccountScheduleResult 还会经 GetMultiple 读高级调度器设置，
+// 返回空表即高级调度器关闭；健康熔断设置仍由 GetValue 提供。
+type proxyBindingHealthSettingRepo struct {
+	openAIAPIKeyHealthSettingRepo
+}
+
+func (*proxyBindingHealthSettingRepo) GetMultiple(context.Context, []string) (map[string]string, error) {
+	return map[string]string{}, nil
+}
+
+// OpenAI API Key 池模式开了健康熔断时，handler 会把每个 failover 交给 ReportOpenAIAccountScheduleResult。
+// 绑定失效的请求根本没出站，若照常计入熔断窗口，达到阈值就会临时摘号，冷却期内修好绑定也恢复不了调度——
+// 违背“只换号、不摘号”的约定。缓存桩直接报告已跳闸：只要计入一次就会摘号，所以零调用才算通过。
+func TestOpenAIBrokenProxyBindingFailoverStaysOutOfAPIKeyHealthBreaker(t *testing.T) {
+	t.Setenv(xai.EnvAllowUnsafeURLOverrides, "true")
+	body := []byte(`{"model":"gpt-5.1","stream":false,"input":"hello"}`)
+	newFixture := func(t *testing.T) (*OpenAIGatewayService, *openAIAPIKeyHealthCacheStub, *openAIAPIKeyHealthAccountRepo, *countingProxyBindingUpstream) {
+		t.Helper()
+		encoded, err := json.Marshal(OpenAIAPIKeyHealthBreakerSettings{Enabled: true, WindowMinutes: 1, FailureThreshold: 3, CooldownMinutes: 5})
+		require.NoError(t, err)
+		cache := &openAIAPIKeyHealthCacheStub{tripped: true}
+		repo := &openAIAPIKeyHealthAccountRepo{}
+		rl := NewRateLimitService(repo, nil, &config.Config{}, nil, cache)
+		rl.SetSettingService(NewSettingService(&proxyBindingHealthSettingRepo{openAIAPIKeyHealthSettingRepo{value: string(encoded)}}, &config.Config{}))
+		rl.SetOpenAIAPIKeyHealthCache(cache)
+		upstream := &countingProxyBindingUpstream{}
+		svc := proxyBindingOpenAIService(upstream)
+		svc.rateLimitService = rl
+		return svc, cache, repo, upstream
+	}
+	newAccount := func() *Account {
+		account := openAIHealthPoolAccount()
+		account.Name = "pool-apikey"
+		account.Concurrency = 1
+		account.Credentials["api_key"] = "sk-test"
+		account.Credentials["base_url"] = "https://api.openai.example/v1"
+		return account
+	}
+
+	// 对照：同一夹具下普通的 502 传输 failover 确实会让熔断跳闸并摘号，证明夹具有效。
+	t.Run("control: plain transport failover trips the breaker", func(t *testing.T) {
+		svc, cache, repo, _ := newFixture(t)
+		account := newAccount()
+		require.True(t, svc.ReportOpenAIAccountScheduleResult(account, "gpt-5.1", false, nil, &UpstreamFailoverError{StatusCode: http.StatusBadGateway, ResponseBody: openAITransportFailoverBody}))
+		require.Equal(t, 1, cache.recordCalls)
+		require.Equal(t, 1, repo.setCalls)
+	})
+	for _, binding := range brokenProxyBindings() {
+		t.Run(binding.name, func(t *testing.T) {
+			svc, cache, repo, upstream := newFixture(t)
+			account := newAccount()
+			require.True(t, isOpenAIAPIKeyHealthBreakerAccount(account))
+			binding.bind(account)
+			c, rec := newProxyBindingTestContext(http.MethodPost, "/v1/responses", body)
+
+			_, err := svc.Forward(context.Background(), c, account, body)
+			requireProxyBindingFailover(t, err, account, c, rec, upstream)
+
+			// 与 handler 一致：先过上报闸门，再上报调度结果；已写出字节的分支走 ObserveOpenAIAccountHealthFailure。
+			var failoverErr *UpstreamFailoverError
+			require.ErrorAs(t, err, &failoverErr)
+			require.True(t, failoverErr.ShouldReportAccountScheduleFailure())
+			require.False(t, svc.ReportOpenAIAccountScheduleResult(account, "gpt-5.1", false, nil, err))
+			require.False(t, svc.ObserveOpenAIAccountHealthFailure(context.Background(), account, err))
+
+			require.Zero(t, cache.recordCalls, "a request that never left must not enter the breaker window")
+			require.Zero(t, cache.setCalls)
+			require.Zero(t, repo.setCalls, "a broken binding must not temp-unschedule the account")
+			require.Nil(t, account.TempUnschedulableUntil)
 		})
 	}
 }

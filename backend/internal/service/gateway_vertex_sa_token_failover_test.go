@@ -209,6 +209,7 @@ func TestHandleAccessTokenTransportErrorProxyUnavailableFailsOver(t *testing.T) 
 	require.ErrorAs(t, got, &failoverErr, "got %T: %v", got, got)
 	require.Equal(t, http.StatusBadGateway, failoverErr.StatusCode)
 	require.True(t, failoverErr.AccountUnavailable)
+	require.True(t, failoverErr.ProxyBindingUnavailable)
 	require.True(t, failoverErr.ShouldRetryNextAccount())
 	require.Equal(t, string(gatewayTransportFailoverBody), string(failoverErr.ResponseBody))
 	require.Zero(t, repo.calls, "绑定失效不是持久传输故障：不临时下线，修好绑定即可恢复调度")
@@ -220,6 +221,29 @@ func TestHandleAccessTokenTransportErrorProxyUnavailableFailsOver(t *testing.T) 
 	require.True(t, ok)
 	require.Len(t, events, 1)
 	require.Equal(t, "request_error", events[0].Kind)
+}
+
+// 关系未加载时取 token 的步骤会按 ID 回查代理（accountProxyURLWithRepo）。数据库拒连时，这个查询错误被包进
+// ErrAccountProxyUnavailable，错误链里同时带着 ECONNREFUSED；若落到传输错误的持久故障分类，账号会因为
+// 数据库故障被临时下线。请求根本没出站：只按绑定失效换号。
+func TestHandleAccessTokenTransportErrorProxyLookupFailureDoesNotEvict(t *testing.T) {
+	repo := &transportTempUnschedRepoStub{}
+	svc := &GatewayService{accountRepo: repo}
+	proxyID := int64(9105)
+	account := &Account{ID: 9105, Name: "claude-oauth", Platform: PlatformAnthropic, Type: AccountTypeOAuth, ProxyID: &proxyID}
+	_, lookupErr := accountProxyURLWithRepo(t.Context(), &grokCredentialProxyRepoStub{
+		err: &net.OpError{Op: "dial", Net: "tcp", Err: syscall.ECONNREFUSED},
+	}, account)
+	require.ErrorIs(t, lookupErr, ErrAccountProxyUnavailable)
+	require.ErrorIs(t, lookupErr, syscall.ECONNREFUSED, "前提：错误链里确实带着会被判为持久故障的拒连")
+
+	got := svc.handleAccessTokenTransportError(t.Context(), newVertexSATokenTestGin("/v1/messages"), account, lookupErr)
+
+	var failoverErr *UpstreamFailoverError
+	require.ErrorAs(t, got, &failoverErr, "got %T: %v", got, got)
+	require.True(t, failoverErr.AccountUnavailable)
+	require.True(t, failoverErr.ProxyBindingUnavailable)
+	require.Zero(t, repo.calls, "数据库拒连不是这个账号的故障，不能临时下线")
 }
 
 // 坏的 SA 私钥是凭据问题，换代理/换时间都不会好：必须保持终止错误，不能伪装成传输失败去 failover，

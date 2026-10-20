@@ -31,7 +31,8 @@ var gatewayTransportFailoverBody = []byte(`{"type":"error","error":{"type":"upst
 //     filled here from the same account snapshot that built the transport;
 //  2. for durable faults (expired/rejected proxy creds, dead proxy,
 //     DNS/routing) temporarily unschedules the account and logs a stable warn
-//     event that alert rules can key on;
+//     event that alert rules can key on; a broken proxy binding
+//     (ErrAccountProxyUnavailable) only switches accounts (ProxyBindingUnavailable);
 //  3. returns an error that is *UpstreamFailoverError (so the handler fails
 //     over to a healthy account) for all non-canceled errors, or the original
 //     error for context.Canceled (client gone — no failover, no eviction).
@@ -56,6 +57,19 @@ func (s *GatewayService) handleUpstreamTransportError(ctx context.Context, c *gi
 		return err
 	}
 
+	// 分配了代理却解析不出可用 URL：请求根本没有出站。只按账号不可用换号（粘性会话也换），不计 Ollama
+	// 活跃、不临时摘号——与 OpenAI / Gemini / Antigravity 一致，绑定修好后立即恢复调度。不能落到下面的
+	// 持久故障分类：按 ID 回查代理时数据库报的 connection refused 也会被包进这个错误，那是数据库的故障，
+	// 不是这个账号的。
+	if errors.Is(err, ErrAccountProxyUnavailable) {
+		return &UpstreamFailoverError{
+			StatusCode:              http.StatusBadGateway,
+			ResponseBody:            gatewayTransportFailoverBody,
+			AccountUnavailable:      true,
+			ProxyBindingUnavailable: true,
+		}
+	}
+
 	// Transport attempt left local validation; count Ollama Cloud activity.
 	scheduleOllamaCloudUsageActivity(s.deferredService, account)
 
@@ -67,7 +81,7 @@ func (s *GatewayService) handleUpstreamTransportError(ctx context.Context, c *gi
 	return &UpstreamFailoverError{
 		StatusCode:         http.StatusBadGateway,
 		ResponseBody:       gatewayTransportFailoverBody,
-		AccountUnavailable: persistent || errors.Is(err, ErrAccountProxyUnavailable),
+		AccountUnavailable: persistent,
 	}
 }
 

@@ -34,8 +34,9 @@ func antigravityProxyUnavailableFailover(c *gin.Context, account *Account, err e
 	event.ProxyID, event.ProxyName = opsUpstreamProxyAttribution(account)
 	appendOpsUpstreamError(c, event)
 	return &UpstreamFailoverError{
-		StatusCode:         http.StatusBadGateway,
-		ResponseBody:       body,
-		AccountUnavailable: true,
+		StatusCode:              http.StatusBadGateway,
+		ResponseBody:            body,
+		AccountUnavailable:      true,
+		ProxyBindingUnavailable: true,
 	}
 }

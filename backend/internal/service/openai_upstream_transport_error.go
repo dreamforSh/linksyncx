@@ -131,12 +131,14 @@ func (s *OpenAIGatewayService) handleOpenAIUpstreamTransportError(ctx context.Co
 
 	// 分配了代理却解析不出可用 URL（关系缺失 / 与 ProxyID 错配 / URL 无效）：账号本身已不可用，
 	// 换号且粘性会话也要换（AccountUnavailable）。请求根本没有出站，所以不计 Ollama / OpenCode
-	// 活跃、也不按持久故障临时摘号——绑定修好后应立即恢复调度。
+	// 活跃、也不按持久故障临时摘号——绑定修好后应立即恢复调度。ProxyBindingUnavailable 让 handler 上报
+	// 调度结果时同样不把它计入 API Key 健康熔断（熔断触发同样会临时摘号）。
 	if errors.Is(err, ErrAccountProxyUnavailable) {
 		return &UpstreamFailoverError{
-			StatusCode:         http.StatusBadGateway,
-			ResponseBody:       openAITransportFailoverBody,
-			AccountUnavailable: true,
+			StatusCode:              http.StatusBadGateway,
+			ResponseBody:            openAITransportFailoverBody,
+			AccountUnavailable:      true,
+			ProxyBindingUnavailable: true,
 		}
 	}
 

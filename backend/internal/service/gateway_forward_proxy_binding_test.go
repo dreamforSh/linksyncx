@@ -148,6 +148,8 @@ func TestGatewayForwardBrokenProxyBindingFailsOverBeforeCredentials(t *testing.T
 					require.ErrorAs(t, err, &failoverErr, "a broken binding must fail over, not end the request")
 					require.Equal(t, http.StatusBadGateway, failoverErr.StatusCode)
 					require.True(t, failoverErr.AccountUnavailable, "the account must be switched, not retried by sticky hold")
+					require.True(t, failoverErr.ProxyBindingUnavailable, "the request never left: keep it out of account health")
+					require.False(t, IsClaudeStickySoftFailure(failoverErr), "a bound session must switch, not hold")
 					require.Zero(t, cache.calls, "credentials must not be resolved or refreshed for a broken binding")
 					require.NotContains(t, rec.Body.String(), "s3cr3tpw")
 				})

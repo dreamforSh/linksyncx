@@ -43,12 +43,13 @@ func (s *GeminiMessagesCompatService) handleUpstreamTransportError(ctx context.C
 	}
 
 	// 分配了代理却解析不出可用 URL：账号本身已不可用，换号（AccountUnavailable）；请求从未出站，
-	// 不临时摘号，绑定修好后立即恢复调度。
+	// 不临时摘号，绑定修好后立即恢复调度（ProxyBindingUnavailable 供各健康统计识别并排除）。
 	if errors.Is(err, ErrAccountProxyUnavailable) {
 		return &UpstreamFailoverError{
-			StatusCode:         http.StatusBadGateway,
-			ResponseBody:       geminiTransportFailoverBody,
-			AccountUnavailable: true,
+			StatusCode:              http.StatusBadGateway,
+			ResponseBody:            geminiTransportFailoverBody,
+			AccountUnavailable:      true,
+			ProxyBindingUnavailable: true,
 		}
 	}
 
