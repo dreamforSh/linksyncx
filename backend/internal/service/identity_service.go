@@ -660,7 +660,7 @@ func (s *IdentityService) ResolveSessionIDWithoutMetadata(ctx context.Context, a
 			return masked
 		}
 	}
-	if clientSessionID = strings.TrimSpace(clientSessionID); clientSessionID != "" && len(clientSessionID) <= 128 {
+	if clientSessionID = normalizeClientSessionID(clientSessionID); clientSessionID != "" {
 		return upstreamSessionIDFor(account.ID, identityEpoch, clientSessionID)
 	}
 	if last, err := s.cache.GetLastActiveSessionID(ctx, account.ID); err == nil && last != "" {
@@ -675,6 +675,16 @@ func (s *IdentityService) ResolveSessionIDWithoutMetadata(ctx context.Context, a
 	logger.LegacyPrintf("service.identity", "Warning: failed to get ambient session for account %d, using bucketed fallback: %v", account.ID, err)
 	bucket := time.Now().UnixNano() / int64(ambientSessionBucket)
 	return generateUUIDFromSeed(fmt.Sprintf("%d::ambient::%d", account.ID, bucket))
+}
+
+// normalizeClientSessionID 去掉客户端 X-Claude-Code-Session-Id 首尾空白；空值或超过 128 字节
+// 视为没带会话。映射与透传共用这一判定，同一个头在两条路径上不会一边算有效、一边算无效。
+func normalizeClientSessionID(raw string) string {
+	raw = strings.TrimSpace(raw)
+	if len(raw) > 128 {
+		return ""
+	}
+	return raw
 }
 
 // TouchActiveSession 记录账号最近活跃的上游会话 ID，供 ResolveSessionIDWithoutMetadata 复用。
