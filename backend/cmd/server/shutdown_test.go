@@ -15,6 +15,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/Wei-Shaw/sub2api/internal/pkg/shutdownctx"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/sysutil"
 	"github.com/coder/websocket"
 	"github.com/stretchr/testify/require"
@@ -175,7 +176,7 @@ func TestHTTPDrainReportsStuckDetachedHandlerWithinForcedWait(t *testing.T) {
 			t.Errorf("flush stream: %v", err)
 			return
 		}
-		<-release // 模拟与请求 context 解耦、只等上游结束的流。
+		<-release // 模拟既不看请求取消、也不经 shutdownctx 响应硬停止的等待。
 	})
 	// 必须先于 server.Close 执行（t.Cleanup 后进先出），否则 Close 会等这个 handler。
 	t.Cleanup(func() { close(release) })
@@ -573,4 +574,85 @@ func TestShutdownTriggerMergesRepeatedRestartRequests(t *testing.T) {
 	}
 	require.Equal(t, "in-app restart requested", trigger.wait())
 	require.Empty(t, trigger.restart)
+}
+
+// 网关的流式上游刻意与请求取消解耦（shutdownctx.Detach）。强制阶段必须通过关停硬停止
+// 结束它们，让 handler 走部分 usage 计费分支返回，而不是把排空拖到 drained=false。
+// 宽限期内则绝不能触发：那段时间正是留给流自然结束、拿到完整 usage 的。
+func TestHTTPDrainHardStopsDetachedUpstreamsOnlyInForcedPhase(t *testing.T) {
+	started, settled, release := make(chan struct{}), make(chan struct{}), make(chan struct{})
+	var upstreamErr atomic.Value
+	server := startDrainTestServer(t, func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		_ = http.NewResponseController(w).Flush()
+		upstream := shutdownctx.Detach(r.Context())
+		close(started)
+		select {
+		case <-upstream.Done():
+			upstreamErr.Store(upstream.Err())
+		case <-release: // 硬停止没接上时让测试失败而不是挂住
+		}
+		close(settled)
+	})
+	t.Cleanup(func() { close(release) })
+	resp, err := http.Get(server.URL)
+	require.NoError(t, err)
+	defer func() { _ = resp.Body.Close() }()
+	waitForDrainSignal(t, started)
+
+	const grace = 300 * time.Millisecond
+	done := drainAsync(server.Config, grace, 2*time.Second)
+	select {
+	case <-settled:
+		t.Fatal("the hard-stop fired during the grace, before in-flight streams could finish on their own")
+	case <-time.After(grace / 2):
+	}
+	outcome := receiveDrainOutcome(t, done)
+	require.True(t, outcome.drained, "a detached upstream must end in the forced phase instead of holding the drain")
+	require.Zero(t, outcome.remaining)
+	require.ErrorIs(t, outcome.err, context.DeadlineExceeded, "the handler may only return after the grace expired")
+	waitForDrainSignal(t, settled)
+	require.Equal(t, context.Canceled, upstreamErr.Load(), "the stream loop's context.Canceled branch bills partial usage")
+}
+
+func TestDetachedUpstreamSurvivesClientDisconnectUntilHardStop(t *testing.T) {
+	started, requestCancelled, settled := make(chan struct{}), make(chan struct{}), make(chan struct{})
+	release := make(chan struct{})
+	server := startDrainTestServer(t, func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		_ = http.NewResponseController(w).Flush()
+		upstream := shutdownctx.Detach(r.Context())
+		close(started)
+		<-r.Context().Done()
+		if upstream.Err() != nil {
+			t.Error("a client disconnect must not cancel the detached upstream (it is drained for billing)")
+		}
+		close(requestCancelled)
+		select {
+		case <-upstream.Done():
+		case <-release: // 硬停止没接上时让测试失败而不是挂住
+		}
+		close(settled)
+	})
+	t.Cleanup(func() { close(release) })
+	clientCtx, disconnect := context.WithCancel(context.Background())
+	defer disconnect()
+	req, err := http.NewRequestWithContext(clientCtx, http.MethodGet, server.URL, nil)
+	require.NoError(t, err)
+	resp, err := http.DefaultClient.Do(req)
+	require.NoError(t, err)
+	defer func() { _ = resp.Body.Close() }()
+	waitForDrainSignal(t, started)
+
+	disconnect()
+	waitForDrainSignal(t, requestCancelled)
+	select {
+	case <-settled:
+		t.Fatal("the detached upstream ended on client disconnect")
+	case <-time.After(50 * time.Millisecond):
+	}
+
+	outcome := receiveDrainOutcome(t, drainAsync(server.Config, 20*time.Millisecond, 2*time.Second))
+	require.True(t, outcome.drained)
+	waitForDrainSignal(t, settled)
 }

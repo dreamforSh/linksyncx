@@ -176,7 +176,8 @@ Sub2API 按以下顺序退出：
 1. 立即关闭监听，新请求被拒绝（经反向代理时返回 502）；WebSocket 会话立即断开。
 2. 进行中的 HTTP/SSE 请求最多再等 `server.shutdown_timeout_seconds`（环境变量
    `SERVER_SHUTDOWN_TIMEOUT_SECONDS`，默认 30 秒）自然结束，流式请求得以拿到完整 usage 并计费。
-3. 宽限期结束后取消剩余请求、断开连接，再最多等 5 秒让 handler 收尾。
+3. 宽限期结束后取消剩余请求（包括多数与客户端解耦的上游流）、断开连接，再最多等 5 秒让
+   handler 收尾；被截断的流式请求走既有的部分 usage 计费逻辑（按已观测到的 usage 入账）。
 4. 执行依赖清理：usage 记录池、计费缓存写队列、配额 flusher 落盘，最后关闭 Redis/数据库，最多 30 秒。
 5. 以退出码 0 退出，由 systemd `Restart=always` / Docker `restart: unless-stopped` 重新拉起。
 

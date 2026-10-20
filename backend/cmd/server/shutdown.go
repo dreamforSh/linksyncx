@@ -12,13 +12,14 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/Wei-Shaw/sub2api/internal/pkg/shutdownctx"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/sysutil"
 )
 
 const (
-	// forcedDrainTimeout 是宽限期结束、取消全部请求 context 之后，再等 handler 返回的时长。
-	// 它只对会响应取消的 handler（非流式请求、WebSocket）有用；与请求 context 解耦的
-	// 上游流不看请求取消，等再久也不会返回，所以只给一个短窗口，不让它拖长重启。
+	// forcedDrainTimeout 是宽限期结束、取消全部请求 context（并硬停止解耦的上游流）之后，
+	// 再等 handler 收尾的时长：被截断的流要提交部分 usage，非流式请求与 WebSocket 要返回。
+	// 不经 shutdownctx 解耦的后台等待仍可能不响应，所以只给一个短窗口，不让它拖长重启。
 	forcedDrainTimeout = 5 * time.Second
 	// applicationCleanupTimeout 限定依赖清理（app.Cleanup）的等待：清理卡住时进程仍要
 	// 退出交给 systemd/Docker 拉起，而不是挂着一个监听已关闭、什么都不服务的进程。
@@ -109,7 +110,8 @@ type httpDrain struct {
 	// 只能由排空流程自己关闭。
 	hijacked map[net.Conn]struct{}
 
-	// forceCtx 是所有请求 context 的根：宽限期结束时 cancel 一次即取消全部进行中的请求。
+	// forceCtx 是所有请求 context 的根：宽限期结束时 cancel 一次即取消全部进行中的请求，
+	// 并对与请求取消解耦的上游流发出关停硬停止。
 	forceCtx context.Context
 	cancel   context.CancelFunc
 }
@@ -134,14 +136,18 @@ func installHTTPDrain(server *http.Server) {
 	// 请求 context 统一派生自 forceCtx（HTTP/1 与 h2c 的请求 context 都源自 BaseContext）：
 	// 强制阶段一次 cancel 就能取消所有请求，不必给每个请求单独注册 AfterFunc——那样
 	// 每个请求都要两次争抢 forceCtx 上的同一把锁。
+	//
+	// forceCtx 同时作为关停硬停止挂在请求 context 上：网关刻意与请求取消解耦的上游流
+	// （shutdownctx.Detach）只响应它，强制阶段以 context.Canceled 结束并提交已观测到的
+	// 部分 usage，而不是挂到进程退出、计费全部丢失。
 	previousBase := server.BaseContext
 	server.BaseContext = func(listener net.Listener) context.Context {
 		if previousBase == nil {
-			return forceCtx
+			return shutdownctx.WithHardStop(forceCtx, forceCtx)
 		}
 		base, cancelBase := context.WithCancel(previousBase(listener))
 		context.AfterFunc(forceCtx, cancelBase)
-		return base
+		return shutdownctx.WithHardStop(base, forceCtx)
 	}
 
 	previousConnContext := server.ConnContext
@@ -240,11 +246,11 @@ func (d *httpDrain) activeHandlers() int {
 }
 
 // drainHTTPServer 关闭监听并等待 handler 返回：先给 grace 让请求自然结束；超时后
-// 取消所有请求 context、关闭全部连接，再最多等 forceWait。
+// 取消所有请求 context（含关停硬停止）、关闭全部连接，再最多等 forceWait。
 //
 // drained=true 表示所有被跟踪的 handler 都已返回；否则 remaining 是仍在运行的数量
-// （通常是与请求 context 解耦、只等上游结束的流）。err 非 nil 说明宽限已耗尽或
-// Shutdown 本身出错，即使 drained=true 也可能非 nil。
+// （既不看请求取消、也不经 shutdownctx 响应硬停止的等待）。err 非 nil 说明宽限已
+// 耗尽或 Shutdown 本身出错，即使 drained=true 也可能非 nil。
 func drainHTTPServer(server *http.Server, grace, forceWait time.Duration) (drained bool, remaining int, err error) {
 	ctx, cancel := context.WithTimeout(context.Background(), grace)
 	defer cancel()
@@ -261,7 +267,7 @@ func drainHTTPServer(server *http.Server, grace, forceWait time.Duration) (drain
 	case <-ctx.Done():
 	}
 
-	// 强制阶段：取消所有请求 context（含 hijack 请求），断开全部连接。
+	// 强制阶段：取消所有请求 context（含 hijack 请求）并硬停止解耦的上游流，断开全部连接。
 	d.cancel()
 	_ = server.Close()
 	d.closeHijacked()
@@ -303,8 +309,8 @@ func runShutdownWith(server *http.Server, timings shutdownTimings, cleanup func(
 		log.Printf("HTTP drain finished with error (drained=%t, handlers still running=%d): %v", drained, remaining, err)
 	}
 	// 无论 handler 是否排空都必须执行 Cleanup：它是 usage 记录池、计费缓存写队列和
-	// 配额 flusher 落盘的唯一入口。仍未返回的 handler 多是只等上游的流，进程随后
-	// 照样退出，它们的计费本就保不住；跳过 Cleanup 只会再丢掉已完成请求的计费。
+	// 配额 flusher 落盘的唯一入口。仍未返回的 handler 不响应取消，进程随后照样退出，
+	// 它们的计费本就保不住；跳过 Cleanup 只会再丢掉已完成请求的计费。
 	cleanedUp := cleanupWithin(cleanup, timings.cleanup)
 	if !cleanedUp {
 		log.Printf("Application cleanup exceeded %s; exiting with pending work", timings.cleanup)
