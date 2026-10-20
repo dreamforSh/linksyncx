@@ -256,8 +256,10 @@ gateway:
   gemini_debug_response_headers: false
   # Connection pool isolation strategy:
   # 连接池隔离策略：
-  # - proxy: Isolate by proxy, same proxy shares connection pool (suitable for few proxies, many accounts)
-  # - proxy: 按代理隔离，同一代理共享连接池（适合代理少、账户多）
+  # - proxy: Isolate by proxy, same proxy shares connection pool (suitable for few proxies, many accounts);
+  #   TLS-fingerprinted requests are further split per template (same proxy + same template share one pool)
+  # - proxy: 按代理隔离，同一代理共享连接池（适合代理少、账户多）；
+  #   带 TLS 指纹的请求再按模板细分（同代理、同模板共享一个池）
   # - account: Isolate by account, same account shares connection pool (suitable for few accounts, strict isolation)
   # - account: 按账户隔离，同一账户共享连接池（适合账户少、需严格隔离）
   # - account_proxy: Isolate by account+proxy combination (default, finest granularity)

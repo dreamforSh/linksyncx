@@ -52,6 +52,7 @@ const (
 const (
 	// ConnectionPoolIsolationProxy: 按代理隔离
 	// 同一代理地址共享连接池，适合代理数量少、账户数量多的场景
+	// 带 TLS 指纹的请求再按模板细分：同代理、同模板共享一个池，账号不会借用别的模板的 ClientHello
 	ConnectionPoolIsolationProxy = "proxy"
 	// ConnectionPoolIsolationAccount: 按账户隔离
 	// 每个账户独立连接池，适合账户数量少、需要严格隔离的场景
