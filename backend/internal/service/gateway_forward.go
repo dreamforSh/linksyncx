@@ -362,8 +362,6 @@ func (s *GatewayService) Forward(ctx context.Context, c *gin.Context, account *A
 	// （会泄漏真实出口 IP）——按传输层故障处理，触发 failover 切换到其它账号。
 	// 先查代理绑定、后取凭证：绑定缺失 / 无效时根本不进入取 token 这一步（刷新 / 交换 token
 	// 本身就是一次出站请求），这类失败固定由这里的 failover 处理，不依赖取凭证那一步的错误怎么上抛。
-	// 此前取凭证在前：Vertex service account 冷缓存换 token 时撞上失效绑定，错误随 GetAccessToken
-	// 原样返回，变成终态 502 而不是切号。
 	resolvedProxyURL, proxyErr := account.ProxyURLForOutbound()
 	if proxyErr != nil {
 		return nil, s.handleUpstreamTransportError(ctx, c, account, proxyErr, OpsUpstreamErrorEvent{})

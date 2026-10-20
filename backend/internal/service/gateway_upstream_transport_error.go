@@ -75,11 +75,12 @@ func (s *GatewayService) handleUpstreamTransportError(ctx context.Context, c *gi
 // 返回 handleUpstreamTransportError 的结果（客户端未断开时即 *UpstreamFailoverError）；其它错误
 // （凭据缺失、坏 SA 私钥、token 端点拒绝等）返回 nil，由调用方保持原有的终止语义。
 //
-// 为什么需要：Vertex SA 账号在 GetAccessToken 里就要经账号代理去 Google 换 token，早于 Forward 里的
-// ProxyURLForOutbound 校验和 DoWithTLS。代理语法合法但已失效时，这里的传输错误若原样返回，handler
-// 只认 *UpstreamFailoverError，请求会被直接判死而不是换号——违背“代理故障要 failover、绝不回退直连”
-// 的约定。分配了代理但关系缺失（ErrAccountProxyUnavailable）同样在这里接住，不依赖调用点上代理校验
-// 与取 token 的先后顺序。
+// 为什么需要：Vertex SA 账号在 GetAccessToken 里就要经账号代理去 Google 换 token。Forward 入口先做
+// ProxyURLForOutbound 校验、再取 token，所以换 token 发生在绑定校验之后、DoWithTLS 之前：代理语法合法
+// 但已失效（拨号失败）时，这里的传输错误若原样返回，handler 只认 *UpstreamFailoverError，请求会被直接
+// 判死而不是换号——违背“代理故障要 failover、绝不回退直连”的约定。
+// ErrAccountProxyUnavailable（关系缺失 / URL 无效）分支在先查绑定的入口上走不到，保留它作为与调用顺序
+// 无关的兜底：哪个调用方先取 token、后查绑定，绑定失效时也照样按账号不可用换号。
 func (s *GatewayService) handleAccessTokenTransportError(ctx context.Context, c *gin.Context, account *Account, err error) error {
 	var exchangeErr *tokenExchangeTransportError
 	switch {

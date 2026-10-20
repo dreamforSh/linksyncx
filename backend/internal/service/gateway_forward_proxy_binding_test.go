@@ -62,7 +62,7 @@ func newAPIKeyAccountWithoutKeyForProxyBindingTest(id int64) *Account {
 // 数据面代理绑定失效（关系缺失，或 URL 无效）时，三个 Anthropic 入口都必须在取凭证之前
 // 返回 AccountUnavailable 的 UpstreamFailoverError——handler 只按这个类型切号，其它错误
 // 都是终态。凭证路径也不能被触达：Vertex service account 冷缓存时取 token 本身就要经代理
-// 出站，此前它先于代理检查执行，失效绑定的错误原样上抛，用户拿到终态 502 而不是切号。
+// 出站，先查绑定保证失效绑定不会触发任何凭证解析、token 刷新或换 token。
 func TestGatewayForwardBrokenProxyBindingFailsOverBeforeCredentials(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	proxyID := int64(9)
