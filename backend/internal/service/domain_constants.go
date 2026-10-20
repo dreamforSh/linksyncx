@@ -705,10 +705,12 @@ const (
 	SettingKeyEnableFingerprintUnification = "enable_fingerprint_unification"
 	// SettingKeyEnableMetadataPassthrough 是否透传客户端原始 metadata.user_id（默认 false）
 	SettingKeyEnableMetadataPassthrough = "enable_metadata_passthrough"
-	// SettingKeyEnableCCHSigning 已废弃（no-op）：2.1.280 实证 cch 为字面量占位符
-	// `cch=00000`（真实 CLI 硬编码、无签名计算），网关在 billing 块中固定注入该
-	// 占位符（见 buildBillingAttributionText），无需开关。保留该 key 仅为向后兼容，
-	// 开关不再产生任何效果。
+	// SettingKeyEnableCCHSigning 已废弃（no-op）：网关没有 cch 签名实现，开关不再产生任何
+	// 效果，保留该 key 仅为向后兼容。cch 自 2.1.281 起是逐请求签名：CLI 的 JS 在第一方分支
+	// （firstParty 且 base URL 为第一方，或 vertex）写入 `cch=00000` 占位符，第一方请求发出前
+	// 由 JS 之下的原生传输层替换成 5 位 hex 签名；线上出现字面量 00000 即未被替换的占位符。
+	// mimic 路径合成的 billing 块保留该占位符（见 buildBillingAttributionText），透传路径
+	// 原样保留客户端的 cch。
 	SettingKeyEnableCCHSigning = "enable_cch_signing"
 	// SettingKeyEnableClaudeOAuthSystemPromptInjection 是否对 Claude OAuth mimic 路径注入 Claude Code system blocks（默认 true）
 	SettingKeyEnableClaudeOAuthSystemPromptInjection = "enable_claude_oauth_system_prompt_injection"

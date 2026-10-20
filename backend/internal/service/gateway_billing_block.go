@@ -177,8 +177,11 @@ func extractFirstUserTextView(view *jsonBodyView) string {
 //     零种子/默认密钥/二进制全段 8 字节常量种子/字符串派生种子/字段派生种子，
 //     在 6 组输入跨度上全部不命中——密钥被混淆/加密保护（原 2.1.37 时代为
 //     xxh64+内嵌种子，当前版本已加固）。
-//   - JS 模板里的字面量 `cch=00000` 是签名不可用/vertex 的回退形态
-//     （`m==="firstParty"&&ni()||m==="vertex"` 分支），属客户端合法形态。
+//   - JS 模板里的字面量 `cch=00000` 是占位符，不是回退形态：JS 在正常的第一方分支
+//     （`m==="firstParty"&&wi()||m==="vertex"`，wi() 即 base URL 未设置或为
+//     api.anthropic.com）总是写入它，第一方请求再由 JS 之下的原生传输层替换成签名（2.1.296
+//     二进制里 `cch=` 只出现在两份模板中，JS 层没有替换代码）。线上出现字面量 00000 即未被
+//     替换的占位符；指向自定义 base URL 的客户端则与 cc_prompt_id 等字段一起整段省略 cch。
 //
 // 网关无签名模块，维持 00000 占位，属已知残留差异。
 // cc_prompt_id：2.1.283+ 第一方携带，与 x-claude-code-prompt-id 头同值

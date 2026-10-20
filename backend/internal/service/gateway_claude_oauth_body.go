@@ -948,7 +948,8 @@ func rewriteSystemForNonClaudeCodeWithPromptBlocks(body []byte, system any, expa
 	originalSystemText, originalSystemCacheControl := extractSystemTextAndCacheControl(system)
 
 	// 2. 构造 system 数组，对齐真实 Claude Code CLI 2.1.280 的 4-block 形态：
-	//    [0] billing attribution block（cc_version={cliVer}.{fp}; cc_entrypoint=cli; cch=00000;）
+	//    [0] billing attribution block（cc_version={cliVer}.{fp}; cc_entrypoint=cli; cch=00000;
+	//        以及 2.1.290 的 cc_prompt_id / cc_turn_* 字段，见 buildBillingAttributionText）
 	//    [1] "You are Claude Code..." 身份前缀 block（不带 cache_control）
 	//    [2] "# Reporting outcomes" 块（真实文本逐字取自二进制；不带 cache_control）
 	//    [3] 工具无关的通用提示词扩充 block（ephemeral + scope:"global" 缓存断点，
@@ -959,8 +960,9 @@ func rewriteSystemForNonClaudeCodeWithPromptBlocks(body []byte, system any, expa
 	//    接近真实，同时不注入会污染被代理用户行为的工具专属指令。
 	//
 	//    缺失 billing block 的系统 payload 是 Anthropic 判定第三方的关键信号之一
-	//    （真实 CLI 每个请求都带）。新版 CLI 已取消 cch=... 签名字段，故 block 不再注入
-	//    cch（见 buildBillingAttributionText）。
+	//    （真实 CLI 每个请求都带）。block 带 cch=00000 占位符：真实 CLI 2.1.281+ 的第一方
+	//    请求由原生层把它替换成逐请求签名，网关没有签名实现，只能保留占位符（已知残留
+	//    差异，见 buildBillingAttributionText）。
 	systemBlocks, blockErr := buildClaudeOAuthSystemPromptBlocksJSON(body, expansionPrompt, blocksConfig)
 	if blockErr != nil {
 		logger.LegacyPrintf("service.gateway", "Warning: failed to build configured Claude OAuth system blocks: %v", blockErr)

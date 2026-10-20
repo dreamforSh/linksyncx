@@ -440,7 +440,7 @@ func (s *GatewayService) Forward(ctx context.Context, c *gin.Context, account *A
 		if err != nil {
 			return nil, err
 		}
-		// 记录本次实际发送的 wire body；只有请求成功后才写回 ParsedRequest，避免 400 retry 基于已签名 CCH 再改写。
+		// 记录本次实际发送的 wire body；只有请求成功后才写回 ParsedRequest，避免 400 retry 基于已改写的 wire body 再改写。
 		lastWireBody = wireBody
 		lastWireIndex = wireIndex
 
@@ -859,7 +859,7 @@ func (s *GatewayService) Forward(ctx context.Context, c *gin.Context, account *A
 		parsed.OnUpstreamAccepted()
 	}
 
-	// 成功后再同步最终 wire body，避免失败重试从已签名 CCH 的 body 继续派生；usage
+	// 成功后再同步最终 wire body，避免失败重试从已改写的 wire body 继续派生；usage
 	// 指纹与日志也要看到上游实际接受的请求体。同步是一次全量重解析，放到响应转发
 	// 之后执行，不卡在上游响应头与客户端首字节之间。此后不再从 body 派生重试，
 	// 同步失败只影响 usage 指纹，记录日志即可。
