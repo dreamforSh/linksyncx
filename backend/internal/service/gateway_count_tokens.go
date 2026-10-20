@@ -275,14 +275,7 @@ func (s *GatewayService) ForwardCountTokens(ctx context.Context, c *gin.Context,
 		}
 
 		// 返回简化的错误响应
-		errMsg := "Upstream request failed"
-		switch resp.StatusCode {
-		case 429:
-			errMsg = "Rate limit exceeded"
-		case 529:
-			errMsg = "Service overloaded"
-		}
-		s.countTokensError(c, resp.StatusCode, "upstream_error", errMsg)
+		s.writeCountTokensUpstreamError(c, account, resp.StatusCode, respBody)
 		if upstreamMsg == "" {
 			return fmt.Errorf("upstream error: %d", resp.StatusCode)
 		}
@@ -393,14 +386,7 @@ func (s *GatewayService) forwardCountTokensAnthropicAPIKeyPassthrough(ctx contex
 			Detail:             upstreamDetail,
 		})
 
-		errMsg := "Upstream request failed"
-		switch resp.StatusCode {
-		case 429:
-			errMsg = "Rate limit exceeded"
-		case 529:
-			errMsg = "Service overloaded"
-		}
-		s.countTokensError(c, resp.StatusCode, "upstream_error", errMsg)
+		s.writeCountTokensUpstreamError(c, account, resp.StatusCode, respBody)
 		if upstreamMsg == "" {
 			return fmt.Errorf("upstream error: %d", resp.StatusCode)
 		}
@@ -716,6 +702,31 @@ func stripCountTokensOAuthOnlyFields(body []byte) []byte {
 		}
 	}
 	return out
+}
+
+// writeCountTokensUpstreamError 把 count_tokens 的上游错误写回下游。
+//
+// 上游 401/403 说明的是网关所用账号的凭据或权限出了问题，不是客户端的网关 key。原样回给
+// 下游时，客户端会误以为自己的 key 失效（Claude Code 会提示重新登录），而 /v1/messages
+// 对同样的上游状态回 502（见 handleErrorResponse 与 handler 的 mapUpstreamError）。
+// 这里与之对齐；管理员配置的错误透传规则优先。其余状态码保持原样，不扩大改动面。
+func (s *GatewayService) writeCountTokensUpstreamError(c *gin.Context, account *Account, upstreamStatus int, respBody []byte) {
+	status := upstreamStatus
+	errMsg := "Upstream request failed"
+	switch upstreamStatus {
+	case http.StatusUnauthorized:
+		status = http.StatusBadGateway
+		errMsg = "Upstream authentication failed, please contact administrator"
+	case http.StatusForbidden:
+		status = http.StatusBadGateway
+		errMsg = "Upstream access forbidden, please contact administrator"
+	case http.StatusTooManyRequests:
+		errMsg = "Rate limit exceeded"
+	case 529:
+		errMsg = "Service overloaded"
+	}
+	status, errType, errMsg, _ := applyErrorPassthroughRule(c, account.Platform, upstreamStatus, respBody, status, "upstream_error", errMsg)
+	s.countTokensError(c, status, errType, errMsg)
 }
 
 // countTokensError 返回 count_tokens 错误响应

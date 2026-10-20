@@ -32,6 +32,10 @@ type RateLimitService struct {
 	settingService        *SettingService
 	tokenCacheInvalidator TokenCacheInvalidator
 	runtimeBlocker        AccountRuntimeBlocker
+	// Claude 401 后台强制刷新，见 ratelimit_anthropic_auth.go。
+	// claudeForcedRefreshRunner 为空时用 goroutine 执行；测试注入同步执行。
+	claudeUnauthorizedRefresher ClaudeUnauthorizedRefresher
+	claudeForcedRefreshRunner   func(func())
 	// ollamaCloudUsageProbe is the optional Ollama Cloud usage probe scheduler
 	// injected via SetOllamaCloudUsageProbeScheduler. See
 	// ratelimit_service_ollama_429.go for how real-Ollama 429s schedule an async
@@ -471,7 +475,9 @@ func (s *RateLimitService) HandleUpstreamError(ctx context.Context, account *Acc
 			break
 		}
 		// OAuth 账号在 401 错误时临时不可调度（给 token 刷新窗口）；非 OAuth 账号保持原有 SetError 行为。
-		if authAccount.Type == AccountTypeOAuth {
+		// 带 refresh token 的 Anthropic setup-token 与 OAuth 一样能刷新自愈，同样走冷却 + 强制刷新，
+		// 不再首发即 SetError；不带 refresh token 的（一年期 token）以及 Antigravity 的 setup-token 不变。
+		if authAccount.Type == AccountTypeOAuth || isAnthropicRefreshableSetupToken(authAccount) {
 			// 1. 失效缓存
 			if s.tokenCacheInvalidator != nil {
 				if err := s.tokenCacheInvalidator.InvalidateToken(ctx, authAccount); err != nil {
@@ -525,6 +531,10 @@ func (s *RateLimitService) HandleUpstreamError(ctx context.Context, account *Acc
 			if err := s.accountRepo.SetTempUnschedulable(ctx, authAccount.ID, until, msg); err != nil {
 				slog.Warn("oauth_401_set_temp_unschedulable_failed", "account_id", authAccount.ID, "error", err)
 			}
+			// 3. Anthropic：冷却期间后台强制刷新一次；成功即解除冷却，invalid_grant 才标错误。
+			if authAccount.Platform == PlatformAnthropic {
+				s.startClaude401ForcedRefresh(ctx, authAccount, msg)
+			}
 			shouldDisable = true
 		} else {
 			// 非 OAuth：保持 SetError 行为
@@ -570,7 +580,7 @@ func (s *RateLimitService) HandleUpstreamError(ctx context.Context, account *Acc
 			upstreamMsg,
 			truncateForLog(responseBody, 1024),
 		)
-		shouldDisable = s.handle403(ctx, account, upstreamMsg, responseBody)
+		shouldDisable = s.handle403(ctx, account, headers, upstreamMsg, responseBody)
 	case 429:
 		s.handle429(ctx, account, headers, responseBody)
 		shouldDisable = false
@@ -1002,10 +1012,18 @@ func buildForbiddenErrorMessage(prefix string, upstreamMsg string, responseBody 
 
 // handle403 处理 403 Forbidden 错误
 // Antigravity 平台区分 validation/violation/generic 三种类型，均 SetError 永久禁用；
+// Anthropic OAuth/setup-token 的边缘 403 走计数冷却，见 handleAnthropicEdge403；
 // 其他平台保持原有 SetError 行为。
-func (s *RateLimitService) handle403(ctx context.Context, account *Account, upstreamMsg string, responseBody []byte) (shouldDisable bool) {
+func (s *RateLimitService) handle403(ctx context.Context, account *Account, headers http.Header, upstreamMsg string, responseBody []byte) (shouldDisable bool) {
 	if account.Platform == PlatformAntigravity {
 		return s.handleAntigravity403(ctx, account, upstreamMsg, responseBody)
+	}
+	// Anthropic OAuth/setup-token：出口 IP（通常是账号绑定的代理）被 Cloudflare 拦截时，
+	// 上游回的是边缘拦截页而不是 Anthropic 的 JSON 错误——这是出口的问题，不是账号的。
+	// 原先首发即 SetError，会把同一代理下的账号在 failover 中逐个永久禁用。
+	// 结构化（JSON）403 才是 Anthropic 对账号本身的权限/封禁判定，保持首发即禁用。
+	if account.IsAnthropicOAuthOrSetupToken() && isAnthropicEdgeForbidden(headers, responseBody) {
+		return s.handleAnthropicEdge403(ctx, account, headers, responseBody)
 	}
 	// Kimi reports its transient per-account concurrency/business limit as a 403.
 	// Keep the normal 403 failover signal (true), but never feed this exact message
