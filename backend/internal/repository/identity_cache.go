@@ -3,6 +3,7 @@ package repository
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"time"
 
@@ -69,15 +70,18 @@ func (c *identityCache) GetFingerprint(ctx context.Context, accountID int64) (*s
 // 所以其它字段类型不对（如 UserAgent 是数字）时只丢弃该字段，保住 ClientID。
 func decodeFingerprint(val string) (*service.Fingerprint, error) {
 	var fp service.Fingerprint
-	if err := json.Unmarshal([]byte(val), &fp); err == nil && fp.ClientID != "" {
+	err := json.Unmarshal([]byte(val), &fp)
+	if err == nil && fp.ClientID != "" {
 		return &fp, nil
 	}
-	return decodeFingerprintFieldByField(val)
-}
-
-// decodeFingerprintFieldByField 是严格解码失败后的退路：ClientID 按 storedClientIDLua 的规则取
-// （区分大小写的 "ClientID" 键，非空字符串），其余字段逐个解码，类型不对的保持零值。
-func decodeFingerprintFieldByField(val string) (*service.Fingerprint, error) {
+	// 字段类型不对时 Unmarshal 跳过该字段、照常解码其余字段，最后才返回 UnmarshalTypeError；
+	// 其它错误（语法错误）说明记录根本不是 JSON，Lua 一侧同样解不出。
+	var typeErr *json.UnmarshalTypeError
+	if err != nil && !errors.As(err, &typeErr) {
+		return nil, fmt.Errorf("%w: %w", service.ErrCorruptClientIdentity, err)
+	}
+	// 严格解码按不区分大小写匹配键，ClientID 改按 storedClientIDLua 的规则从区分大小写的
+	// "ClientID" 键重取（非空字符串）。
 	var fields map[string]json.RawMessage
 	if err := json.Unmarshal([]byte(val), &fields); err != nil {
 		return nil, fmt.Errorf("%w: %w", service.ErrCorruptClientIdentity, err)
@@ -85,14 +89,6 @@ func decodeFingerprintFieldByField(val string) (*service.Fingerprint, error) {
 	var clientID string
 	if err := json.Unmarshal(fields["ClientID"], &clientID); err != nil || clientID == "" {
 		return nil, fmt.Errorf("%w: no client ID", service.ErrCorruptClientIdentity)
-	}
-	var fp service.Fingerprint
-	for name, raw := range fields {
-		field, err := json.Marshal(map[string]json.RawMessage{name: raw})
-		if err != nil {
-			continue
-		}
-		_ = json.Unmarshal(field, &fp)
 	}
 	fp.ClientID = clientID
 	return &fp, nil

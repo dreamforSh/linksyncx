@@ -216,6 +216,9 @@ func TestDecodeFingerprintAgreesWithStoredClientIDLua(t *testing.T) {
 		{payload: `{"ClientID":null}`},
 		{payload: `{"ClientID":["legacy"]}`},
 		{payload: `{"ClientID":"legacy"}`, clientID: "legacy"},
+		{payload: `{"ClientID":"legacy","IdentityEpoch":3}`, clientID: "legacy", epoch: 3},
+		// Go 的严格解码按不区分大小写匹配键，后出现的 "clientid" 把 ClientID 清空；Lua 只认 "ClientID"。
+		{payload: `{"ClientID":"legacy","clientid":""}`, clientID: "legacy"},
 		{payload: `{"ClientID":"legacy","UserAgent":5}`, clientID: "legacy"},
 		{payload: `{"ClientID":"legacy","UserAgent":5,"IdentityEpoch":3}`, clientID: "legacy", epoch: 3},
 		{payload: `{"ClientID":"legacy","Persisted":"yes","StainlessOS":"MacOS"}`, clientID: "legacy", os: "MacOS"},
