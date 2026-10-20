@@ -1404,6 +1404,7 @@ export default {
         alpnProtocolsHint: 'Comma-separated, e.g. h2, http/1.1',
         supportedVersions: 'Supported TLS Versions',
         keyShareGroups: 'Key Share Groups',
+        keyShareGroupsHint: 'Comma-separated group IDs; each must also appear in Elliptic Curves. Empty fields use the built-in defaults (curves 4588, 29, 23, 24; key shares 4588, 29), so custom curves without key share groups must include 4588 and 29',
         pskModes: 'PSK Modes',
         extensions: 'Extensions'
       },

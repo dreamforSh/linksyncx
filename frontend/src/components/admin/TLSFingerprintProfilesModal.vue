@@ -254,6 +254,7 @@
               class="input font-mono text-xs"
               :placeholder="'29, 23'"
             />
+            <p class="input-hint text-xs">{{ t('admin.tlsFingerprintProfiles.form.keyShareGroupsHint') }}</p>
           </div>
 
           <div>
@@ -331,6 +332,7 @@ import { ref, reactive, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useAppStore } from '@/stores/app'
 import { adminAPI } from '@/api/admin'
+import { extractApiErrorMessage } from '@/utils/apiError'
 import type { TLSFingerprintProfile } from '@/api/admin/tlsFingerprintProfile'
 import BaseDialog from '@/components/common/BaseDialog.vue'
 import ConfirmDialog from '@/components/common/ConfirmDialog.vue'
@@ -600,8 +602,10 @@ const handleSubmit = async () => {
 
     closeFormModal()
     loadProfiles()
-  } catch (error: any) {
-    appStore.showError(error.response?.data?.detail || t('admin.tlsFingerprintProfiles.saveFailed'))
+  } catch (error) {
+    // 拦截器把后端错误改写成 { status, code, message }，没有 response.data.detail；
+    // 不自洽模板被拒时 message 指明了字段和缺失的组，必须原样展示给管理员。
+    appStore.showError(extractApiErrorMessage(error, t('admin.tlsFingerprintProfiles.saveFailed')))
     console.error('Error saving TLS fingerprint profile:', error)
   } finally {
     submitting.value = false
@@ -617,8 +621,8 @@ const confirmDelete = async () => {
     showDeleteDialog.value = false
     deletingProfile.value = null
     loadProfiles()
-  } catch (error: any) {
-    appStore.showError(error.response?.data?.detail || t('admin.tlsFingerprintProfiles.deleteFailed'))
+  } catch (error) {
+    appStore.showError(extractApiErrorMessage(error, t('admin.tlsFingerprintProfiles.deleteFailed')))
     console.error('Error deleting TLS fingerprint profile:', error)
   }
 }
