@@ -1422,7 +1422,9 @@ export default {
       // Save / delete failure reasons, keyed by the backend reason
       errors: {
         TLS_PROFILE_NAME_EXISTS: 'A profile with this name already exists; choose another Profile Name',
-        TLS_PROFILE_NOT_FOUND: 'This profile no longer exists; another admin may have deleted it'
+        TLS_PROFILE_NOT_FOUND: 'This profile no longer exists; another admin may have deleted it',
+        TLS_PROFILE_KEY_SHARE_NOT_IN_CURVES: 'Key share group {group} is not listed in Elliptic Curves. Every Key Share Group must also appear in Elliptic Curves; empty fields use the built-in defaults (curves 4588, 29, 23, 24; key shares 4588, 29)',
+        TLS_PROFILE_KEY_SHARE_WITHOUT_SUPPORTED_GROUPS: 'Extensions include key_share (51) but not supported_groups (10), so Elliptic Curves cannot be sent. Add 10 to Extensions, or leave Extensions empty to use the built-in order'
       }
     }
 }

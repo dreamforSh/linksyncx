@@ -38,6 +38,8 @@ type TLSFingerprintProfile struct {
 // 所以错误挂在 key_share_groups 上，并提示空字段会回落到内置默认值。
 // 例外是自定义 extensions 带了 key_share（51）却漏了 supported_groups（10）：curves 根本发不出去，
 // 改 curves 无济于事，错误挂在 extensions 上并说明怎么补。
+// 两种情况都把 ValidateProfile 的原始错误挂在 Cause 上，服务层据此给出稳定的 reason 与 metadata
+// （见 tlsProfileValidationError），前端用表单上的字段名显示本地化原因；这里的英文 Message 只是兜底。
 func (p *TLSFingerprintProfile) Validate() error {
 	if p.Name == "" {
 		return &ValidationError{Field: "name", Message: "name is required"}
@@ -47,11 +49,13 @@ func (p *TLSFingerprintProfile) Validate() error {
 			return &ValidationError{
 				Field:   "extensions",
 				Message: err.Error() + "; add supported_groups (10) to extensions, or leave extensions empty to use the built-in order",
+				Cause:   err,
 			}
 		}
 		return &ValidationError{
 			Field:   "key_share_groups",
 			Message: err.Error() + "; every key share group must also be listed in curves (empty fields fall back to the built-in defaults)",
+			Cause:   err,
 		}
 	}
 	return nil

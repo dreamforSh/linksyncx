@@ -113,10 +113,7 @@ func (h *TLSFingerprintProfileHandler) Create(c *gin.Context) {
 
 	created, err := h.service.Create(c.Request.Context(), profile)
 	if err != nil {
-		if _, ok := err.(*model.ValidationError); ok {
-			response.BadRequest(c, err.Error())
-			return
-		}
+		// 校验失败由服务层转成带 reason / metadata 的 400，重名是 409，统一交给 ErrorFrom。
 		response.ErrorFrom(c, err)
 		return
 	}
@@ -206,10 +203,6 @@ func (h *TLSFingerprintProfileHandler) Update(c *gin.Context) {
 
 	updated, err := h.service.Update(c.Request.Context(), profile)
 	if err != nil {
-		if _, ok := err.(*model.ValidationError); ok {
-			response.BadRequest(c, err.Error())
-			return
-		}
 		response.ErrorFrom(c, err)
 		return
 	}

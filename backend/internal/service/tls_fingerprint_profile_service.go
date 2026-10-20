@@ -2,6 +2,8 @@ package service
 
 import (
 	"context"
+	"errors"
+	"strconv"
 	"sync"
 	"time"
 
@@ -18,6 +20,40 @@ var (
 	ErrTLSFingerprintProfileNotFound   = infraerrors.NotFound("TLS_PROFILE_NOT_FOUND", "TLS fingerprint profile not found")
 	ErrTLSFingerprintProfileNameExists = infraerrors.Conflict("TLS_PROFILE_NAME_EXISTS", "TLS fingerprint profile name already exists")
 )
+
+// 保存校验失败（400）的稳定 reason。两条 ClientHello 自洽性规则各有一个 reason，key share 不在 curves 里时
+// metadata.group 给出是哪个组；前端按 reason 用表单上的字段名（密钥共享组 / 椭圆曲线 / 扩展）拼本地化提示。
+// message 仍是带 API 字段名的英文原文，前端没有对应文案时原样展示。其余校验失败（如缺名称）统一为
+// TLS_PROFILE_INVALID，metadata.field 指明字段。
+const (
+	tlsProfileReasonInvalid                        = "TLS_PROFILE_INVALID"
+	tlsProfileReasonKeyShareNotInCurves            = "TLS_PROFILE_KEY_SHARE_NOT_IN_CURVES"
+	tlsProfileReasonKeyShareWithoutSupportedGroups = "TLS_PROFILE_KEY_SHARE_WITHOUT_SUPPORTED_GROUPS"
+)
+
+// tlsProfileValidationError 把 model.TLSFingerprintProfile.Validate 的错误变成带 reason 的 400。
+// 原错误挂在 cause 上，调用方仍可用 errors.As 取到 *model.ValidationError。
+func tlsProfileValidationError(err error) error {
+	var validationErr *model.ValidationError
+	if !errors.As(err, &validationErr) {
+		return err
+	}
+	var (
+		keyShareErr *tlsfingerprint.KeyShareNotInSupportedGroupsError
+		appErr      *infraerrors.ApplicationError
+	)
+	switch {
+	case errors.As(err, &keyShareErr):
+		appErr = infraerrors.BadRequest(tlsProfileReasonKeyShareNotInCurves, err.Error()).
+			WithMetadata(map[string]string{"group": strconv.FormatUint(uint64(keyShareErr.Group), 10)})
+	case errors.Is(err, tlsfingerprint.ErrKeyShareWithoutSupportedGroups):
+		appErr = infraerrors.BadRequest(tlsProfileReasonKeyShareWithoutSupportedGroups, err.Error())
+	default:
+		appErr = infraerrors.BadRequest(tlsProfileReasonInvalid, err.Error()).
+			WithMetadata(map[string]string{"field": validationErr.Field})
+	}
+	return appErr.WithCause(err)
+}
 
 // TLSFingerprintProfileRepository 定义 TLS 指纹模板的数据访问接口
 //
@@ -98,7 +134,7 @@ func (s *TLSFingerprintProfileService) GetByID(ctx context.Context, id int64) (*
 // Create 创建模板
 func (s *TLSFingerprintProfileService) Create(ctx context.Context, profile *model.TLSFingerprintProfile) (*model.TLSFingerprintProfile, error) {
 	if err := profile.Validate(); err != nil {
-		return nil, err
+		return nil, tlsProfileValidationError(err)
 	}
 
 	created, err := s.repo.Create(ctx, profile)
@@ -116,7 +152,7 @@ func (s *TLSFingerprintProfileService) Create(ctx context.Context, profile *mode
 // Update 更新模板
 func (s *TLSFingerprintProfileService) Update(ctx context.Context, profile *model.TLSFingerprintProfile) (*model.TLSFingerprintProfile, error) {
 	if err := profile.Validate(); err != nil {
-		return nil, err
+		return nil, tlsProfileValidationError(err)
 	}
 
 	updated, err := s.repo.Update(ctx, profile)

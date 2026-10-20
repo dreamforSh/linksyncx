@@ -6,9 +6,11 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net/http"
 	"testing"
 
 	"github.com/Wei-Shaw/sub2api/internal/model"
+	infraerrors "github.com/Wei-Shaw/sub2api/internal/pkg/errors"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/tlsfingerprint"
 	"github.com/stretchr/testify/require"
 )
@@ -261,27 +263,45 @@ func TestTLSFingerprintProfileFailedReloadAlsoClearsRandomCandidates(t *testing.
 }
 
 // 保存时就拦住不自洽的模板（key_share 必须是 supported_groups 的子集，空字段按内置默认值补齐后再查），
-// 否则它存进库后绑定它的账号每个请求都失败。错误必须是 *model.ValidationError（handler 据此返回 400），
-// 字段指向真正要改的输入：key share 不在 curves 里挂 key_share_groups；自定义扩展列表有 key_share（51）
-// 却漏了 supported_groups（10）时 curves 本身没写错，挂 extensions。自洽的模板（含全默认、curves 已包含
+// 否则它存进库后绑定它的账号每个请求都失败。错误是带稳定 reason 的 400（handler 经 ErrorFrom 原样返回），
+// 原因链上仍是 *model.ValidationError，字段指向真正要改的输入：key share 不在 curves 里挂 key_share_groups，
+// reason TLS_PROFILE_KEY_SHARE_NOT_IN_CURVES 并在 metadata.group 给出是哪个组（前端据此用表单字段名拼本地化提示）；
+// 自定义扩展列表有 key_share（51）却漏了 supported_groups（10）时 curves 本身没写错，挂 extensions，
+// reason TLS_PROFILE_KEY_SHARE_WITHOUT_SUPPORTED_GROUPS。自洽的模板（含全默认、curves 已包含
 // 默认 key share 的）照常保存。
 func TestTLSFingerprintProfileSaveRejectsInconsistentClientHello(t *testing.T) {
 	ctx := context.Background()
 	type invalidCase struct {
-		profile *model.TLSFingerprintProfile
-		field   string
-		reason  string
+		profile    *model.TLSFingerprintProfile
+		field      string
+		message    string
+		reasonCode string
+		metadata   map[string]string
 	}
-	keyShareCase := func(p *model.TLSFingerprintProfile) invalidCase {
-		return invalidCase{profile: p, field: "key_share_groups", reason: "absent from supported groups"}
+	keyShareCase := func(p *model.TLSFingerprintProfile, group string) invalidCase {
+		return invalidCase{
+			profile:    p,
+			field:      "key_share_groups",
+			message:    "TLS key share " + group + " is absent from supported groups",
+			reasonCode: "TLS_PROFILE_KEY_SHARE_NOT_IN_CURVES",
+			metadata:   map[string]string{"group": group},
+		}
 	}
 	invalid := map[string]invalidCase{
-		"custom curves without key shares": keyShareCase(&model.TLSFingerprintProfile{Name: "node-like", Curves: []uint16{29, 23, 24}}),
-		"key share missing from curves":    keyShareCase(&model.TLSFingerprintProfile{Name: "mismatch", Curves: []uint16{29, 23}, KeyShareGroups: []uint16{29, 24}}),
+		"custom curves without key shares": keyShareCase(&model.TLSFingerprintProfile{Name: "node-like", Curves: []uint16{29, 23, 24}}, "4588"),
+		"key share missing from curves":    keyShareCase(&model.TLSFingerprintProfile{Name: "mismatch", Curves: []uint16{29, 23}, KeyShareGroups: []uint16{29, 24}}, "24"),
 		"key_share without supported_groups extension": {
-			profile: &model.TLSFingerprintProfile{Name: "no-groups", Curves: []uint16{29}, KeyShareGroups: []uint16{29}, Extensions: []uint16{0, 43, 51}},
-			field:   "extensions",
-			reason:  "supported_groups (10)",
+			profile:    &model.TLSFingerprintProfile{Name: "no-groups", Curves: []uint16{29}, KeyShareGroups: []uint16{29}, Extensions: []uint16{0, 43, 51}},
+			field:      "extensions",
+			message:    "supported_groups (10)",
+			reasonCode: "TLS_PROFILE_KEY_SHARE_WITHOUT_SUPPORTED_GROUPS",
+		},
+		"missing name": {
+			profile:    &model.TLSFingerprintProfile{},
+			field:      "name",
+			message:    "name is required",
+			reasonCode: "TLS_PROFILE_INVALID",
+			metadata:   map[string]string{"field": "name"},
 		},
 	}
 	valid := map[string]*model.TLSFingerprintProfile{
@@ -296,7 +316,13 @@ func TestTLSFingerprintProfileSaveRejectsInconsistentClientHello(t *testing.T) {
 		var validationErr *model.ValidationError
 		require.ErrorAs(t, err, &validationErr)
 		require.Equal(t, want.field, validationErr.Field)
-		require.Contains(t, validationErr.Message, want.reason)
+		require.Contains(t, validationErr.Message, want.message)
+
+		appErr := infraerrors.FromError(err)
+		require.Equal(t, int32(http.StatusBadRequest), appErr.Code)
+		require.Equal(t, want.reasonCode, appErr.Reason)
+		require.Equal(t, want.metadata, appErr.Metadata)
+		require.Equal(t, validationErr.Error(), appErr.Message, "the English message stays as the fallback text")
 	}
 
 	for name, tc := range invalid {

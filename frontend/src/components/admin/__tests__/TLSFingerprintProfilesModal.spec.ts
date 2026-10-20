@@ -110,23 +110,63 @@ describe('TLSFingerprintProfilesModal', () => {
     i18nState.translate = null
   })
 
-  // 后端拒绝不自洽模板时给出的原因（哪个字段、缺了哪个组）必须展示给管理员，
-  // 只显示“保存模板失败”会让人无从下手。没有本地化文案的 4xx 原样展示后端 message。
-  it('shows the backend validation message when saving is rejected', async () => {
-    const keyShareError = {
-      status: 400,
-      code: 400,
-      message: 'key_share_groups: TLS key share 4588 is absent from supported groups; every key share group must also be listed in curves'
-    }
+  // 后端拒绝不自洽模板时给出的原因（哪个字段、缺了哪个组）必须展示给管理员，只显示“保存模板失败”
+  // 会让人无从下手。后端 message 用的是 API 字段名（key_share_groups / curves / extensions），
+  // 中文界面要按 reason 换成表单上的字段名，并带上 metadata 里不在椭圆曲线中的组。
+  it.each([
+    [
+      'a key share group missing from the curves',
+      {
+        status: 400,
+        code: 400,
+        reason: 'TLS_PROFILE_KEY_SHARE_NOT_IN_CURVES',
+        metadata: { group: '4588' },
+        message:
+          'key_share_groups: TLS key share 4588 is absent from supported groups; every key share group must also be listed in curves (empty fields fall back to the built-in defaults)'
+      },
+      '密钥共享组中的 4588 没有出现在椭圆曲线中。密钥共享组的每一项都必须同时列在椭圆曲线里；留空的字段使用内置默认值（椭圆曲线 4588, 29, 23, 24；密钥共享组 4588, 29）'
+    ],
+    [
+      'key_share without supported_groups in the extensions',
+      {
+        status: 400,
+        code: 400,
+        reason: 'TLS_PROFILE_KEY_SHARE_WITHOUT_SUPPORTED_GROUPS',
+        message:
+          'extensions: TLS key_share extension (51) is sent without the supported_groups extension (10); add supported_groups (10) to extensions, or leave extensions empty to use the built-in order'
+      },
+      '扩展中包含 key_share（51）却没有 supported_groups（10），椭圆曲线将无法发送。请在扩展中加入 10，或留空扩展以使用内置顺序'
+    ]
+  ])('localizes the rejection reason for %s', async (_label, error, expected) => {
+    useZhMessages()
     listMock.mockResolvedValue([])
-    createMock.mockRejectedValue(keyShareError)
+    createMock.mockRejectedValue(error)
     const wrapper = await mountOpenModal()
 
     await submitNewProfile(wrapper, 'node-like', '29, 23, 24')
 
     expect(createMock).toHaveBeenCalledWith(expect.objectContaining({ name: 'node-like', curves: [29, 23, 24] }))
-    expect(showErrorMock).toHaveBeenCalledWith(keyShareError.message)
+    expect(showErrorMock).toHaveBeenCalledWith(expected)
     expect(showSuccessMock).not.toHaveBeenCalled()
+  })
+
+  // 没有本地化文案的 4xx（如其余校验失败、请求体解析失败）原样展示后端 message，总比只说“保存失败”强。
+  it('shows the backend message for a 4xx without a localized reason', async () => {
+    useZhMessages()
+    const invalidError = {
+      status: 400,
+      code: 400,
+      reason: 'TLS_PROFILE_INVALID',
+      metadata: { field: 'name' },
+      message: 'name: name is required'
+    }
+    listMock.mockResolvedValue([])
+    createMock.mockRejectedValue(invalidError)
+    const wrapper = await mountOpenModal()
+
+    await submitNewProfile(wrapper, 'renamed')
+
+    expect(showErrorMock).toHaveBeenCalledWith(invalidError.message)
   })
 
   // 重名保存（409）与删除已不存在的模板（404）按 reason 显示本地化文案，而不是英文的后端 message。

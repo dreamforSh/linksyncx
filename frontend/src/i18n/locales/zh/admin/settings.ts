@@ -1416,7 +1416,9 @@ export default {
       // 按后端 reason 显示的保存 / 删除失败原因
       errors: {
         TLS_PROFILE_NAME_EXISTS: '已有同名模板，请换一个模板名称',
-        TLS_PROFILE_NOT_FOUND: '模板不存在，可能已被其他管理员删除'
+        TLS_PROFILE_NOT_FOUND: '模板不存在，可能已被其他管理员删除',
+        TLS_PROFILE_KEY_SHARE_NOT_IN_CURVES: '密钥共享组中的 {group} 没有出现在椭圆曲线中。密钥共享组的每一项都必须同时列在椭圆曲线里；留空的字段使用内置默认值（椭圆曲线 4588, 29, 23, 24；密钥共享组 4588, 29）',
+        TLS_PROFILE_KEY_SHARE_WITHOUT_SUPPORTED_GROUPS: '扩展中包含 key_share（51）却没有 supported_groups（10），椭圆曲线将无法发送。请在扩展中加入 10，或留空扩展以使用内置顺序'
       }
     }
 }

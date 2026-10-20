@@ -15,13 +15,27 @@ import (
 // 而不是让管理员去改本来就写对了的 curves。
 var ErrKeyShareWithoutSupportedGroups = errors.New("TLS key_share extension (51) is sent without the supported_groups extension (10)")
 
+// KeyShareNotInSupportedGroupsError 表示 key_share 里的 Group 没有出现在 supported_groups（curves）中。
+//
+// 做成类型而不是 fmt.Errorf：保存校验要用 errors.As 取出具体是哪个组，作为 metadata 交给前端，
+// 用表单上的字段名拼出本地化提示。Error() 的英文原文保持不变，dialer 建连前拒绝时的报错与
+// “随机”候选的排除日志照旧。
+type KeyShareNotInSupportedGroupsError struct {
+	Group uint16
+}
+
+func (e *KeyShareNotInSupportedGroupsError) Error() string {
+	return fmt.Sprintf("TLS key share %d is absent from supported groups", e.Group)
+}
+
 // ValidateProfile 校验 profile 最终生效的 ClientHello 是否自洽（空字段按内置默认值补齐后再查）。
 //
 // 目前只检查 key_share 中的每个组都出现在 supported_groups 里：TLS 1.3 规定 key_share 必须是
 // supported_groups 的子集，违反的 ClientHello 既不像任何真实客户端，又可能被上游直接拒绝。
 // 典型的踩坑是自定义了 curves（如 Node 的 [29, 23, 30, ...]）却没写 key_share_groups，
 // 于是 key_share 继承内置默认的 [X25519MLKEM768, X25519]，而 4588 并不在 curves 里。
-// 扩展列表里压根没有 supported_groups 时返回 ErrKeyShareWithoutSupportedGroups，原因不在 curves。
+// 扩展列表里压根没有 supported_groups 时返回 ErrKeyShareWithoutSupportedGroups，原因不在 curves；
+// 其余不自洽返回 *KeyShareNotInSupportedGroupsError，指明第一个不在 supported_groups 里的组。
 // nil profile（不伪装）与全默认 profile 都合法。
 func ValidateProfile(profile *Profile) error {
 	spec := buildClientHelloSpecFromProfile(profile)
@@ -46,7 +60,7 @@ func ValidateProfile(profile *Profile) error {
 		if !sendsSupportedGroups {
 			return ErrKeyShareWithoutSupportedGroups
 		}
-		return fmt.Errorf("TLS key share %d is absent from supported groups", share.Group)
+		return &KeyShareNotInSupportedGroupsError{Group: uint16(share.Group)}
 	}
 	return nil
 }

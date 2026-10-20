@@ -70,6 +70,35 @@ func TestValidateProfileNamesMissingSupportedGroupsExtension(t *testing.T) {
 	require.NotErrorIs(t, err, ErrKeyShareWithoutSupportedGroups)
 }
 
+// 保存校验要知道是哪个组不在 supported_groups 里（作为 metadata 交给前端拼本地化提示），
+// 所以这个错误必须能用 errors.As 取出组号；英文原文不能变，dialer 报错与“随机”候选的排除日志依赖它。
+func TestValidateProfileReportsOffendingKeyShareGroup(t *testing.T) {
+	for name, tc := range map[string]struct {
+		profile *Profile
+		group   uint16
+	}{
+		"custom curves inherit the default key shares": {profile: &Profile{Curves: []uint16{29, 23, 24}}, group: 4588},
+		"explicit key share outside curves":            {profile: &Profile{Curves: []uint16{29}, KeyShareGroups: []uint16{29, 23}}, group: 23},
+		"supported_groups present in custom extensions": {
+			profile: &Profile{Curves: []uint16{29}, KeyShareGroups: []uint16{24}, Extensions: []uint16{0, 10, 43, 51}},
+			group:   24,
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			err := ValidateProfile(tc.profile)
+			var keyShareErr *KeyShareNotInSupportedGroupsError
+			require.ErrorAs(t, err, &keyShareErr)
+			require.Equal(t, tc.group, keyShareErr.Group)
+			require.EqualError(t, err, fmt.Sprintf("TLS key share %d is absent from supported groups", tc.group))
+			require.NotErrorIs(t, err, ErrKeyShareWithoutSupportedGroups)
+		})
+	}
+
+	var keyShareErr *KeyShareNotInSupportedGroupsError
+	require.False(t, errors.As(ValidateProfile(&Profile{Extensions: []uint16{0, 43, 51}}), &keyShareErr),
+		"a missing supported_groups extension is reported by its own sentinel, not as an absent group")
+}
+
 // 每个 dialer 独占一份会话票据缓存，不同账号/代理的 TLS 会话不会互相复用。
 func TestTLSSessionTicketsAreScopedToDialer(t *testing.T) {
 	proxyURL, err := url.Parse("http://127.0.0.1:1080")
