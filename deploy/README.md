@@ -192,6 +192,10 @@ Sub2API 按以下顺序退出：
 把宽限调到 55 秒以上时请同步调大这些值。宽限期内服务不接受新请求，宽限越长，
 每次重启的不可用窗口也越长。
 
+systemd unit 同时设置 `KillMode=mixed`：SIGTERM 只发给主进程，传输插件等子进程由主进程
+在清理阶段按序停止；默认的 `control-group` 会让插件在宽限一开始就退出，经插件转发的请求
+因此拿不到宽限。早先安装的 unit 需要手动加上这一行并执行 `systemctl daemon-reload`。
+
 ### Database Migration Notes (PostgreSQL)
 
 - Migrations are applied in lexicographic order (e.g. `001_...sql`, `002_...sql`).

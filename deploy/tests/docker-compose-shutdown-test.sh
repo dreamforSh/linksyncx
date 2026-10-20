@@ -79,6 +79,10 @@ for unit_source in deploy/sub2api.service deploy/install.sh; do
     fail "deploy/sub2api.service and the install.sh unit disagree on TimeoutStopSec"
   fi
   unit_timeout=$timeouts
+  # 默认 KillMode=control-group 会在排空开始时就 SIGTERM 插件子进程。
+  kill_modes=$(normalized "$unit_source" | sed -n 's/^KillMode=//p')
+  [ "$kill_modes" = "mixed" ] || \
+    fail "$unit_source must set KillMode=mixed exactly once so SIGTERM reaches only the main process"
 done
 
 printf 'shutdown deployment test passed\n'
