@@ -220,6 +220,22 @@ func newVertexServiceAccountHTTPClient(proxyURL string) (*http.Client, error) {
 	return servertiming.InstrumentClient(&http.Client{Timeout: 15 * time.Second, Transport: transport}), nil
 }
 
+// tokenExchangeTransportError 标记取 token 的出站请求没能完成 HTTP 往返（代理拨号/DNS/TCP/TLS 失败，
+// 或按账号代理建不出传输）。
+//
+// 为什么在出错处打类型标记：Forward 要把这类失败交给 handleUpstreamTransportError 换号——死代理
+// 只是这个账号的出口坏了，换个账号请求就能成功；而坏 SA 私钥、token 端点拒绝断言这类凭据错误必须
+// 保持原样终止。只凭错误字符串区分既脆弱又容易误伤，所以由唯一知道“请求是否真的发出去了”的这一层
+// 来标记。Error() 保持原文案不变，日志和已有断言不受影响。
+type tokenExchangeTransportError struct {
+	tokenURL string
+	err      error
+}
+
+func (e *tokenExchangeTransportError) Error() string { return e.err.Error() }
+
+func (e *tokenExchangeTransportError) Unwrap() error { return e.err }
+
 func exchangeVertexServiceAccountToken(ctx context.Context, key *vertexServiceAccountKey, proxyURL string) (string, time.Duration, error) {
 	now := time.Now()
 	claims := jwt.MapClaims{
@@ -254,11 +270,18 @@ func exchangeVertexServiceAccountToken(ctx context.Context, key *vertexServiceAc
 
 	client, err := newVertexServiceAccountHTTPClient(proxyURL)
 	if err != nil {
-		return "", 0, fmt.Errorf("configure service account token proxy: %w", err)
+		// 代理配置建不出传输与数据面 DoWithTLS 解析代理失败同类：是出口问题而非凭据问题。
+		return "", 0, &tokenExchangeTransportError{
+			tokenURL: key.TokenURI,
+			err:      fmt.Errorf("configure service account token proxy: %w", err),
+		}
 	}
 	resp, err := client.Do(req)
 	if err != nil {
-		return "", 0, fmt.Errorf("service account token request failed: %w", err)
+		return "", 0, &tokenExchangeTransportError{
+			tokenURL: key.TokenURI,
+			err:      fmt.Errorf("service account token request failed: %w", err),
+		}
 	}
 	defer func() { _ = resp.Body.Close() }()
 
