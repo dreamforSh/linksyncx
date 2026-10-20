@@ -265,6 +265,7 @@
               class="input font-mono text-xs"
               :placeholder="'0x0000, 0x0005, 0x000a'"
             />
+            <p class="input-hint text-xs">{{ t('admin.tlsFingerprintProfiles.form.extensionsHint') }}</p>
           </div>
 
           <div>

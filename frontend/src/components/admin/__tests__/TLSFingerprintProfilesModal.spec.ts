@@ -126,4 +126,12 @@ describe('TLSFingerprintProfilesModal', () => {
 
     expect(wrapper.text()).toContain('admin.tlsFingerprintProfiles.form.keyShareGroupsHint')
   })
+
+  it('explains that key_share needs supported_groups next to the extensions field', async () => {
+    listMock.mockResolvedValue([])
+    const wrapper = await mountOpenModal()
+    await wrapper.get('button.btn-primary.btn-sm').trigger('click')
+
+    expect(wrapper.text()).toContain('admin.tlsFingerprintProfiles.form.extensionsHint')
+  })
 })

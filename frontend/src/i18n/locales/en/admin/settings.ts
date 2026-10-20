@@ -1406,7 +1406,8 @@ export default {
         keyShareGroups: 'Key Share Groups',
         keyShareGroupsHint: 'Comma-separated group IDs; each must also appear in Elliptic Curves. Empty fields use the built-in defaults (curves 4588, 29, 23, 24; key shares 4588, 29), so custom curves without key share groups must include 4588 and 29',
         pskModes: 'PSK Modes',
-        extensions: 'Extensions'
+        extensions: 'Extensions',
+        extensionsHint: 'Comma-separated extension IDs in ClientHello order; leave empty for the built-in order. If you include key_share (51 / 0x0033), also include supported_groups (10 / 0x000a)'
       },
 
       deleteConfirm: 'Delete Profile',

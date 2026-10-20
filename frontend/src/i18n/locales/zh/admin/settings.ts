@@ -1400,7 +1400,8 @@ export default {
         keyShareGroups: '密钥共享组',
         keyShareGroupsHint: '逗号分隔的组 ID，每个都必须同时出现在椭圆曲线中。留空的字段使用内置默认值（椭圆曲线 4588, 29, 23, 24；密钥共享组 4588, 29），因此只自定义椭圆曲线时必须包含 4588 和 29',
         pskModes: 'PSK 模式',
-        extensions: '扩展'
+        extensions: '扩展',
+        extensionsHint: '按 ClientHello 中的顺序逗号分隔的扩展 ID，留空使用内置顺序。包含 key_share（51 / 0x0033）时必须同时包含 supported_groups（10 / 0x000a）'
       },
 
       deleteConfirm: '删除模板',
