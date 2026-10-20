@@ -711,20 +711,21 @@ func (s *SettingService) refreshCachedSettings(settings *SystemSettings) {
 		return
 	}
 
-	// 先使 inflight singleflight 失效，再刷新缓存，缩小旧值覆盖新值的竞态窗口
+	// 先使 inflight singleflight 失效，再递增代号并刷新缓存：Forget 只让后来者另起回源，
+	// 已在途的回源靠代号核对放弃写入，不会把保存前读到的旧值写回缓存。
 	versionBoundsSF.Forget("version_bounds")
-	versionBoundsCache.Store(&cachedVersionBounds{
+	versionBoundsGeneration.bumpAndStore(&versionBoundsCache, &cachedVersionBounds{
 		min:       settings.MinClaudeCodeVersion,
 		max:       settings.MaxClaudeCodeVersion,
 		expiresAt: time.Now().Add(versionBoundsCacheTTL).UnixNano(),
 	})
 	backendModeSF.Forget("backend_mode")
-	backendModeCache.Store(&cachedBackendMode{
+	backendModeGeneration.bumpAndStore(&backendModeCache, &cachedBackendMode{
 		value:     settings.BackendModeEnabled,
 		expiresAt: time.Now().Add(backendModeCacheTTL).UnixNano(),
 	})
 	gatewayForwardingSF.Forget("gateway_forwarding")
-	gatewayForwardingCache.Store(&cachedGatewayForwardingSettings{
+	gatewayForwardingGeneration.bumpAndStore(&gatewayForwardingCache, &cachedGatewayForwardingSettings{
 		openAITTFTMode:                   normalizeOpenAITTFTMode(settings.OpenAITTFTMode),
 		fingerprintUnification:           settings.EnableFingerprintUnification,
 		metadataPassthrough:              settings.EnableMetadataPassthrough,

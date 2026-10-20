@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"strconv"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -73,6 +74,45 @@ var gatewayForwardingSF singleflight.Group
 const gatewayForwardingCacheTTL = 60 * time.Second
 const gatewayForwardingErrorTTL = 5 * time.Second
 const gatewayForwardingDBTimeout = 5 * time.Second
+
+// settingCacheGeneration 防止在途的缓存回源覆盖管理员刚保存的新值。
+// refreshCachedSettings 的 singleflight.Forget 只能让后来者另起回源，已经发出的 DB 读取
+// 仍会在返回后把读到的旧值（或读失败时的默认值）写回缓存，让刚保存的设置最长一个 TTL
+// 不生效。回源前记下代号、写缓存前核对；保存时先递增代号再写缓存，在途回源的结果即作废。
+// 核对与写入在同一把锁内完成，避免"核对通过后、写入前"恰好发生保存。
+type settingCacheGeneration struct {
+	mu  sync.Mutex
+	gen uint64
+}
+
+func (g *settingCacheGeneration) current() uint64 {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	return g.gen
+}
+
+// storeIfCurrent 仅当代号自回源开始后未变时才写缓存。
+func (g *settingCacheGeneration) storeIfCurrent(gen uint64, cache *atomic.Value, v any) {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	if g.gen == gen {
+		cache.Store(v)
+	}
+}
+
+// bumpAndStore 供管理员保存后刷新缓存：递增代号并写入新值，使在途回源的结果作废。
+func (g *settingCacheGeneration) bumpAndStore(cache *atomic.Value, v any) {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	g.gen++
+	cache.Store(v)
+}
+
+var (
+	versionBoundsGeneration     settingCacheGeneration
+	backendModeGeneration       settingCacheGeneration
+	gatewayForwardingGeneration settingCacheGeneration
+)
 
 // cachedAccountSchedulingThresholds 缓存平台自动停调阈值（进程内缓存，60s TTL）
 type cachedAccountSchedulingThresholds struct {
@@ -812,27 +852,28 @@ func (s *SettingService) IsBackendModeEnabled(ctx context.Context) bool {
 				return cached.value, nil
 			}
 		}
+		gen := backendModeGeneration.current()
 		dbCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), backendModeDBTimeout)
 		defer cancel()
 		value, err := s.settingRepo.GetValue(dbCtx, SettingKeyBackendModeEnabled)
 		if err != nil {
 			if errors.Is(err, ErrSettingNotFound) {
 				// Setting not yet created (fresh install) - default to disabled with full TTL
-				backendModeCache.Store(&cachedBackendMode{
+				backendModeGeneration.storeIfCurrent(gen, &backendModeCache, &cachedBackendMode{
 					value:     false,
 					expiresAt: time.Now().Add(backendModeCacheTTL).UnixNano(),
 				})
 				return false, nil
 			}
 			slog.Warn("failed to get backend_mode_enabled setting", "error", err)
-			backendModeCache.Store(&cachedBackendMode{
+			backendModeGeneration.storeIfCurrent(gen, &backendModeCache, &cachedBackendMode{
 				value:     false,
 				expiresAt: time.Now().Add(backendModeErrorTTL).UnixNano(),
 			})
 			return false, nil
 		}
 		enabled := value == "true"
-		backendModeCache.Store(&cachedBackendMode{
+		backendModeGeneration.storeIfCurrent(gen, &backendModeCache, &cachedBackendMode{
 			value:     enabled,
 			expiresAt: time.Now().Add(backendModeCacheTTL).UnixNano(),
 		})
@@ -885,6 +926,7 @@ func (s *SettingService) getGatewayForwardingSettingsCached(ctx context.Context)
 				}, nil
 			}
 		}
+		gen := gatewayForwardingGeneration.current()
 		dbCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), gatewayForwardingDBTimeout)
 		defer cancel()
 		values, err := s.settingRepo.GetMultiple(dbCtx, []string{
@@ -901,7 +943,7 @@ func (s *SettingService) getGatewayForwardingSettingsCached(ctx context.Context)
 		})
 		if err != nil {
 			slog.Warn("failed to get gateway forwarding settings", "error", err)
-			gatewayForwardingCache.Store(&cachedGatewayForwardingSettings{
+			gatewayForwardingGeneration.storeIfCurrent(gen, &gatewayForwardingCache, &cachedGatewayForwardingSettings{
 				openAITTFTMode:                   OpenAITTFTModeSemantic,
 				fingerprintUnification:           true,
 				metadataPassthrough:              false,
@@ -936,7 +978,7 @@ func (s *SettingService) getGatewayForwardingSettingsCached(ctx context.Context)
 		if v, ok := values[SettingKeyEnableClientDatelineNormalization]; ok && v != "" {
 			clientDatelineNormalization = v == "true"
 		}
-		gatewayForwardingCache.Store(&cachedGatewayForwardingSettings{
+		gatewayForwardingGeneration.storeIfCurrent(gen, &gatewayForwardingCache, &cachedGatewayForwardingSettings{
 			openAITTFTMode:                   ttftMode,
 			fingerprintUnification:           fp,
 			metadataPassthrough:              mp,
@@ -1024,6 +1066,7 @@ func (s *SettingService) GetClaudeCodeVersionBounds(ctx context.Context) (min, m
 				return bounds{cached.min, cached.max}, nil
 			}
 		}
+		gen := versionBoundsGeneration.current()
 		// 使用独立 context：断开请求取消链，避免客户端断连导致空值被长期缓存
 		dbCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), versionBoundsDBTimeout)
 		defer cancel()
@@ -1034,7 +1077,7 @@ func (s *SettingService) GetClaudeCodeVersionBounds(ctx context.Context) (min, m
 		if err != nil {
 			// fail-open: DB 错误时不阻塞请求，但记录日志并使用短 TTL 快速重试
 			slog.Warn("failed to get claude code version bounds setting, skipping version check", "error", err)
-			versionBoundsCache.Store(&cachedVersionBounds{
+			versionBoundsGeneration.storeIfCurrent(gen, &versionBoundsCache, &cachedVersionBounds{
 				min:       "",
 				max:       "",
 				expiresAt: time.Now().Add(versionBoundsErrorTTL).UnixNano(),
@@ -1045,7 +1088,7 @@ func (s *SettingService) GetClaudeCodeVersionBounds(ctx context.Context) (min, m
 			min: values[SettingKeyMinClaudeCodeVersion],
 			max: values[SettingKeyMaxClaudeCodeVersion],
 		}
-		versionBoundsCache.Store(&cachedVersionBounds{
+		versionBoundsGeneration.storeIfCurrent(gen, &versionBoundsCache, &cachedVersionBounds{
 			min:       b.min,
 			max:       b.max,
 			expiresAt: time.Now().Add(versionBoundsCacheTTL).UnixNano(),
