@@ -247,4 +247,14 @@ func TestShouldRetryUpstreamErrorOnlyStopsAnthropicAuthRejections(t *testing.T) 
 	require.False(t, svc.shouldRetryUpstreamError(account, http.StatusTooManyRequests), "selected codes are handled, not retried")
 	require.True(t, svc.shouldRetryUpstreamError(account, http.StatusInternalServerError), "unselected non-auth codes keep the in-place retry")
 	require.True(t, svc.shouldRetryUpstreamError(account, 529), "unselected non-auth codes keep the in-place retry")
+
+	// 平台范围同样只限 Anthropic：Antigravity API Key 账号也会经由 GatewayService.Forward 转发，
+	// 未选中的 401/403 维持旧的原地重试语义，防止修复被无意放宽到所有平台。
+	other := newAnthropicAuthRetryAPIKeyAccount(false)
+	other.Platform = PlatformAntigravity
+	other.Credentials["custom_error_codes_enabled"] = true
+	other.Credentials["custom_error_codes"] = []any{float64(429)}
+	require.True(t, svc.shouldRetryUpstreamError(other, http.StatusUnauthorized), "non-Anthropic platforms keep the in-place retry for unselected 401")
+	require.True(t, svc.shouldRetryUpstreamError(other, http.StatusForbidden), "non-Anthropic platforms keep the in-place retry for unselected 403")
+	require.False(t, svc.shouldRetryUpstreamError(other, http.StatusTooManyRequests), "selected codes are handled, not retried")
 }
