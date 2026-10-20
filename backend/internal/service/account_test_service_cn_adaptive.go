@@ -215,7 +215,8 @@ func (s *AccountTestService) doCNProviderAdaptiveRequest(req *http.Request, acco
 
 // testCNProviderAnthropicConnection verifies the native Anthropic endpoint of a
 // CN-provider account explicitly configured with api_protocol=anthropic. Before
-// this path existed such accounts fell through to the generic Claude tester,// which (a) appended ?beta=true and (b) defaulted a missing base_url to
+// this path existed such accounts fell through to the generic Claude tester,
+// which (a) appended ?beta=true and (b) defaulted a missing base_url to
 // https://api.anthropic.com — sending the provider's API key to Anthropic
 // instead of the provider's own Anthropic-compatible endpoint. The probe uses
 // GetAnthropicProtocolBaseURL (same resolution as real /v1/messages forwarding,
@@ -289,7 +290,12 @@ func (s *AccountTestService) testCNProviderAnthropicConnection(c *gin.Context, a
 	if resp.StatusCode != http.StatusOK {
 		body, _ := io.ReadAll(resp.Body)
 		errMsg := fmt.Sprintf("Anthropic endpoint returned %d: %s", resp.StatusCode, string(body))
-		if (resp.StatusCode == http.StatusUnauthorized || resp.StatusCode == http.StatusForbidden) && s.accountRepo != nil {
+		// 仅 401 永久标错（与上面两个 adaptive 探测一致）。403 只回报给管理员：
+		// 运行时（handleOpenAI403）对国产供应商 / OpenCode / Command Code 的 403
+		// 不做单次永久禁用——HTML/Cloudflare 403（如 "error code: 1010"）不算证据，
+		// JSON 403 走计数 + 临时冷却，Command Code 用量上限 403 是临时状态。
+		// 手动测试不能比运行时更严格。
+		if resp.StatusCode == http.StatusUnauthorized && s.accountRepo != nil {
 			_ = s.accountRepo.SetError(ctx, account.ID, errMsg)
 		}
 		return s.sendErrorAndEnd(c, errMsg)
