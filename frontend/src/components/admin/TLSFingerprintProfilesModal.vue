@@ -333,7 +333,7 @@ import { ref, reactive, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useAppStore } from '@/stores/app'
 import { adminAPI } from '@/api/admin'
-import { extractI18nErrorMessage } from '@/utils/apiError'
+import { extractApiErrorCode, extractI18nErrorMessage } from '@/utils/apiError'
 import type { TLSFingerprintProfile } from '@/api/admin/tlsFingerprintProfile'
 import BaseDialog from '@/components/common/BaseDialog.vue'
 import ConfirmDialog from '@/components/common/ConfirmDialog.vue'
@@ -575,6 +575,10 @@ const profileErrorMessage = (error: unknown, fallback: string): string => {
   return extractI18nErrorMessage(error, t, 'admin.tlsFingerprintProfiles.errors', fallback)
 }
 
+// 模板已在别处被删除（另一个管理员、另一个标签页）时，留着确认框或编辑表单重试只会得到同样的 404，
+// 列表里也还挂着那行已不存在的模板，所以这时要关掉对话框并重新拉取列表。
+const isProfileGone = (error: unknown): boolean => extractApiErrorCode(error) === 'TLS_PROFILE_NOT_FOUND'
+
 const handleDelete = (profile: TLSFingerprintProfile) => {
   deletingProfile.value = profile
   showDeleteDialog.value = true
@@ -618,6 +622,11 @@ const handleSubmit = async () => {
     // 被拒的原因（名称重复、模板不自洽）必须展示给管理员，只显示“保存模板失败”会让人无从下手。
     appStore.showError(profileErrorMessage(error, t('admin.tlsFingerprintProfiles.saveFailed')))
     console.error('Error saving TLS fingerprint profile:', error)
+    // 只有模板已不存在时才关表单；其余失败（重名、不自洽、临时故障）保留管理员填的内容，改一改或稍后重试即可。
+    if (isProfileGone(error)) {
+      closeFormModal()
+      loadProfiles()
+    }
   } finally {
     submitting.value = false
   }
@@ -635,6 +644,11 @@ const confirmDelete = async () => {
   } catch (error) {
     appStore.showError(profileErrorMessage(error, t('admin.tlsFingerprintProfiles.deleteFailed')))
     console.error('Error deleting TLS fingerprint profile:', error)
+    if (isProfileGone(error)) {
+      showDeleteDialog.value = false
+      deletingProfile.value = null
+      loadProfiles()
+    }
   }
 }
 </script>

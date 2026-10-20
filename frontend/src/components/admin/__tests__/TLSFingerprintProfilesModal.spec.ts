@@ -5,9 +5,10 @@ import zh from '@/i18n/locales/zh'
 
 type Translate = (key: string, params?: Record<string, unknown>) => string
 
-const { listMock, createMock, deleteMock, showErrorMock, showSuccessMock, i18nState } = vi.hoisted(() => ({
+const { listMock, createMock, updateMock, deleteMock, showErrorMock, showSuccessMock, i18nState } = vi.hoisted(() => ({
   listMock: vi.fn(),
   createMock: vi.fn(),
+  updateMock: vi.fn(),
   deleteMock: vi.fn(),
   showErrorMock: vi.fn(),
   showSuccessMock: vi.fn(),
@@ -20,7 +21,7 @@ vi.mock('@/api/admin', () => ({
     tlsFingerprintProfiles: {
       list: listMock,
       create: createMock,
-      update: vi.fn(),
+      update: updateMock,
       delete: deleteMock
     }
   }
@@ -73,6 +74,13 @@ const ConfirmDialogStub = defineComponent({
 // API 客户端拦截器把后端错误改写成 { status, code, reason, message, metadata }，没有 response.data.detail。
 // 后端没有映射的错误一律是 500 "internal error"（infraerrors 的兜底）。
 const internalError = { status: 500, code: 500, message: 'internal error' }
+// 模板在别处已被删除时，更新与删除都会得到这个 404。
+const profileGoneError = {
+  status: 404,
+  code: 404,
+  reason: 'TLS_PROFILE_NOT_FOUND',
+  message: 'TLS fingerprint profile not found'
+}
 
 async function mountOpenModal() {
   const wrapper = mount(TLSFingerprintProfilesModal, {
@@ -104,6 +112,7 @@ describe('TLSFingerprintProfilesModal', () => {
   beforeEach(() => {
     listMock.mockReset()
     createMock.mockReset()
+    updateMock.mockReset()
     deleteMock.mockReset()
     showErrorMock.mockReset()
     showSuccessMock.mockReset()
@@ -179,16 +188,13 @@ describe('TLSFingerprintProfilesModal', () => {
       reason: 'TLS_PROFILE_NAME_EXISTS',
       message: 'TLS fingerprint profile name already exists'
     })
-    deleteMock.mockRejectedValue({
-      status: 404,
-      code: 404,
-      reason: 'TLS_PROFILE_NOT_FOUND',
-      message: 'TLS fingerprint profile not found'
-    })
+    deleteMock.mockRejectedValue(profileGoneError)
     const wrapper = await mountOpenModal()
 
     await submitNewProfile(wrapper, 'chrome')
     expect(showErrorMock).toHaveBeenLastCalledWith('已有同名模板，请换一个模板名称')
+    // 重名只需改个名字再保存，表单要保留管理员已填的内容。
+    expect(wrapper.find('form').exists()).toBe(true)
 
     await deleteFirstProfile(wrapper, '删除')
     expect(deleteMock).toHaveBeenCalledWith(3)
@@ -210,10 +216,48 @@ describe('TLSFingerprintProfilesModal', () => {
 
     await submitNewProfile(wrapper, 'defaults')
     expect(showErrorMock).toHaveBeenLastCalledWith('保存模板失败')
+    expect(wrapper.find('form').exists()).toBe(true)
 
     await deleteFirstProfile(wrapper, '删除')
     expect(deleteMock).toHaveBeenCalledWith(3)
     expect(showErrorMock).toHaveBeenLastCalledWith('删除模板失败')
+    // 临时故障可以直接重试：确认框保持打开，也不必重新拉取列表。
+    expect(wrapper.find('[data-testid="confirm-delete"]').exists()).toBe(true)
+    expect(listMock).toHaveBeenCalledTimes(1)
+  })
+
+  // 模板已被其他管理员删除（404 TLS_PROFILE_NOT_FOUND）时，留着确认框或编辑表单重试只会得到同样的 404，
+  // 列表里也还挂着那行已不存在的模板：要关掉对话框并重新拉取列表。
+  it('closes the delete confirmation and reloads the list when the profile is already gone', async () => {
+    useZhMessages()
+    listMock.mockResolvedValueOnce([{ id: 3, name: 'chrome', enable_grease: false }]).mockResolvedValueOnce([])
+    deleteMock.mockRejectedValue(profileGoneError)
+    const wrapper = await mountOpenModal()
+
+    await deleteFirstProfile(wrapper, '删除')
+
+    expect(deleteMock).toHaveBeenCalledWith(3)
+    expect(showErrorMock).toHaveBeenLastCalledWith('模板不存在，可能已被其他管理员删除')
+    expect(wrapper.find('[data-testid="confirm-delete"]').exists()).toBe(false)
+    expect(listMock).toHaveBeenCalledTimes(2)
+    expect(wrapper.findAll('tbody tr')).toHaveLength(0)
+  })
+
+  it('closes the edit form and reloads the list when the edited profile is already gone', async () => {
+    useZhMessages()
+    listMock.mockResolvedValueOnce([{ id: 3, name: 'chrome', enable_grease: false }]).mockResolvedValueOnce([])
+    updateMock.mockRejectedValue(profileGoneError)
+    const wrapper = await mountOpenModal()
+
+    await wrapper.get('button[title="编辑"]').trigger('click')
+    await wrapper.get('form').trigger('submit')
+    await flushPromises()
+
+    expect(updateMock).toHaveBeenCalledWith(3, expect.objectContaining({ name: 'chrome' }))
+    expect(showErrorMock).toHaveBeenLastCalledWith('模板不存在，可能已被其他管理员删除')
+    expect(wrapper.find('form').exists()).toBe(false)
+    expect(listMock).toHaveBeenCalledTimes(2)
+    expect(wrapper.findAll('tbody tr')).toHaveLength(0)
   })
 
   it('falls back to the generic message when the error carries none', async () => {
