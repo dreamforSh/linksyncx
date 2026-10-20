@@ -659,6 +659,11 @@ type ForwardResult struct {
 	ImageSizeBreakdown map[string]int
 	SearchCount        int
 	AudioUsage         *AudioUsage
+
+	// cacheTTL1hInjection 是构建上游请求时"全局 1h cache TTL 注入"开关的快照。计费据此决定
+	// 是否把 1h 缓存创建归回 5m，而不是重读可能已被切换的全局开关；零值（未决策）表示该转发
+	// 路径没有做这项决策，计费回退到实时读取，保持原有行为。
+	cacheTTL1hInjection cacheTTL1hInjectionSnapshot
 }
 
 // GatewayFailureStage identifies which request stage failed. The zero value is

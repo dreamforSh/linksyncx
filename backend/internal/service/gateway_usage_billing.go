@@ -782,8 +782,10 @@ func (s *GatewayService) recordUsageCore(ctx context.Context, input *recordUsage
 
 	// Cache TTL Override: 确保计费时 token 分类与账号设置一致。
 	// 账号级设置优先；全局 1h 请求注入开启时，默认把 usage 计费归回 5m。
+	// 全局开关用 ForwardResult 携带的构建期快照，不在计费时重读：开关可能在请求发出后
+	// 已被切换，重读会让计费 TTL 与实际发出的请求不一致。
 	cacheTTLOverridden := false
-	if overrideTarget, ok := s.resolveCacheTTLUsageOverrideTarget(ctx, account); ok {
+	if overrideTarget, ok := s.resolveCacheTTLUsageOverrideTarget(ctx, account, result.cacheTTL1hInjection); ok {
 		applyCacheTTLOverride(&result.Usage, overrideTarget)
 		cacheTTLOverridden = (result.Usage.CacheCreation5mTokens + result.Usage.CacheCreation1hTokens) > 0
 	}
