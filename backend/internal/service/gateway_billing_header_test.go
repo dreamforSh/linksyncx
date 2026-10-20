@@ -383,6 +383,76 @@ func TestSyncBillingHeaderVersion_GatewayBuiltSuffixFollowsFinalBody(t *testing.
 	require.Equal(t, string(body), string(clientBuilt))
 }
 
+// cch 缺失时只给网关合成的 mimic 块补 00000 占位符；透传块保持客户端原样（不补）。
+func TestSyncBillingHeaderVersion_CCHPlaceholderOnlyForGatewayBuiltBlocks(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		ua     string
+		source billingFingerprintSource
+		want   string
+	}{
+		{
+			name:   "gateway_built_same_version",
+			ua:     "claude-cli/2.1.296 (external, cli)",
+			source: billingFingerprintFromBody,
+			want:   "x-anthropic-billing-header: cc_version=2.1.296.dfd; cc_entrypoint=cli; cch=00000; cc_turn_index=1;",
+		},
+		{
+			name:   "gateway_built_version_change",
+			ua:     "claude-cli/2.1.297 (external, cli)",
+			source: billingFingerprintFromBody,
+			want:   "x-anthropic-billing-header: cc_version=2.1.297.37d; cc_entrypoint=cli; cch=00000; cc_turn_index=1;",
+		},
+		{
+			name:   "client_same_version",
+			ua:     "claude-cli/2.1.296 (external, cli)",
+			source: billingFingerprintFromClient,
+			want:   "x-anthropic-billing-header: cc_version=2.1.296.dfd; cc_entrypoint=cli; cc_turn_index=1;",
+		},
+		{
+			name:   "client_version_change",
+			ua:     "claude-cli/2.1.297 (external, cli)",
+			source: billingFingerprintFromClient,
+			want:   "x-anthropic-billing-header: cc_version=2.1.297.37d; cc_entrypoint=cli; cc_turn_index=1;",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			body := nativeClaudeCodeTestBody(t,
+				"x-anthropic-billing-header: cc_version=2.1.296.dfd; cc_entrypoint=cli; cc_turn_index=1;",
+				fingerprintTestPromptASCII)
+			result := syncBillingHeaderVersion(body, tc.ua, tc.source)
+			require.Equal(t, tc.want, gjson.GetBytes(result, "system.0.text").String())
+		})
+	}
+}
+
+// 管理员自定义的字面量 billing 模板不带 cch 时，mimic 路径照旧补 cch=00000 占位符：
+// 透传块不补 cch 的规则不影响 mimic 路径。
+func TestBuildUpstreamRequest_MimicCustomBillingTemplateGetsCCHPlaceholder(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	resetGatewayForwardingSettingsCacheForTest(t)
+	c, _ := gin.CreateTestContext(httptest.NewRecorder())
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/messages", nil)
+	c.Request.Header.Set("User-Agent", "opencode/1.0")
+
+	const blocksConfig = `[{"type":"text","text":"x-anthropic-billing-header: cc_version={cc_version}.{fp}; cc_entrypoint=cli;"},{"type":"text","text":"{claude_code_system_prompt}"}]`
+	body := []byte(`{"model":"claude-haiku-4-5","system":"You are a helpful assistant.","messages":[{"role":"user","content":"hello world"}]}`)
+	body = rewriteSystemForNonClaudeCodeWithPromptBlocks(body, "You are a helpful assistant.", "", blocksConfig)
+	require.NotContains(t, gjson.GetBytes(body, "system.0.text").String(), "cch=")
+
+	svc := &GatewayService{cfg: &config.Config{}}
+	account := &Account{ID: 1, Platform: PlatformAnthropic, Type: AccountTypeOAuth}
+	req, wireBody, err := svc.buildUpstreamRequest(context.Background(), c, account,
+		body, "test-token", "oauth", "claude-haiku-4-5", false, true)
+	require.NoError(t, err)
+
+	version := ExtractCLIVersion(getHeaderRaw(req.Header, "User-Agent"))
+	require.Equal(t, claude.EffectiveCLIVersion(), version)
+	require.Equal(t,
+		"x-anthropic-billing-header: cc_version="+version+"."+computeClaudeCodeFingerprint(wireBody, version)+"; cc_entrypoint=cli; cch=00000;",
+		gjson.GetBytes(wireBody, "system.0.text").String())
+}
+
 // 透传真实 Claude Code（fp=true）：客户端 2.1.290 的指纹 UA 被抬到 EffectiveCLIVersion，
 // billing cc_version 必须跟随出站 User-Agent，后缀按真实 prompt（而非会话上下文 meta 块）换算。
 func TestBuildUpstreamRequest_NativeBillingFollowsFlooredUserAgent(t *testing.T) {
