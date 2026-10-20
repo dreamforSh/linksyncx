@@ -32,9 +32,15 @@ type ClashPoolSettings struct {
 	// unlimited sharing, when 1 was both the minimum and the default.
 	SettingsVersion int `json:"settings_version,omitempty"`
 	// AllowUnprobedExitBinding allows binding nodes whose egress IP is unknown.
-	AllowUnprobedExitBinding bool   `json:"allow_unprobed_exit_binding"`
-	HealthTestURL            string `json:"health_test_url"`
-	HealthTimeoutMs          int    `json:"health_timeout_ms"`
+	AllowUnprobedExitBinding bool `json:"allow_unprobed_exit_binding"`
+	// PauseAutomaticProbes 暂停后台的定时探测，供按流量计费的机场、节点很多或不想让出口定期
+	// 访问 AI 平台的部署使用。用「暂停」的反向命名，是为了让零值就等于继续探测：全新安装、
+	// 没有该字段的旧记录、不带该字段的自建脚本 PUT、存储值校验失败和读取出错的回退，都天然
+	// 继续探测，读写和校验路径不需要任何特判。探测在这里承担安全职责（出口变更暂停、本机 IP
+	// 自查、故障暂停与恢复），所以暂停时仍保留一部分探测，见 clashPausedProbeViews。
+	PauseAutomaticProbes bool   `json:"pause_automatic_probes"`
+	HealthTestURL        string `json:"health_test_url"`
+	HealthTimeoutMs      int    `json:"health_timeout_ms"`
 	// BoundCheckIntervalSeconds applies to nodes backing at least one account.
 	BoundCheckIntervalSeconds   int `json:"bound_check_interval_seconds"`
 	UnboundCheckIntervalSeconds int `json:"unbound_check_interval_seconds"`

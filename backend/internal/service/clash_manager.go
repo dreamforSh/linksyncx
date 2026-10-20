@@ -510,13 +510,23 @@ func (m *ClashManager) leaderCycle(ctx context.Context) {
 			m.log().Warn("load clash nodes failed", zap.Error(err))
 		} else {
 			now := time.Now()
-			if due := dueForLatency(views, settings, now); len(due) > 0 {
-				if _, err := m.svc.probeLatency(ctx, due, settings, true); err != nil {
+			probeSettings := settings
+			latencyViews, exitViews := views, views
+			// 暂停自动探测时只保留保障安全的探测（见 clashPausedProbeViews），AI 平台检测
+			// 不承担安全职责，一并关闭。手动探测走 TestNodesLatency/ProbeNodesExit，不受影响。
+			if settings.PauseAutomaticProbes {
+				latencyViews, exitViews = clashPausedProbeViews(views)
+				paused := *settings
+				paused.PlatformChecksEnabled = false
+				probeSettings = &paused
+			}
+			if due := dueForLatency(latencyViews, probeSettings, now); len(due) > 0 {
+				if _, err := m.svc.probeLatency(ctx, due, probeSettings, true); err != nil {
 					m.log().Warn("clash latency round failed", zap.Error(err))
 				}
 			}
-			if due := dueForExitProbe(views, settings, now); len(due) > 0 {
-				m.svc.probeExits(ctx, due, settings)
+			if due := dueForExitProbe(exitViews, probeSettings, now); len(due) > 0 {
+				m.svc.probeExits(ctx, due, probeSettings)
 			}
 		}
 	}
@@ -567,6 +577,31 @@ func (m *ClashManager) refreshDueProfiles(ctx context.Context) {
 				zap.String("status", result.Status), zap.String("error", result.Error))
 		}
 	}
+}
+
+// clashPausedProbeViews 选出暂停自动探测时仍要探测的节点，其余定时探测全部停掉。
+//   - 延迟：只复测健康检查失败的已绑定节点，让节点恢复后能解除账号暂停。健康状态只由探测写入，
+//     不复测的话这些账号会一直暂停；反过来，健康的已绑定节点出故障不再被发现，只能靠请求失败切换账号。
+//   - 出口：已绑定节点照常交给 dueForExitProbe（unknown/stale 立即复核，其余按出口探测间隔），
+//     这样原地换出口的暂停、出口等于本机 IP 的自查、订阅刷新后的复核都继续生效。
+//   - 未绑定节点只对从未做过出口探测（ExitCheckedAt 为空）的节点探一次，让新订阅的节点拿到
+//     exit_ip、可以绑定。探测请求失败时 probeOneExit 也会写入 ExitCheckedAt，所以不会每轮重探；
+//     仍受 ExitProbePerMinute 预算限制，且排在已绑定节点之后。
+func clashPausedProbeViews(views []ClashNodeView) (latency, exit []ClashNodeView) {
+	for i := range views {
+		view := &views[i]
+		if len(view.Accounts) == 0 {
+			if view.ExitCheckedAt == nil {
+				exit = append(exit, *view)
+			}
+			continue
+		}
+		exit = append(exit, *view)
+		if view.HealthStatus == ClashHealthUnhealthy {
+			latency = append(latency, *view)
+		}
+	}
+	return latency, exit
 }
 
 func clashNodeLive(view *ClashNodeView) bool {
