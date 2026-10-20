@@ -7,9 +7,13 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
+	"strconv"
+	"sync/atomic"
 	"testing"
 	"time"
 
+	"github.com/Wei-Shaw/sub2api/internal/pkg/websearch"
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/require"
 )
@@ -200,5 +204,77 @@ func TestGatewayCountTokensBrokenProxyBindingSkipsCredentials(t *testing.T) {
 				require.Zero(t, cache.calls, "credentials must not be resolved or refreshed for a broken binding")
 			})
 		}
+	}
+}
+
+// Web Search 模拟分支在 Forward 里先于上面的“先查代理绑定”执行：纯 web_search 请求根本走不到
+// 通用转发路径，而搜索请求同样经账号代理出站，所以这个分支要自己先查绑定、按账号不可用换号。
+// canary 是本地 HTTP 代理桩，同时充当 provider 自带的代理：账号代理若被当成“没有代理”放行，
+// 搜索会改走 provider 代理、打到 canary。对照组把账号代理指向 canary，证明夹具确实走进了
+// 模拟分支（通用转发路径只会调 httpUpstream，碰不到 canary）。
+func TestGatewayWebSearchEmulationBrokenProxyBindingFailsOver(t *testing.T) {
+	var canaryHits atomic.Int32
+	canary := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		canaryHits.Add(1)
+		w.WriteHeader(http.StatusServiceUnavailable)
+	}))
+	defer canary.Close()
+	canaryURL, err := url.Parse(canary.URL)
+	require.NoError(t, err)
+	canaryPort, err := strconv.Atoi(canaryURL.Port())
+	require.NoError(t, err)
+
+	SetWebSearchManager(websearch.NewManager([]websearch.ProviderConfig{{Type: "brave", APIKey: "k", ProxyURL: canary.URL}}, nil))
+	defer SetWebSearchManager(nil)
+	setGlobalWebSearchConfig(&WebSearchEmulationConfig{
+		Enabled:   true,
+		Providers: []WebSearchProviderConfig{{Type: "brave", APIKey: "k"}},
+	})
+	defer clearGlobalWebSearchConfig()
+
+	forward := func(t *testing.T, bind func(*Account)) (*Account, *gin.Context, *httptest.ResponseRecorder, *countingProxyBindingUpstream, error) {
+		t.Helper()
+		body := []byte(`{"model":"claude-sonnet-4-5","max_tokens":16,"stream":true,"tools":[{"type":"web_search_20250305","name":"web_search"}],"messages":[{"role":"user","content":"latest go release"}]}`)
+		parsed, err := ParseGatewayRequest(NewRequestBodyRef(body), PlatformAnthropic)
+		require.NoError(t, err)
+		c, rec := newProxyBindingTestContext(http.MethodPost, "/v1/messages", body)
+		upstream := &countingProxyBindingUpstream{}
+		svc := &GatewayService{
+			httpUpstream:     upstream,
+			settingService:   newSettingServiceForWebSearchTest(true),
+			rateLimitService: &RateLimitService{},
+			deferredService:  &DeferredService{},
+		}
+		account := newAnthropicAPIKeyAccount(WebSearchModeEnabled)
+		account.ID = 621
+		account.Name = "anthropic-websearch-proxy-binding"
+		bind(account)
+		_, err = svc.Forward(context.Background(), c, account, parsed)
+		return account, c, rec, upstream, err
+	}
+
+	t.Run("control: healthy binding searches through the account proxy", func(t *testing.T) {
+		canaryHits.Store(0)
+		_, _, _, upstream, err := forward(t, func(a *Account) {
+			id := brokenBindingProxyID
+			a.ProxyID = &id
+			a.Proxy = &Proxy{ID: id, Protocol: "http", Host: canaryURL.Hostname(), Port: canaryPort}
+		})
+		require.Error(t, err, "the canary refuses CONNECT, so the search itself fails")
+		require.NotZero(t, canaryHits.Load(), "the fixture must reach web search emulation")
+		require.Zero(t, upstream.calls)
+	})
+	for _, binding := range brokenProxyBindings() {
+		t.Run(binding.name, func(t *testing.T) {
+			canaryHits.Store(0)
+			account, c, rec, upstream, err := forward(t, binding.bind)
+			requireProxyBindingFailover(t, err, account, c, rec, upstream)
+			require.Zero(t, canaryHits.Load(), "no search may run without the assigned proxy")
+			// main 上这一行的 failover body 是搜索客户端的报错原文，会带出完整代理 URL（含账号密码）；
+			// 换号耗尽后可能经错误透传规则回给客户端。
+			var failoverErr *UpstreamFailoverError
+			require.ErrorAs(t, err, &failoverErr)
+			require.NotContains(t, string(failoverErr.ResponseBody), "bad host", "the failover body must not echo proxy configuration")
+		})
 	}
 }
