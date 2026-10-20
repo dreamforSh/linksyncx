@@ -195,7 +195,9 @@ func setClaudeOAuthHeaders(req *http.Request, opts *service.ClaudeUsageFetchOpti
 func (s *claudeUsageService) do(req *http.Request, opts *service.ClaudeUsageFetchOptions, timeout time.Duration) (*http.Response, error) {
 	if opts.TLSProfile != nil && s.httpUpstream != nil {
 		ctx, cancel := context.WithTimeout(req.Context(), timeout)
-		resp, err := s.httpUpstream.DoWithTLS(req.WithContext(ctx), opts.ProxyURL, opts.AccountID, 0, opts.TLSProfile)
+		// 传账号并发而不是 0：与转发请求的池配置键一致，探测才会复用转发的连接池，
+		// 而不是每次探测（后台账号列表刷新时每个账号最多 3 分钟一次）都把它拆掉、逼下一个真实请求重新握手。
+		resp, err := s.httpUpstream.DoWithTLS(req.WithContext(ctx), opts.ProxyURL, opts.AccountID, opts.AccountConcurrency, opts.TLSProfile)
 		if err != nil {
 			cancel()
 			return nil, fmt.Errorf("request with TLS fingerprint failed: %w", err)

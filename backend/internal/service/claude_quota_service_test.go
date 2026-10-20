@@ -65,10 +65,11 @@ func (claudeQuotaUsageLogRepo) GetAccountWindowStats(context.Context, int64, tim
 }
 
 type claudeQuotaFakeFetcher struct {
-	mu      sync.Mutex
-	queries []string
-	body    string
-	err     error
+	mu            sync.Mutex
+	queries       []string
+	concurrencies []int
+	body          string
+	err           error
 }
 
 func (f *claudeQuotaFakeFetcher) FetchUsage(ctx context.Context, accessToken, proxyURL string) (*ClaudeUsageResponse, error) {
@@ -78,6 +79,7 @@ func (f *claudeQuotaFakeFetcher) FetchUsage(ctx context.Context, accessToken, pr
 func (f *claudeQuotaFakeFetcher) FetchUsageWithOptions(_ context.Context, opts *ClaudeUsageFetchOptions) (*ClaudeUsageResponse, error) {
 	f.mu.Lock()
 	f.queries = append(f.queries, opts.Query)
+	f.concurrencies = append(f.concurrencies, opts.AccountConcurrency)
 	f.mu.Unlock()
 	if f.err != nil {
 		return nil, f.err
@@ -222,6 +224,24 @@ func TestClaudeQuotaRefresh_PersistsSnapshotSubscriptionAndUsage(t *testing.T) {
 	snapshotJSON, err := json.Marshal(updated[claudeResetSnapshotExtraKey])
 	require.NoError(t, err)
 	require.NotContains(t, string(snapshotJSON), "grant_1")
+}
+
+// 用量 / 配额探测要带上账号并发：TLS 连接池按并发定池大小并据此判断能否复用，
+// 探测传 0 会把转发的热连接池拆掉重建。配额刷新复用 claudeFetchOptions，同样要带上。
+func TestClaudeQuotaRefresh_ProbeCarriesAccountConcurrency(t *testing.T) {
+	fetcher := &claudeQuotaFakeFetcher{body: claudeUsageBody(cedarEmberBlock(usableCedarGrant(1)), "")}
+	api := &claudeQuotaFakeAPI{profileBody: claudeMax20xProfile}
+	account := claudeQuotaTestAccount(func(a *Account) { a.Concurrency = 5 })
+	svc, _ := newClaudeQuotaTestService(account, fetcher, api)
+
+	_, err := svc.RefreshQuota(context.Background(), account.ID)
+	require.NoError(t, err)
+	require.Equal(t, []int{5}, fetcher.concurrencies)
+
+	opts, err := svc.usage.claudeFetchOptions(context.Background(), &account, "at")
+	require.NoError(t, err)
+	require.Equal(t, 5, opts.AccountConcurrency)
+	require.Equal(t, account.ID, opts.AccountID)
 }
 
 func TestClaudeQuotaRefresh_AtSessionWallReadsWeeklyReset(t *testing.T) {

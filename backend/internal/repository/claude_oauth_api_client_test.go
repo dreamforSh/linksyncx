@@ -9,6 +9,7 @@ import (
 
 	"github.com/Wei-Shaw/sub2api/internal/pkg/claude"
 	infraerrors "github.com/Wei-Shaw/sub2api/internal/pkg/errors"
+	"github.com/Wei-Shaw/sub2api/internal/pkg/tlsfingerprint"
 	"github.com/Wei-Shaw/sub2api/internal/service"
 	"github.com/stretchr/testify/require"
 )
@@ -161,4 +162,46 @@ func TestClaudeOAuthAPIClientMapsUpstreamErrors(t *testing.T) {
 		require.Equal(t, tc.wantReason, infraerrors.Reason(err), "status %d", tc.status)
 		srv.Close()
 	}
+}
+
+// 用量 / 配额探测与正式转发共用账号的 TLS 连接池：探测必须带上账号并发，池配置键才与转发一致。
+// 旧实现传 0，被当成池配置变更，每次探测都把转发的热连接池拆掉重建，下一个真实请求被迫重新握手。
+// 默认的 account_proxy 隔离下，转发 → 探测 → 转发三次都必须命中同一个池。
+func TestClaudeUsageProbeReusesForwardTLSPool(t *testing.T) {
+	pool, cert := newWireTestPKI(t)
+	upstream := startWireCaptureServer(t, cert)
+	upstreamSvc := newWireTestUpstream(t, pool)
+	const accountID, concurrency = 42, 3
+
+	forward := func() {
+		payload := doWireRequest(t, upstreamSvc, "", accountID, concurrency, newClaudeCodeWireRequest(t, upstream.addr, []byte("{}")))
+		require.JSONEq(t, `{"received":2}`, payload)
+	}
+	forward()
+	first := onlyUpstreamClientEntry(t, upstreamSvc)
+
+	usage := &claudeUsageService{usageURL: "https://" + upstream.addr + "/api/oauth/usage", httpUpstream: upstreamSvc}
+	_, err := usage.FetchUsageWithOptions(t.Context(), &service.ClaudeUsageFetchOptions{
+		AccessToken:        "at",
+		AccountID:          accountID,
+		AccountConcurrency: concurrency,
+		TLSProfile:         &tlsfingerprint.Profile{Name: "wire-test"},
+	})
+	require.NoError(t, err)
+	require.Same(t, first, onlyUpstreamClientEntry(t, upstreamSvc), "the usage probe must reuse the forward pool")
+
+	forward()
+	require.Same(t, first, onlyUpstreamClientEntry(t, upstreamSvc), "the next forward must find the pool the probe left intact")
+	require.Len(t, upstream.capturedHeads(), 3)
+}
+
+func onlyUpstreamClientEntry(t *testing.T, svc *httpUpstreamService) *upstreamClientEntry {
+	t.Helper()
+	svc.mu.RLock()
+	defer svc.mu.RUnlock()
+	require.Len(t, svc.clients, 1)
+	for _, entry := range svc.clients {
+		return entry
+	}
+	return nil
 }

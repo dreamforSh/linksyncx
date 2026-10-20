@@ -314,6 +314,9 @@ type ClaudeUsageFetchOptions struct {
 	TLSProfile  *tlsfingerprint.Profile // TLS 指纹 Profile（nil 表示不启用）
 	Fingerprint *Fingerprint            // 缓存的指纹信息（User-Agent 等）
 	Query       string                  // 附加查询参数（如 cedar_ember=1&skip_spend=1），空表示普通读取
+	// AccountConcurrency 是账号并发上限，与转发请求传给 DoWithTLS 的值一致。连接池按并发
+	// 定池大小并据此校验能否复用，探测若传 0 会被当成池配置变更，把转发的热连接池整个拆掉重建。
+	AccountConcurrency int
 }
 
 // ClaudeUsageFetcher fetches usage data from Anthropic OAuth API
@@ -1769,10 +1772,11 @@ func (s *AccountUsageService) claudeFetchOptions(ctx context.Context, account *A
 	}
 
 	opts := &ClaudeUsageFetchOptions{
-		AccessToken: accessToken,
-		ProxyURL:    proxyURL,
-		AccountID:   account.ID,
-		TLSProfile:  s.tlsFPProfileService.ResolveTLSProfile(account),
+		AccessToken:        accessToken,
+		ProxyURL:           proxyURL,
+		AccountID:          account.ID,
+		AccountConcurrency: account.Concurrency,
+		TLSProfile:         s.tlsFPProfileService.ResolveTLSProfile(account),
 	}
 
 	if s.identityCache != nil {
