@@ -25,6 +25,7 @@ func TestClaudeQuotaRejectsBrokenProxyBeforeTokenProvider(t *testing.T) {
 	}{
 		{"missing", nil},
 		{"mismatched", &Proxy{ID: id + 1, Protocol: "socks5", Host: "proxy.invalid", Port: 1080}},
+		{"invalid", &Proxy{ID: id, Protocol: "unsupported", Host: "proxy.invalid", Port: 1080}},
 	} {
 		t.Run(fixture.name, func(t *testing.T) {
 			account := claudeQuotaTestAccount(nil)
@@ -43,22 +44,33 @@ func TestClaudeQuotaRejectsBrokenProxyBeforeTokenProvider(t *testing.T) {
 	}
 }
 
-// 配额刷新 / 额度重置 / 原始用量读取三条入口都在发出任何上游请求前拒绝失效的代理绑定。
+// 配额刷新 / 额度重置 / 原始用量读取三条入口都在发出任何上游请求前拒绝失效的代理绑定
+// （关系缺失，或 URL 无效——后者交给传输层只会变成一次普通请求失败）。
 func TestClaudeAccountAPIsRejectBrokenProxyBinding(t *testing.T) {
-	account := claudeQuotaTestAccount(nil)
-	account.Credentials = map[string]any{"access_token": "dummy"}
 	proxyID := int64(9)
-	account.ProxyID, account.Proxy = &proxyID, nil
-	fetcher := &claudeQuotaFakeFetcher{body: `{}`}
-	api := &claudeQuotaFakeAPI{profileBody: claudeMax20xProfile}
-	svc, _ := newClaudeQuotaTestService(account, fetcher, api)
-	_, err := svc.RefreshQuota(t.Context(), account.ID)
-	require.ErrorIs(t, err, ErrAccountProxyUnavailable)
-	_, err = svc.ResetCredit(t.Context(), account.ID, "")
-	require.ErrorIs(t, err, ErrAccountProxyUnavailable)
-	_, err = svc.usage.fetchOAuthUsageRaw(t.Context(), &account)
-	require.ErrorIs(t, err, ErrAccountProxyUnavailable)
-	require.Empty(t, fetcher.queries)
-	require.Zero(t, api.profileCalls)
-	require.Empty(t, api.claims)
+	for _, fixture := range []struct {
+		name  string
+		proxy *Proxy
+	}{
+		{"missing", nil},
+		{"invalid", &Proxy{ID: proxyID, Protocol: "unsupported", Host: "proxy.invalid", Port: 1080}},
+	} {
+		t.Run(fixture.name, func(t *testing.T) {
+			account := claudeQuotaTestAccount(nil)
+			account.Credentials = map[string]any{"access_token": "dummy"}
+			account.ProxyID, account.Proxy = &proxyID, fixture.proxy
+			fetcher := &claudeQuotaFakeFetcher{body: `{}`}
+			api := &claudeQuotaFakeAPI{profileBody: claudeMax20xProfile}
+			svc, _ := newClaudeQuotaTestService(account, fetcher, api)
+			_, err := svc.RefreshQuota(t.Context(), account.ID)
+			require.ErrorIs(t, err, ErrAccountProxyUnavailable)
+			_, err = svc.ResetCredit(t.Context(), account.ID, "")
+			require.ErrorIs(t, err, ErrAccountProxyUnavailable)
+			_, err = svc.usage.fetchOAuthUsageRaw(t.Context(), &account)
+			require.ErrorIs(t, err, ErrAccountProxyUnavailable)
+			require.Empty(t, fetcher.queries)
+			require.Zero(t, api.profileCalls)
+			require.Empty(t, api.claims)
+		})
+	}
 }

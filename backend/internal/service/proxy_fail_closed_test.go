@@ -12,6 +12,7 @@ import (
 	"sort"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/Wei-Shaw/sub2api/internal/pkg/oauth"
 	"github.com/gin-gonic/gin"
@@ -29,6 +30,8 @@ func TestResolveProxyURLByID(t *testing.T) {
 			return &Proxy{ID: id, Protocol: "socks5", Host: "127.0.0.1", Port: 7891}, nil
 		case 6:
 			return nil, lookupErr
+		case 8:
+			return &Proxy{ID: 8, Protocol: "unsupported", Host: "proxy.example.com", Port: 1080, Username: "user", Password: "s3cr3tpw"}, nil
 		default:
 			return nil, nil
 		}
@@ -55,6 +58,61 @@ func TestResolveProxyURLByID(t *testing.T) {
 	_, err = resolveProxyURLByID(ctx, repo, &broken)
 	require.ErrorIs(t, err, ErrAccountProxyUnavailable)
 	require.ErrorIs(t, err, lookupErr, "the lookup cause stays inspectable")
+
+	// 无效 URL 不能交给 OAuth / 刷新的 HTTP 客户端再失败：错误带代理 ID 便于排查，不回显凭据。
+	invalid := int64(8)
+	url, err = resolveProxyURLByID(ctx, repo, &invalid)
+	require.ErrorIs(t, err, ErrAccountProxyUnavailable, "an invalid proxy url must not degrade to direct")
+	require.Empty(t, url)
+	require.Contains(t, err.Error(), "proxy 8 has an invalid url")
+	require.NotContains(t, err.Error(), "s3cr3tpw")
+}
+
+// OAuth 授权入口：管理员选的代理 URL 无效时，在调用任何上游客户端之前报错；授权码交换失败
+// 时保留授权会话，修好代理后可以直接重试，不必重新打开授权链接。
+func TestOAuthEntryPointsRejectInvalidProxyURLBeforeClient(t *testing.T) {
+	id := int64(9)
+	repo := &mockProxyRepoForOAuth{getByIDFunc: func(context.Context, int64) (*Proxy, error) {
+		return &Proxy{ID: id, Protocol: "unsupported", Host: "proxy.example.com", Port: 8080, Username: "user", Password: "s3cr3tpw"}, nil
+	}}
+	client := &mockClaudeOAuthClient{
+		getOrgUUIDFunc: func(context.Context, string, string) (string, error) {
+			t.Fatal("cookie auth must not reach claude.ai through an invalid proxy")
+			return "", nil
+		},
+		exchangeCodeFunc: func(context.Context, string, string, string, string, bool) (*oauth.TokenResponse, error) {
+			t.Fatal("code exchange must not be sent through an invalid proxy")
+			return nil, nil
+		},
+		refreshTokenFunc: func(context.Context, string, string, string) (*oauth.TokenResponse, error) {
+			t.Fatal("token refresh must not be sent through an invalid proxy")
+			return nil, nil
+		},
+	}
+	svc := NewOAuthService(repo, client)
+	t.Cleanup(svc.Stop)
+
+	_, err := svc.GenerateAuthURL(t.Context(), &id)
+	require.ErrorIs(t, err, ErrAccountProxyUnavailable)
+	require.NotContains(t, err.Error(), "s3cr3tpw")
+
+	_, err = svc.CookieAuth(t.Context(), &CookieAuthInput{SessionKey: "sk", ProxyID: &id})
+	require.ErrorIs(t, err, ErrAccountProxyUnavailable)
+
+	svc.sessionStore.Set("session-1", &oauth.OAuthSession{State: "st", CodeVerifier: "cv", CreatedAt: time.Now()})
+	_, err = svc.ExchangeCode(t.Context(), &ExchangeCodeInput{SessionID: "session-1", Code: "code", ProxyID: &id})
+	require.ErrorIs(t, err, ErrAccountProxyUnavailable)
+	_, retained := svc.sessionStore.Get("session-1")
+	require.True(t, retained, "a failed proxy resolution must not consume the authorization session")
+
+	// 已加载的关系同样无效时，回查 repo 也拿不到可用 URL，刷新必须报错而不是直连。
+	invalidRelation := &Proxy{ID: id, Protocol: "unsupported", Host: "proxy.example.com", Port: 8080}
+	_, err = svc.RefreshAccountToken(t.Context(), &Account{
+		ID: 4, Platform: PlatformAnthropic, Type: AccountTypeOAuth,
+		ProxyID: &id, Proxy: invalidRelation,
+		Credentials: map[string]any{"refresh_token": "rt"},
+	})
+	require.ErrorIs(t, err, ErrAccountProxyUnavailable)
 }
 
 func TestAccountProxyURLWithRepo(t *testing.T) {
