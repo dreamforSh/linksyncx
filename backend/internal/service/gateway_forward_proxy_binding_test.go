@@ -45,6 +45,20 @@ func (c *proxyBindingCountingTokenCache) ReleaseRefreshLock(context.Context, str
 	return nil
 }
 
+// 上游桩返回错误而不是 (nil, nil)：若回归导致请求漏到上游，Forward 走传输错误分支、
+// 断言干净地失败在当前子测试，而不是解引用空响应把整个测试二进制 panic 掉、吞掉其它结果。
+var errProxyBindingUpstreamMustNotBeCalled = errors.New("upstream must not be called for a broken proxy binding")
+
+// API Key 取凭证只读本地字段、不出站，单看凭证路径的调用次数证明不了"先查代理"。
+// 故意删掉 api_key：一旦顺序回退成先取凭证，就会先拿到一个普通错误（既不是 failover，
+// 也不是 ErrAccountProxyUnavailable），这一行随之失败——API Key 行因此也能守住顺序。
+func newAPIKeyAccountWithoutKeyForProxyBindingTest(id int64) *Account {
+	account := newAnthropicAPIKeyAccountForTest()
+	account.ID = id
+	delete(account.Credentials, "api_key")
+	return account
+}
+
 // 数据面代理绑定失效（关系缺失，或 URL 无效）时，三个 Anthropic 入口都必须在取凭证之前
 // 返回 AccountUnavailable 的 UpstreamFailoverError——handler 只按这个类型切号，其它错误
 // 都是终态。凭证路径也不能被触达：Vertex service account 冷缓存时取 token 本身就要经代理
@@ -70,12 +84,10 @@ func TestGatewayForwardBrokenProxyBindingFailsOverBeforeCredentials(t *testing.T
 				Credentials: map[string]any{"access_token": "oauth-token"},
 			}
 		}},
-		// API Key 透传走独立分支（forwardAnthropicAPIKeyPassthroughWithInput），规则相同。
-		{"apikey passthrough", func() *Account {
-			account := newAnthropicAPIKeyAccountForTest()
-			account.ID = 603
-			return account
-		}},
+		// 账号开了 anthropic_passthrough：messages 入口走独立的透传分支
+		// （forwardAnthropicAPIKeyPassthroughWithInput），chat completions / responses 没有透传分支、
+		// 走普通路径；规则都一样。
+		{"apikey", func() *Account { return newAPIKeyAccountWithoutKeyForProxyBindingTest(603) }},
 		{"service account", func() *Account {
 			return &Account{
 				ID: 602, Name: "anthropic-vertex-proxy-binding", Platform: PlatformAnthropic, Type: AccountTypeServiceAccount,
@@ -116,7 +128,7 @@ func TestGatewayForwardBrokenProxyBindingFailsOverBeforeCredentials(t *testing.T
 					c, _ := gin.CreateTestContext(rec)
 					c.Request = httptest.NewRequest(http.MethodPost, "/v1/messages", nil)
 
-					upstream := &anthropicHTTPUpstreamRecorder{}
+					upstream := &anthropicHTTPUpstreamRecorder{err: errProxyBindingUpstreamMustNotBeCalled}
 					cache := &proxyBindingCountingTokenCache{}
 					svc := newForwardPartialUsageServiceForTest(upstream)
 					svc.claudeTokenProvider = NewClaudeTokenProvider(nil, cache, nil)
@@ -126,12 +138,12 @@ func TestGatewayForwardBrokenProxyBindingFailsOverBeforeCredentials(t *testing.T
 					account.Proxy = binding.proxy
 
 					result, err := entry.call(svc, c, account)
+					require.Nil(t, upstream.lastReq, "no upstream request may leave without the assigned proxy")
 					require.Nil(t, result)
 					var failoverErr *UpstreamFailoverError
 					require.ErrorAs(t, err, &failoverErr, "a broken binding must fail over, not end the request")
 					require.Equal(t, http.StatusBadGateway, failoverErr.StatusCode)
 					require.True(t, failoverErr.AccountUnavailable, "the account must be switched, not retried by sticky hold")
-					require.Nil(t, upstream.lastReq, "no upstream request may leave without the assigned proxy")
 					require.Zero(t, cache.calls, "credentials must not be resolved or refreshed for a broken binding")
 					require.NotContains(t, rec.Body.String(), "s3cr3tpw")
 				})
@@ -160,7 +172,8 @@ func TestGatewayCountTokensBrokenProxyBindingSkipsCredentials(t *testing.T) {
 				Concurrency: 1, Status: StatusActive, Schedulable: true,
 				Credentials: map[string]any{"access_token": "oauth-token"},
 			}},
-			{"apikey passthrough", newAnthropicAPIKeyAccountForTest()},
+			// 开了 anthropic_passthrough，走 forwardCountTokensAnthropicAPIKeyPassthrough。
+			{"apikey passthrough", newAPIKeyAccountWithoutKeyForProxyBindingTest(612)},
 		} {
 			t.Run(binding.name+"/"+acc.name, func(t *testing.T) {
 				rec := httptest.NewRecorder()
@@ -171,7 +184,7 @@ func TestGatewayCountTokensBrokenProxyBindingSkipsCredentials(t *testing.T) {
 				parsed, err := ParseGatewayRequest(NewRequestBodyRef(body), PlatformAnthropic)
 				require.NoError(t, err)
 
-				upstream := &anthropicHTTPUpstreamRecorder{}
+				upstream := &anthropicHTTPUpstreamRecorder{err: errProxyBindingUpstreamMustNotBeCalled}
 				cache := &proxyBindingCountingTokenCache{}
 				svc := newForwardPartialUsageServiceForTest(upstream)
 				svc.claudeTokenProvider = NewClaudeTokenProvider(nil, cache, nil)
@@ -181,9 +194,9 @@ func TestGatewayCountTokensBrokenProxyBindingSkipsCredentials(t *testing.T) {
 				account.Proxy = binding.proxy
 
 				err = svc.ForwardCountTokens(context.Background(), c, account, parsed)
+				require.Nil(t, upstream.lastReq, "no upstream request may leave without the assigned proxy")
 				require.ErrorIs(t, err, ErrAccountProxyUnavailable)
 				require.Equal(t, http.StatusBadGateway, rec.Code)
-				require.Nil(t, upstream.lastReq, "no upstream request may leave without the assigned proxy")
 				require.Zero(t, cache.calls, "credentials must not be resolved or refreshed for a broken binding")
 			})
 		}
