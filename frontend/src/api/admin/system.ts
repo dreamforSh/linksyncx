@@ -102,11 +102,21 @@ export async function rollback(version?: string): Promise<UpdateResult> {
   return data
 }
 
+export interface RestartResult {
+  message: string
+  operation_id?: string
+  /**
+   * server.shutdown_timeout_seconds: how long the old process may keep draining
+   * in-flight requests before it exits. Absent on older backends.
+   */
+  shutdown_timeout_seconds?: number
+}
+
 /**
  * Restart the service
  */
-export async function restartService(): Promise<{ message: string }> {
-  const { data } = await apiClient.post<{ message: string }>('/admin/system/restart')
+export async function restartService(): Promise<RestartResult> {
+  const { data } = await apiClient.post<RestartResult>('/admin/system/restart')
   return data
 }
 

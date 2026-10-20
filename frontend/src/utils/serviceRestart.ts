@@ -14,10 +14,41 @@ export const RESTART_POLL_INTERVAL_MS = 1000
  * 短到恰好落在两次探测之间、新进程已就绪——两种情况都应直接刷新。
  */
 export const RESTART_DOWN_DETECTION_LIMIT_MS = 15_000
-/** 整体上限：宽限 30s + 强制 5s + 清理 30s + 拉起与启动，留足余量。 */
+/**
+ * 整体上限的默认值：宽限 30s + 强制 5s + 清理 30s + 拉起与启动，留足余量。
+ * 后端未下发宽限（旧版本）时使用；宽限可配到 3600s，下发时按 restartTotalLimitMs 计算。
+ */
 export const RESTART_TOTAL_LIMIT_MS = 120_000
 /** 单次探测超时：反向代理在后端下线时可能挂起请求，不能让一次探测卡住轮询。 */
 export const RESTART_PROBE_TIMEOUT_MS = 3000
+/** 宽限之后的固定开销：强制取消 5s + 依赖清理最多 30s（对应后端的 forcedDrainTimeout、applicationCleanupTimeout）。 */
+export const RESTART_AFTER_GRACE_MS = 5_000 + 30_000
+/** 拉起与启动的余量：systemd RestartSec=5、进程启动，在线更新后还可能要跑迁移。 */
+export const RESTART_STARTUP_ALLOWANCE_MS = 60_000
+
+/**
+ * 按后端下发的 server.shutdown_timeout_seconds 计算整体上限。宽限调大后固定 2 分钟
+ * 不够：页面会在旧进程仍在排空时刷新，落到连接被拒或代理 502 的错误页。
+ * 字段缺失或无效时退回默认值，且结果不低于默认值，不让小宽限缩短原有的等待。
+ */
+export function restartTotalLimitMs(shutdownTimeoutSeconds?: number | null): number {
+  if (
+    typeof shutdownTimeoutSeconds !== 'number' ||
+    !Number.isFinite(shutdownTimeoutSeconds) ||
+    shutdownTimeoutSeconds <= 0
+  ) {
+    return RESTART_TOTAL_LIMIT_MS
+  }
+  return Math.max(
+    RESTART_TOTAL_LIMIT_MS,
+    shutdownTimeoutSeconds * 1000 + RESTART_AFTER_GRACE_MS + RESTART_STARTUP_ALLOWANCE_MS
+  )
+}
+
+/** 提示文案里的“最长约 N 分钟”。 */
+export function restartLimitMinutes(totalLimitMs: number): number {
+  return Math.max(1, Math.round(totalLimitMs / 60_000))
+}
 
 export type ServiceRestartWaitResult =
   /** 观测到下线后又恢复健康：新进程已就绪。 */

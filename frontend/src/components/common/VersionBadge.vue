@@ -262,7 +262,7 @@
                   v-if="restarting"
                   class="text-center text-xs text-gray-500 dark:text-dark-400"
                 >
-                  {{ t("version.restartingHint") }}
+                  {{ t("version.restartingHint", { minutes: restartWaitMinutes }) }}
                 </p>
               </div>
 
@@ -718,6 +718,9 @@ import {
 import { useClipboard } from "@/composables/useClipboard";
 import {
   probeServiceHealth,
+  RESTART_TOTAL_LIMIT_MS,
+  restartLimitMinutes,
+  restartTotalLimitMs,
   waitForServiceRestart,
 } from "@/utils/serviceRestart";
 import Icon from "@/components/icons/Icon.vue";
@@ -758,6 +761,12 @@ const updateError = ref("");
 const updateSuccess = ref(false);
 // 重启等待已用时（秒）。等待时长取决于后端排空进行中的请求，无法预知，所以显示已用时而非倒计时。
 const restartElapsed = ref(0);
+// 等新进程就绪的上限：后端随重启响应下发排空宽限，宽限调大时相应放宽，
+// 避免旧进程仍在排空时就刷新到错误页；拿到响应之前按默认上限提示。
+const restartLimitMs = ref(RESTART_TOTAL_LIMIT_MS);
+const restartWaitMinutes = computed(() =>
+  restartLimitMinutes(restartLimitMs.value),
+);
 let restartTicker: ReturnType<typeof setInterval> | null = null;
 let restartWaitCancelled = false;
 // Distinguishes the success + restart panel between update and rollback flows
@@ -952,6 +961,7 @@ async function handleRestart() {
 
   restarting.value = true;
   restartElapsed.value = 0;
+  restartLimitMs.value = RESTART_TOTAL_LIMIT_MS;
   restartWaitCancelled = false;
   stopRestartTicker();
   restartTicker = setInterval(() => {
@@ -959,18 +969,22 @@ async function handleRestart() {
   }, 1000);
 
   try {
-    await restartService();
+    const restartResult = await restartService();
+    restartLimitMs.value = restartTotalLimitMs(
+      restartResult?.shutdown_timeout_seconds,
+    );
     // Service will restart, page will reload automatically or show disconnected
   } catch (error) {
     // Expected - connection will be lost during restart
     console.log("Service restarting...");
   }
 
-  // 后端先排空进行中的请求再退出、由 systemd/Docker 拉起，耗时可达一两分钟：
+  // 后端先排空进行中的请求再退出、由 systemd/Docker 拉起，耗时取决于配置的宽限：
   // 先等旧进程下线，再等新进程健康后刷新，避免刷新到排空中的旧进程或错误页。
   const result = await waitForServiceRestart({
     probe: () => probeServiceHealth(),
     isCancelled: () => restartWaitCancelled,
+    totalLimitMs: restartLimitMs.value,
   });
   stopRestartTicker();
   if (result !== "cancelled") {

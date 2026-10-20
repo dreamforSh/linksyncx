@@ -3,6 +3,8 @@ import {
   probeServiceHealth,
   RESTART_DOWN_DETECTION_LIMIT_MS,
   RESTART_TOTAL_LIMIT_MS,
+  restartLimitMinutes,
+  restartTotalLimitMs,
   waitForServiceRestart
 } from '../serviceRestart'
 
@@ -57,6 +59,55 @@ describe('waitForServiceRestart', () => {
       waitForServiceRestart({ probe, ...clock, isCancelled: () => cancelled })
     ).resolves.toBe('cancelled')
     expect(probe).toHaveBeenCalledTimes(4)
+  })
+})
+
+describe('restartTotalLimitMs', () => {
+  it('按后端下发的宽限放宽整体上限：宽限 + 强制 5s + 清理 30s + 拉起启动 60s', () => {
+    expect(restartTotalLimitMs(300)).toBe(395_000)
+    expect(restartTotalLimitMs(3600)).toBe(3_695_000)
+    expect(restartTotalLimitMs(30)).toBe(125_000)
+  })
+
+  it('字段缺失或无效时退回默认上限，小宽限也不缩短原有等待', () => {
+    expect(restartTotalLimitMs()).toBe(RESTART_TOTAL_LIMIT_MS)
+    expect(restartTotalLimitMs(null)).toBe(RESTART_TOTAL_LIMIT_MS)
+    expect(restartTotalLimitMs(0)).toBe(RESTART_TOTAL_LIMIT_MS)
+    expect(restartTotalLimitMs(-5)).toBe(RESTART_TOTAL_LIMIT_MS)
+    expect(restartTotalLimitMs(Number.NaN)).toBe(RESTART_TOTAL_LIMIT_MS)
+    expect(restartTotalLimitMs(1)).toBe(RESTART_TOTAL_LIMIT_MS)
+  })
+
+  it('宽限 300s 时旧进程排空 5 分多钟，按宽限放宽的上限能等到新进程，固定上限会提前刷新', async () => {
+    // 0~1s 旧进程仍健康，随后排空 300s + 强制 5s + 清理 + 拉起启动，约 331s 时新进程健康。
+    const downUntil = 331_000
+    const fixed = simulatedClock()
+    await expect(
+      waitForServiceRestart({
+        probe: async () => fixed.now() < 1000 || fixed.now() >= downUntil,
+        ...fixed
+      })
+    ).resolves.toBe('timeout')
+    expect(fixed.now()).toBe(RESTART_TOTAL_LIMIT_MS)
+
+    const scaled = simulatedClock()
+    await expect(
+      waitForServiceRestart({
+        probe: async () => scaled.now() < 1000 || scaled.now() >= downUntil,
+        ...scaled,
+        totalLimitMs: restartTotalLimitMs(300)
+      })
+    ).resolves.toBe('restarted')
+    expect(scaled.now()).toBeGreaterThanOrEqual(downUntil)
+  })
+})
+
+describe('restartLimitMinutes', () => {
+  it('提示里的分钟数随上限变化，默认宽限仍是约 2 分钟', () => {
+    expect(restartLimitMinutes(RESTART_TOTAL_LIMIT_MS)).toBe(2)
+    expect(restartLimitMinutes(restartTotalLimitMs(30))).toBe(2)
+    expect(restartLimitMinutes(restartTotalLimitMs(300))).toBe(7)
+    expect(restartLimitMinutes(restartTotalLimitMs(3600))).toBe(62)
   })
 })
 

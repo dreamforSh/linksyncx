@@ -42,7 +42,7 @@ export default {
     restartNow: 'Restart Now',
     restarting: 'Restarting...',
     restartingHint:
-      'Waiting for in-flight requests to finish and the service to come back. This can take up to 2 minutes.',
+      'Waiting for in-flight requests to finish and the service to come back. This can take up to about {minutes} minutes.',
     retry: 'Retry',
     rollback: 'Version Rollback',
     rollbackSelectVersion: 'Select a version to roll back to (last 3 versions)',
