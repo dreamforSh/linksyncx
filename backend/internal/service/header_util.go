@@ -41,8 +41,13 @@ var headerWireCasing = map[string]string{
 
 	// Claude Code 2.1.87+ 新增 header
 	"x-claude-code-session-id": "X-Claude-Code-Session-Id",
-	"x-client-request-id":      "x-client-request-id",
-	"content-length":           "content-length",
+	// 2.1.296 二进制常量为小写（"x-claude-code-prompt-id"/"x-claude-code-request-class"），
+	// 与 Title-Case 的 X-Claude-Code-Session-Id 不同。缺这两条时透传路径会按 Go 规范化后的
+	// Title-Case 发出，httpwire 按字节序把它们排进大写块，头名与头序都偏离真实 CLI。
+	"x-claude-code-prompt-id":     "x-claude-code-prompt-id",
+	"x-claude-code-request-class": "x-claude-code-request-class",
+	"x-client-request-id":         "x-client-request-id",
+	"content-length":              "content-length",
 }
 
 // headerWireOrder 定义真实 Claude CLI 发送 header 的顺序（本机 claude.exe
