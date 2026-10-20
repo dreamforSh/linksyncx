@@ -542,7 +542,11 @@ func (s *httpUpstreamService) getClientEntryWithTLS(proxyURL string, accountID i
 	settings := s.resolvePoolSettings(isolation, accountConcurrency)
 	settings = s.applyProfilePoolSettings(settings, upstreamProfile)
 	// TLS 指纹客户端使用独立的缓存键，加 "tls:" 前缀
-	cacheKey := "tls:" + buildCacheKey(isolation, proxyKey, accountID, upstreamProtocolModeDefault)
+	// 末尾再拼 profile 线级配置摘要：模板被编辑或账号改绑后 ClientHello 变了，键随之变化，
+	// 下一个请求就按新模板建池，不必等重启或空闲回收。前半段仍按配置的隔离模式组成——
+	// proxy 模式下同代理、同模板的账号继续共享一个池，不同模板各用各的池，不会再借用别的
+	// 账号的 ClientHello。旧摘要的池没人再用，由 evictIdleLocked / LRU 淘汰。
+	cacheKey := "tls:" + buildCacheKey(isolation, proxyKey, accountID, upstreamProtocolModeDefault) + "|fp:" + tlsfingerprint.ProfileCacheKey(profile)
 	poolKey := buildPoolKey(settings, upstreamProtocolModeDefault) + ":tls"
 
 	now := time.Now()

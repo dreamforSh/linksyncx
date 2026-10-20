@@ -2,7 +2,6 @@ package service
 
 import (
 	"context"
-	"math/rand/v2"
 	"sync"
 	"time"
 
@@ -145,27 +144,52 @@ func (s *TLSFingerprintProfileService) GetProfileByID(id int64) *tlsfingerprint.
 	return nil
 }
 
-// getRandomProfile 从本地缓存中随机选择一个 Profile
-func (s *TLSFingerprintProfileService) getRandomProfile() *tlsfingerprint.Profile {
+// stickyProfileForAccount 为绑定“随机”（profile id = -1）的账号，在当前模板集合中确定性地选出一个模板。
+//
+// 一个账号就是一台固定设备（见 account_device_profile.go 的设备画像原则：同一账号的出站请求恒定
+// 呈现同一设备形态）。按请求随机挑模板会让同一账号相邻两次请求呈现不同的 TLS 栈，不像任何真实
+// 客户端；连接池键又带着模板摘要，还会把一个账号拆成 N 个并行连接池。
+//
+// 因此用 rendezvous（HRW）哈希代替 rand：对每个模板计算 tlsProfileRendezvousWeight(账号 ID, 模板 ID)，
+// 取权重最大者。同一账号永远落在同一模板上，多实例部署之间也一致，且无需落库；新增一个模板
+// 只会把约 1/N 的账号迁到这个新模板上，删除模板只影响原本落在它上面的账号。
+// 权重函数对模板 ID 是单射，不同模板不会同权；平局取较小 ID 只是兜底，保证结果与 map 遍历顺序无关。
+func (s *TLSFingerprintProfileService) stickyProfileForAccount(accountID int64) *tlsfingerprint.Profile {
 	s.localMu.RLock()
 	defer s.localMu.RUnlock()
 
-	if len(s.localCache) == 0 {
-		return nil
-	}
-
-	// 收集所有 profile
-	profiles := make([]*model.TLSFingerprintProfile, 0, len(s.localCache))
-	for _, p := range s.localCache {
-		if p != nil {
-			profiles = append(profiles, p)
+	var (
+		chosen     *model.TLSFingerprintProfile
+		chosenID   int64
+		bestWeight uint64
+	)
+	for id, p := range s.localCache {
+		if p == nil {
+			continue
+		}
+		weight := tlsProfileRendezvousWeight(accountID, id)
+		if chosen == nil || weight > bestWeight || (weight == bestWeight && id < chosenID) {
+			chosen, chosenID, bestWeight = p, id, weight
 		}
 	}
-	if len(profiles) == 0 {
+	if chosen == nil {
 		return nil
 	}
+	return chosen.ToTLSProfile()
+}
 
-	return profiles[rand.IntN(len(profiles))].ToTLSProfile()
+// tlsProfileRendezvousWeight 把 (账号 ID, 模板 ID) 混合成 64 位权重。splitmix64 终结器雪崩充分，
+// 相邻 ID 的权重也互不相关，各模板胜出的概率均等；它是 64 位上的双射，所以同一账号下
+// 不同模板 ID 的权重必然不同。
+func tlsProfileRendezvousWeight(accountID, profileID int64) uint64 {
+	return splitmix64(splitmix64(uint64(accountID)) ^ uint64(profileID))
+}
+
+func splitmix64(x uint64) uint64 {
+	x += 0x9e3779b97f4a7c15
+	x = (x ^ (x >> 30)) * 0xbf58476d1ce4e5b9
+	x = (x ^ (x >> 27)) * 0x94d049bb133111eb
+	return x ^ (x >> 31)
 }
 
 // ResolveTLSProfile 根据 Account 的配置解析出运行时 TLS Profile
@@ -173,7 +197,8 @@ func (s *TLSFingerprintProfileService) getRandomProfile() *tlsfingerprint.Profil
 // 逻辑：
 //  1. 未启用 TLS 指纹 → 返回 nil（不伪装）
 //  2. 启用 + 绑定了 profile_id → 从缓存查找对应 profile
-//  3. 启用 + 未绑定或找不到 → 返回空 Profile（使用代码内置默认值）
+//  3. 启用 + 绑定“随机”（-1）→ 按账号 ID 固定选出一个模板（stickyProfileForAccount）
+//  4. 启用 + 未绑定或找不到 → 返回空 Profile（使用代码内置默认值）
 func (s *TLSFingerprintProfileService) ResolveTLSProfile(account *Account) *tlsfingerprint.Profile {
 	if account == nil || !account.IsTLSFingerprintEnabled() {
 		return nil
@@ -185,8 +210,9 @@ func (s *TLSFingerprintProfileService) ResolveTLSProfile(account *Account) *tlsf
 		}
 	}
 	if id == -1 {
-		// 随机选择一个 profile
-		if p := s.getRandomProfile(); p != nil {
+		// “随机”按账号固定：每个账号确定性地落在一个模板上，而不是每个请求重新抽取。
+		// 只在本分支内访问 s，未绑定（id = 0）的路径对 nil 接收者仍然安全。
+		if p := s.stickyProfileForAccount(account.ID); p != nil {
 			return p
 		}
 	}
