@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -95,7 +96,7 @@ func newSystemHandlerTestRouter(t *testing.T, updateSvc *systemHandlerUpdateServ
 		ProcessingTimeout:  time.Second,
 		SystemOperationTTL: time.Minute,
 	})
-	handler := NewSystemHandler(updateSvc, lockSvc)
+	handler := NewSystemHandler(updateSvc, lockSvc, 30)
 
 	router := gin.New()
 	router.POST("/api/v1/admin/system/update", handler.PerformUpdate)
@@ -321,4 +322,81 @@ func TestSystemHandlerGetRollbackVersionsError(t *testing.T) {
 	router.ServeHTTP(rec, req)
 
 	require.Equal(t, http.StatusInternalServerError, rec.Code)
+}
+
+type systemRestartResponseEnvelope struct {
+	Code int `json:"code"`
+	Data struct {
+		Message                string `json:"message"`
+		OperationID            string `json:"operation_id"`
+		ShutdownTimeoutSeconds *int   `json:"shutdown_timeout_seconds"`
+	} `json:"data"`
+}
+
+func newSystemRestartTestRouter(t *testing.T, shutdownTimeoutSeconds int, restarts *atomic.Int32) *gin.Engine {
+	t.Helper()
+	gin.SetMode(gin.TestMode)
+	// 与生产一致：系统操作锁与幂等重放共用同一个幂等存储。
+	repo := newMemoryIdempotencyRepoStub()
+	previousCoordinator := service.DefaultIdempotencyCoordinator()
+	service.SetDefaultIdempotencyCoordinator(service.NewIdempotencyCoordinator(repo, service.DefaultIdempotencyConfig()))
+	t.Cleanup(func() { service.SetDefaultIdempotencyCoordinator(previousCoordinator) })
+
+	lockSvc := service.NewSystemOperationLockService(repo, service.IdempotencyConfig{
+		ProcessingTimeout:  time.Second,
+		SystemOperationTTL: time.Minute,
+	})
+	handler := NewSystemHandler(&systemHandlerUpdateServiceStub{}, lockSvc, shutdownTimeoutSeconds)
+	handler.scheduleRestart = func() { restarts.Add(1) }
+
+	router := gin.New()
+	router.POST("/api/v1/admin/system/restart", handler.RestartService)
+	return router
+}
+
+func postSystemRestart(t *testing.T, router *gin.Engine, idempotencyKey string) (*httptest.ResponseRecorder, systemRestartResponseEnvelope) {
+	t.Helper()
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/admin/system/restart", nil)
+	req.Header.Set("Idempotency-Key", idempotencyKey)
+	router.ServeHTTP(rec, req)
+	require.Equal(t, http.StatusOK, rec.Code, rec.Body.String())
+	var body systemRestartResponseEnvelope
+	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &body))
+	require.Equal(t, 0, body.Code)
+	return rec, body
+}
+
+// 重启会先排空进行中的请求最多 server.shutdown_timeout_seconds，前端据此放宽等待新进程
+// 就绪的上限。同一 Idempotency-Key 的重试拿到的是存储的结果，也必须带上宽限，且不能
+// 再触发一次重启。
+func TestSystemHandlerRestartReportsShutdownGraceIncludingReplay(t *testing.T) {
+	var restarts atomic.Int32
+	router := newSystemRestartTestRouter(t, 150, &restarts)
+
+	first, firstBody := postSystemRestart(t, router, "restart-grace")
+	require.Empty(t, first.Header().Get("X-Idempotency-Replayed"))
+	require.Equal(t, "Service restart initiated", firstBody.Data.Message)
+	require.NotEmpty(t, firstBody.Data.OperationID)
+	require.NotNil(t, firstBody.Data.ShutdownTimeoutSeconds, "the restart response must report the configured grace")
+	require.Equal(t, 150, *firstBody.Data.ShutdownTimeoutSeconds)
+	require.Equal(t, int32(1), restarts.Load())
+
+	replay, replayBody := postSystemRestart(t, router, "restart-grace")
+	require.Equal(t, "true", replay.Header().Get("X-Idempotency-Replayed"))
+	require.NotNil(t, replayBody.Data.ShutdownTimeoutSeconds, "the replayed restart response must report the grace too")
+	require.Equal(t, 150, *replayBody.Data.ShutdownTimeoutSeconds)
+	require.Equal(t, firstBody.Data.OperationID, replayBody.Data.OperationID)
+	require.Equal(t, int32(1), restarts.Load(), "a replay must not restart the service again")
+}
+
+// 宽限未知时不下发 0：前端把缺失的字段当作未知，退回固定上限。
+func TestSystemHandlerRestartOmitsUnknownShutdownGrace(t *testing.T) {
+	var restarts atomic.Int32
+	router := newSystemRestartTestRouter(t, 0, &restarts)
+
+	rec, body := postSystemRestart(t, router, "restart-unknown-grace")
+	require.Nil(t, body.Data.ShutdownTimeoutSeconds)
+	require.NotContains(t, rec.Body.String(), "shutdown_timeout_seconds")
+	require.Equal(t, int32(1), restarts.Load())
 }
