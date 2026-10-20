@@ -418,6 +418,8 @@ docker compose -f docker-compose.local.yml pull
 docker compose -f docker-compose.local.yml up -d
 ```
 
+> **注意:** `pull` はイメージを更新するだけで、compose ファイルは置き換えません。グレースフルシャットダウン対応前にダウンロードした compose ファイルでは `sub2api` サービスに `stop_grace_period` がないため、停止タイムアウトは Docker デフォルトの 10 秒のままとなり、処理中のリクエストが終わる前や usage/課金データの書き込み前にプロセスが SIGKILL されることがあります。最新の [`deploy/docker-compose.local.yml`](deploy/docker-compose.local.yml) に置き換えてローカルの変更を反映し直すか、`sub2api` サービスに `stop_grace_period: 90s`（単位は必須）を追加してください。その後 `up -d` を実行すると、新しい停止タイムアウトでコンテナが再作成されます。`docker run` でデプロイしている場合は `--stop-timeout 90` を付けてコンテナを再作成する必要があります。停止タイムアウトとシャットダウン猶予の関係は [グレースフルシャットダウンと再起動](deploy/README.md#优雅关停与重启graceful-shutdown) を参照してください。
+
 #### 簡単な移行（ローカルディレクトリバージョン）
 
 `docker-compose.local.yml` を使用している場合、新しいサーバーへの移行が簡単です:

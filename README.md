@@ -417,6 +417,8 @@ docker compose -f docker-compose.local.yml pull
 docker compose -f docker-compose.local.yml up -d
 ```
 
+> **Note:** `pull` only updates the image; it does not replace your compose file. A compose file downloaded before graceful shutdown was added has no `stop_grace_period` on the `sub2api` service, so Docker keeps its default 10-second stop timeout and can SIGKILL the process before in-flight requests drain and usage/billing records are flushed. Either replace your compose file with the current [`deploy/docker-compose.local.yml`](deploy/docker-compose.local.yml) and re-apply your local edits, or add `stop_grace_period: 90s` (the unit is required) to the `sub2api` service, then run `up -d` so the container is recreated with the new stop timeout. `docker run` deployments must recreate the container with `--stop-timeout 90`. See [Graceful shutdown and restart](deploy/README.md#优雅关停与重启graceful-shutdown) for how this timeout relates to the shutdown grace.
+
 #### Easy Migration (Local Directory Version)
 
 When using `docker-compose.local.yml`, migrate to a new server easily:
