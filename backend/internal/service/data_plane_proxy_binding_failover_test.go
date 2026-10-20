@@ -320,6 +320,58 @@ func TestAntigravityDataPlaneBrokenProxyBindingFailsOver(t *testing.T) {
 	}
 }
 
+// count_tokens 没有换号循环：绑定失效时与传输失败同口径回 502（fail-closed，绝不出站）。
+// 不写响应就返回的话 handler 只记日志，客户端会拿到空的 200。
+func TestOpenAICountTokensBrokenProxyBindingAnswers502(t *testing.T) {
+	newAccount := func() *Account {
+		return &Account{ID: 101, Name: "openai-apikey", Platform: PlatformOpenAI, Type: AccountTypeAPIKey, Concurrency: 1,
+			Status: StatusActive, Schedulable: true,
+			Credentials: map[string]any{"api_key": "sk-test", "base_url": "https://api.openai.com/v1"}}
+	}
+	entries := []struct {
+		name string
+		path string
+		body []byte
+		call func(*OpenAIGatewayService, *gin.Context, *Account, []byte) error
+	}{
+		{
+			name: "responses input_tokens",
+			path: "/v1/responses/input_tokens",
+			body: []byte(`{"model":"gpt-5.4","input":"hello world"}`),
+			call: func(s *OpenAIGatewayService, c *gin.Context, a *Account, body []byte) error {
+				return s.ForwardResponsesInputTokens(context.Background(), c, a, body)
+			},
+		},
+		{
+			name: "anthropic count_tokens bridge",
+			path: "/v1/messages/count_tokens",
+			body: []byte(`{"model":"claude-sonnet-4-5","messages":[{"role":"user","content":"hello"}]}`),
+			call: func(s *OpenAIGatewayService, c *gin.Context, a *Account, body []byte) error {
+				return s.ForwardCountTokensAsAnthropic(context.Background(), c, a, body, "gpt-5.3-codex")
+			},
+		},
+	}
+	for _, entry := range entries {
+		for _, binding := range brokenProxyBindings() {
+			t.Run(entry.name+"/"+binding.name, func(t *testing.T) {
+				upstream := &countingProxyBindingUpstream{}
+				svc := proxyBindingOpenAIService(upstream)
+				account := newAccount()
+				binding.bind(account)
+				c, rec := newProxyBindingTestContext(http.MethodPost, entry.path, entry.body)
+
+				err := entry.call(svc, c, account, entry.body)
+
+				require.ErrorIs(t, err, ErrAccountProxyUnavailable)
+				require.Zero(t, upstream.calls, "no outbound request may be made")
+				require.Equal(t, http.StatusBadGateway, rec.Code)
+				require.Contains(t, rec.Body.String(), "upstream_error")
+				require.NotContains(t, rec.Body.String(), "bad host", "the client must not see proxy configuration")
+			})
+		}
+	}
+}
+
 // /v1/web_search 的 Grok 原生搜索早已对绑定失效换号，这里锁住它与其它数据面一致标 AccountUnavailable。
 func TestGrokNativeWebSearchBrokenProxyBindingIsAccountUnavailable(t *testing.T) {
 	t.Setenv(xai.EnvAllowUnsafeURLOverrides, "true")
