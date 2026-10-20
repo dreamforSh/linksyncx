@@ -64,10 +64,18 @@ do
     fail "$compose_file must give the sub2api service stop_grace_period \${SUB2API_STOP_GRACE_PERIOD:-${stop_grace}s} and pass SERVER_SHUTDOWN_TIMEOUT_SECONDS with an empty fallback exactly once (got $counts)"
 done
 
-apple_timeout=$(normalized deploy/apple-container.sh | sed -n 's/^CONTAINER_STOP_TIMEOUT_SECONDS=\([0-9][0-9]*\)$/\1/p')
-[ -n "$apple_timeout" ] || fail "deploy/apple-container.sh must define CONTAINER_STOP_TIMEOUT_SECONDS"
+# Apple container 的停止超时从 .env 解析（行为由 apple-container-test.sh 覆盖），
+# 这里只检查默认值与随宽限增加的余量都覆盖关停预算。
+apple_timeout=$(normalized deploy/apple-container.sh | sed -n 's/^DEFAULT_CONTAINER_STOP_TIMEOUT_SECONDS=\([0-9][0-9]*\)$/\1/p')
+[ -n "$apple_timeout" ] || fail "deploy/apple-container.sh must define DEFAULT_CONTAINER_STOP_TIMEOUT_SECONDS"
 [ "$apple_timeout" -ge $((default_grace + forced_and_cleanup_seconds)) ] || \
   fail "Apple container stop timeout ${apple_timeout}s is shorter than the default shutdown budget"
+apple_margin=$(normalized deploy/apple-container.sh | sed -n 's/^CONTAINER_STOP_MARGIN_SECONDS=\([0-9][0-9]*\)$/\1/p')
+[ -n "$apple_margin" ] || fail "deploy/apple-container.sh must define CONTAINER_STOP_MARGIN_SECONDS"
+[ "$apple_margin" -ge "$forced_and_cleanup_seconds" ] || \
+  fail "Apple container stop margin ${apple_margin}s does not cover the forced phase and cleanup"
+[ "$(normalized deploy/.env.example | grep -Fxc 'APPLE_CONTAINER_STOP_TIMEOUT_SECONDS=' || true)" -eq 1 ] || \
+  fail "deploy/.env.example must document APPLE_CONTAINER_STOP_TIMEOUT_SECONDS (empty) exactly once"
 if normalized deploy/apple-container.sh | grep -Eq 'container stop --time [0-9]'; then
   fail "deploy/apple-container.sh must stop containers with CONTAINER_STOP_TIMEOUT_SECONDS"
 fi

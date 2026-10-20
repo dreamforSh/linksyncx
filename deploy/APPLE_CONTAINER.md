@@ -121,6 +121,16 @@ intentionally, run `./apple-container.sh destroy --yes` to remove the managed
 containers and network while preserving named volumes, then run
 `./apple-container.sh up`.
 
+`down`, `restart`, `destroy`, and the application-container replacement in `up`
+wait for Sub2API's graceful shutdown before forcing a stop. The wait follows
+the shutdown grace in `.env`: it is `max(90, SERVER_SHUTDOWN_TIMEOUT_SECONDS + 60)`
+seconds. If the grace is set only in the data volume's `config.yaml`, the script
+cannot see it; set the wait explicitly, at least the grace plus 35 seconds:
+
+```dotenv
+APPLE_CONTAINER_STOP_TIMEOUT_SECONDS=
+```
+
 The normal `up` command recreates the application container, so application environment changes are applied immediately. Use `up --recreate` when changing PostgreSQL or Redis container images or Redis runtime configuration. Persistent data remains in named volumes.
 
 `POSTGRES_USER`, `POSTGRES_PASSWORD`, and `POSTGRES_DB` are applied only when PostgreSQL initializes an empty data volume. Changing them in `.env` and recreating the container does not change an existing database. Rotate a password with `ALTER ROLE`, and plan explicit migrations for user or database changes. To intentionally initialize a new empty database, first back up the old one and use `destroy --volumes`.
