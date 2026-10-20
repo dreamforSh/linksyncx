@@ -108,16 +108,22 @@ func truncateAuditExtraString(value string, limit int) string {
 }
 
 // auditSensitiveReads 需要审计的敏感 GET 读取（method+FullPath → 动作名）。
+// 键必须与已注册路由逐字一致，否则静默永不命中；由 audit_log_route_drift_test.go 守护。
 var auditSensitiveReads = map[string]string{
-	"GET /api/v1/admin/accounts/data":             "admin.accounts.export",
-	"GET /api/v1/admin/proxies/data":              "admin.proxies.export",
-	"GET /api/v1/admin/redeem-codes/export":       "admin.redeem_codes.export",
-	"GET /api/v1/admin/backups/:id/download-url":  "admin.backups.download",
-	"GET /api/v1/admin/settings/admin-api-key":    "admin.admin_api_key.read",
-	"GET /api/v1/admin/users/:id/api-keys":        "admin.users.api_keys.read",
-	"GET /api/v1/admin/groups/:id/api-keys":       "admin.groups.api_keys.read",
-	"GET /api/v1/admin/backups/s3-config":         "admin.backups.s3_config.read",
-	"GET /api/v1/admin/data-management/s3/config": "admin.data_management.s3_config.read",
+	"GET /api/v1/admin/accounts/data":            "admin.accounts.export",
+	"GET /api/v1/admin/proxies/data":             "admin.proxies.export",
+	"GET /api/v1/admin/redeem-codes/export":      "admin.redeem_codes.export",
+	"GET /api/v1/admin/backups/:id/download-url": "admin.backups.download",
+	"GET /api/v1/admin/settings/admin-api-key":   "admin.admin_api_key.read",
+	"GET /api/v1/admin/users/:id/api-keys":       "admin.users.api_keys.read",
+	"GET /api/v1/admin/groups/:id/api-keys":      "admin.groups.api_keys.read",
+	"GET /api/v1/admin/backups/s3-config":        "admin.backups.s3_config.read",
+	// data-management 从未注册过 /s3/config（原键是死键，这类读取从未入审计）。实际下发 S3 目标的读接口是：
+	// /s3/profiles 返回全部 S3 profile 的 endpoint/bucket/access_key_id，/config 内嵌当前生效的 S3 配置
+	// （另含 PG/Redis 连接信息）；secret 只回 *_configured 标记，暴露面与 backups/s3-config 同级。
+	// 该模块目前已弃用、接口统一返回 503，仍按接口契约审计：模块恢复时不会漏审，弃用期的探测也会留痕。
+	"GET /api/v1/admin/data-management/s3/profiles": "admin.data_management.s3_profiles.read",
+	"GET /api/v1/admin/data-management/config":      "admin.data_management.config.read",
 }
 
 // auditActionOverrides 变更类请求的动作名精确映射（未命中时自动推导）。
