@@ -589,8 +589,11 @@ func (m *ClashManager) refreshDueProfiles(ctx context.Context) {
 //   - 出口：已绑定节点照常交给 dueForExitProbe（unknown/stale 立即复核，其余按出口探测间隔），
 //     这样原地换出口的暂停、出口等于本机 IP 的自查、订阅刷新后的复核都继续生效。
 //   - 未绑定节点只对从未做过出口探测（ExitCheckedAt 为空）的节点探一次，让新订阅的节点拿到
-//     exit_ip、可以绑定。探测请求失败时 probeOneExit 也会写入 ExitCheckedAt，所以不会每轮重探；
-//     仍受 ExitProbePerMinute 预算限制，且排在已绑定节点之后。
+//     exit_ip、可以绑定。只要发出了探测请求，无论成败 probeOneExit 都会写入 ExitCheckedAt，所以
+//     不会每轮重探；唯一不写的是受管代理行缺失、根本没发请求的情况，这类节点每轮占一个预算名额
+//     但没有网络请求。仍受 ExitProbePerMinute 预算限制，且排在已绑定节点之后；dueForExitProbe
+//     跳过已判定异常的节点，所以暂停前就异常的未绑定节点拿不到这次探测，要先手动测延迟。
+//     其余未绑定节点保留暂停前的健康状态和出口 IP，绑定后才会按上面已绑定节点的规则复核。
 func clashPausedProbeViews(views []ClashNodeView) (latency, exit []ClashNodeView) {
 	for i := range views {
 		view := &views[i]

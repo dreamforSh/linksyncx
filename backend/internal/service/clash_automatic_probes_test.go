@@ -141,6 +141,9 @@ func TestClashPausedProbesSkipRoutineRounds(t *testing.T) {
 	// 失败（exit 仍为 unknown）。它们都已做过出口探测，不属于一次性探测的范围。
 	unbound := env.repo.addNode(profile.ID, "unbound", "198.51.100.2", func(n *ClashNode) { n.ExitCheckedAt = &longAgo })
 	unboundFailed := env.repo.addNode(profile.ID, "unbound-failed", "", func(n *ClashNode) { n.ExitCheckedAt = &longAgo })
+	// 暂停前已判定异常、从未做过出口探测的未绑定节点：一次性出口探测跳过异常节点，延迟也不复测，
+	// 所以它保持异常、不能绑定，只能靠手动检测恢复。
+	unboundDown := env.repo.addNode(profile.ID, "unbound-down", "", func(n *ClashNode) { n.HealthStatus = ClashHealthUnhealthy })
 	checked := time.Now()
 	bound := env.repo.addNode(profile.ID, "bound-ok", "198.51.100.1", func(n *ClashNode) { n.ExitCheckedAt = &checked; n.LastCheckedAt = &checked })
 	env.repo.bind("acc", bound.ProxyID, nil)
@@ -158,6 +161,10 @@ func TestClashPausedProbesSkipRoutineRounds(t *testing.T) {
 	require.Nil(t, env.repo.node(unbound.ID).LastCheckedAt)
 	require.Equal(t, longAgo.Unix(), env.repo.node(unbound.ID).ExitCheckedAt.Unix())
 	require.Equal(t, longAgo.Unix(), env.repo.node(unboundFailed.ID).ExitCheckedAt.Unix())
+	require.Equal(t, ClashHealthUnhealthy, env.repo.node(unboundDown.ID).HealthStatus)
+	require.Nil(t, env.repo.node(unboundDown.ID).ExitCheckedAt)
+	_, err := env.svc.CheckAccountBinding(ctx, ClashBindingCheck{NewAccounts: 1, NewProxyID: ptr64(unboundDown.ProxyID)})
+	requireClashReason(t, err, ClashErrCodeExitUnavailable)
 	require.Equal(t, checked.Unix(), env.repo.node(bound.ID).ExitCheckedAt.Unix())
 	require.NotNil(t, env.repo.account(parked.ID).Until, "pause reconciliation still runs")
 	require.False(t, manager.lastReclaim.IsZero(), "retention maintenance still runs")
@@ -284,6 +291,32 @@ func TestClashPausedProbesRecheckFailingBoundNode(t *testing.T) {
 	require.Positive(t, env.runtime.attempts[ClashProxyName(node.ID)])
 	require.Equal(t, ClashHealthHealthy, env.repo.node(node.ID).HealthStatus)
 	require.Nil(t, env.repo.account(acc.ID).Until, "recovered node releases its accounts")
+}
+
+// 暂停时未绑定节点的出口 IP 不再更新，可能已过时。绑定后按已绑定节点的规则复核：超过出口探测
+// 间隔的下一轮立即探测，出口已原地变化时按出口变更策略暂停刚绑定的账号，而不是沿用过时的 IP。
+func TestClashPausedProbesRecheckOutdatedUnboundExitOnceBound(t *testing.T) {
+	env := newClashTestEnv(t, pausedProbeSettings())
+	ctx := context.Background()
+	profile := env.repo.addProfile("p", true)
+	longAgo := time.Now().Add(-30 * 24 * time.Hour)
+	node := env.repo.addNode(profile.ID, "rotated", "198.51.100.1", func(n *ClashNode) {
+		n.ExitCheckedAt = &longAgo
+		n.LastCheckedAt = &longAgo
+	})
+	env.prober.byPort[strconv.Itoa(node.ListenPort)] = "198.51.100.77"
+	manager := newSyncedClashManager(t, env)
+
+	manager.leaderCycle(ctx)
+	require.Zero(t, env.prober.calls)
+	got := env.repo.node(node.ID)
+	require.Equal(t, "198.51.100.1", got.ExitIP, "unbound exits are not refreshed while paused")
+	require.Equal(t, ClashExitOK, got.ExitStatus)
+
+	acc := env.repo.bind("acc", node.ProxyID, nil)
+	manager.leaderCycle(ctx)
+	require.Equal(t, ClashExitChanged, env.repo.node(node.ID).ExitStatus)
+	require.Equal(t, "[clash-exit] rotated: exit IP changed to 198.51.100.77, awaiting confirmation", env.repo.account(acc.ID).Reason)
 }
 
 // expireClashLatencyChecks 清掉节点的上次延迟检测时间，模拟已经过了一个已绑定检测间隔。

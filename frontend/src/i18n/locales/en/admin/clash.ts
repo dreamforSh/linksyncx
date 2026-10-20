@@ -39,7 +39,7 @@ export default {
       healthy: 'Healthy nodes',
       healthyHint: '{count} unhealthy',
       probesPaused: 'Automatic probes paused',
-      probesPausedHint: 'Healthy nodes are no longer checked on a schedule, so their outages are not detected automatically; unhealthy bound nodes are still retested so they can recover. Resume probes in Settings',
+      probesPausedHint: 'Healthy nodes are no longer checked on a schedule, so their outages are not detected automatically; the health and exit IP of unbound nodes may be outdated; unhealthy bound nodes are still retested so they can recover. Resume probes in Settings',
       bound: 'Bound accounts',
       boundHint: 'Up to {max} account(s) per exit',
       boundHintUnknown: 'Accounts using Clash exits',
@@ -502,7 +502,7 @@ export default {
         },
         pause_automatic_probes: {
           label: 'Pause automatic probes',
-          hint: 'Unbound nodes are no longer probed, except for a one-time exit check of nodes that have never been probed so they can be bound (if it fails, probe them manually). Bound nodes skip the scheduled latency and AI platform checks but still re-check their exit IP on the exit probe interval, so exit-change pauses and the own-IP check keep working, and unhealthy bound nodes are still retested so they can recover. Outages of healthy bound nodes are no longer detected automatically; their accounts only fail over when requests fail. Manual checks and subscription refreshes are unaffected'
+          hint: 'Unbound nodes are no longer probed, except for a one-time exit check of nodes that have never been probed so they can be bound (if it fails, probe them manually). Other unbound nodes keep the health and exit IP they had before the pause: unhealthy ones can only be bound after a manual check shows them healthy again, and the shown exit IP may be outdated. Once bound, the exit is re-checked on the exit probe interval (right away if the interval has passed), and a changed IP is handled by the exit change policy, so probe the exit manually before binding. Bound nodes skip the scheduled latency and AI platform checks but still re-check their exit IP on the exit probe interval, so exit-change pauses and the own-IP check keep working, and unhealthy bound nodes are still retested so they can recover. Outages of healthy bound nodes are no longer detected automatically; their accounts only fail over when requests fail. Manual checks and subscription refreshes are unaffected'
         },
         health_test_url: {
           label: 'Health check URL',
