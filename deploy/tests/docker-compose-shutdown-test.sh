@@ -64,6 +64,52 @@ do
     fail "$compose_file must give the sub2api service stop_grace_period \${SUB2API_STOP_GRACE_PERIOD:-${stop_grace}s} and pass SERVER_SHUTDOWN_TIMEOUT_SECONDS with an empty fallback exactly once (got $counts)"
 done
 
+# deploy/DOCKER.md 是镜像页说明，示例常被直接照抄：每条 docker run 都要带足关停预算的
+# --stop-timeout 和 --restart unless-stopped（后台“重启”以退出码 0 退出，靠它拉起），
+# 内联 compose 的 sub2api 服务同样要有 restart 与足够的 stop_grace_period。
+# 只看代码块，续行（行尾反斜杠）拼成一条命令再判断。
+doc_counts=$(
+  normalized deploy/DOCKER.md | awk -v min="$((default_grace + forced_and_cleanup_seconds))" '
+    /^```/ {
+      in_code = !in_code
+      cmd = ""
+      in_application = 0
+      next
+    }
+    !in_code { next }
+    $0 == "  sub2api:" { in_application = 1 }
+    in_application && $0 ~ /^  [A-Za-z0-9_-]+:$/ && $0 != "  sub2api:" { in_application = 0 }
+    in_application && $0 == "    restart: unless-stopped" { compose_restart++ }
+    in_application && $0 ~ /^    stop_grace_period: [0-9]+s$/ {
+      value = $0
+      sub(/^    stop_grace_period: /, "", value)
+      sub(/s$/, "", value)
+      if (value + 0 >= min) compose_stop++
+    }
+    {
+      line = $0
+      continued = sub(/\\$/, "", line)
+      cmd = cmd " " line
+      if (continued) next
+      if (cmd ~ /docker run /) {
+        runs++
+        ok = (cmd ~ /--restart unless-stopped/)
+        if (match(cmd, /--stop-timeout [0-9]+/)) {
+          if (substr(cmd, RSTART + 15, RLENGTH - 15) + 0 < min) ok = 0
+        } else {
+          ok = 0
+        }
+        if (ok) good_runs++
+      }
+      cmd = ""
+    }
+    END { printf "%d %d %d %d\n", runs, good_runs, compose_restart, compose_stop }
+  '
+)
+set -- $doc_counts
+[ "$1" -ge 1 ] && [ "$1" = "$2" ] && [ "$3" -eq 1 ] && [ "$4" -eq 1 ] || \
+  fail "deploy/DOCKER.md examples must give every docker run --restart unless-stopped and --stop-timeout >= $((default_grace + forced_and_cleanup_seconds)), and the inline compose sub2api service restart: unless-stopped and a long enough stop_grace_period (got runs/ok/restart/stop $doc_counts)"
+
 # Apple container 的停止超时从 .env 解析（行为由 apple-container-test.sh 覆盖），
 # 这里只检查默认值与随宽限增加的余量都覆盖关停预算。
 apple_timeout=$(normalized deploy/apple-container.sh | sed -n 's/^DEFAULT_CONTAINER_STOP_TIMEOUT_SECONDS=\([0-9][0-9]*\)$/\1/p')
