@@ -285,7 +285,7 @@ docker compose down -v
 | `JWT_SECRET` | **Recommended** | *(auto-generated)* | JWT secret (fixed for persistent sessions) |
 | `TOTP_ENCRYPTION_KEY` | **Recommended** | *(auto-generated)* | TOTP encryption key (fixed for persistent 2FA) |
 | `SERVER_PORT` | No | `8080` | Server port |
-| `SERVER_SHUTDOWN_TIMEOUT_SECONDS` | No | `30` | Grace for in-flight HTTP/SSE requests on stop/restart (1-3600). See 优雅关停与重启. |
+| `SERVER_SHUTDOWN_TIMEOUT_SECONDS` | No | *(empty)* | Grace for in-flight HTTP/SSE requests on stop/restart (1-3600). Empty keeps `server.shutdown_timeout_seconds` from a mounted config.yaml (default `30`); a value overrides it. See 优雅关停与重启. |
 | `SUB2API_STOP_GRACE_PERIOD` | No | `90s` | Compose `stop_grace_period`; must be at least the shutdown grace + 35s. |
 | `ADMIN_EMAIL` | No | `admin@sub2api.local` | Admin email |
 | `ADMIN_PASSWORD` | No | *(auto-generated)* | Admin password |

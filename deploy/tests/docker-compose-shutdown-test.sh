@@ -21,9 +21,13 @@ normalized() {
 forced_and_cleanup_seconds=35
 default_grace=30
 
-grace_line="SERVER_SHUTDOWN_TIMEOUT_SECONDS=${default_grace}"
+# 宽限变量留空透传：非空的环境变量会覆盖挂载的 config.yaml，留空时 viper 回落到
+# config.yaml 或默认的 30 秒。
+grace_line="SERVER_SHUTDOWN_TIMEOUT_SECONDS="
 [ "$(normalized deploy/.env.example | grep -Fxc "$grace_line" || true)" -eq 1 ] || \
-  fail "deploy/.env.example must set $grace_line exactly once"
+  fail "deploy/.env.example must leave $grace_line empty exactly once so config.yaml keeps working"
+[ "$(normalized deploy/.env.example | grep -c '^SERVER_SHUTDOWN_TIMEOUT_SECONDS=' || true)" -eq 1 ] || \
+  fail "deploy/.env.example must define SERVER_SHUTDOWN_TIMEOUT_SECONDS exactly once"
 stop_grace=$(normalized deploy/.env.example | sed -n 's/^SUB2API_STOP_GRACE_PERIOD=\([0-9][0-9]*\)s$/\1/p')
 [ -n "$stop_grace" ] || fail "deploy/.env.example must set SUB2API_STOP_GRACE_PERIOD in seconds"
 [ "$stop_grace" -ge $((default_grace + forced_and_cleanup_seconds)) ] || \
@@ -36,7 +40,7 @@ for compose_file in \
   deploy/docker-compose.dev.yml
 do
   counts=$(
-    normalized "$compose_file" | awk -v grace="$default_grace" -v stop="$stop_grace" '
+    normalized "$compose_file" | awk -v stop="$stop_grace" '
       $0 == "  sub2api:" {
         in_application = 1
         next
@@ -47,7 +51,7 @@ do
       in_application && $0 == "    stop_grace_period: ${SUB2API_STOP_GRACE_PERIOD:-" stop "s}" {
         stop_count++
       }
-      in_application && $0 == "      - SERVER_SHUTDOWN_TIMEOUT_SECONDS=${SERVER_SHUTDOWN_TIMEOUT_SECONDS:-" grace "}" {
+      in_application && $0 == "      - SERVER_SHUTDOWN_TIMEOUT_SECONDS=${SERVER_SHUTDOWN_TIMEOUT_SECONDS:-}" {
         env_count++
       }
       $0 ~ /^[[:space:]]*#/ { next }
@@ -57,7 +61,7 @@ do
     '
   )
   [ "$counts" = "1 1 1 1" ] || \
-    fail "$compose_file must give the sub2api service stop_grace_period \${SUB2API_STOP_GRACE_PERIOD:-${stop_grace}s} and pass SERVER_SHUTDOWN_TIMEOUT_SECONDS (default ${default_grace}) exactly once (got $counts)"
+    fail "$compose_file must give the sub2api service stop_grace_period \${SUB2API_STOP_GRACE_PERIOD:-${stop_grace}s} and pass SERVER_SHUTDOWN_TIMEOUT_SECONDS with an empty fallback exactly once (got $counts)"
 done
 
 apple_timeout=$(normalized deploy/apple-container.sh | sed -n 's/^CONTAINER_STOP_TIMEOUT_SECONDS=\([0-9][0-9]*\)$/\1/p')

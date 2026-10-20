@@ -75,8 +75,10 @@ docker run -d --stop-timeout 90 -e SERVER_SHUTDOWN_TIMEOUT_SECONDS=30 ... ghcr.i
 ```
 
 Compose 中对应 `stop_grace_period: 90s`（仓库自带的 compose 文件读取 `.env` 中的
-`SUB2API_STOP_GRACE_PERIOD`）。管理后台的“重启”按钮走同一流程，并以退出码 0 退出，
-依赖 `restart: unless-stopped` 重新拉起容器。
+`SUB2API_STOP_GRACE_PERIOD`）。自带的 compose 文件把 `SERVER_SHUTDOWN_TIMEOUT_SECONDS`
+默认留空透传：留空时生效的是挂载的 `config.yaml` 中的 `server.shutdown_timeout_seconds`
+（未配置则为 30），在 `.env` 中填写后覆盖 `config.yaml`。管理后台的“重启”按钮走同一流程，
+并以退出码 0 退出，依赖 `restart: unless-stopped` 重新拉起容器。
 
 ## Environment Variables
 

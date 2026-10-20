@@ -101,6 +101,33 @@ func TestLoadServerShutdownTimeout(t *testing.T) {
 		_, err := Load()
 		require.ErrorContains(t, err, "server.shutdown_timeout_seconds")
 	})
+
+	// 仓库自带的 compose 以 ${SERVER_SHUTDOWN_TIMEOUT_SECONDS:-} 透传：变量总会存在，
+	// 但留空时必须让挂载的 config.yaml 生效，不能被默认值悄悄覆盖。
+	writeShutdownConfig := func(t *testing.T) {
+		t.Helper()
+		configFile := filepath.Join(t.TempDir(), "config.yaml")
+		require.NoError(t, os.WriteFile(configFile, []byte("server:\n  shutdown_timeout_seconds: 75\n"), 0o600))
+		t.Setenv("CONFIG_FILE", configFile)
+	}
+
+	t.Run("empty environment value keeps the config file grace", func(t *testing.T) {
+		resetViperWithJWTSecret(t)
+		writeShutdownConfig(t)
+		t.Setenv("SERVER_SHUTDOWN_TIMEOUT_SECONDS", "")
+		cfg, err := Load()
+		require.NoError(t, err)
+		require.Equal(t, 75, cfg.Server.ShutdownTimeoutSeconds)
+	})
+
+	t.Run("non-empty environment value overrides the config file grace", func(t *testing.T) {
+		resetViperWithJWTSecret(t)
+		writeShutdownConfig(t)
+		t.Setenv("SERVER_SHUTDOWN_TIMEOUT_SECONDS", "30")
+		cfg, err := Load()
+		require.NoError(t, err)
+		require.Equal(t, 30, cfg.Server.ShutdownTimeoutSeconds)
+	})
 }
 
 func TestLoadSimpleModeKeyRateLimitEnabledFromEnvironment(t *testing.T) {

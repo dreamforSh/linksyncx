@@ -15,9 +15,10 @@ services:
     image: ghcr.io/dreamforsh/linksyncx:latest
     container_name: sub2api
     restart: unless-stopped
-    # 优雅关停：SIGTERM 后先给进行中的请求 SERVER_SHUTDOWN_TIMEOUT_SECONDS（默认 30s）
-    # 自然结束，再强制取消约 5s、执行依赖清理（最多 30s）。Docker 默认 10s 就 SIGKILL，
-    # 会在 usage/计费落盘之前杀掉进程，所以本值必须 >= 宽限 + 35s。
+    # 优雅关停：SIGTERM 后先给进行中的请求一段宽限（.env 的 SERVER_SHUTDOWN_TIMEOUT_SECONDS，
+    # 留空则取 config.yaml 的 server.shutdown_timeout_seconds，默认 30s）自然结束，再强制
+    # 取消约 5s、执行依赖清理（最多 30s）。Docker 默认 10s 就 SIGKILL，会在 usage/计费
+    # 落盘之前杀掉进程，所以本值必须 >= 宽限 + 35s。
     stop_grace_period: ${SUB2API_STOP_GRACE_PERIOD:-90s}
     security_opt:
       - no-new-privileges:true
@@ -44,7 +45,7 @@ services:
       - SERVER_PORT=8080
       - SERVER_MODE=${SERVER_MODE:-release}
       - ENABLE_SERVER_TIMING=${ENABLE_SERVER_TIMING:-false}
-      - SERVER_SHUTDOWN_TIMEOUT_SECONDS=${SERVER_SHUTDOWN_TIMEOUT_SECONDS:-30}
+      - SERVER_SHUTDOWN_TIMEOUT_SECONDS=${SERVER_SHUTDOWN_TIMEOUT_SECONDS:-}
       - RUN_MODE=${RUN_MODE:-standard}
       - SIMPLE_MODE_AUTO_CREATE_DEFAULT_GROUPS=${SIMPLE_MODE_AUTO_CREATE_DEFAULT_GROUPS:-}
       - SIMPLE_MODE_KEY_RATE_LIMIT_ENABLED=${SIMPLE_MODE_KEY_RATE_LIMIT_ENABLED:-false}
