@@ -82,7 +82,7 @@ func TestMergeCustomUsagePreservesSavedSecrets(t *testing.T) {
 			Method:  http.MethodGet,
 			Headers: map[string]string{"Authorization": ""},
 		},
-	}, old, secrets)
+	}, old, secrets, "")
 	if next.APIKey != "saved-key" || next.AccessToken != "saved-token" {
 		t.Fatalf("empty secret fields must preserve saved values: %+v", next)
 	}
@@ -93,12 +93,12 @@ func TestMergeCustomUsagePreservesSavedSecrets(t *testing.T) {
 		t.Fatalf("empty header must keep the saved value: %q", merged.Request.Headers["Authorization"])
 	}
 
-	_, cleared := mergeCustomUsage(CustomUsageConfig{ClearAPIKey: true}, old, secrets)
+	_, cleared := mergeCustomUsage(CustomUsageConfig{ClearAPIKey: true}, old, secrets, "")
 	if cleared.APIKey != "" {
 		t.Fatal("clear_api_key must clear the saved key")
 	}
 
-	_, replaced := mergeCustomUsage(CustomUsageConfig{APIKey: "new-key"}, old, secrets)
+	_, replaced := mergeCustomUsage(CustomUsageConfig{APIKey: "new-key"}, old, secrets, "")
 	if replaced.APIKey != "new-key" {
 		t.Fatal("non-empty secret must replace the saved key")
 	}

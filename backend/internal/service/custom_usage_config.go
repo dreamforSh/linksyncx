@@ -4,14 +4,17 @@ import (
 	"encoding/json"
 	"errors"
 	"math"
+	"net"
 	"net/http"
 	"net/url"
 	"regexp"
 	"strconv"
 	"strings"
 	"unicode"
+	"unicode/utf8"
 
 	infraerrors "github.com/Wei-Shaw/sub2api/internal/pkg/errors"
+	"golang.org/x/net/idna"
 )
 
 const (
@@ -89,6 +92,11 @@ type customUsageSecrets struct {
 	AccessToken string            `json:"access_token,omitempty"`
 	RequestURL  string            `json:"request_url,omitempty"`
 	Headers     map[string]string `json:"headers,omitempty"`
+	// Origin is the target the values above were saved for (customUsageTargetOrigin).
+	// readCustomUsage drops them once the request would go anywhere else, e.g.
+	// after a generic account edit moved the base_url a config follows. Values
+	// saved before origins were recorded have none; the next PutConfig adds it.
+	Origin string `json:"origin,omitempty"`
 }
 
 func customUsageDefaults() CustomUsageConfig {
@@ -147,52 +155,244 @@ func readCustomUsage(a *Account) (CustomUsageConfig, customUsageSecrets, bool) {
 			_ = json.Unmarshal(b, &secrets)
 		}
 	}
+	private := c
 	if secrets.RequestURL != "" {
-		c.Request.URL = secrets.RequestURL
+		private.Request.URL = secrets.RequestURL
 	}
 	if secrets.Headers != nil {
-		c.Request.Headers = secrets.Headers
+		private.Request.Headers = secrets.Headers
 	}
-	return c, secrets, configured
+	if explicitlyConfigured && !customUsageSecretsBound(private, secrets, a.GetCredential("base_url")) {
+		// The stored (redacted) config stays usable; its literals do not travel.
+		return c, customUsageSecrets{}, configured
+	}
+	return private, secrets, configured
 }
 
-func mergeCustomUsage(c CustomUsageConfig, old CustomUsageConfig, secrets customUsageSecrets) (CustomUsageConfig, customUsageSecrets) {
-	if c.ClearAPIKey {
-		secrets.APIKey = ""
-	} else if c.APIKey != "" {
-		secrets.APIKey = c.APIKey
+// customUsageSecretsBound reports whether saved literals may be used for c, the
+// config with those literals applied.
+func customUsageSecretsBound(c CustomUsageConfig, secrets customUsageSecrets, accountBaseURL string) bool {
+	if secrets.Origin == "" {
+		// Saved before origins were recorded: trusted for the target c resolves to
+		// now, as before, so an unedited GET -> PUT keeps them and records it.
+		return true
 	}
-	if c.ClearAccessToken {
-		secrets.AccessToken = ""
-	} else if c.AccessToken != "" {
-		secrets.AccessToken = c.AccessToken
-	}
-	if c.Request.URL == "" && c.Template == old.Template {
+	return secrets.Origin == customUsageTargetOrigin(c, accountBaseURL)
+}
+
+// mergeCustomUsage folds an edited (redacted) config onto the saved one. Saved
+// literal credentials — blanked query values, blanked header values and the
+// dedicated api_key / access_token — stay bound to the target origin they were
+// saved for: they are restored only while the request still reaches that origin.
+// accountBaseURL resolves an empty config base_url, as prepareCustomUsage does.
+func mergeCustomUsage(c CustomUsageConfig, old CustomUsageConfig, secrets customUsageSecrets, accountBaseURL string) (CustomUsageConfig, customUsageSecrets) {
+	publicURL := customUsagePublicURL(old.Request.URL)
+	unchangedURL := false
+	if c.Template != old.Template {
+		// Different presets must not reuse an old private request accidentally.
+		if c.Request.URL == old.Request.URL || c.Request.URL == publicURL {
+			c.Request.URL = ""
+		}
+	} else if c.Request.URL == "" || c.Request.URL == publicURL {
+		// An omitted URL, or the redacted one read back from GET, means "unchanged".
 		c.Request.URL = old.Request.URL
+		unchangedURL = true
 	}
-	// A redacted URL read back from GET keeps the original query values.
-	if c.Request.URL == customUsagePublicURL(old.Request.URL) {
-		c.Request.URL = old.Request.URL
+	// Unpinning a target (empty base_url, so it follows the account's) is a
+	// retarget even while the account still points at the same origin: a later
+	// account edit could move it without coming through here.
+	sameTarget := customUsageTargetOrigin(c, accountBaseURL) == customUsageTargetOrigin(old, accountBaseURL) &&
+		(!customUsageFollowsAccount(c) || customUsageFollowsAccount(old))
+	switch {
+	case unchangedURL && !sameTarget:
+		c.Request.URL = publicURL
+	case !unchangedURL && sameTarget && c.Template == old.Template:
+		c.Request.URL = customUsageRestoreQuery(c.Request.URL, old.Request.URL)
 	}
 	headers := make(map[string]string, len(c.Request.Headers))
 	for k, v := range c.Request.Headers {
-		if v == "" {
+		if v == "" && sameTarget {
 			v = old.Request.Headers[k]
 		}
 		headers[k] = v
 	}
 	c.Request.Headers = headers
-	if c.Template != old.Template {
-		// Different presets must not reuse an old private request accidentally.
-		if c.Request.URL == old.Request.URL {
-			c.Request.URL = ""
-		}
+	if c.ClearAPIKey || (c.APIKey == "" && !sameTarget) {
+		secrets.APIKey = ""
+	} else if c.APIKey != "" {
+		secrets.APIKey = c.APIKey
+	}
+	if c.ClearAccessToken || (c.AccessToken == "" && !sameTarget) {
+		secrets.AccessToken = ""
+	} else if c.AccessToken != "" {
+		secrets.AccessToken = c.AccessToken
 	}
 	c.APIKey = ""
 	c.AccessToken = ""
 	c.ClearAPIKey = false
 	c.ClearAccessToken = false
 	return c, secrets
+}
+
+// customUsageNoBaseOrigin stands in for {{baseUrl}} when neither the config nor
+// the account has a base_url; such a request cannot be prepared, so two of them
+// compare equal without an account lookup.
+const customUsageNoBaseOrigin = "https://usage.invalid"
+
+func customUsagePresetURL(template string) string {
+	switch template {
+	case "general", "sub2api":
+		return "{{baseUrl}}/v1/usage"
+	case "newapi":
+		return "{{baseUrl}}/api/user/self"
+	}
+	return ""
+}
+
+// customUsageRequestURL is c's URL template, with the preset URL that
+// normalizeCustomUsage fills in for an empty one.
+func customUsageRequestURL(c CustomUsageConfig) string {
+	if c.Request.URL == "" {
+		return customUsagePresetURL(c.Template)
+	}
+	return c.Request.URL
+}
+
+// customUsageFollowsAccount reports whether c's target comes from the account's
+// base_url ({{baseUrl}} with an empty config base_url), which generic account
+// edits can change without going through mergeCustomUsage.
+func customUsageFollowsAccount(c CustomUsageConfig) bool {
+	return strings.TrimRight(strings.TrimSpace(c.BaseURL), "/") == "" && strings.Contains(customUsageRequestURL(c), "{{baseUrl}}")
+}
+
+func customUsageASCII(s string) bool {
+	for i := 0; i < len(s); i++ {
+		if s[i] >= utf8.RuneSelf {
+			return false
+		}
+	}
+	return true
+}
+
+// customUsageDialHost returns the name the HTTP transport resolves for host.
+// net/http maps non-ASCII hosts with IDNA (UTS #46) Lookup, under which U+0130
+// becomes "i" + U+0307 rather than the plain "i" strings.ToLower yields, so a
+// case fold would equate a lookalike domain with the real one. A host IDNA
+// rejects is dialled verbatim, so it is kept byte-for-byte.
+func customUsageDialHost(host string) string {
+	if customUsageASCII(host) {
+		return strings.TrimSuffix(strings.ToLower(host), ".")
+	}
+	if ascii, err := idna.Lookup.ToASCII(host); err == nil {
+		return strings.TrimSuffix(strings.ToLower(ascii), ".")
+	}
+	return host
+}
+
+// customUsageTargetOrigin returns the lower-cased scheme://host[:port] (default
+// port and trailing dot dropped, IDN hosts in their dialled ASCII form) that
+// prepareCustomUsage would send c to, or "" when the URL has no parseable host.
+// {{baseUrl}} is substituted textually, as customUsageExpand does, so
+// "{{baseUrl}}.evil.example" resolves to its real host.
+func customUsageTargetOrigin(c CustomUsageConfig, accountBaseURL string) string {
+	raw := customUsageRequestURL(c)
+	base := strings.TrimRight(strings.TrimSpace(c.BaseURL), "/")
+	if base == "" {
+		base = strings.TrimRight(strings.TrimSpace(accountBaseURL), "/")
+	}
+	if base == "" {
+		base = customUsageNoBaseOrigin
+	}
+	u, err := url.Parse(strings.ReplaceAll(raw, "{{baseUrl}}", base))
+	if err != nil {
+		return ""
+	}
+	return customUsageURLOrigin(u)
+}
+
+// customUsageURLOrigin returns u's lower-cased scheme://host[:port] with the
+// default port and trailing dot dropped and IDN hosts in their dialled ASCII
+// form, or "" when u has no host.
+func customUsageURLOrigin(u *url.URL) string {
+	scheme := strings.ToLower(u.Scheme)
+	host := customUsageDialHost(u.Hostname())
+	if host == "" {
+		return ""
+	}
+	port := u.Port()
+	if (scheme == "https" && port == "443") || (scheme == "http" && port == "80") {
+		port = ""
+	}
+	if port != "" {
+		host = net.JoinHostPort(host, port)
+	} else if strings.Contains(host, ":") {
+		host = "[" + host + "]"
+	}
+	return scheme + "://" + host
+}
+
+// customUsageQueryPairs visits raw "name=value" pairs by url.ParseQuery's rules
+// (skipping the pairs it would drop), so callers can rewrite a query in place
+// without re-encoding it.
+func customUsageQueryPairs(pairs []string, visit func(index int, name, rawValue string)) {
+	for i, pair := range pairs {
+		if pair == "" || strings.Contains(pair, ";") {
+			continue
+		}
+		key, value, _ := strings.Cut(pair, "=")
+		name, err := url.QueryUnescape(key)
+		if err != nil {
+			continue
+		}
+		if _, err := url.QueryUnescape(value); err != nil {
+			continue
+		}
+		visit(i, name, value)
+	}
+}
+
+// customUsageRestoreQuery fills the blank query values of next with the values
+// GET hid from prev. Placeholders stay visible in GET, so for each name the
+// j-th non-placeholder value sent back stands for the j-th hidden value, however
+// placeholder pairs were moved or removed; a blank one gets that value back.
+// Everything else — order, placeholders, values the admin typed — is kept verbatim.
+// Callers must only use it when next and prev reach the same origin.
+func customUsageRestoreQuery(next, prev string) string {
+	start := strings.IndexByte(next, '?')
+	if start < 0 {
+		return next
+	}
+	end := len(next)
+	if hash := strings.IndexByte(next[start:], '#'); hash >= 0 {
+		end = start + hash
+	}
+	hidden := map[string][]string{}
+	if _, query, ok := strings.Cut(prev, "?"); ok {
+		query, _, _ = strings.Cut(query, "#")
+		customUsageQueryPairs(strings.Split(query, "&"), func(_ int, name, rawValue string) {
+			if decoded, _ := url.QueryUnescape(rawValue); !customUsageQueryPlaceholder(decoded) {
+				hidden[name] = append(hidden[name], rawValue)
+			}
+		})
+	}
+	pairs := strings.Split(next[start+1:end], "&")
+	customUsageQueryPairs(pairs, func(i int, name, rawValue string) {
+		if decoded, _ := url.QueryUnescape(rawValue); customUsageQueryPlaceholder(decoded) || len(hidden[name]) == 0 {
+			return
+		}
+		old := hidden[name][0]
+		hidden[name] = hidden[name][1:]
+		if rawValue != "" || old == "" {
+			return
+		}
+		key, _, _ := strings.Cut(pairs[i], "=")
+		pairs[i] = key + "=" + old
+	})
+	return next[:start+1] + strings.Join(pairs, "&") + next[end:]
+}
+
+func customUsageQueryPlaceholder(v string) bool {
+	return v == "{{apiKey}}" || v == "{{accessToken}}" || v == "{{userId}}"
 }
 
 func normalizeCustomUsage(c *CustomUsageConfig) error {
@@ -219,11 +419,8 @@ func normalizeCustomUsage(c *CustomUsageConfig) error {
 	if c.Request.Headers == nil {
 		c.Request.Headers = map[string]string{}
 	}
-	if c.Template != "custom" && c.Request.URL == "" {
-		c.Request.URL = "{{baseUrl}}/v1/usage"
-		if c.Template == "newapi" {
-			c.Request.URL = "{{baseUrl}}/api/user/self"
-		}
+	if c.Request.URL == "" {
+		c.Request.URL = customUsagePresetURL(c.Template)
 	}
 	if c.Template != "custom" && len(c.Request.Headers) == 0 {
 		c.Request.Headers["Authorization"] = "Bearer {{apiKey}}"
@@ -302,7 +499,25 @@ func normalizeCustomUsage(c *CustomUsageConfig) error {
 	if !customUsageKnownTemplates(c.Request.URL) || strings.ContainsAny(c.UserID, "\r\n\x00") {
 		return ErrCustomUsageConfig
 	}
+	if !customUsageUnambiguousHost(c.BaseURL) || !customUsageUnambiguousHost(c.Request.URL) {
+		return ErrCustomUsageConfig
+	}
 	return nil
+}
+
+// customUsageUnambiguousHost rejects a host whose lower-cased spelling, which the
+// host checks compare (customUsageSameOrigin), dials another host than the host
+// itself: U+0130 lower-cases to "i" but IDNA maps it to "i" + U+0307, so such a
+// lookalike would pass for the account's own ASCII host. Other internationalised
+// hosts are accepted; the transport dials their IDNA form. {{baseUrl}} becomes a
+// pathless sentinel, so text appended to it is checked as host text.
+func customUsageUnambiguousHost(raw string) bool {
+	u, err := url.Parse(strings.ReplaceAll(raw, "{{baseUrl}}", customUsageNoBaseOrigin))
+	if err != nil {
+		return true
+	}
+	host := u.Hostname()
+	return customUsageDialHost(host) == customUsageDialHost(strings.ToLower(host))
 }
 
 var customUsageHeaderName = regexp.MustCompile("^[!#$%&'*+.^_`|~0-9A-Za-z-]+$")
@@ -454,7 +669,7 @@ func customUsagePublicURL(raw string) string {
 	q := u.Query()
 	for k, vs := range q {
 		for i, v := range vs {
-			if v != "{{apiKey}}" && v != "{{accessToken}}" && v != "{{userId}}" {
+			if !customUsageQueryPlaceholder(v) {
 				vs[i] = ""
 			}
 		}
