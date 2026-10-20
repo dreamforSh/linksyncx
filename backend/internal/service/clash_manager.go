@@ -512,6 +512,7 @@ func (m *ClashManager) leaderCycle(ctx context.Context) {
 			now := time.Now()
 			probeSettings := settings
 			latencyViews, exitViews := views, views
+			guardGlobalFailure := true
 			// 暂停自动探测时只保留保障安全的探测（见 clashPausedProbeViews），AI 平台检测
 			// 不承担安全职责，一并关闭。手动探测走 TestNodesLatency/ProbeNodesExit，不受影响。
 			if settings.PauseAutomaticProbes {
@@ -519,9 +520,12 @@ func (m *ClashManager) leaderCycle(ctx context.Context) {
 				paused := *settings
 				paused.PlatformChecksEnabled = false
 				probeSettings = &paused
+				// 这时延迟轮里只有已判定异常的节点，大多失败是常态：全局故障保护护不住任何节点
+				// （失败也无法再降级），只会吞掉失败、不清零连续成功次数，让抖动节点绕过恢复阈值。
+				guardGlobalFailure = false
 			}
 			if due := dueForLatency(latencyViews, probeSettings, now); len(due) > 0 {
-				if _, err := m.svc.probeLatency(ctx, due, probeSettings, true); err != nil {
+				if _, err := m.svc.probeLatency(ctx, due, probeSettings, guardGlobalFailure); err != nil {
 					m.log().Warn("clash latency round failed", zap.Error(err))
 				}
 			}

@@ -286,6 +286,55 @@ func TestClashPausedProbesRecheckFailingBoundNode(t *testing.T) {
 	require.Nil(t, env.repo.account(acc.ID).Until, "recovered node releases its accounts")
 }
 
+// expireClashLatencyChecks 清掉节点的上次延迟检测时间，模拟已经过了一个已绑定检测间隔。
+func expireClashLatencyChecks(repo *fakeClashRepo, nodes []*ClashNode) {
+	repo.mu.Lock()
+	defer repo.mu.Unlock()
+	for _, node := range nodes {
+		repo.nodes[node.ID].LastCheckedAt = nil
+	}
+}
+
+// 暂停时延迟轮里只有已判定异常的已绑定节点，它们大多失败是常态。全局故障保护若在这里生效，
+// 会吞掉抖动节点的失败、不清零连续成功次数，让它经过「成功-失败-成功」就凑够恢复阈值并解除账号暂停。
+func TestClashPausedProbesKeepRecoveryThresholdWhenMostRecheckedNodesFail(t *testing.T) {
+	env := newClashTestEnv(t, pausedProbeSettings(func(s *ClashPoolSettings) { s.RecoveryThreshold = 2 }))
+	ctx := context.Background()
+	profile := env.repo.addProfile("p", true)
+	unhealthy := func(n *ClashNode) { n.HealthStatus = ClashHealthUnhealthy }
+	flapping := env.repo.addNode(profile.ID, "flapping", "198.51.100.1", unhealthy)
+	acc := env.repo.bind("acc", flapping.ProxyID, nil)
+	nodes := []*ClashNode{flapping}
+	for i := 0; i < clashGlobalFailureMinimum-1; i++ {
+		down := env.repo.addNode(profile.ID, "down-"+strconv.Itoa(i), "198.51.100.2"+strconv.Itoa(i), unhealthy)
+		env.repo.bind("acc-"+strconv.Itoa(i), down.ProxyID, nil)
+		env.runtime.delays[ClashProxyName(down.ID)] = errors.New("timeout")
+		nodes = append(nodes, down)
+	}
+	manager := newSyncedClashManager(t, env)
+	for round, step := range []struct {
+		fails               bool
+		successes, failures int
+	}{
+		{fails: false, successes: 1, failures: 0},
+		{fails: true, successes: 0, failures: 1},
+		{fails: false, successes: 1, failures: 0},
+	} {
+		expireClashLatencyChecks(env.repo, nodes)
+		if step.fails {
+			env.runtime.delays[ClashProxyName(flapping.ID)] = errors.New("timeout")
+		} else {
+			delete(env.runtime.delays, ClashProxyName(flapping.ID))
+		}
+		manager.leaderCycle(ctx)
+		got := env.repo.node(flapping.ID)
+		require.Equal(t, step.successes, got.ConsecutiveSuccesses, "round %d", round+1)
+		require.Equal(t, step.failures, got.ConsecutiveFailures, "round %d", round+1)
+		require.Equal(t, ClashHealthUnhealthy, got.HealthStatus, "round %d", round+1)
+		require.NotNil(t, env.repo.account(acc.ID).Until, "round %d: the account stays paused", round+1)
+	}
+}
+
 func TestClashAutomaticProbesDefaultKeepsScheduling(t *testing.T) {
 	env := newClashTestEnv(t, nil)
 	profile := env.repo.addProfile("p", true)
