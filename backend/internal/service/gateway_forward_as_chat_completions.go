@@ -121,6 +121,10 @@ func (s *GatewayService) ForwardAsChatCompletions(
 	// 8. Get access token
 	token, tokenType, err := s.GetAccessToken(ctx, account)
 	if err != nil {
+		// Vertex SA 取 token 时已经过账号代理：代理失效是这个账号的出口故障，换号而不是判死请求。
+		if transportErr := s.handleAccessTokenTransportError(ctx, c, account, err); transportErr != nil {
+			return nil, transportErr
+		}
 		return nil, fmt.Errorf("get access token: %w", err)
 	}
 

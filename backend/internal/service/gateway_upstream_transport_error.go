@@ -71,6 +71,29 @@ func (s *GatewayService) handleUpstreamTransportError(ctx context.Context, c *gi
 	}
 }
 
+// handleAccessTokenTransportError 把 GetAccessToken 阶段的代理/传输层失败按数据面传输错误处理，
+// 返回 handleUpstreamTransportError 的结果（客户端未断开时即 *UpstreamFailoverError）；其它错误
+// （凭据缺失、坏 SA 私钥、token 端点拒绝等）返回 nil，由调用方保持原有的终止语义。
+//
+// 为什么需要：Vertex SA 账号在 GetAccessToken 里就要经账号代理去 Google 换 token，早于 Forward 里的
+// ProxyURLForOutbound 校验和 DoWithTLS。代理语法合法但已失效时，这里的传输错误若原样返回，handler
+// 只认 *UpstreamFailoverError，请求会被直接判死而不是换号——违背“代理故障要 failover、绝不回退直连”
+// 的约定。分配了代理但关系缺失（ErrAccountProxyUnavailable）同样在这里接住，不依赖调用点上代理校验
+// 与取 token 的先后顺序。
+func (s *GatewayService) handleAccessTokenTransportError(ctx context.Context, c *gin.Context, account *Account, err error) error {
+	var exchangeErr *tokenExchangeTransportError
+	switch {
+	case errors.As(err, &exchangeErr):
+		return s.handleUpstreamTransportError(ctx, c, account, err, OpsUpstreamErrorEvent{
+			UpstreamURL: safeUpstreamURL(exchangeErr.tokenURL),
+		})
+	case errors.Is(err, ErrAccountProxyUnavailable):
+		return s.handleUpstreamTransportError(ctx, c, account, err, OpsUpstreamErrorEvent{})
+	default:
+		return nil
+	}
+}
+
 // tempUnscheduleTransportError marks an account temporarily unschedulable
 // after a durable transport failure. Unlike the OpenAI side there is no
 // in-memory scheduler block on this path: the Anthropic/Bedrock scheduler
