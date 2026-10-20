@@ -46,23 +46,16 @@ func RegisterGatewayRoutes(
 	groupModelAllowlist := middleware.GroupModelAllowlist()
 
 	isOpenAIResponsesCompatibleGatewayPlatform := func(c *gin.Context) bool {
-		switch getGroupPlatform(c) {
-		case service.PlatformOpenAI, service.PlatformGrok, service.PlatformPerplexity,
-			service.PlatformCodeBuddy,
-			service.PlatformKimi, service.PlatformZhipu, service.PlatformDeepseek,
-			service.PlatformMiniMax, service.PlatformOpenCodeGo, service.PlatformCommandCode:
-			// 国产 OpenAI 兼容供应商与 openai/grok 一样经 OpenAI 网关转发。
-			return true
-		default:
-			return false
-		}
+		return isOpenAIGatewayPlatform(getGroupPlatform(c))
 	}
 	countTokensHandler := func(c *gin.Context) {
-		switch getGroupPlatform(c) {
-		case service.PlatformOpenAI, service.PlatformCodeBuddy, service.PlatformKimi, service.PlatformZhipu, service.PlatformDeepseek, service.PlatformMiniMax, service.PlatformOpenCodeGo, service.PlatformCommandCode:
-			h.OpenAIGateway.CountTokens(c)
-		case service.PlatformGrok:
+		switch {
+		case getGroupPlatform(c) == service.PlatformGrok:
 			h.OpenAIGateway.GrokCountTokens(c)
+		case isOpenAIResponsesCompatibleGatewayPlatform(c):
+			// 与 /v1/messages 同一平台集合（曾漏掉 perplexity，落到 Anthropic 网关调度）；
+			// 非 OpenAI 账号由 ForwardCountTokensAsAnthropic 本地估算。
+			h.OpenAIGateway.CountTokens(c)
 		default:
 			h.Gateway.CountTokens(c)
 		}
@@ -694,5 +687,21 @@ func compositeRouteEndpointForPath(path string) string {
 		return service.CompositeRouteEndpointGemini
 	default:
 		return service.CompositeRouteEndpointAny
+	}
+}
+
+// isOpenAIGatewayPlatform reports whether a group platform is served by the
+// OpenAI gateway on the Anthropic-shaped entrypoints (/v1/messages and
+// /v1/messages/count_tokens share it, so the two lists cannot drift apart).
+func isOpenAIGatewayPlatform(platform string) bool {
+	switch platform {
+	case service.PlatformOpenAI, service.PlatformGrok, service.PlatformPerplexity,
+		service.PlatformCodeBuddy,
+		service.PlatformKimi, service.PlatformZhipu, service.PlatformDeepseek,
+		service.PlatformMiniMax, service.PlatformOpenCodeGo, service.PlatformCommandCode:
+		// 国产 OpenAI 兼容供应商与 openai/grok 一样经 OpenAI 网关转发。
+		return true
+	default:
+		return false
 	}
 }

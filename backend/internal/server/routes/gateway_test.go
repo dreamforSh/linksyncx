@@ -468,3 +468,18 @@ func TestGatewayRoutesOpenAICountTokensPathIsRegistered(t *testing.T) {
 	router.ServeHTTP(w, req)
 	require.NotEqual(t, http.StatusNotFound, w.Code)
 }
+
+func TestOpenAIGatewayPlatformsServeCountTokens(t *testing.T) {
+	// count_tokens follows /v1/messages: Perplexity groups used to fall through to the
+	// Anthropic gateway's count_tokens while their messages went to the OpenAI gateway.
+	for _, platform := range []string{
+		service.PlatformOpenAI, service.PlatformGrok, service.PlatformPerplexity, service.PlatformCodeBuddy,
+		service.PlatformKimi, service.PlatformZhipu, service.PlatformDeepseek, service.PlatformMiniMax,
+		service.PlatformOpenCodeGo, service.PlatformCommandCode,
+	} {
+		require.True(t, isOpenAIGatewayPlatform(platform), platform)
+	}
+	for _, platform := range []string{service.PlatformAnthropic, service.PlatformGemini, service.PlatformAntigravity, service.PlatformComposite, ""} {
+		require.False(t, isOpenAIGatewayPlatform(platform), platform)
+	}
+}
