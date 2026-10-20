@@ -50,6 +50,19 @@ server:
   # Applies to all requests, especially important for h2c first request memory protection
   # 适用于所有请求，对 h2c 第一请求的内存保护尤为重要
   max_request_body_size: 268435456
+  # Graceful shutdown grace in seconds (1-3600, default 30). On SIGTERM or an
+  # in-app restart the listener closes at once and in-flight HTTP/SSE requests
+  # get this long to finish; WebSocket sessions are closed immediately. After
+  # the grace, request contexts are cancelled, ~5s more is allowed, then
+  # dependency cleanup runs (bounded at 30s). Env: SERVER_SHUTDOWN_TIMEOUT_SECONDS.
+  # 优雅关停宽限（秒，1-3600，默认 30）。收到 SIGTERM 或后台重启时监听立即关闭，
+  # 进行中的 HTTP/SSE 请求有这么长时间自然结束（流式请求被截断会拿不到完整
+  # usage，导致漏计费）；WebSocket 会话立即断开。宽限结束后取消请求 context、
+  # 再等约 5 秒，然后执行依赖清理（最多 30 秒）。宽限期内新请求会被拒绝，所以
+  # 调大它也会拉长重启的不可用窗口。Docker 的 stop_grace_period / systemd 的
+  # TimeoutStopSec 必须不小于 宽限 + 5 + 30 秒，否则会在清理完成前被 SIGKILL。
+  # 环境变量：SERVER_SHUTDOWN_TIMEOUT_SECONDS。
+  shutdown_timeout_seconds: 30
   # HTTP/2 Cleartext (h2c) configuration
   # HTTP/2 Cleartext (h2c) 配置
   h2c:

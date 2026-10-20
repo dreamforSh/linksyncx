@@ -79,6 +79,30 @@ func TestLoadServerTimingConfig(t *testing.T) {
 	})
 }
 
+func TestLoadServerShutdownTimeout(t *testing.T) {
+	t.Run("defaults to a 30 second grace", func(t *testing.T) {
+		resetViperWithJWTSecret(t)
+		cfg, err := Load()
+		require.NoError(t, err)
+		require.Equal(t, 30, cfg.Server.ShutdownTimeoutSeconds)
+	})
+
+	t.Run("overridden by SERVER_SHUTDOWN_TIMEOUT_SECONDS", func(t *testing.T) {
+		resetViperWithJWTSecret(t)
+		t.Setenv("SERVER_SHUTDOWN_TIMEOUT_SECONDS", "120")
+		cfg, err := Load()
+		require.NoError(t, err)
+		require.Equal(t, 120, cfg.Server.ShutdownTimeoutSeconds)
+	})
+
+	t.Run("out of range environment value fails validation", func(t *testing.T) {
+		resetViperWithJWTSecret(t)
+		t.Setenv("SERVER_SHUTDOWN_TIMEOUT_SECONDS", "0")
+		_, err := Load()
+		require.ErrorContains(t, err, "server.shutdown_timeout_seconds")
+	})
+}
+
 func TestLoadSimpleModeKeyRateLimitEnabledFromEnvironment(t *testing.T) {
 	resetViperWithJWTSecret(t)
 	t.Setenv("SIMPLE_MODE_KEY_RATE_LIMIT_ENABLED", "true")
@@ -1593,6 +1617,16 @@ func TestValidateConfigErrors(t *testing.T) {
 			name:    "server max header bytes too small",
 			mutate:  func(c *Config) { c.Server.MaxHeaderBytes = 4096 },
 			wantErr: "server.max_header_bytes",
+		},
+		{
+			name:    "server shutdown timeout zero",
+			mutate:  func(c *Config) { c.Server.ShutdownTimeoutSeconds = 0 },
+			wantErr: "server.shutdown_timeout_seconds",
+		},
+		{
+			name:    "server shutdown timeout above one hour",
+			mutate:  func(c *Config) { c.Server.ShutdownTimeoutSeconds = 3601 },
+			wantErr: "server.shutdown_timeout_seconds",
 		},
 		{
 			name:    "server max request body size",
