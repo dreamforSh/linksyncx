@@ -35,7 +35,10 @@ type TLSFingerprintProfileService struct {
 
 	// 本地 ID→Profile 映射缓存，用于 DoWithTLS 热路径快速查找
 	localCache map[int64]*model.TLSFingerprintProfile
-	localMu    sync.RWMutex
+	// randomCandidates 是“随机”模式参与 rendezvous 的模板：localCache 中通过 tlsfingerprint.ValidateProfile
+	// 的那部分，在 setLocalCache 时算好、与 localCache 一起整体替换，热路径只遍历切片，不逐请求校验。
+	randomCandidates []*model.TLSFingerprintProfile
+	localMu          sync.RWMutex
 }
 
 // NewTLSFingerprintProfileService 创建 TLS 指纹模板服务
@@ -153,23 +156,24 @@ func (s *TLSFingerprintProfileService) GetProfileByID(id int64) *tlsfingerprint.
 // 因此用 rendezvous（HRW）哈希代替 rand：对每个模板计算 tlsProfileRendezvousWeight(账号 ID, 模板 ID)，
 // 取权重最大者。同一账号永远落在同一模板上，多实例部署之间也一致，且无需落库；新增一个模板
 // 只会把约 1/N 的账号迁到这个新模板上，删除模板只影响原本落在它上面的账号。
-// 权重函数对模板 ID 是单射，不同模板不会同权；平局取较小 ID 只是兜底，保证结果与 map 遍历顺序无关。
+// 权重函数对模板 ID 是单射，不同模板不会同权；平局取较小 ID 只是兜底，保证结果与候选顺序无关。
+//
+// 候选只有通过 ValidateProfile 的模板（randomCandidates）：不自洽的模板在 DoWithTLS 建池前必然被拒，
+// 若参与选择，落在它上面的约 1/N 个账号会被永久钉住、每个请求都失败（这类错误不触发临时下线，
+// 粘性会话还会在原账号上反复重试）。剔除它等价于它不存在，其余账号的选择不受影响；校验是模板的
+// 纯函数，多实例的候选集合一致，选择仍然一致。没有任何有效模板时返回 nil，回落到内置默认 profile。
 func (s *TLSFingerprintProfileService) stickyProfileForAccount(accountID int64) *tlsfingerprint.Profile {
 	s.localMu.RLock()
 	defer s.localMu.RUnlock()
 
 	var (
 		chosen     *model.TLSFingerprintProfile
-		chosenID   int64
 		bestWeight uint64
 	)
-	for id, p := range s.localCache {
-		if p == nil {
-			continue
-		}
-		weight := tlsProfileRendezvousWeight(accountID, id)
-		if chosen == nil || weight > bestWeight || (weight == bestWeight && id < chosenID) {
-			chosen, chosenID, bestWeight = p, id, weight
+	for _, p := range s.randomCandidates {
+		weight := tlsProfileRendezvousWeight(accountID, p.ID)
+		if chosen == nil || weight > bestWeight || (weight == bestWeight && p.ID < chosen.ID) {
+			chosen, bestWeight = p, weight
 		}
 	}
 	if chosen == nil {
@@ -197,7 +201,7 @@ func splitmix64(x uint64) uint64 {
 // 逻辑：
 //  1. 未启用 TLS 指纹 → 返回 nil（不伪装）
 //  2. 启用 + 绑定了 profile_id → 从缓存查找对应 profile
-//  3. 启用 + 绑定“随机”（-1）→ 按账号 ID 固定选出一个模板（stickyProfileForAccount）
+//  3. 启用 + 绑定“随机”（-1）→ 按账号 ID 在自洽的模板中固定选出一个（stickyProfileForAccount）
 //  4. 启用 + 未绑定或找不到 → 返回空 Profile（使用代码内置默认值）
 func (s *TLSFingerprintProfileService) ResolveTLSProfile(account *Account) *tlsfingerprint.Profile {
 	if account == nil || !account.IsTLSFingerprintEnabled() {
@@ -205,6 +209,8 @@ func (s *TLSFingerprintProfileService) ResolveTLSProfile(account *Account) *tlsf
 	}
 	id := account.GetTLSFingerprintProfileID()
 	if id > 0 {
+		// 显式绑定的模板即使不自洽也原样返回，由 DoWithTLS 明确报错：这是管理员指定的设备，
+		// 悄悄换成别的模板会掩盖配置错误，也会在管理员不知情时改变账号的指纹。
 		if p := s.GetProfileByID(id); p != nil {
 			return p
 		}
@@ -251,11 +257,30 @@ func (s *TLSFingerprintProfileService) reloadFromDB(ctx context.Context) error {
 func (s *TLSFingerprintProfileService) setLocalCache(profiles []*model.TLSFingerprintProfile) {
 	m := make(map[int64]*model.TLSFingerprintProfile, len(profiles))
 	for _, p := range profiles {
+		if p == nil {
+			continue
+		}
 		m[p.ID] = p
+	}
+
+	// 保存时已校验（model.TLSFingerprintProfile.Validate），这里兜住校验上线前存进库里的不自洽模板：
+	// 只把自洽的模板放进“随机”候选。只在加载时（启动与模板增删改通知）记一次日志，不在请求路径上刷屏；
+	// 模板里没有凭据，记 ID、名称与原因即可。
+	candidates := make([]*model.TLSFingerprintProfile, 0, len(m))
+	for _, p := range profiles {
+		if p == nil || m[p.ID] != p {
+			continue // 同 ID 重复时与 localCache 一致，以最后一个为准
+		}
+		if err := tlsfingerprint.ValidateProfile(p.ToTLSProfile()); err != nil {
+			logger.LegacyPrintf("service.tls_fp_profile", "[TLSFPProfileService] Template %d (%q) is excluded from Random selection: %v", p.ID, p.Name, err)
+			continue
+		}
+		candidates = append(candidates, p)
 	}
 
 	s.localMu.Lock()
 	s.localCache = m
+	s.randomCandidates = candidates
 	s.localMu.Unlock()
 }
 
@@ -272,9 +297,8 @@ func (s *TLSFingerprintProfileService) invalidateAndNotify(ctx context.Context) 
 
 	if err := s.reloadFromDB(ctx); err != nil {
 		logger.LegacyPrintf("service.tls_fp_profile", "[TLSFPProfileService] Failed to refresh local cache: %v", err)
-		s.localMu.Lock()
-		s.localCache = make(map[int64]*model.TLSFingerprintProfile)
-		s.localMu.Unlock()
+		// 经 setLocalCache 清空，“随机”候选随 localCache 一起清掉，不会继续选中已删除或已改动的模板。
+		s.setLocalCache(nil)
 	}
 
 	if s.cache != nil {

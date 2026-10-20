@@ -4,10 +4,12 @@ package service
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"testing"
 
 	"github.com/Wei-Shaw/sub2api/internal/model"
+	"github.com/Wei-Shaw/sub2api/internal/pkg/tlsfingerprint"
 	"github.com/stretchr/testify/require"
 )
 
@@ -121,12 +123,78 @@ func TestResolveTLSProfileFallsBackWithoutTemplatesAndToleratesNilService(t *tes
 	require.Equal(t, "Built-in Default (Node.js 24.x)", profile.Name)
 }
 
-// tlsProfileRepoStub 是内存版模板仓储，记录写入次数，用来确认被拒的模板没有落库。
+// inconsistentTLSProfileTemplate 是 profile_invariants.go 描述的典型踩坑：自定义了 curves 却没填
+// key_share_groups，key_share 继承内置默认的 [4588, 29]，而 4588 不在 curves 里，DoWithTLS 建池前必然拒绝。
+func inconsistentTLSProfileTemplate(id int64) *model.TLSFingerprintProfile {
+	return &model.TLSFingerprintProfile{
+		ID:     id,
+		Name:   fmt.Sprintf("template-%d", id),
+		Curves: []uint16{29, 23},
+	}
+}
+
+func newTLSProfileTestAccountBoundTo(id, profileID int64) *Account {
+	account := newRandomTLSProfileTestAccount(id)
+	account.Extra["tls_fingerprint_profile_id"] = float64(profileID)
+	return account
+}
+
+// 不自洽的模板若参与“随机”选择，落在它上面的约 1/N 个账号会被永久钉住、每个请求都在建池前失败，
+// 而且这类错误不触发临时下线，粘性会话还会在原账号上反复重试。剔除后它必须等价于不存在：
+// 没有账号选中它，其余账号的选择与只有有效模板时逐一相同，多实例（加载顺序不同）仍然一致。
+func TestResolveTLSProfileRandomTemplateSkipsInconsistentTemplates(t *testing.T) {
+	const accounts = 4000
+	require.Error(t, tlsfingerprint.ValidateProfile(inconsistentTLSProfileTemplate(5).ToTLSProfile()),
+		"fixture must be rejected by the same check DoWithTLS applies")
+
+	validOnly := resolveRandomTLSTemplates(t, newStickyTLSProfileTestService(1, 2, 3, 4), accounts)
+
+	withInvalid := newStickyTLSProfileTestService(1, 2, 3, 4)
+	withInvalid.setLocalCache(append(withInvalid.snapshotLocalCacheForTest(), inconsistentTLSProfileTemplate(5)))
+	require.Equal(t, validOnly, resolveRandomTLSTemplates(t, withInvalid, accounts),
+		"an inconsistent template must not take any account, nor move accounts between valid templates")
+
+	otherInstance := &TLSFingerprintProfileService{}
+	otherInstance.setLocalCache(append([]*model.TLSFingerprintProfile{inconsistentTLSProfileTemplate(5)},
+		newStickyTLSProfileTestService(4, 3, 2, 1).snapshotLocalCacheForTest()...))
+	require.Equal(t, validOnly, resolveRandomTLSTemplates(t, otherInstance, accounts), "instances must agree on each account's template")
+
+	// 一个有效 + 一个不自洽：所有账号都落在有效模板上。
+	oneValid := newStickyTLSProfileTestService(1)
+	oneValid.setLocalCache(append(oneValid.snapshotLocalCacheForTest(), inconsistentTLSProfileTemplate(2)))
+	for id, name := range resolveRandomTLSTemplates(t, oneValid, accounts) {
+		require.Equal(t, "template-1", name, "account %d resolved to the inconsistent template", id)
+	}
+
+	// 全部不自洽：与没有模板一样回落到内置默认 profile。
+	allInvalid := &TLSFingerprintProfileService{}
+	allInvalid.setLocalCache([]*model.TLSFingerprintProfile{inconsistentTLSProfileTemplate(1), inconsistentTLSProfileTemplate(2)})
+	for id, name := range resolveRandomTLSTemplates(t, allInvalid, 200) {
+		require.Equal(t, "Built-in Default (Node.js 24.x)", name, "account %d", id)
+	}
+}
+
+// 显式绑定（id > 0）的不自洽模板行为不变：仍原样返回，由 DoWithTLS 在建池前明确报错，
+// 不会被悄悄换成别的模板或内置默认值（那会掩盖管理员的配置错误）。
+func TestResolveTLSProfileDirectBindingKeepsInconsistentTemplate(t *testing.T) {
+	svc := newStickyTLSProfileTestService(1)
+	svc.setLocalCache(append(svc.snapshotLocalCacheForTest(), inconsistentTLSProfileTemplate(2)))
+
+	profile := svc.ResolveTLSProfile(newTLSProfileTestAccountBoundTo(7, 2))
+	require.NotNil(t, profile)
+	require.Equal(t, "template-2", profile.Name)
+	require.Equal(t, []uint16{29, 23}, profile.Curves)
+	require.Error(t, tlsfingerprint.ValidateProfile(profile))
+}
+
+// tlsProfileRepoStub 是内存版模板仓储，记录写入次数，用来确认被拒的模板没有落库；
+// listErr 模拟增删改后重新加载失败。
 type tlsProfileRepoStub struct {
 	profiles map[int64]*model.TLSFingerprintProfile
 	nextID   int64
 	creates  int
 	updates  int
+	listErr  error
 }
 
 func newTLSProfileRepoStub(seed ...*model.TLSFingerprintProfile) *tlsProfileRepoStub {
@@ -138,6 +206,9 @@ func newTLSProfileRepoStub(seed ...*model.TLSFingerprintProfile) *tlsProfileRepo
 }
 
 func (r *tlsProfileRepoStub) List(context.Context) ([]*model.TLSFingerprintProfile, error) {
+	if r.listErr != nil {
+		return nil, r.listErr
+	}
 	out := make([]*model.TLSFingerprintProfile, 0, len(r.profiles))
 	for _, p := range r.profiles {
 		out = append(out, p)
@@ -168,6 +239,25 @@ func (r *tlsProfileRepoStub) Update(_ context.Context, p *model.TLSFingerprintPr
 func (r *tlsProfileRepoStub) Delete(_ context.Context, id int64) error {
 	delete(r.profiles, id)
 	return nil
+}
+
+// 增删改后重新加载失败时本地缓存会被清空，“随机”候选必须一起清掉：否则 localCache 已空，
+// 候选里却还留着旧模板（可能正是刚被删除或改坏的那个），账号会继续被分到它上面。
+func TestTLSFingerprintProfileFailedReloadAlsoClearsRandomCandidates(t *testing.T) {
+	repo := newTLSProfileRepoStub(
+		&model.TLSFingerprintProfile{ID: 1, Name: "template-1", Curves: []uint16{29}, KeyShareGroups: []uint16{29}},
+		&model.TLSFingerprintProfile{ID: 2, Name: "template-2", Curves: []uint16{29}, KeyShareGroups: []uint16{29}},
+	)
+	svc := NewTLSFingerprintProfileService(repo, nil)
+	require.NotEqual(t, "Built-in Default (Node.js 24.x)", svc.ResolveTLSProfile(newRandomTLSProfileTestAccount(1)).Name)
+
+	repo.listErr = errors.New("db unavailable")
+	require.NoError(t, svc.Delete(context.Background(), 1))
+
+	require.Nil(t, svc.GetProfileByID(2))
+	for id, name := range resolveRandomTLSTemplates(t, svc, 200) {
+		require.Equal(t, "Built-in Default (Node.js 24.x)", name, "account %d still resolved to a template after the cache was cleared", id)
+	}
 }
 
 // 保存时就拦住不自洽的模板（key_share 必须是 supported_groups 的子集，空字段按内置默认值补齐后再查），
