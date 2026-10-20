@@ -1411,6 +1411,12 @@ export default {
       deleteSuccess: '模板删除成功',
       loadFailed: '加载模板失败',
       saveFailed: '保存模板失败',
-      deleteFailed: '删除模板失败'
+      deleteFailed: '删除模板失败',
+
+      // 按后端 reason 显示的保存 / 删除失败原因
+      errors: {
+        TLS_PROFILE_NAME_EXISTS: '已有同名模板，请换一个模板名称',
+        TLS_PROFILE_NOT_FOUND: '模板不存在，可能已被其他管理员删除'
+      }
     }
 }

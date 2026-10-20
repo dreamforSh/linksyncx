@@ -85,7 +85,8 @@ func (r *tlsFingerprintProfileRepository) Create(ctx context.Context, p *model.T
 
 	created, err := builder.Save(ctx)
 	if err != nil {
-		return nil, err
+		// name 有唯一约束：重名要回 409 和可本地化的 reason，而不是原样的约束错误（500 "internal error"）。
+		return nil, translatePersistenceError(err, nil, service.ErrTLSFingerprintProfileNameExists)
 	}
 	return r.toModel(created), nil
 }
@@ -150,14 +151,17 @@ func (r *tlsFingerprintProfileRepository) Update(ctx context.Context, p *model.T
 
 	updated, err := builder.Save(ctx)
 	if err != nil {
-		return nil, err
+		// 改名撞上已有模板回 409；handler 先查后改，中间被别人删掉时回 404。
+		return nil, translatePersistenceError(err, service.ErrTLSFingerprintProfileNotFound, service.ErrTLSFingerprintProfileNameExists)
 	}
 	return r.toModel(updated), nil
 }
 
 // Delete 删除模板
 func (r *tlsFingerprintProfileRepository) Delete(ctx context.Context, id int64) error {
-	return r.client.TLSFingerprintProfile.DeleteOneID(id).Exec(ctx)
+	// 模板已不存在（另一个管理员刚删掉、列表过期）回 404，而不是 500。
+	err := r.client.TLSFingerprintProfile.DeleteOneID(id).Exec(ctx)
+	return translatePersistenceError(err, service.ErrTLSFingerprintProfileNotFound, nil)
 }
 
 // toModel 将 Ent 实体转换为服务模型

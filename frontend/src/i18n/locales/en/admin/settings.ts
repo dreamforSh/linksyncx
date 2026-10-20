@@ -1417,6 +1417,12 @@ export default {
       deleteSuccess: 'Profile deleted successfully',
       loadFailed: 'Failed to load profiles',
       saveFailed: 'Failed to save profile',
-      deleteFailed: 'Failed to delete profile'
+      deleteFailed: 'Failed to delete profile',
+
+      // Save / delete failure reasons, keyed by the backend reason
+      errors: {
+        TLS_PROFILE_NAME_EXISTS: 'A profile with this name already exists; choose another Profile Name',
+        TLS_PROFILE_NOT_FOUND: 'This profile no longer exists; another admin may have deleted it'
+      }
     }
 }

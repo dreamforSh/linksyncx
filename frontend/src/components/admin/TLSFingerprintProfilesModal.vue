@@ -333,7 +333,7 @@ import { ref, reactive, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useAppStore } from '@/stores/app'
 import { adminAPI } from '@/api/admin'
-import { extractApiErrorMessage } from '@/utils/apiError'
+import { extractI18nErrorMessage } from '@/utils/apiError'
 import type { TLSFingerprintProfile } from '@/api/admin/tlsFingerprintProfile'
 import BaseDialog from '@/components/common/BaseDialog.vue'
 import ConfirmDialog from '@/components/common/ConfirmDialog.vue'
@@ -565,6 +565,16 @@ const handleEdit = (profile: TLSFingerprintProfile) => {
   showEditModal.value = true
 }
 
+// 保存 / 删除失败时给管理员看的原因。只有 4xx 的后端原因有意义（模板不自洽、名称重复、模板已被删除）：
+// 按 reason 在 admin.tlsFingerprintProfiles.errors 下找本地化文案，找不到才原样展示后端 message。
+// 5xx 时后端只会给出通用的英文 "internal error"，网络错误也一样没有可用的原因，
+// 这时显示本地化的“保存 / 删除模板失败”。
+const profileErrorMessage = (error: unknown, fallback: string): string => {
+  const status = (error as { status?: unknown } | null)?.status
+  if (typeof status !== 'number' || status < 400 || status >= 500) return fallback
+  return extractI18nErrorMessage(error, t, 'admin.tlsFingerprintProfiles.errors', fallback)
+}
+
 const handleDelete = (profile: TLSFingerprintProfile) => {
   deletingProfile.value = profile
   showDeleteDialog.value = true
@@ -604,9 +614,9 @@ const handleSubmit = async () => {
     closeFormModal()
     loadProfiles()
   } catch (error) {
-    // 拦截器把后端错误改写成 { status, code, message }，没有 response.data.detail；
-    // 不自洽模板被拒时 message 指明了字段和缺失的组，必须原样展示给管理员。
-    appStore.showError(extractApiErrorMessage(error, t('admin.tlsFingerprintProfiles.saveFailed')))
+    // 拦截器把后端错误改写成 { status, code, reason, message, metadata }，没有 response.data.detail；
+    // 被拒的原因（名称重复、模板不自洽）必须展示给管理员，只显示“保存模板失败”会让人无从下手。
+    appStore.showError(profileErrorMessage(error, t('admin.tlsFingerprintProfiles.saveFailed')))
     console.error('Error saving TLS fingerprint profile:', error)
   } finally {
     submitting.value = false
@@ -623,7 +633,7 @@ const confirmDelete = async () => {
     deletingProfile.value = null
     loadProfiles()
   } catch (error) {
-    appStore.showError(extractApiErrorMessage(error, t('admin.tlsFingerprintProfiles.deleteFailed')))
+    appStore.showError(profileErrorMessage(error, t('admin.tlsFingerprintProfiles.deleteFailed')))
     console.error('Error deleting TLS fingerprint profile:', error)
   }
 }

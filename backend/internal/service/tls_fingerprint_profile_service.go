@@ -6,11 +6,23 @@ import (
 	"time"
 
 	"github.com/Wei-Shaw/sub2api/internal/model"
+	infraerrors "github.com/Wei-Shaw/sub2api/internal/pkg/errors"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/logger"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/tlsfingerprint"
 )
 
+// 模板名称在表上唯一（migrations/080），重名保存与操作已删除的模板是管理员最常碰到的两种失败。
+// 仓储把唯一约束冲突与记录不存在翻译成这两个错误，handler 经 response.ErrorFrom 回 409 / 404，
+// 前端按 reason 显示本地化文案；不翻译的话它们落到 infraerrors 的兜底，管理员只看到 500 "internal error"。
+var (
+	ErrTLSFingerprintProfileNotFound   = infraerrors.NotFound("TLS_PROFILE_NOT_FOUND", "TLS fingerprint profile not found")
+	ErrTLSFingerprintProfileNameExists = infraerrors.Conflict("TLS_PROFILE_NAME_EXISTS", "TLS fingerprint profile name already exists")
+)
+
 // TLSFingerprintProfileRepository 定义 TLS 指纹模板的数据访问接口
+//
+// GetByID 找不到时返回 (nil, nil)；Update / Delete 找不到时返回 ErrTLSFingerprintProfileNotFound，
+// Create / Update 名称重复时返回 ErrTLSFingerprintProfileNameExists。
 type TLSFingerprintProfileRepository interface {
 	List(ctx context.Context) ([]*model.TLSFingerprintProfile, error)
 	GetByID(ctx context.Context, id int64) (*model.TLSFingerprintProfile, error)
