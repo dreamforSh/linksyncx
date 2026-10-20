@@ -5,6 +5,9 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"math"
+	"strconv"
+	"strings"
 	"time"
 
 	"github.com/Wei-Shaw/sub2api/internal/service"
@@ -64,10 +67,11 @@ func (c *identityCache) GetFingerprint(ctx context.Context, accountID int64) (*s
 // decodeFingerprint 解析存储中的指纹记录；记录不是 JSON 对象或没有非空字符串 ClientID 时返回
 // 包装 service.ErrCorruptClientIdentity 的错误，调用方据此把它当缓存缺失、新建并覆盖。
 //
-// 「损坏」的判定必须与 storedClientIDLua 一致：Lua 认为合法的记录（只要有非空字符串 ClientID）
-// 在这里报损坏的话，调用方会在仍可用的 device_id 之上另起一台新设备；记录里的 IdentityEpoch 若高于
-// 新身份，replaceFingerprintScript 的代次保护又会拒绝覆盖，缓存就一直坏着、每个请求都要读库。
-// 所以其它字段类型不对（如 UserAgent 是数字）时只丢弃该字段，保住 ClientID。
+// 对不规范的记录，ClientID 与 IdentityEpoch 的读法必须与 Lua 脚本一致：Lua 认为合法的记录（只要有
+// 非空字符串 ClientID）在这里报损坏的话，调用方会在仍可用的 device_id 之上另起一台新设备；Go 读出的
+// 代次低于 replaceFingerprintScript 读到的代次的话，收编后回写缓存会一直被代次保护拒绝，缓存就一直
+// 坏着、每个请求都要读库。所以其它字段类型不对（如 UserAgent 是数字）时只丢弃该字段，保住 ClientID，
+// 代次按 Lua 的读法取（见 luaIdentityEpoch）。
 func decodeFingerprint(val string) (*service.Fingerprint, error) {
 	var fp service.Fingerprint
 	err := json.Unmarshal([]byte(val), &fp)
@@ -80,8 +84,7 @@ func decodeFingerprint(val string) (*service.Fingerprint, error) {
 	if err != nil && !errors.As(err, &typeErr) {
 		return nil, fmt.Errorf("%w: %w", service.ErrCorruptClientIdentity, err)
 	}
-	// 严格解码按不区分大小写匹配键，ClientID 改按 storedClientIDLua 的规则从区分大小写的
-	// "ClientID" 键重取（非空字符串）。
+	// 严格解码按不区分大小写匹配键，ClientID 与 IdentityEpoch 改按 Lua 的规则从区分大小写的键重取。
 	var fields map[string]json.RawMessage
 	if err := json.Unmarshal([]byte(val), &fields); err != nil {
 		return nil, fmt.Errorf("%w: %w", service.ErrCorruptClientIdentity, err)
@@ -91,7 +94,42 @@ func decodeFingerprint(val string) (*service.Fingerprint, error) {
 		return nil, fmt.Errorf("%w: no client ID", service.ErrCorruptClientIdentity)
 	}
 	fp.ClientID = clientID
+	fp.IdentityEpoch = luaIdentityEpoch(fields["IdentityEpoch"])
 	return &fp, nil
+}
+
+// luaIdentityEpoch 按 replaceFingerprintScript 的 tonumber(identity.IdentityEpoch) or 0 读代次，
+// 并向上取整成代次保护（storedEpoch > ARGV[2] 才拒写）能放行的最小整数：数字字符串、小数、指数写法
+// 在 Lua 里都是有效代次，严格解码却只认 JSON 整数。字符串按十进制解析（去掉 C isspace 首尾空白）；
+// "0x10" 这类十六进制整数字符串、超出 int64 或非有限的值对不齐，按 0 处理——缓存仍可能修不好、
+// 每个请求读库，但身份稳定、不会卡死。没有任何写入方会产生这类值，它们只来自手工改坏的记录。
+func luaIdentityEpoch(raw json.RawMessage) int64 {
+	var epoch int64
+	if json.Unmarshal(raw, &epoch) == nil {
+		return epoch
+	}
+	var value any
+	if json.Unmarshal(raw, &value) != nil {
+		return 0
+	}
+	var n float64
+	switch v := value.(type) {
+	case float64:
+		n = v
+	case string:
+		parsed, err := strconv.ParseFloat(strings.Trim(v, " \t\n\v\f\r"), 64)
+		if err != nil {
+			return 0
+		}
+		n = parsed
+	default:
+		return 0
+	}
+	n = math.Ceil(n)
+	if math.IsNaN(n) || n < math.MinInt64 || n >= math.MaxInt64 {
+		return 0
+	}
+	return int64(n)
 }
 
 // storedClientIDLua 解析存储中的指纹记录并取出 ClientID；记录缺失、损坏或没有 ClientID 时为 nil。
