@@ -109,6 +109,10 @@ type httpDrain struct {
 	// hijacked 记录已被 hijack（WebSocket 等）的连接：http.Server.Shutdown 不跟踪它们，
 	// 只能由排空流程自己关闭。
 	hijacked map[net.Conn]struct{}
+	// unserved 记录已被 Serve 接受、但还没有任何请求进入 handler 的连接（浏览器预连接、
+	// 只建 TCP 的探活、请求头没发完）。Shutdown 要等这类 StateNew 连接满 5 秒才肯关，
+	// 由排空流程自己关闭，见 beginDrain。
+	unserved map[net.Conn]struct{}
 
 	// forceCtx 是所有请求 context 的根：宽限期结束时 cancel 一次即取消全部进行中的请求，
 	// 并对与请求取消解耦的上游流发出关停硬停止。
@@ -128,6 +132,7 @@ func installHTTPDrain(server *http.Server) {
 		next:     next,
 		done:     make(chan struct{}),
 		hijacked: make(map[net.Conn]struct{}),
+		unserved: make(map[net.Conn]struct{}),
 		forceCtx: forceCtx,
 		cancel:   cancel,
 	}
@@ -155,7 +160,8 @@ func installHTTPDrain(server *http.Server) {
 		if previousConnContext != nil {
 			ctx = previousConnContext(ctx, conn)
 		}
-		// handler 返回时据此把（可能被 hijack 的）连接从 hijacked 中移除。
+		// 请求进入 handler 时据此把连接移出 unserved，handler 返回时把（可能被 hijack 的）
+		// 连接从 hijacked 中移除。
 		return context.WithValue(ctx, requestConnKey{}, conn)
 	}
 
@@ -164,24 +170,45 @@ func installHTTPDrain(server *http.Server) {
 		if previousState != nil {
 			previousState(conn, state)
 		}
-		// 只有 hijack 需要加锁：New/Active/Idle/Closed 每个连接都会触发多次，
-		// 在热路径上抢全局锁不值得。StateHijacked 是终态，之后不会再有 StateClosed。
-		if state != http.StateHijacked {
-			return
-		}
-		d.mu.Lock()
-		d.hijacked[conn] = struct{}{}
-		closeConn := d.stopping
-		d.mu.Unlock()
-		if closeConn {
-			// 排空开始后才完成的 WebSocket 升级同样按 T=0 策略立即关闭。
-			_ = conn.Close()
+		// Active/Idle 每个请求都会触发，不在热路径上抢全局锁；New/Closed/Hijacked
+		// 每个连接只触发一次，加锁的代价可以忽略。StateHijacked 是终态，之后不会再有 StateClosed。
+		switch state {
+		case http.StateNew:
+			d.mu.Lock()
+			closeConn := d.stopping
+			if !closeConn {
+				d.unserved[conn] = struct{}{}
+			}
+			d.mu.Unlock()
+			if closeConn {
+				// 排空开始后、监听关闭前才接受的连接没有任何请求，按 beginDrain 的规则直接关闭。
+				_ = conn.Close()
+			}
+		case http.StateClosed:
+			d.mu.Lock()
+			delete(d.unserved, conn)
+			d.mu.Unlock()
+		case http.StateHijacked:
+			d.mu.Lock()
+			d.hijacked[conn] = struct{}{}
+			closeConn := d.stopping
+			d.mu.Unlock()
+			if closeConn {
+				// 排空开始后才完成的 WebSocket 升级同样按 T=0 策略立即关闭。
+				_ = conn.Close()
+			}
 		}
 	}
 }
 
 func (d *httpDrain) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	conn, _ := r.Context().Value(requestConnKey{}).(net.Conn)
 	d.mu.Lock()
+	if conn != nil {
+		// 连接上已有请求进入 handler（包括下面被拒的 503）：它的响应收尾要由 Shutdown
+		// 等到完成，排空不能再把它当作空连接直接关闭。
+		delete(d.unserved, conn)
+	}
 	if d.stopping {
 		d.mu.Unlock()
 		// 监听在关停开始时已关闭，能走到这里的只有既有连接上的新请求。
@@ -193,12 +220,11 @@ func (d *httpDrain) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	d.active++
 	d.mu.Unlock()
 	// defer 保证 handler panic（net/http 会兜底 recover）时计数同样归还。
-	defer d.finish(r)
+	defer d.finish(conn)
 	d.next.ServeHTTP(w, r)
 }
 
-func (d *httpDrain) finish(r *http.Request) {
-	conn, _ := r.Context().Value(requestConnKey{}).(net.Conn)
+func (d *httpDrain) finish(conn net.Conn) {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 	if conn != nil {
@@ -210,11 +236,22 @@ func (d *httpDrain) finish(r *http.Request) {
 	}
 }
 
-// beginDrain 进入排空状态：拒绝新请求，并在 T=0 关闭所有 hijack 连接。
+// beginDrain 进入排空状态：拒绝新请求，并在 T=0 关闭所有 hijack 连接和从未有请求
+// 进入 handler 的连接。
 //
 // WebSocket（Codex/Responses WS、OpenAI live、grok audio、ops WS）不享受宽限：
 // 空闲的 Codex WS 客户端会一直挂着连接，若等到宽限结束再关，每次重启都要
 // 完整等满宽限（期间监听已关闭，新请求全部被拒）。只有 HTTP/SSE 请求等宽限。
+//
+// 从未发来请求的连接（浏览器预连接、四层探活、请求头没发完）同样立即关闭：net/http 的
+// Shutdown 只在 StateNew 连接存在超过 5 秒后才把它当作空闲关掉（closeIdleConns 里的
+// Issue 22682 规则），哪怕所有 handler 都已返回，每次关停/后台重启也要因此白等约 5 秒，
+// 期间监听已关闭、什么都不服务。这类连接上没有进行中的响应，此时到来的请求反正只会拿到 503。
+//
+// 刻意不在 d.done 关闭后直接 server.Close() 来跳过这段轮询：d.done 在我们的 ServeHTTP
+// 返回时就关闭，早于 net/http 在 finishRequest 里刷出缓冲的响应尾部与 chunk 结束标记，
+// h2 的帧也还在异步写出，提前 Close 会截断最后一批响应。服务过请求的连接仍由 Shutdown
+// 等到空闲再关。
 func (d *httpDrain) beginDrain() {
 	d.mu.Lock()
 	if !d.stopping {
@@ -225,12 +262,18 @@ func (d *httpDrain) beginDrain() {
 	}
 	d.mu.Unlock()
 	d.closeHijacked()
+	d.closeTracked(d.unserved)
 }
 
 func (d *httpDrain) closeHijacked() {
+	d.closeTracked(d.hijacked)
+}
+
+// closeTracked 在锁内取快照、锁外关闭：Close 可能阻塞，不能让它卡住 ConnState 和 ServeHTTP。
+func (d *httpDrain) closeTracked(tracked map[net.Conn]struct{}) {
 	d.mu.Lock()
-	conns := make([]net.Conn, 0, len(d.hijacked))
-	for conn := range d.hijacked {
+	conns := make([]net.Conn, 0, len(tracked))
+	for conn := range tracked {
 		conns = append(conns, conn)
 	}
 	d.mu.Unlock()

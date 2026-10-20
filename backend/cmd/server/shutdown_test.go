@@ -58,6 +58,34 @@ func startH2CDrainTestServer(t *testing.T, handler http.HandlerFunc) (*httptest.
 	return server, &http.Client{Transport: transport}
 }
 
+// startDrainTestServerCountingConns 与 startDrainTestServer 相同，另返回 http.Server 已登记
+// （ConnState=StateNew）的连接数：测试据此确认原始 TCP 连接确实进入了 Serve 的跟踪，
+// 而不是还停在 Accept 之前。
+func startDrainTestServerCountingConns(t *testing.T, handler http.HandlerFunc) (*httptest.Server, *atomic.Int32) {
+	t.Helper()
+	var accepted atomic.Int32
+	server := httptest.NewUnstartedServer(handler)
+	server.Config.ConnState = func(_ net.Conn, state http.ConnState) {
+		if state == http.StateNew {
+			accepted.Add(1)
+		}
+	}
+	installHTTPDrain(server.Config)
+	server.Start()
+	t.Cleanup(server.Close)
+	return server, &accepted
+}
+
+func requireConnClosedByServer(t *testing.T, conn net.Conn) {
+	t.Helper()
+	require.NoError(t, conn.SetReadDeadline(time.Now().Add(2*time.Second)))
+	n, err := conn.Read(make([]byte, 64))
+	require.Zero(t, n)
+	require.Error(t, err)
+	var netErr net.Error
+	require.False(t, errors.As(err, &netErr) && netErr.Timeout(), "the connection must be closed, not left hanging: %v", err)
+}
+
 func drainOf(t *testing.T, server *http.Server) *httpDrain {
 	t.Helper()
 	drain, ok := server.Handler.(*httpDrain)
@@ -322,6 +350,83 @@ func TestHTTPDrainRejectsRequestsArrivingDuringDrain(t *testing.T) {
 	require.True(t, drained)
 	require.Zero(t, remaining)
 	require.NoError(t, err)
+}
+
+// 只建了 TCP、从未发完请求头的连接（浏览器预连接、四层探活、请求头发到一半）不能拖住
+// 排空：net/http 的 Shutdown 要等 StateNew 连接存在满 5 秒才把它当空闲关掉（Issue 22682），
+// 即使一个 handler 都没在跑，每次关停/后台重启也会白等约 5 秒，期间监听已关闭、什么都不服务。
+func TestHTTPDrainDoesNotWaitForConnectionsThatNeverSentARequest(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		sent string
+	}{
+		{name: "silent"},
+		{name: "partial header", sent: "GET / HTTP/1.1\r\nHost: drain.test\r\n"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			server, accepted := startDrainTestServerCountingConns(t, func(http.ResponseWriter, *http.Request) {
+				t.Error("no request should reach the handler")
+			})
+			conn, err := net.Dial("tcp", server.Listener.Addr().String())
+			require.NoError(t, err)
+			defer func() { _ = conn.Close() }()
+			if tc.sent != "" {
+				_, err = io.WriteString(conn, tc.sent)
+				require.NoError(t, err)
+			}
+			require.Eventually(t, func() bool { return accepted.Load() == 1 }, 2*time.Second, time.Millisecond)
+
+			// 宽限远大于 5 秒：排空若仍按 StateNew 规则轮询，会在约 5 秒后才返回而不是到期。
+			started := time.Now()
+			drained, remaining, err := drainHTTPServer(server.Config, 10*time.Second, time.Second)
+			elapsed := time.Since(started)
+			require.True(t, drained)
+			require.Zero(t, remaining)
+			require.NoError(t, err)
+			require.Less(t, elapsed, time.Second, "a connection that never sent a request must not hold the drain")
+			requireConnClosedByServer(t, conn)
+		})
+	}
+}
+
+// 关掉“从未发过请求”的连接不能波及刚返回的 handler：d.done 在我们的 ServeHTTP 返回时
+// 就关闭，net/http 随后才在 finishRequest 里刷出缓冲的响应尾部和 chunk 结束标记，所以排空
+// 仍要等 Shutdown 确认这些连接收尾完毕，而不是一见 d.done 就 server.Close()。
+func TestHTTPDrainDeliversResponseTailWhileClosingSilentConnections(t *testing.T) {
+	started, release := make(chan struct{}), make(chan struct{})
+	releaseStream := sync.OnceFunc(func() { close(release) })
+	server, accepted := startDrainTestServerCountingConns(t, func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		_, _ = io.WriteString(w, "data: first\n\n")
+		_ = http.NewResponseController(w).Flush()
+		close(started)
+		<-release
+		// 不 Flush：这部分只在 handler 返回后由 net/http 刷出。
+		_, _ = io.WriteString(w, "data: tail\n\n")
+	})
+	t.Cleanup(releaseStream)
+	resp, err := http.Get(server.URL)
+	require.NoError(t, err)
+	defer func() { _ = resp.Body.Close() }()
+	waitForDrainSignal(t, started)
+
+	silent, err := net.Dial("tcp", server.Listener.Addr().String())
+	require.NoError(t, err)
+	defer func() { _ = silent.Close() }()
+	require.Eventually(t, func() bool { return accepted.Load() == 2 }, 2*time.Second, time.Millisecond)
+
+	begin := time.Now()
+	done := drainAsync(server.Config, 10*time.Second, time.Second)
+	requireDrainStillRunning(t, done)
+	releaseStream()
+	outcome := receiveDrainOutcome(t, done)
+	require.True(t, outcome.drained)
+	require.NoError(t, outcome.err)
+	require.Less(t, time.Since(begin), time.Second, "the silent connection must not hold the drain once the stream finished")
+	body, err := io.ReadAll(resp.Body)
+	require.NoError(t, err, "the response tail flushed after the handler returned must not be cut")
+	require.Equal(t, "data: first\n\ndata: tail\n\n", string(body))
+	requireConnClosedByServer(t, silent)
 }
 
 func TestHTTPDrainWithoutTrackerStillClosesServer(t *testing.T) {
