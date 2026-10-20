@@ -1736,15 +1736,17 @@ func (s *AccountUsageService) GetAccountUsageStats(ctx context.Context, accountI
 // 如果账号开启了 TLS 指纹，则使用 TLS 指纹伪装
 // 如果有缓存的 Fingerprint，则使用缓存的 User-Agent 等信息
 func (s *AccountUsageService) fetchOAuthUsageRaw(ctx context.Context, account *Account) (*ClaudeUsageResponse, error) {
+	// 先校验代理绑定、后取 token（与 ClaudeQuotaService.fetchOptions 一致）：token provider
+	// 临近过期会刷新，刷新本身就是一次上游请求，不能为注定发不出去的用量查询去做。
+	opts, err := s.claudeFetchOptions(ctx, account, "")
+	if err != nil {
+		return nil, err
+	}
 	accessToken := s.claudeUsageAccessToken(ctx, account)
 	if accessToken == "" {
 		return nil, fmt.Errorf("no access token available")
 	}
-
-	opts, err := s.claudeFetchOptions(ctx, account, accessToken)
-	if err != nil {
-		return nil, err
-	}
+	opts.AccessToken = accessToken
 	return s.usageFetcher.FetchUsageWithOptions(ctx, opts)
 }
 

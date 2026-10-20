@@ -74,3 +74,64 @@ func TestClaudeAccountAPIsRejectBrokenProxyBinding(t *testing.T) {
 		})
 	}
 }
+
+// claudeUsageOptsRecorder 记录原始用量读取实际带出的选项（token 与代理）。
+type claudeUsageOptsRecorder struct {
+	opts []*ClaudeUsageFetchOptions
+}
+
+func (r *claudeUsageOptsRecorder) FetchUsage(ctx context.Context, accessToken, proxyURL string) (*ClaudeUsageResponse, error) {
+	return r.FetchUsageWithOptions(ctx, &ClaudeUsageFetchOptions{AccessToken: accessToken, ProxyURL: proxyURL})
+}
+
+func (r *claudeUsageOptsRecorder) FetchUsageWithOptions(_ context.Context, opts *ClaudeUsageFetchOptions) (*ClaudeUsageResponse, error) {
+	r.opts = append(r.opts, opts)
+	return &ClaudeUsageResponse{}, nil
+}
+
+// 主动用量读取（GetUsage → fetchOAuthUsageRaw）经 token provider 取 token，临近过期会刷新；
+// 代理绑定失效时必须先拒绝，provider 一次都不能被调用（刷新本身也是一次上游请求）。
+func TestClaudeUsageRawRejectsBrokenProxyBeforeTokenProvider(t *testing.T) {
+	id := int64(9)
+	for _, fixture := range []struct {
+		name  string
+		proxy *Proxy
+	}{
+		{"missing", nil},
+		{"mismatched", &Proxy{ID: id + 1, Protocol: "socks5", Host: "proxy.invalid", Port: 1080}},
+		{"invalid", &Proxy{ID: id, Protocol: "unsupported", Host: "proxy.invalid", Port: 1080}},
+	} {
+		t.Run(fixture.name, func(t *testing.T) {
+			account := claudeQuotaTestAccount(nil)
+			account.Credentials = map[string]any{"access_token": "stored"}
+			account.ProxyID, account.Proxy = &id, fixture.proxy
+			calls := 0
+			fetcher := &claudeUsageOptsRecorder{}
+			usage := &AccountUsageService{usageFetcher: fetcher, claudeTokenProvider: quotaTokenProviderFunc(
+				func(context.Context, *Account) (string, error) {
+					calls++
+					return "must-not-refresh", nil
+				})}
+			resp, err := usage.fetchOAuthUsageRaw(t.Context(), &account)
+			require.ErrorIs(t, err, ErrAccountProxyUnavailable)
+			require.Nil(t, resp)
+			require.Zero(t, calls)
+			require.Empty(t, fetcher.opts)
+		})
+	}
+
+	// 绑定正常时照常经 provider 取 token，并带上账号代理。
+	t.Run("valid binding", func(t *testing.T) {
+		account := claudeQuotaTestAccount(nil)
+		account.Credentials = map[string]any{"access_token": "stored"}
+		account.ProxyID, account.Proxy = &id, &Proxy{ID: id, Protocol: "socks5", Host: "127.0.0.1", Port: 7891}
+		fetcher := &claudeUsageOptsRecorder{}
+		usage := &AccountUsageService{usageFetcher: fetcher, claudeTokenProvider: quotaTokenProviderFunc(
+			func(context.Context, *Account) (string, error) { return "fresh-token", nil })}
+		_, err := usage.fetchOAuthUsageRaw(t.Context(), &account)
+		require.NoError(t, err)
+		require.Len(t, fetcher.opts, 1)
+		require.Equal(t, "fresh-token", fetcher.opts[0].AccessToken)
+		require.Equal(t, "socks5://127.0.0.1:7891", fetcher.opts[0].ProxyURL)
+	})
+}
