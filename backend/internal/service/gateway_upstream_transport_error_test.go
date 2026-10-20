@@ -94,6 +94,13 @@ func TestHandleUpstreamTransportError_AttributesEventTimeProxy(t *testing.T) {
 			account:  &Account{ID: 149, Name: "acc", Platform: PlatformAnthropic},
 			wantName: opsProxyNameDirect,
 		},
+		{
+			// 分配了代理但关系缺失：请求因拒绝直连而失败，事件归到分配的代理，绝不记 direct。
+			name:     "assigned proxy relation missing",
+			account:  &Account{ID: 149, Name: "acc", Platform: PlatformAnthropic, ProxyID: &proxyID},
+			wantID:   &proxyID,
+			wantName: opsProxyNameUnknown,
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

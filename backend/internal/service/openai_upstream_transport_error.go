@@ -109,11 +109,25 @@ func classifyUpstreamTransportError(err error) upstreamTransportErrorClass {
 //
 // passthrough tags the Ops error event for the OpenAI passthrough forward path.
 func (s *OpenAIGatewayService) handleOpenAIUpstreamTransportError(ctx context.Context, c *gin.Context, account *Account, err error, passthrough bool) error {
+	proxyID, proxyName := opsUpstreamProxyAttribution(account)
+	return s.handleOpenAIUpstreamTransportErrorAttributed(ctx, c, account, err, passthrough, proxyID, proxyName)
+}
+
+// handleOpenAIWSUpstreamTransportError 是 WebSocket 上游路径的同一处理，只是 Ops 代理归因按 WS 语义
+// （opsUpstreamWSProxyAttribution）：WS 拨号器没有托管代理时回落到读环境代理的 http.DefaultClient，
+// 所以“没有托管代理”在 WS 上记 unknown 而不是 direct。同一路径上的拨号失败、回退等事件都按这个语义
+// 归因，WS 入口自己记的事件不能换一套口径。
+func (s *OpenAIGatewayService) handleOpenAIWSUpstreamTransportError(ctx context.Context, c *gin.Context, account *Account, err error, passthrough bool) error {
+	proxyID, proxyName := opsUpstreamWSProxyAttribution(account)
+	return s.handleOpenAIUpstreamTransportErrorAttributed(ctx, c, account, err, passthrough, proxyID, proxyName)
+}
+
+func (s *OpenAIGatewayService) handleOpenAIUpstreamTransportErrorAttributed(ctx context.Context, c *gin.Context, account *Account, err error, passthrough bool, proxyID *int64, proxyName string) error {
 	safeErr := sanitizeUpstreamErrorMessage(err.Error())
 	setOpsUpstreamError(c, 0, safeErr, "")
 	appendOpsUpstreamError(c, OpsUpstreamErrorEvent{
-		ProxyID:            opsUpstreamProxyID(account),
-		ProxyName:          opsUpstreamProxyName(account),
+		ProxyID:            proxyID,
+		ProxyName:          proxyName,
 		Platform:           account.Platform,
 		AccountID:          account.ID,
 		AccountName:        account.Name,

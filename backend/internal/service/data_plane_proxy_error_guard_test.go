@@ -39,11 +39,12 @@ var proxyURLResolvers = map[string]bool{
 
 // proxyErrorConverters 把代理错误转成 failover（或按平台约定处理）的函数。
 var proxyErrorConverters = map[string]bool{
-	"handleOpenAIUpstreamTransportError":  true,
-	"handleUpstreamTransportError":        true,
-	"handleAccessTokenTransportError":     true,
-	"antigravityProxyUnavailableFailover": true,
-	"forwardNativeTransportFailure":       true,
+	"handleOpenAIUpstreamTransportError":   true,
+	"handleOpenAIWSUpstreamTransportError": true,
+	"handleUpstreamTransportError":         true,
+	"handleAccessTokenTransportError":      true,
+	"antigravityProxyUnavailableFailover":  true,
+	"forwardNativeTransportFailure":        true,
 }
 
 // rawProxyErrorAllowlist 是可以直接返回代理错误的非换号路径，每条都写明理由。

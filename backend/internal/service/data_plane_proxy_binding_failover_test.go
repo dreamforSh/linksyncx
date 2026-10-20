@@ -91,11 +91,98 @@ func requireProxyBindingFailover(t *testing.T, err error, account *Account, c *g
 	last := events[len(events)-1]
 	require.Equal(t, "request_error", last.Kind)
 	require.Contains(t, last.Message, ErrAccountProxyUnavailable.Error())
+	// 两种失效都归到分配的代理上，绝不能记成 direct：请求恰恰是因为拒绝直连才失败的，记 direct 会让管理员
+	// 以为有账号绕过代理出站了。
+	require.NotNil(t, last.ProxyID, "the event must point at the assigned binding")
+	require.Equal(t, brokenBindingProxyID, *last.ProxyID)
+	require.NotEqual(t, opsProxyNameDirect, last.ProxyName, "a request refused for its proxy binding is not a direct request")
 	if account.Proxy != nil {
-		// URL 无效时代理行还在：事件指向具体代理，管理员能定位是哪条绑定写错了。
-		require.NotNil(t, last.ProxyID)
-		require.Equal(t, brokenBindingProxyID, *last.ProxyID)
+		// URL 无效时代理行还在：事件带上它的名称，管理员能定位是哪条绑定写错了。
+		require.Equal(t, account.Proxy.Name, last.ProxyName)
 		require.NotContains(t, last.Message, "bad host", "the event must not echo proxy configuration")
+	} else {
+		require.Equal(t, opsProxyNameUnknown, last.ProxyName)
+	}
+}
+
+// WS 上游路径的代理失效分支与该路径上其它 WS 事件同一口径（opsUpstreamWSProxyAttribution）：没有托管代理时
+// 拨号器回落到读环境代理的 http.DefaultClient，记 unknown；HTTP 路径没有托管代理才是 direct。两条路径对
+// 绑定失效的账号都归到分配的代理 ID。
+func TestHandleOpenAIWSUpstreamTransportErrorUsesWSProxyAttribution(t *testing.T) {
+	boundID := brokenBindingProxyID
+	cases := []struct {
+		name     string
+		account  func() *Account
+		err      error
+		wantID   *int64
+		wantWS   string
+		wantHTTP string
+	}{
+		{
+			name:     "no managed proxy",
+			account:  func() *Account { return &Account{ID: 111, Name: "ws", Platform: PlatformOpenAI} },
+			err:      errors.New("EOF"),
+			wantWS:   opsProxyNameUnknown,
+			wantHTTP: opsProxyNameDirect,
+		},
+		{
+			name: "missing relation",
+			account: func() *Account {
+				return &Account{ID: 112, Name: "ws", Platform: PlatformOpenAI, ProxyID: &boundID}
+			},
+			err:      ErrAccountProxyUnavailable,
+			wantID:   &boundID,
+			wantWS:   opsProxyNameUnknown,
+			wantHTTP: opsProxyNameUnknown,
+		},
+		{
+			name: "managed proxy",
+			account: func() *Account {
+				return &Account{ID: 113, Name: "ws", Platform: PlatformOpenAI, ProxyID: &boundID, Proxy: &Proxy{ID: boundID, Name: "ws-proxy"}}
+			},
+			err:      errors.New("EOF"),
+			wantID:   &boundID,
+			wantWS:   "ws-proxy",
+			wantHTTP: "ws-proxy",
+		},
+	}
+	lastEvent := func(t *testing.T, c *gin.Context) *OpsUpstreamErrorEvent {
+		t.Helper()
+		raw, ok := c.Get(OpsUpstreamErrorsKey)
+		require.True(t, ok)
+		events, ok := raw.([]*OpsUpstreamErrorEvent)
+		require.True(t, ok)
+		require.Len(t, events, 1)
+		return events[0]
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			svc := proxyBindingOpenAIService(&countingProxyBindingUpstream{})
+			for _, path := range []struct {
+				name   string
+				handle func(*gin.Context, *Account) error
+				want   string
+			}{
+				{"ws", func(c *gin.Context, a *Account) error {
+					return svc.handleOpenAIWSUpstreamTransportError(context.Background(), c, a, tc.err, false)
+				}, tc.wantWS},
+				{"http", func(c *gin.Context, a *Account) error {
+					return svc.handleOpenAIUpstreamTransportError(context.Background(), c, a, tc.err, false)
+				}, tc.wantHTTP},
+			} {
+				c, _ := newProxyBindingTestContext(http.MethodGet, "/v1/responses", nil)
+				var failoverErr *UpstreamFailoverError
+				require.ErrorAs(t, path.handle(c, tc.account()), &failoverErr, path.name)
+				ev := lastEvent(t, c)
+				if tc.wantID == nil {
+					require.Nil(t, ev.ProxyID, path.name)
+				} else {
+					require.NotNil(t, ev.ProxyID, path.name)
+					require.Equal(t, *tc.wantID, *ev.ProxyID, path.name)
+				}
+				require.Equal(t, path.want, ev.ProxyName, path.name)
+			}
+		})
 	}
 }
 
