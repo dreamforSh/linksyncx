@@ -3,6 +3,7 @@
 package service
 
 import (
+	"context"
 	"fmt"
 	"testing"
 
@@ -118,6 +119,122 @@ func TestResolveTLSProfileFallsBackWithoutTemplatesAndToleratesNilService(t *tes
 	profile = nilService.ResolveTLSProfile(unbound)
 	require.NotNil(t, profile)
 	require.Equal(t, "Built-in Default (Node.js 24.x)", profile.Name)
+}
+
+// tlsProfileRepoStub 是内存版模板仓储，记录写入次数，用来确认被拒的模板没有落库。
+type tlsProfileRepoStub struct {
+	profiles map[int64]*model.TLSFingerprintProfile
+	nextID   int64
+	creates  int
+	updates  int
+}
+
+func newTLSProfileRepoStub(seed ...*model.TLSFingerprintProfile) *tlsProfileRepoStub {
+	r := &tlsProfileRepoStub{profiles: map[int64]*model.TLSFingerprintProfile{}, nextID: 100}
+	for _, p := range seed {
+		r.profiles[p.ID] = p
+	}
+	return r
+}
+
+func (r *tlsProfileRepoStub) List(context.Context) ([]*model.TLSFingerprintProfile, error) {
+	out := make([]*model.TLSFingerprintProfile, 0, len(r.profiles))
+	for _, p := range r.profiles {
+		out = append(out, p)
+	}
+	return out, nil
+}
+
+func (r *tlsProfileRepoStub) GetByID(_ context.Context, id int64) (*model.TLSFingerprintProfile, error) {
+	return r.profiles[id], nil
+}
+
+func (r *tlsProfileRepoStub) Create(_ context.Context, p *model.TLSFingerprintProfile) (*model.TLSFingerprintProfile, error) {
+	r.creates++
+	r.nextID++
+	stored := *p
+	stored.ID = r.nextID
+	r.profiles[stored.ID] = &stored
+	return &stored, nil
+}
+
+func (r *tlsProfileRepoStub) Update(_ context.Context, p *model.TLSFingerprintProfile) (*model.TLSFingerprintProfile, error) {
+	r.updates++
+	stored := *p
+	r.profiles[stored.ID] = &stored
+	return &stored, nil
+}
+
+func (r *tlsProfileRepoStub) Delete(_ context.Context, id int64) error {
+	delete(r.profiles, id)
+	return nil
+}
+
+// 保存时就拦住不自洽的模板（key_share 必须是 supported_groups 的子集，空字段按内置默认值补齐后再查），
+// 否则它存进库后绑定它的账号每个请求都失败。错误必须是 *model.ValidationError（handler 据此返回 400），
+// 字段挂在 key_share_groups 上；自洽的模板（含全默认、curves 已包含默认 key share 的）照常保存。
+func TestTLSFingerprintProfileSaveRejectsInconsistentClientHello(t *testing.T) {
+	ctx := context.Background()
+	invalid := map[string]*model.TLSFingerprintProfile{
+		"custom curves without key shares": {Name: "node-like", Curves: []uint16{29, 23, 24}},
+		"key share missing from curves":    {Name: "mismatch", Curves: []uint16{29, 23}, KeyShareGroups: []uint16{29, 24}},
+	}
+	valid := map[string]*model.TLSFingerprintProfile{
+		"all defaults":                      {Name: "defaults"},
+		"explicit key shares within curves": {Name: "explicit", Curves: []uint16{29, 23}, KeyShareGroups: []uint16{29}},
+		"custom curves keep default shares": {Name: "pq", Curves: []uint16{4588, 29, 23}},
+		"key shares within default curves":  {Name: "x25519-only", KeyShareGroups: []uint16{29}},
+	}
+
+	requireKeyShareValidationError := func(t *testing.T, err error) {
+		t.Helper()
+		var validationErr *model.ValidationError
+		require.ErrorAs(t, err, &validationErr)
+		require.Equal(t, "key_share_groups", validationErr.Field)
+		require.Contains(t, validationErr.Message, "absent from supported groups")
+	}
+
+	for name, profile := range invalid {
+		t.Run("create rejects "+name, func(t *testing.T) {
+			repo := newTLSProfileRepoStub()
+			svc := NewTLSFingerprintProfileService(repo, nil)
+			created, err := svc.Create(ctx, profile)
+			requireKeyShareValidationError(t, err)
+			require.Nil(t, created)
+			require.Zero(t, repo.creates)
+		})
+		t.Run("update rejects "+name, func(t *testing.T) {
+			original := &model.TLSFingerprintProfile{ID: 7, Name: "original", Curves: []uint16{29}, KeyShareGroups: []uint16{29}}
+			repo := newTLSProfileRepoStub(original)
+			svc := NewTLSFingerprintProfileService(repo, nil)
+			edited := *profile
+			edited.ID = 7
+			updated, err := svc.Update(ctx, &edited)
+			requireKeyShareValidationError(t, err)
+			require.Nil(t, updated)
+			require.Zero(t, repo.updates)
+			require.Same(t, original, repo.profiles[7])
+		})
+	}
+	for name, profile := range valid {
+		t.Run("create accepts "+name, func(t *testing.T) {
+			repo := newTLSProfileRepoStub()
+			svc := NewTLSFingerprintProfileService(repo, nil)
+			created, err := svc.Create(ctx, profile)
+			require.NoError(t, err)
+			require.NotNil(t, created)
+			require.Equal(t, 1, repo.creates)
+		})
+		t.Run("update accepts "+name, func(t *testing.T) {
+			repo := newTLSProfileRepoStub(&model.TLSFingerprintProfile{ID: 7, Name: "original"})
+			svc := NewTLSFingerprintProfileService(repo, nil)
+			edited := *profile
+			edited.ID = 7
+			_, err := svc.Update(ctx, &edited)
+			require.NoError(t, err)
+			require.Equal(t, 1, repo.updates)
+		})
+	}
 }
 
 func (s *TLSFingerprintProfileService) snapshotLocalCacheForTest() []*model.TLSFingerprintProfile {

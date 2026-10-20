@@ -28,9 +28,21 @@ type TLSFingerprintProfile struct {
 }
 
 // Validate 验证模板配置的有效性
+//
+// 除名称外还要求最终生效的 ClientHello 自洽（tlsfingerprint.ValidateProfile）：这样的模板在
+// DoWithTLS 建池前一定会被拒绝，存进去只会让绑定它的账号每个请求都失败，“随机”模式下还会把
+// 约 1/N 的账号长期钉在它上面。目前唯一的检查是 key_share 必须是 supported_groups 的子集，
+// 典型踩坑是自定义了 curves 却没填 key_share_groups，于是继承内置默认的 [4588, 29]，
+// 所以错误挂在 key_share_groups 上，并提示空字段会回落到内置默认值。
 func (p *TLSFingerprintProfile) Validate() error {
 	if p.Name == "" {
 		return &ValidationError{Field: "name", Message: "name is required"}
+	}
+	if err := tlsfingerprint.ValidateProfile(p.ToTLSProfile()); err != nil {
+		return &ValidationError{
+			Field:   "key_share_groups",
+			Message: err.Error() + "; every key share group must also be listed in curves (empty fields fall back to the built-in defaults)",
+		}
 	}
 	return nil
 }
