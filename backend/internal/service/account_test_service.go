@@ -640,6 +640,13 @@ func (s *AccountTestService) testClaudeAccountConnection(c *gin.Context, account
 
 		// 403 表示账号被上游封禁，标记为 error 状态
 		if resp.StatusCode == http.StatusForbidden {
+			// 例外：Anthropic OAuth/setup-token 的边缘 403（Cloudflare 拦截页等）说明代理出口被拦，
+			// 不是账号证据。运行时只计数冷却（handleAnthropicEdge403），测试不能比运行时更严；
+			// 定时测试也走这里，否则出口被拦期间会周期性地把账号永久禁用。只报告，不标错。
+			if account.IsAnthropicOAuthOrSetupToken() && isAnthropicEdgeForbidden(resp.Header, body) {
+				return s.sendErrorAndEnd(c, "API returned 403 from the edge (proxy/egress IP likely blocked; account not marked): "+
+					describeEdgeForbidden(resp.Header, body))
+			}
 			_ = s.accountRepo.SetError(ctx, account.ID, errMsg)
 		}
 

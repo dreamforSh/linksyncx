@@ -29,6 +29,8 @@ type ClaudeTokenProvider struct {
 	refreshAPI    *OAuthRefreshAPI
 	executor      OAuthRefreshExecutor
 	refreshPolicy ProviderRefreshPolicy
+
+	unauthorizedRefreshLimiter claudeUnauthorizedRefreshLimiter
 }
 
 func NewClaudeTokenProvider(
