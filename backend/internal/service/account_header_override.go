@@ -125,14 +125,14 @@ func (a *Account) GetHeaderOverrides() map[string]string {
 	rawSig := uint64(0)
 	rawSigReady := false
 
-	if a.headerOverrideCacheReady &&
-		a.headerOverrideCacheCredentialsPtr == credentialsPtr &&
-		a.headerOverrideCacheRawPtr == rawPtr &&
-		a.headerOverrideCacheRawLen == rawLen {
+	if cached := loadAccountMappingCache(&a.headerOverrideCache); cached != nil &&
+		cached.credentialsPtr == credentialsPtr &&
+		cached.rawPtr == rawPtr &&
+		cached.rawLen == rawLen {
 		rawSig = modelMappingSignature(rawMapping)
 		rawSigReady = true
-		if a.headerOverrideCacheRawSig == rawSig {
-			return a.headerOverrideCache
+		if cached.rawSig == rawSig {
+			return cached.value
 		}
 	}
 
@@ -141,12 +141,14 @@ func (a *Account) GetHeaderOverrides() map[string]string {
 		rawSig = modelMappingSignature(rawMapping)
 	}
 
-	a.headerOverrideCache = overrides
-	a.headerOverrideCacheReady = true
-	a.headerOverrideCacheCredentialsPtr = credentialsPtr
-	a.headerOverrideCacheRawPtr = rawPtr
-	a.headerOverrideCacheRawLen = rawLen
-	a.headerOverrideCacheRawSig = rawSig
+	// 与 GetModelMapping 共用不可变快照 + 原子发布，同一账号可被并发请求安全共享
+	storeAccountMappingCache(&a.headerOverrideCache, &accountMappingCache{
+		value:          overrides,
+		credentialsPtr: credentialsPtr,
+		rawPtr:         rawPtr,
+		rawLen:         rawLen,
+		rawSig:         rawSig,
+	})
 	return overrides
 }
 

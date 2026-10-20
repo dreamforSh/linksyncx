@@ -11,7 +11,9 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"time"
+	"unsafe"
 
 	"github.com/Wei-Shaw/sub2api/internal/config"
 	"github.com/Wei-Shaw/sub2api/internal/domain"
@@ -68,22 +70,11 @@ type Account struct {
 	GroupIDs      []int64
 	Groups        []*Group
 
-	// model_mapping 热路径缓存（非持久化字段）
-	modelMappingCache               map[string]string
-	modelMappingCacheReady          bool
-	modelMappingCacheCredentialsPtr uintptr
-	modelMappingCacheRawPtr         uintptr
-	modelMappingCacheRawLen         int
-	modelMappingCacheRawSig         uint64
-	modelMappingCacheRuntimeVersion uint64
-
-	// header_overrides 热路径缓存（非持久化字段，同 model_mapping 缓存先例）
-	headerOverrideCache               map[string]string
-	headerOverrideCacheReady          bool
-	headerOverrideCacheCredentialsPtr uintptr
-	headerOverrideCacheRawPtr         uintptr
-	headerOverrideCacheRawLen         int
-	headerOverrideCacheRawSig         uint64
+	// model_mapping / header_overrides 热路径缓存（非持久化字段）。
+	// 同一个 *Account 会被并发请求共享，只能经 loadAccountMappingCache /
+	// storeAccountMappingCache 原子读写，见 accountMappingCache。
+	modelMappingCache   *accountMappingCache
+	headerOverrideCache *accountMappingCache
 }
 
 type OpenAIEndpointCapability string
@@ -609,15 +600,15 @@ func (a *Account) GetModelMapping() map[string]string {
 	rawSig := uint64(0)
 	rawSigReady := false
 
-	if a.modelMappingCacheReady &&
-		a.modelMappingCacheCredentialsPtr == credentialsPtr &&
-		a.modelMappingCacheRawPtr == rawPtr &&
-		a.modelMappingCacheRawLen == rawLen &&
-		a.modelMappingCacheRuntimeVersion == runtimeVersion {
+	if cached := loadAccountMappingCache(&a.modelMappingCache); cached != nil &&
+		cached.credentialsPtr == credentialsPtr &&
+		cached.rawPtr == rawPtr &&
+		cached.rawLen == rawLen &&
+		cached.runtimeVersion == runtimeVersion {
 		rawSig = modelMappingSignature(rawMapping)
 		rawSigReady = true
-		if a.modelMappingCacheRawSig == rawSig {
-			return a.modelMappingCache
+		if cached.rawSig == rawSig {
+			return cached.value
 		}
 	}
 
@@ -626,13 +617,14 @@ func (a *Account) GetModelMapping() map[string]string {
 		rawSig = modelMappingSignature(rawMapping)
 	}
 
-	a.modelMappingCache = mapping
-	a.modelMappingCacheReady = true
-	a.modelMappingCacheCredentialsPtr = credentialsPtr
-	a.modelMappingCacheRawPtr = rawPtr
-	a.modelMappingCacheRawLen = rawLen
-	a.modelMappingCacheRawSig = rawSig
-	a.modelMappingCacheRuntimeVersion = runtimeVersion
+	storeAccountMappingCache(&a.modelMappingCache, &accountMappingCache{
+		value:          mapping,
+		credentialsPtr: credentialsPtr,
+		rawPtr:         rawPtr,
+		rawLen:         rawLen,
+		rawSig:         rawSig,
+		runtimeVersion: runtimeVersion,
+	})
 	return mapping
 }
 
@@ -719,6 +711,35 @@ func (a *Account) resolveModelMapping(rawMapping map[string]any) map[string]stri
 		return xai.DefaultModelMapping()
 	}
 	return nil
+}
+
+// accountMappingCache 是从 credentials 子映射解析出的结果，连同计算时的来源标识
+// （credentials / 子映射的指针、长度、内容签名、运行时映射版本）一起整体发布的快照。
+// WHY：同一个 *Account 会被调度快照 / 账号缓存同时交给多个请求；原先逐字段懒写入，
+// 读者可能拼出新旧混杂的来源标识，弱内存序 CPU（arm64）上还可能先看到新 map 指针、
+// 后看到 map 内容。快照构造完即不再修改、经原子指针发布，读者只会看到某个完整快照。
+// 来源变化（凭据整体替换、子映射原地增删改、运行时设置变更）由读者比对来源标识发现并
+// 重算，无需显式失效；并发未命中时各自重算、后写覆盖，每个快照都自洽，覆盖无害。
+// 返回的 value 被所有调用方共享，调用方不得修改。
+type accountMappingCache struct {
+	value          map[string]string
+	credentialsPtr uintptr
+	rawPtr         uintptr
+	rawLen         int
+	rawSig         uint64
+	runtimeVersion uint64
+}
+
+// loadAccountMappingCache / storeAccountMappingCache 以 atomic.Pointer 的语义读写缓存槽。
+// WHY 不直接用 atomic.Pointer / sync.Mutex 字段：Account 大量按值拷贝（[]Account、
+// acc := *account），二者内含 noCopy 会让 govet copylocks 全线报错；普通指针字段
+// 按值拷贝只是共享同一个不可变快照，且拷贝改了 Credentials 也会因来源标识不符而重算。
+func loadAccountMappingCache(slot **accountMappingCache) *accountMappingCache {
+	return (*accountMappingCache)(atomic.LoadPointer((*unsafe.Pointer)(unsafe.Pointer(slot))))
+}
+
+func storeAccountMappingCache(slot **accountMappingCache, entry *accountMappingCache) {
+	atomic.StorePointer((*unsafe.Pointer)(unsafe.Pointer(slot)), unsafe.Pointer(entry))
 }
 
 func mapPtr(m map[string]any) uintptr {
