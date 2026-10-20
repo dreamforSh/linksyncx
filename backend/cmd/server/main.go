@@ -149,7 +149,8 @@ func runMainServer() {
 	if err != nil {
 		log.Fatalf("Failed to initialize application: %v", err)
 	}
-	defer app.Cleanup()
+	// app.Cleanup 由下方 runShutdown 在 HTTP handler 排空之后显式执行：
+	// 依赖（usage 池、Clash、插件、Redis/DB）不能在仍有流式请求时被拆掉。
 	if app.PluginManager != nil {
 		if err := app.PluginManager.Start(context.Background()); err != nil {
 			log.Printf("Plugin manager started in degraded state: %v", err)
@@ -175,6 +176,7 @@ func runMainServer() {
 	}
 
 	// 启动服务器
+	installHTTPDrain(app.Server)
 	go func() {
 		if err := app.Server.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
 			log.Fatalf("Failed to start server: %v", err)
@@ -186,16 +188,13 @@ func runMainServer() {
 	// 等待中断信号
 	quit := make(chan os.Signal, 1)
 	signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM)
-	<-quit
+	sig := <-quit
+	// 第一个信号之后立即恢复默认处理：排空可能持续数十秒，第二次 Ctrl+C/SIGTERM
+	// 必须能直接结束进程。docker/systemd 只发一次 SIGTERM，随后是 SIGKILL，不受影响。
+	signal.Stop(quit)
 
-	log.Println("Shutting down server...")
-
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-
-	if err := app.Server.Shutdown(ctx); err != nil {
-		log.Printf("Server forced to shutdown: %v", err)
-	}
-
-	log.Println("Server exited")
+	grace := time.Duration(cfg.Server.ShutdownTimeoutSeconds) * time.Second
+	log.Printf("Shutting down server (%s): draining in-flight requests for up to %s...", sig, grace)
+	report := runShutdown(app.Server, grace, app.Cleanup)
+	log.Printf("Server exited (handlers drained=%t, still running=%d, cleanup completed=%t)", report.drained, report.remaining, report.cleanedUp)
 }
