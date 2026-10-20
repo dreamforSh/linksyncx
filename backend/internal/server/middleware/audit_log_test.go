@@ -3,6 +3,7 @@ package middleware
 import (
 	"bytes"
 	"context"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"sync"
@@ -187,4 +188,75 @@ func TestOllamaCloudUsageSessionRouteOmitsAuditBody(t *testing.T) {
 	require.Len(t, logs, 1)
 	require.Equal(t, "<credential-bearing body omitted>", logs[0].RequestBody)
 	require.NotContains(t, logs[0].RequestBody, "audit-canary")
+}
+
+// Clash 订阅创建/更新/预览的请求体含订阅 URL（路径/查询 token）与分享链接（节点密码），
+// 键级脱敏覆盖不到字符串值内的凭证，必须整体不入库；同时 handler 仍须读到完整原始 body。
+// 普通账号更新作对照：整体省略只限这几条路由，其它路由仍按键脱敏入库。
+func TestClashProfileRoutesOmitAuditBodyAndPreserveHandlerBody(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	repository := &auditCaptureRepository{}
+	auditService := service.NewAuditLogService(repository, nil)
+	auditService.Start()
+	t.Cleanup(auditService.Stop)
+
+	router := gin.New()
+	router.Use(func(c *gin.Context) {
+		c.Set(string(ContextKeyUser), AuthSubject{UserID: 77})
+		c.Set(string(ContextKeyUserRole), "admin")
+		c.Next()
+	})
+	router.Use(gin.HandlerFunc(NewAuditLogMiddleware(auditService)))
+	const profileBody = `{"source_type":"links","url":"https://sub.example.com/path-canary?token=query-canary","content":"trojan://content-canary@node.example.com:443","source_name":"source-canary.yaml"}`
+	var handlerBodies []string
+	profileHandler := func(c *gin.Context) {
+		body, err := io.ReadAll(c.Request.Body)
+		require.NoError(t, err)
+		handlerBodies = append(handlerBodies, string(body))
+		c.Status(http.StatusNoContent)
+	}
+	router.POST("/api/v1/admin/clash/profiles", profileHandler)
+	router.PUT("/api/v1/admin/clash/profiles/:id", profileHandler)
+	router.POST("/api/v1/admin/clash/profiles/preview", profileHandler)
+	router.PUT("/api/v1/admin/accounts/:id", func(c *gin.Context) { c.Status(http.StatusNoContent) })
+
+	for _, request := range []*http.Request{
+		httptest.NewRequest(http.MethodPost, "/api/v1/admin/clash/profiles", bytes.NewBufferString(profileBody)),
+		httptest.NewRequest(http.MethodPut, "/api/v1/admin/clash/profiles/42", bytes.NewBufferString(profileBody)),
+		httptest.NewRequest(http.MethodPost, "/api/v1/admin/clash/profiles/preview", bytes.NewBufferString(profileBody)),
+		httptest.NewRequest(http.MethodPut, "/api/v1/admin/accounts/42", bytes.NewBufferString(`{"base_url":"https://gateway.example.com","api_key":"api-key-canary"}`)),
+	} {
+		request.Header.Set("Content-Type", "application/json")
+		recorder := httptest.NewRecorder()
+		router.ServeHTTP(recorder, request)
+		require.Equal(t, http.StatusNoContent, recorder.Code)
+	}
+	auditService.Stop()
+	require.Equal(t, []string{profileBody, profileBody, profileBody}, handlerBodies, "omitted routes must leave the request body intact for the handler")
+
+	repository.mu.Lock()
+	logs := append([]*service.AuditLog(nil), repository.logs...)
+	repository.mu.Unlock()
+	require.Len(t, logs, 4)
+
+	wantActions := map[string]string{
+		"POST /api/v1/admin/clash/profiles":         "admin.clash.profile.create",
+		"PUT /api/v1/admin/clash/profiles/:id":      "admin.clash.profile.update",
+		"POST /api/v1/admin/clash/profiles/preview": "admin.clash.profile.preview",
+	}
+	seen := make(map[string]bool, len(wantActions))
+	for _, entry := range logs {
+		require.NotContains(t, entry.RequestBody, "canary")
+		if entry.Path == "/api/v1/admin/accounts/:id" {
+			require.Contains(t, entry.RequestBody, "https://gateway.example.com")
+			require.Contains(t, entry.RequestBody, `"api_key":"***"`)
+			continue
+		}
+		routeKey := entry.Method + " " + entry.Path
+		require.Contains(t, wantActions, routeKey)
+		require.Equal(t, wantActions[routeKey], entry.Action)
+		require.Equal(t, "<credential-bearing body omitted>", entry.RequestBody)
+		seen[routeKey] = true
+	}
+	require.Len(t, seen, len(wantActions))
 }
