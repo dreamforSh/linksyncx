@@ -731,6 +731,10 @@ WorkingDirectory=/opt/sub2api
 ExecStart=/opt/sub2api/sub2api
 Restart=always
 RestartSec=5
+# 优雅关停：SIGTERM 后先等进行中的请求 server.shutdown_timeout_seconds（默认 30s），
+# 再强制取消约 5s、执行依赖清理（最多 30s）把 usage/计费落盘。显式写出而不依赖
+# DefaultTimeoutStopSec，避免被调低的系统默认值提前 SIGKILL；须 >= 宽限 + 35s。
+TimeoutStopSec=90
 StandardOutput=journal
 StandardError=journal
 SyslogIdentifier=sub2api

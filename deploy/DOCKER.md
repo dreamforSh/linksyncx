@@ -63,6 +63,21 @@ and a simple SQL query. `depends_on: condition: service_healthy` helps order a
 fresh Compose start, but application-level retries are still required when
 Docker restores existing containers after a host restart.
 
+## Graceful Shutdown / 优雅关停
+
+`docker stop` 发出 SIGTERM 后，Sub2API 立即关闭监听并断开 WebSocket，进行中的
+HTTP/SSE 请求最多再等 `SERVER_SHUTDOWN_TIMEOUT_SECONDS`（默认 30 秒）；之后强制取消约
+5 秒、执行依赖清理（usage/计费落盘，最多 30 秒）再退出。Docker 默认只等 10 秒就
+SIGKILL，所以容器的停止超时必须不小于“宽限 + 35 秒”：
+
+```bash
+docker run -d --stop-timeout 90 -e SERVER_SHUTDOWN_TIMEOUT_SECONDS=30 ... ghcr.io/dreamforsh/linksyncx:latest
+```
+
+Compose 中对应 `stop_grace_period: 90s`（仓库自带的 compose 文件读取 `.env` 中的
+`SUB2API_STOP_GRACE_PERIOD`）。管理后台的“重启”按钮走同一流程，并以退出码 0 退出，
+依赖 `restart: unless-stopped` 重新拉起容器。
+
 ## Environment Variables
 
 | Variable | Description | Required | Default |
@@ -71,6 +86,7 @@ Docker restores existing containers after a host restart.
 | `REDIS_URL` | Redis connection string | Yes | - |
 | `PORT` | Server port | No | `8080` |
 | `GIN_MODE` | Gin framework mode (`debug`/`release`) | No | `release` |
+| `SERVER_SHUTDOWN_TIMEOUT_SECONDS` | Grace for in-flight HTTP/SSE requests on stop/restart (1-3600) | No | `30` |
 
 ## Supported Architectures
 

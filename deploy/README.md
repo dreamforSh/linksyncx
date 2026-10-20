@@ -168,6 +168,29 @@ Kubernetes, use a PostgreSQL readiness probe and retain the Sub2API startup
 retry behavior; configure the application liveness probe separately so a
 database recovery period is not treated as a permanent process failure.
 
+### 优雅关停与重启（Graceful Shutdown）
+
+收到 SIGTERM/SIGINT，或在管理后台点击“重启”（包括在线更新/回滚后的重启）时，
+Sub2API 按以下顺序退出：
+
+1. 立即关闭监听，新请求被拒绝（经反向代理时返回 502）；WebSocket 会话立即断开。
+2. 进行中的 HTTP/SSE 请求最多再等 `server.shutdown_timeout_seconds`（环境变量
+   `SERVER_SHUTDOWN_TIMEOUT_SECONDS`，默认 30 秒）自然结束，流式请求得以拿到完整 usage 并计费。
+3. 宽限期结束后取消剩余请求、断开连接，再最多等 5 秒让 handler 收尾。
+4. 执行依赖清理：usage 记录池、计费缓存写队列、配额 flusher 落盘，最后关闭 Redis/数据库，最多 30 秒。
+5. 以退出码 0 退出，由 systemd `Restart=always` / Docker `restart: unless-stopped` 重新拉起。
+
+因此部署侧的停止超时必须不小于“宽限 + 35 秒”，否则进程会在计费落盘之前被 SIGKILL：
+
+| 部署方式 | 设置项 | 默认值 |
+|----------|--------|--------|
+| Docker Compose | `stop_grace_period`（`.env` 中的 `SUB2API_STOP_GRACE_PERIOD`） | `90s` |
+| systemd | `sub2api.service` 中的 `TimeoutStopSec` | `90` |
+| Apple container | `apple-container.sh` 中的 `CONTAINER_STOP_TIMEOUT_SECONDS` | `90` |
+
+把宽限调到 55 秒以上时请同步调大这些值。宽限期内服务不接受新请求，宽限越长，
+每次重启的不可用窗口也越长。
+
 ### Database Migration Notes (PostgreSQL)
 
 - Migrations are applied in lexicographic order (e.g. `001_...sql`, `002_...sql`).
@@ -257,6 +280,8 @@ docker compose down -v
 | `JWT_SECRET` | **Recommended** | *(auto-generated)* | JWT secret (fixed for persistent sessions) |
 | `TOTP_ENCRYPTION_KEY` | **Recommended** | *(auto-generated)* | TOTP encryption key (fixed for persistent 2FA) |
 | `SERVER_PORT` | No | `8080` | Server port |
+| `SERVER_SHUTDOWN_TIMEOUT_SECONDS` | No | `30` | Grace for in-flight HTTP/SSE requests on stop/restart (1-3600). See 优雅关停与重启. |
+| `SUB2API_STOP_GRACE_PERIOD` | No | `90s` | Compose `stop_grace_period`; must be at least the shutdown grace + 35s. |
 | `ADMIN_EMAIL` | No | `admin@sub2api.local` | Admin email |
 | `ADMIN_PASSWORD` | No | *(auto-generated)* | Admin password |
 | `TZ` | No | `Asia/Shanghai` | Timezone |
