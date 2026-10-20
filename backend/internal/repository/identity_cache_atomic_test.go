@@ -95,9 +95,10 @@ func TestIdentityCorruptedRecordIsReplacedOnCreate(t *testing.T) {
 // clientIdentityMemoryStore 按 client_identity_repo 的 SQL 语义实现条件写的内存身份库，
 // 让真实 Redis 脚本与数据库优先的身份路径（ProvideIdentityService，生产装配）一起测。
 type clientIdentityMemoryStore struct {
-	mu   sync.Mutex
-	rows map[int64]service.ClientIdentityRecord
-	err  error
+	mu    sync.Mutex
+	rows  map[int64]service.ClientIdentityRecord
+	err   error
+	reads int // Get 调用次数（含失败的），用来断言缓存修好后热路径不再读库
 }
 
 var _ service.ClientIdentityStore = (*clientIdentityMemoryStore)(nil)
@@ -119,6 +120,12 @@ func (m *clientIdentityMemoryStore) count() int {
 	return len(m.rows)
 }
 
+func (m *clientIdentityMemoryStore) readCount() int {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.reads
+}
+
 func (m *clientIdentityMemoryStore) row(accountID int64) *service.ClientIdentityRecord {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -136,6 +143,7 @@ func (m *clientIdentityMemoryStore) rowLocked(accountID int64) *service.ClientId
 func (m *clientIdentityMemoryStore) Get(_ context.Context, accountID int64) (*service.ClientIdentityRecord, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	m.reads++
 	if m.err != nil {
 		return nil, m.err
 	}
@@ -222,8 +230,13 @@ func TestDecodeFingerprintAgreesWithStoredClientIDLua(t *testing.T) {
 		{payload: `{"ClientID":["legacy"]}`},
 		{payload: `{"ClientID":"legacy"}`, clientID: "legacy"},
 		{payload: `{"ClientID":"legacy","IdentityEpoch":3}`, clientID: "legacy", epoch: 3},
-		// Go 的严格解码按不区分大小写匹配键，后出现的 "clientid" 把 ClientID 清空；Lua 只认 "ClientID"。
+		// Go 的严格解码按不区分大小写匹配键，后出现的 "clientid" 会覆盖 ClientID（清空或换成别的值）；
+		// Lua 只认 "ClientID"，只有大小写变体键的记录在它看来没有身份。
 		{payload: `{"ClientID":"legacy","clientid":""}`, clientID: "legacy"},
+		{payload: `{"ClientID":"a","clientid":"b"}`, clientID: "a"},
+		{payload: `{"clientid":"legacy"}`},
+		// 完全相同的重复键两边都是后者胜。
+		{payload: `{"ClientID":"a","ClientID":"b"}`, clientID: "b"},
 		{payload: `{"ClientID":"legacy","UserAgent":5}`, clientID: "legacy"},
 		{payload: `{"ClientID":"legacy","UserAgent":5,"IdentityEpoch":3}`, clientID: "legacy", epoch: 3},
 		{payload: `{"ClientID":"legacy","Persisted":"yes","StainlessOS":"MacOS"}`, clientID: "legacy", os: "MacOS"},
@@ -239,6 +252,9 @@ func TestDecodeFingerprintAgreesWithStoredClientIDLua(t *testing.T) {
 		{payload: `{"ClientID":"legacy","IdentityEpoch":[3]}`, clientID: "legacy"},
 		// Lua 只读区分大小写的 "IdentityEpoch"，大小写不同的键在它看来不存在（代次 0）。
 		{payload: `{"ClientID":"legacy","UserAgent":5,"identityepoch":-5}`, clientID: "legacy"},
+		// 严格解码本身成功时也一样：后出现的大小写变体键不能把代次读低（回写被拒）或读高（代次虚涨）。
+		{payload: `{"ClientID":"legacy","IdentityEpoch":5,"identityepoch":1}`, clientID: "legacy", epoch: 5},
+		{payload: `{"ClientID":"legacy","IdentityEpoch":1,"identityepoch":5}`, clientID: "legacy", epoch: 1},
 	}
 	for i, tc := range cases {
 		t.Run(tc.payload, func(t *testing.T) {
@@ -319,7 +335,8 @@ func TestPersistedIdentityReplacesCorruptCacheRecord(t *testing.T) {
 
 // ClientID 完好、只是其它字段类型不对的记录在 storedClientIDLua 看来是合法身份：必须原样收编进库
 // （device_id 不变、代次沿用），不能另起一台新设备；收编后缓存被规范记录覆盖，后续请求不再依赖数据库。
-// 代次本身类型不对时按 Lua 代次保护读到的值（向上取整）收编，否则覆盖缓存的写入一直被拒。
+// 代次本身类型不对、或被大小写变体键遮住时按 Lua 代次保护读到的值收编，否则覆盖缓存的写入一直被拒、
+// 每个请求都去读库。
 func TestPersistedIdentityAdoptsSalvageableCacheRecord(t *testing.T) {
 	cases := []struct {
 		name    string
@@ -331,6 +348,8 @@ func TestPersistedIdentityAdoptsSalvageableCacheRecord(t *testing.T) {
 		{name: "numeric-string epoch", payload: `{"ClientID":"legacy","IdentityEpoch":"3"}`, epoch: 3},
 		{name: "fractional epoch", payload: `{"ClientID":"legacy","IdentityEpoch":3.5}`, epoch: 4},
 		{name: "exponent epoch", payload: `{"ClientID":"legacy","IdentityEpoch":1e2}`, epoch: 100},
+		{name: "case-variant epoch key", payload: `{"ClientID":"legacy","IdentityEpoch":5,"identityepoch":1}`, epoch: 5},
+		{name: "case-variant client ID key", payload: `{"ClientID":"legacy","clientid":"other"}`},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -356,6 +375,15 @@ func TestPersistedIdentityAdoptsSalvageableCacheRecord(t *testing.T) {
 			require.Equal(t, tc.epoch, repaired.IdentityEpoch)
 			require.True(t, repaired.Persisted)
 			require.NotEmpty(t, repaired.UserAgent)
+
+			reads := store.readCount()
+			for i := 0; i < 2; i++ {
+				again, err := svc.GetOrCreateAccountFingerprint(t.Context(), corruptRecordTestAccount(8), http.Header{})
+				require.NoError(t, err)
+				require.Equal(t, "legacy", again.ClientID)
+				require.Equal(t, tc.epoch, again.IdentityEpoch)
+			}
+			require.Equal(t, reads, store.readCount(), "the repaired cache serves later requests without reading the DB")
 
 			store.fail(errors.New("database down"))
 			for i := 0; i < 2; i++ {

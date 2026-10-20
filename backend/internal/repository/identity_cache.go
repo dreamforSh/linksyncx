@@ -3,7 +3,6 @@ package repository
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"math"
 	"strconv"
@@ -72,19 +71,13 @@ func (c *identityCache) GetFingerprint(ctx context.Context, accountID int64) (*s
 // 代次低于 replaceFingerprintScript 读到的代次的话，收编后回写缓存会一直被代次保护拒绝，缓存就一直
 // 坏着、每个请求都要读库。所以其它字段类型不对（如 UserAgent 是数字）时只丢弃该字段，保住 ClientID，
 // 代次按 Lua 的读法取（见 luaIdentityEpoch）。
+//
+// 这两个字段每次都从区分大小写的键读，不能只在严格解码失败时才这样读：encoding/json 按不区分大小写
+// 匹配键、重复键后者胜，{"ClientID":"a","IdentityEpoch":5,"identityepoch":1} 严格解码照样成功，
+// 却读出代次 1（Lua 读到 5），正好落进上面说的读库死循环。多出的一次 map 解码只有几微秒，相对 Redis
+// 往返可以忽略；只在出现大小写变体键时才走它的话，得在不解析的情况下识别 \u 转义写出的键名，不值得。
 func decodeFingerprint(val string) (*service.Fingerprint, error) {
-	var fp service.Fingerprint
-	err := json.Unmarshal([]byte(val), &fp)
-	if err == nil && fp.ClientID != "" {
-		return &fp, nil
-	}
-	// 字段类型不对时 Unmarshal 跳过该字段、照常解码其余字段，最后才返回 UnmarshalTypeError；
-	// 其它错误（语法错误）说明记录根本不是 JSON，Lua 一侧同样解不出。
-	var typeErr *json.UnmarshalTypeError
-	if err != nil && !errors.As(err, &typeErr) {
-		return nil, fmt.Errorf("%w: %w", service.ErrCorruptClientIdentity, err)
-	}
-	// 严格解码按不区分大小写匹配键，ClientID 与 IdentityEpoch 改按 Lua 的规则从区分大小写的键重取。
+	// 不是 JSON 对象时 Lua 一侧同样解不出身份；null 解成 nil map，按没有 ClientID 处理。
 	var fields map[string]json.RawMessage
 	if err := json.Unmarshal([]byte(val), &fields); err != nil {
 		return nil, fmt.Errorf("%w: %w", service.ErrCorruptClientIdentity, err)
@@ -93,6 +86,11 @@ func decodeFingerprint(val string) (*service.Fingerprint, error) {
 	if err := json.Unmarshal(fields["ClientID"], &clientID); err != nil || clientID == "" {
 		return nil, fmt.Errorf("%w: no client ID", service.ErrCorruptClientIdentity)
 	}
+	// 其余字段尽力解码：字段类型不对时 Unmarshal 跳过该字段、照常解码其余字段，最后才返回
+	// UnmarshalTypeError。上面已确认是合法 JSON 对象、Fingerprint 又只有基本类型字段，这里不会有
+	// 别的错误，所以错误本身直接忽略。
+	var fp service.Fingerprint
+	_ = json.Unmarshal([]byte(val), &fp)
 	fp.ClientID = clientID
 	fp.IdentityEpoch = luaIdentityEpoch(fields["IdentityEpoch"])
 	return &fp, nil
