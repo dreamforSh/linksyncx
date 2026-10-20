@@ -60,14 +60,41 @@ func (c *identityCache) GetFingerprint(ctx context.Context, accountID int64) (*s
 	return decodeFingerprint(val)
 }
 
+// decodeFingerprint 解析存储中的指纹记录；记录不是 JSON 对象或没有非空字符串 ClientID 时返回
+// 包装 service.ErrCorruptClientIdentity 的错误，调用方据此把它当缓存缺失、新建并覆盖。
+//
+// 「损坏」的判定必须与 storedClientIDLua 一致：Lua 认为合法的记录（只要有非空字符串 ClientID）
+// 在这里报损坏的话，调用方会在仍可用的 device_id 之上另起一台新设备；记录里的 IdentityEpoch 若高于
+// 新身份，replaceFingerprintScript 的代次保护又会拒绝覆盖，缓存就一直坏着、每个请求都要读库。
+// 所以其它字段类型不对（如 UserAgent 是数字）时只丢弃该字段，保住 ClientID。
 func decodeFingerprint(val string) (*service.Fingerprint, error) {
 	var fp service.Fingerprint
-	if err := json.Unmarshal([]byte(val), &fp); err != nil {
-		return nil, err
+	if err := json.Unmarshal([]byte(val), &fp); err == nil && fp.ClientID != "" {
+		return &fp, nil
 	}
-	if fp.ClientID == "" {
-		return nil, fmt.Errorf("stored account identity has no client ID")
+	return decodeFingerprintFieldByField(val)
+}
+
+// decodeFingerprintFieldByField 是严格解码失败后的退路：ClientID 按 storedClientIDLua 的规则取
+// （区分大小写的 "ClientID" 键，非空字符串），其余字段逐个解码，类型不对的保持零值。
+func decodeFingerprintFieldByField(val string) (*service.Fingerprint, error) {
+	var fields map[string]json.RawMessage
+	if err := json.Unmarshal([]byte(val), &fields); err != nil {
+		return nil, fmt.Errorf("%w: %w", service.ErrCorruptClientIdentity, err)
 	}
+	var clientID string
+	if err := json.Unmarshal(fields["ClientID"], &clientID); err != nil || clientID == "" {
+		return nil, fmt.Errorf("%w: no client ID", service.ErrCorruptClientIdentity)
+	}
+	var fp service.Fingerprint
+	for name, raw := range fields {
+		field, err := json.Marshal(map[string]json.RawMessage{name: raw})
+		if err != nil {
+			continue
+		}
+		_ = json.Unmarshal(field, &fp)
+	}
+	fp.ClientID = clientID
 	return &fp, nil
 }
 

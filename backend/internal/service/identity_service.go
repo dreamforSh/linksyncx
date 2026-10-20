@@ -155,7 +155,8 @@ type Fingerprint struct {
 
 // IdentityCache defines cache operations for identity service
 type IdentityCache interface {
-	// GetFingerprint 读取账号指纹：记录不存在返回 (nil, nil)；存储故障或记录损坏返回 error。
+	// GetFingerprint 读取账号指纹：记录不存在返回 (nil, nil)；存储故障返回 error；
+	// 记录损坏（没有可恢复的 ClientID）返回包装 ErrCorruptClientIdentity 的 error。
 	GetFingerprint(ctx context.Context, accountID int64) (*Fingerprint, error)
 	// SetFingerprint 续期/更新指纹（原子）：只在存储中仍是同一 ClientID（或记录缺失/损坏）时写入；
 	// 若期间其它实例已写入不同身份，则不覆盖并返回存储中的胜者。返回值为写入后的当前记录。
@@ -201,6 +202,11 @@ type ClaudeSessionMigration struct {
 // 此时绝不能带临时随机身份出站：同一账号的设备 ID 抖动是最容易被关联的信号。
 // 调用方应把它转成可换号的错误（见 claudeIdentityUnavailableFailover）。
 var ErrClientIdentityUnavailable = errors.New("account client identity is unavailable")
+
+// ErrCorruptClientIdentity 表示缓存中的身份记录损坏：不是 JSON 对象，或没有非空字符串 ClientID。
+// 记录里没有可恢复的 device_id，等多久都不会好转（与 Redis 暂时读不到不同），
+// 调用方应按缓存缺失处理，写入可用身份时覆盖它。
+var ErrCorruptClientIdentity = errors.New("cached account client identity is corrupt")
 
 // IdentityService 管理OAuth账号的请求身份指纹
 type IdentityService struct {
