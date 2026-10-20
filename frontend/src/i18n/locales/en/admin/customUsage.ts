@@ -25,6 +25,7 @@ export default {
   "credentialOverride": "Override is available in the custom template",
   "requestUrl": "Request URL",
   "variables": "Supported variables:",
+  "savedSecretsHint": "Saved query-parameter and header values are hidden; leave them empty to keep them. Changing the target host requires re-entering them (and any dedicated credential).",
   "headers": "Request headers (JSON)",
   "extractor": "Extractor configuration (JSON)",
   "extractorHint": "JSON paths / divisor only, no JavaScript. Text fields accept path or value.",

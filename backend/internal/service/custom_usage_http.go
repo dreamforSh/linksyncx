@@ -150,14 +150,16 @@ func customUsageUsesVariable(c CustomUsageConfig, key string) bool {
 	return false
 }
 
-// customUsageSameHost compares the request host with the account's own base_url host.
-func customUsageSameHost(u *url.URL, accountBaseURL string) bool {
+// customUsageSameOrigin compares the request origin (scheme, dialled host and
+// effective port) with the account's own base_url origin: the same host over
+// plain http or on another port is another destination for the account key.
+func customUsageSameOrigin(u *url.URL, accountBaseURL string) bool {
 	base, err := url.Parse(strings.TrimSpace(accountBaseURL))
 	if err != nil {
 		return false
 	}
-	want := strings.TrimSuffix(strings.ToLower(base.Hostname()), ".")
-	return want != "" && want == strings.TrimSuffix(strings.ToLower(u.Hostname()), ".")
+	want := customUsageURLOrigin(base)
+	return want != "" && want == customUsageURLOrigin(u)
 }
 
 func prepareCustomUsage(a *Account, c CustomUsageConfig, secrets customUsageSecrets) (customUsagePrepared, error) {
@@ -245,11 +247,11 @@ func prepareCustomUsage(a *Account, c CustomUsageConfig, secrets customUsageSecr
 		}
 	}
 	// The account's own credentials, which admins cannot read back, may only go to
-	// the host the account already sends them to. A usage endpoint elsewhere needs
-	// its own credential entered in this config.
+	// the origin the account already sends them to. A usage endpoint elsewhere
+	// needs its own credential entered in this config.
 	accountKey := secrets.APIKey == "" && apiKey != "" && customUsageUsesVariable(c, "apiKey")
 	accountAccess := secrets.AccessToken == "" && access != "" && customUsageUsesVariable(c, "accessToken")
-	if (accountKey || accountAccess) && !customUsageSameHost(u, a.GetCredential("base_url")) {
+	if (accountKey || accountAccess) && !customUsageSameOrigin(u, a.GetCredential("base_url")) {
 		return out, ErrCustomUsageConfig
 	}
 	headerBytes := len("Accept: application/json\r\nHost: \r\nUser-Agent: Go-http-client/1.1\r\nConnection: close\r\n\r\n") + len(u.Host)

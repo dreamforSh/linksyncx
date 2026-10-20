@@ -25,6 +25,7 @@ export default {
   "credentialOverride": "需要时可在自定义模板中覆盖",
   "requestUrl": "请求 URL",
   "variables": "支持变量：",
+  "savedSecretsHint": "已保存的查询参数值与请求头值不回显，留空即保留；更换目标主机需重新填写（专用凭据同理）。",
   "headers": "请求头（JSON）",
   "extractor": "提取器配置（JSON）",
   "extractorHint": "仅 JSON 路径 / divisor，不执行 JavaScript；文本字段用 path 或 value。",

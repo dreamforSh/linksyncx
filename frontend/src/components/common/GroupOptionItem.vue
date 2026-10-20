@@ -123,7 +123,7 @@ const peakRateTitle = computed(() => {
   return t('common.peakRateTooltip', { window: peakRateText.value })
 })
 
-// Rate pill color matches platform badge color
+// Rate pill color matches platform badge color (GroupBadge standard variant)
 const ratePillClass = computed(() => {
   switch (props.platform) {
     case 'anthropic':
@@ -131,8 +131,25 @@ const ratePillClass = computed(() => {
     case 'openai':
       return 'bg-green-50 text-green-700 dark:bg-green-900/20 dark:text-green-400'
     case 'gemini':
+    case 'perplexity':
       return 'bg-sky-50 text-sky-700 dark:bg-sky-900/20 dark:text-sky-400'
-    default: // antigravity and others
+    case 'grok':
+      return 'bg-zinc-100 text-zinc-700 dark:bg-zinc-800 dark:text-zinc-200'
+    case 'kimi':
+      return 'bg-pink-50 text-pink-700 dark:bg-pink-900/20 dark:text-pink-400'
+    case 'zhipu':
+      return 'bg-indigo-50 text-indigo-700 dark:bg-indigo-900/20 dark:text-indigo-400'
+    case 'deepseek':
+      return 'bg-teal-50 text-teal-700 dark:bg-teal-900/20 dark:text-teal-400'
+    case 'minimax':
+      return 'bg-rose-50 text-rose-700 dark:bg-rose-900/20 dark:text-rose-400'
+    case 'opencode_go':
+      return 'bg-amber-100 text-amber-800 dark:bg-amber-800/40 dark:text-amber-300'
+    case 'command_code':
+      return 'bg-slate-100 text-slate-700 dark:bg-slate-500/25 dark:text-slate-300'
+    case 'composite':
+      return 'bg-cyan-50 text-cyan-800 dark:bg-cyan-900/20 dark:text-cyan-300'
+    default: // antigravity, codebuddy and others
       return 'bg-violet-50 text-violet-700 dark:bg-violet-900/20 dark:text-violet-400'
   }
 })

@@ -435,10 +435,16 @@ export function getPlatformTagClass(platform: string): string {
     case 'openai': return 'bg-emerald-100 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-400'
     case 'gemini': return 'bg-blue-100 text-blue-700 dark:bg-blue-900/30 dark:text-blue-400'
     case 'antigravity': return 'bg-purple-100 text-purple-700 dark:bg-purple-900/30 dark:text-purple-400'
-    case 'grok': return 'bg-slate-100 text-slate-700 dark:bg-slate-800 dark:text-slate-300'
+    // grok 用 zinc（同 platformColors / PlatformTypeBadge），slate 留给 command_code
+    case 'grok': return 'bg-zinc-100 text-zinc-700 dark:bg-zinc-800 dark:text-zinc-300'
+    case 'perplexity': return 'bg-sky-100 text-sky-700 dark:bg-sky-900/30 dark:text-sky-400'
+    case 'codebuddy': return 'bg-violet-100 text-violet-700 dark:bg-violet-900/30 dark:text-violet-400'
     case 'kimi': return 'bg-pink-100 text-pink-700 dark:bg-pink-900/30 dark:text-pink-400'
     case 'zhipu': return 'bg-indigo-100 text-indigo-700 dark:bg-indigo-900/30 dark:text-indigo-400'
     case 'deepseek': return 'bg-teal-100 text-teal-700 dark:bg-teal-900/30 dark:text-teal-400'
+    case 'minimax': return 'bg-rose-100 text-rose-700 dark:bg-rose-900/30 dark:text-rose-400'
+    case 'opencode_go': return 'bg-amber-100 text-amber-800 dark:bg-amber-900/30 dark:text-amber-300'
+    case 'command_code': return 'bg-slate-100 text-slate-700 dark:bg-slate-500/25 dark:text-slate-300'
     default: return 'bg-gray-100 text-gray-700 dark:bg-gray-900/30 dark:text-gray-400'
   }
 }
@@ -450,10 +456,15 @@ export function getPlatformTextClass(platform: string): string {
     case 'openai': return 'text-emerald-700 dark:text-emerald-400'
     case 'gemini': return 'text-blue-700 dark:text-blue-400'
     case 'antigravity': return 'text-purple-700 dark:text-purple-400'
-    case 'grok': return 'text-slate-700 dark:text-slate-300'
+    case 'grok': return 'text-zinc-700 dark:text-zinc-300'
+    case 'perplexity': return 'text-sky-700 dark:text-sky-400'
+    case 'codebuddy': return 'text-violet-700 dark:text-violet-400'
     case 'kimi': return 'text-pink-700 dark:text-pink-400'
     case 'zhipu': return 'text-indigo-700 dark:text-indigo-400'
     case 'deepseek': return 'text-teal-700 dark:text-teal-400'
+    case 'minimax': return 'text-rose-700 dark:text-rose-400'
+    case 'opencode_go': return 'text-amber-700 dark:text-amber-300'
+    case 'command_code': return 'text-slate-700 dark:text-slate-300'
     default: return ''
   }
 }

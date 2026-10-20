@@ -141,7 +141,10 @@ const labelClass = computed(() => {
       return `${base} bg-red-200/80 text-red-800 dark:bg-red-800/50 dark:text-red-300`
     }
     if (props.daysRemaining <= 7) {
-      // 警告（<=7天）：橙色
+      // 警告（<=7天）：橙色。opencode_go 平台色本身就是 amber，警告改用 orange 才能与平常 label 区分
+      if (props.platform === 'opencode_go') {
+        return `${base} bg-orange-300/80 text-orange-900 dark:bg-orange-800/60 dark:text-orange-300`
+      }
       return `${base} bg-amber-200/80 text-amber-800 dark:bg-amber-800/50 dark:text-amber-300`
     }
   }
@@ -180,6 +183,14 @@ const labelClass = computed(() => {
   if (props.platform === 'minimax') {
     return `${base} bg-rose-200/60 text-rose-800 dark:bg-rose-800/40 dark:text-rose-300`
   }
+  if (props.platform === 'opencode_go') {
+    // 徽章本体已是 amber-200，label 再深一档
+    return `${base} bg-amber-300/70 text-amber-900 dark:bg-amber-500/30 dark:text-amber-100`
+  }
+  if (props.platform === 'command_code') {
+    // 暗色比徽章本体（slate-500/50）更亮一档
+    return `${base} bg-slate-300/70 text-slate-800 dark:bg-slate-400/40 dark:text-slate-100`
+  }
   if (props.platform === 'composite') {
     return `${base} bg-cyan-200/70 text-cyan-900 dark:bg-cyan-900/50 dark:text-cyan-300`
   }
@@ -187,7 +198,12 @@ const labelClass = computed(() => {
 })
 
 const peakRateClass = computed(() => {
-  return 'px-1.5 py-0.5 rounded text-[10px] font-semibold bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-300'
+  const base = 'px-1.5 py-0.5 rounded text-[10px] font-semibold'
+  if (props.platform === 'opencode_go') {
+    // opencode_go 徽章本体也是 amber，高峰标签改浅底 + 描边，否则会糊进徽章底色
+    return `${base} bg-amber-50 text-amber-800 ring-1 ring-inset ring-amber-300 dark:bg-amber-950/50 dark:text-amber-200 dark:ring-amber-600/50`
+  }
+  return `${base} bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-300`
 })
 
 // Badge color based on platform and subscription type
@@ -247,6 +263,19 @@ const badgeClass = computed(() => {
     return isSubscription.value
       ? 'bg-rose-100 text-rose-700 dark:bg-rose-900/30 dark:text-rose-400'
       : 'bg-rose-50 text-rose-700 dark:bg-rose-900/20 dark:text-rose-400'
+  }
+  if (props.platform === 'opencode_go') {
+    // anthropic 标准分组已占 amber-50，opencode_go 整体上移一档（同 grok 的 -200/-100）
+    return isSubscription.value
+      ? 'bg-amber-200 text-amber-900 dark:bg-amber-800/60 dark:text-amber-200'
+      : 'bg-amber-100 text-amber-800 dark:bg-amber-800/40 dark:text-amber-300'
+  }
+  if (props.platform === 'command_code') {
+    // 中性色同 grok：浅色用 -200/-100 才看得出底色。暗色的 dark-* 就是 slate 色阶
+    // （卡片 dark-800、下拉悬停 dark-700），实色或半透明 slate-700/800 都会糊进去，改用更亮的半透明 slate-500
+    return isSubscription.value
+      ? 'bg-slate-200 text-slate-800 dark:bg-slate-500/50 dark:text-slate-100'
+      : 'bg-slate-100 text-slate-700 dark:bg-slate-500/25 dark:text-slate-300'
   }
   if (props.platform === 'composite') {
     return isSubscription.value

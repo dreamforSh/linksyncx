@@ -40,10 +40,11 @@
         </div>
         <p class="text-xs text-gray-400 dark:text-dark-400">{{ t('admin.accounts.customUsage.intervalDefault') }}</p>
         <section class="space-y-4 border-t border-gray-200 pt-4 dark:border-dark-600">
-          <div><label for="custom-usage-url" class="input-label">{{ t('admin.accounts.customUsage.requestUrl') }}</label><div class="flex items-center gap-2"><span class="rounded bg-gray-100 px-2 py-2 text-xs font-medium text-gray-500 dark:bg-dark-700">GET</span><input id="custom-usage-url" v-model="draft.request.url" class="input font-mono text-sm" spellcheck="false" autocomplete="off" /></div></div>
+          <div><label for="custom-usage-url" class="input-label">{{ t('admin.accounts.customUsage.requestUrl') }}</label><div class="flex items-center gap-2"><span class="rounded bg-gray-100 px-2 py-2 text-xs font-medium text-gray-500 dark:bg-dark-700">GET</span><input id="custom-usage-url" v-model="draft.request.url" class="input font-mono text-sm" spellcheck="false" autocomplete="off" aria-describedby="custom-usage-secret-hint" /></div></div>
           <p class="text-xs text-gray-500 dark:text-gray-400">{{ t('admin.accounts.customUsage.variables') }} <code v-for="variable in variables" :key="variable" class="mr-2 select-all">{{ variable }}</code></p>
+          <p id="custom-usage-secret-hint" class="input-hint">{{ t('admin.accounts.customUsage.savedSecretsHint') }}</p>
           <div class="grid gap-4 md:grid-cols-2">
-          <div><label for="custom-usage-headers" class="input-label">{{ t('admin.accounts.customUsage.headers') }}</label><textarea id="custom-usage-headers" v-model="headersText" rows="8" class="input font-mono text-xs" spellcheck="false" autocomplete="off" /></div>
+          <div><label for="custom-usage-headers" class="input-label">{{ t('admin.accounts.customUsage.headers') }}</label><textarea id="custom-usage-headers" v-model="headersText" rows="8" class="input font-mono text-xs" spellcheck="false" autocomplete="off" aria-describedby="custom-usage-secret-hint" /></div>
           <div><label for="custom-usage-extractor" class="input-label">{{ t('admin.accounts.customUsage.extractor') }}</label><textarea id="custom-usage-extractor" v-model="extractorText" rows="8" class="input font-mono text-xs" spellcheck="false" aria-describedby="custom-usage-extractor-hint" /></div>
           </div>
           <p id="custom-usage-extractor-hint" class="input-hint">{{ t('admin.accounts.customUsage.extractorHint') }}</p>

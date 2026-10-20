@@ -171,6 +171,18 @@ func TestPrepareCustomUsageKeepsAccountCredentialsOnTheAccountHost(t *testing.T)
 	if _, err := prepareCustomUsage(account, draft, customUsageSecrets{}); err != nil {
 		t.Fatalf("the account's own host must stay allowed: %v", err)
 	}
+	draft.BaseURL = "https://relay.example.com:443"
+	if _, err := prepareCustomUsage(account, draft, customUsageSecrets{}); err != nil {
+		t.Fatalf("the explicit default port is the same origin: %v", err)
+	}
+
+	// Same host, other scheme or port: another destination for the account key.
+	for _, base := range []string{"http://relay.example.com", "https://relay.example.com:8443"} {
+		draft.BaseURL = base
+		if _, err := prepareCustomUsage(account, draft, customUsageSecrets{}); !errors.Is(err, ErrCustomUsageConfig) {
+			t.Fatalf("the account key must not go to %s: %v", base, err)
+		}
+	}
 }
 
 func TestCustomUsageAccountDefaultsSkipOfficialAPIs(t *testing.T) {

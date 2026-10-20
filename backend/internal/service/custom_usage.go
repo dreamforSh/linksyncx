@@ -142,7 +142,7 @@ func (s *CustomUsageService) PutConfig(ctx context.Context, id int64, c CustomUs
 		return nil, err
 	}
 	old, secrets, _ := readCustomUsage(a)
-	c, secrets = mergeCustomUsage(c, old, secrets)
+	c, secrets = mergeCustomUsage(c, old, secrets, a.GetCredential("base_url"))
 	prepared, err := prepareCustomUsage(a, c, secrets)
 	if err != nil {
 		return nil, err
@@ -150,6 +150,7 @@ func (s *CustomUsageService) PutConfig(ctx context.Context, id int64, c CustomUs
 	c = prepared.config
 	secrets.RequestURL = c.Request.URL
 	secrets.Headers = c.Request.Headers
+	secrets.Origin = customUsageTargetOrigin(c, a.GetCredential("base_url"))
 	public := publicCustomUsage(c)
 	configJSON, err := json.Marshal(public)
 	if err != nil {
@@ -253,7 +254,7 @@ func (s *CustomUsageService) Query(ctx context.Context, id int64, force bool, dr
 	}
 	c, secrets, configured := readCustomUsage(a)
 	if draft != nil {
-		c, secrets = mergeCustomUsage(*draft, c, secrets)
+		c, secrets = mergeCustomUsage(*draft, c, secrets, a.GetCredential("base_url"))
 		configured = true
 	}
 	empty := customUsageEmpty(c, configured)
@@ -339,7 +340,7 @@ func (s *CustomUsageService) Query(ctx context.Context, id int64, force bool, dr
 	} else {
 		latest, creds, exists := readCustomUsage(fresh)
 		if draft != nil {
-			latest, creds = mergeCustomUsage(*draft, latest, creds)
+			latest, creds = mergeCustomUsage(*draft, latest, creds, fresh.GetCredential("base_url"))
 			exists = true
 		}
 		prepared, err := prepareCustomUsage(fresh, latest, creds)

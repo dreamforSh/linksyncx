@@ -42,8 +42,9 @@ type openAIInputTokensCountPrepared struct {
 
 // ForwardResponsesInputTokens handles the native OpenAI
 // POST /v1/responses/input_tokens shape. Custom OpenAI-compatible relays often
-// implement /responses but not this preflight endpoint, so those accounts use
-// the local estimator instead of receiving a request that is known to fail.
+// implement /responses but not this preflight endpoint, so those accounts (and
+// every non-OpenAI platform account) use the local estimator instead of
+// receiving a request that is known to fail.
 func (s *OpenAIGatewayService) ForwardResponsesInputTokens(
 	ctx context.Context,
 	c *gin.Context,
@@ -62,7 +63,11 @@ func (s *OpenAIGatewayService) ForwardResponsesInputTokens(
 	}
 
 	if shouldEstimateOpenAIInputTokensLocally(account) {
-		writeOpenAIResponsesInputTokensFallback(c, account, prepared, 0, "custom_relay")
+		reason := "custom_relay"
+		if !account.IsOpenAI() {
+			reason = "platform_without_input_tokens"
+		}
+		writeOpenAIResponsesInputTokensFallback(c, account, prepared, 0, reason)
 		return nil
 	}
 
@@ -149,9 +154,14 @@ func prepareNativeOpenAIInputTokensCountRequest(body []byte, account *Account) (
 	}, nil
 }
 
+// shouldEstimateOpenAIInputTokensLocally 是白名单：/responses/input_tokens 是
+// OpenAI 专有端点，只有真正的 OpenAI 平台账号（OAuth，或 base_url 为空 /
+// api.openai.com 的 API Key）才发上游。其余经 OpenAI 网关的平台（Grok、国产
+// 供应商、OpenCode、CodeBuddy、Perplexity、Command Code……）都只提供推理端点：
+// 转发上游只会命中不存在的端点（还可能带着客户端 UA、空 base_url 时落到 OpenAI
+// 官方地址），错误再流入账号处置逻辑误伤整账号，因此一律本地估算。
 func shouldEstimateOpenAIInputTokensLocally(account *Account) bool {
-	// Command Code 只提供推理端点，没有 OpenAI 专有的 /responses/input_tokens。
-	if account == nil || account.IsGrok() || account.IsCNProvider() || account.IsCommandCode() || account.Type == AccountTypeUpstream {
+	if account == nil || !account.IsOpenAI() || account.Type == AccountTypeUpstream {
 		return true
 	}
 	if account.Type != AccountTypeAPIKey {
@@ -272,15 +282,19 @@ func (s *OpenAIGatewayService) ForwardCountTokensAsAnthropic(
 	// count_tokens 为 "Anthropic only"，Kimi/智谱亦无任何文档承诺。转发上游
 	// 只会常态 404，且错误还会流入账号处置逻辑误伤整账号调度；Claude Code
 	// 高频调用此端点，本地 tiktoken 估算是与 Grok 一致的既有方案。
-	// Command Code Provider API 同样没有 count_tokens 端点。
-	if account.IsCNProvider() || account.IsOpenCodeGo() || account.IsCodeBuddy() || account.IsCommandCode() {
+	// Command Code Provider API、CodeBuddy 同样没有 count_tokens 端点。
+	// 按白名单判定：只有 OpenAI 平台账号桥接到 /responses/input_tokens；
+	// Grok（路由层已分流到 GrokCountTokens）、Perplexity 等其他平台即使被
+	// 路由到这里，也本地估算而不是把凭据发往 OpenAI 专有端点。
+	if !account.IsOpenAI() {
 		estimated, err := estimateAnthropicCountTokensLocally(body)
 		if err != nil {
 			writeAnthropicCountTokensError(c, http.StatusBadRequest, "invalid_request_error", "Failed to parse request body")
-			return fmt.Errorf("count_tokens: estimate cn provider input tokens: %w", err)
+			return fmt.Errorf("count_tokens: estimate %s input tokens locally: %w", account.Platform, err)
 		}
-		logger.L().Debug("openai count_tokens: cn provider local estimate",
+		logger.L().Debug("openai count_tokens: non-openai platform local estimate",
 			zap.Int64("account_id", account.ID),
+			zap.String("platform", account.Platform),
 			zap.Int("estimated_input_tokens", estimated),
 		)
 		c.JSON(http.StatusOK, gin.H{
