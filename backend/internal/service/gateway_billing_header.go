@@ -69,6 +69,8 @@ func syncBillingHeaderVersion(body []byte, userAgent string, source billingFinge
 //   - FromBody：按最终 body 重算；
 //   - FromClient：版本不变时整段保留；版本变化时反推客户端的指纹输入后按新版本重算；
 //   - 原本没有后缀的不补。
+//
+// cch 不补也不改（见函数内注释）。
 func syncBillingHeaderVersionView(view *jsonBodyView, userAgent string, source billingFingerprintSource) {
 	version := ExtractCLIVersion(userAgent)
 	if version == "" {
@@ -100,11 +102,10 @@ func syncBillingHeaderVersionView(view *jsonBodyView, userAgent string, source b
 					return replacement + "." + rederiveClientBillingFingerprintView(view, oldVersion, oldSuffix, version)
 				}
 			})
-			// 2.1.280 实证：cch 是第一方请求恒带的字面量占位符（无签名）；
-			// 客户端指向 localhost/3P 时会省略，发往第一方前补回；已有值原样保留。
-			if !strings.Contains(newText, "cch=") {
-				newText = ensureBillingCCHStubText(newText)
-			}
+			// cch 不在这里补：客户端指向自定义 base URL 时，CLI 把 cch 与 cc_prompt_id /
+			// cc_turn_* 放在同一个第一方门控下一起省略，只补 cch 会拼出真实客户端不会发的
+			// 混合形态。已有的 cch（客户端原生层的逐请求签名，或 mimic 合成块里的 00000
+			// 占位符）原样保留：网关没有签名实现，无法重算。
 			if newText != text.String() {
 				_ = view.setString(fmt.Sprintf("system.%d.text", idx), newText)
 			}
@@ -164,19 +165,4 @@ func rederiveClientBillingFingerprintView(view *jsonBodyView, oldVersion, oldSuf
 		return claudeCodeFingerprintForChars(matched, newVersion)
 	}
 	return claudeCodeFingerprintForChars(preferred, newVersion)
-}
-
-// ensureBillingCCHStubText 为 billing attribution 文本补齐 " cch=00000;" 占位符，
-// 插在 cc_entrypoint 子句之后。
-func ensureBillingCCHStubText(text string) string {
-	i := strings.Index(text, "cc_entrypoint=")
-	if i < 0 {
-		return text
-	}
-	j := strings.IndexByte(text[i:], ';')
-	if j < 0 {
-		return text
-	}
-	at := i + j + 1
-	return text[:at] + " cch=00000;" + text[at:]
 }
