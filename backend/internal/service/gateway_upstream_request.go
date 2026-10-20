@@ -98,7 +98,7 @@ func (s *GatewayService) buildUpstreamRequestIndexed(ctx context.Context, c *gin
 
 	// Mimicry may override the cached User-Agent later, even without a fingerprint.
 	if billingUA := effectiveBillingUserAgent(mimicUserAgent, tokenType, mimicClaudeCode, fingerprint); billingUA != "" {
-		syncBillingHeaderVersionView(view, billingUA)
+		syncBillingHeaderVersionView(view, billingUA, billingFingerprintSourceFor(tokenType, mimicClaudeCode))
 	}
 
 	// === 计算最终 anthropic-beta header（先于 body sanitize 与 CCH 签名）===
