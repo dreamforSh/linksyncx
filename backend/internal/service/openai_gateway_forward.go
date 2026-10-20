@@ -1083,7 +1083,7 @@ func (s *OpenAIGatewayService) Forward(ctx context.Context, c *gin.Context, acco
 			if headerGuard != nil {
 				headerGuard.close()
 			}
-			return nil, proxyErr
+			return nil, s.handleOpenAIUpstreamTransportError(ctx, c, account, proxyErr, false)
 		}
 
 		// Send request

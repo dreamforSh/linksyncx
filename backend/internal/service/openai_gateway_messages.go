@@ -419,7 +419,7 @@ func (s *OpenAIGatewayService) ForwardAsAnthropic(
 	// 7. Send request（fail-closed：分配了代理但不可用时拒绝直连）
 	proxyURL, proxyErr := account.ProxyURLForOutbound()
 	if proxyErr != nil {
-		return nil, proxyErr
+		return nil, s.handleOpenAIUpstreamTransportError(ctx, c, account, proxyErr, false)
 	}
 	// Grok may reject encrypted reasoning replayed under a different OAuth
 	// account/cache identity. Match forwardGrokResponses: one strip+retry before

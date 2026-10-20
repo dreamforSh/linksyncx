@@ -253,7 +253,7 @@ func (s *AntigravityGatewayService) prepareAntigravityCompatCall(
 	request.reasoningEffort = ApplyThinkingEnabledFallback(request.reasoningEffort, request.originalBody, mappedModel)
 	proxyURL, err := antigravityCompatProxyURL(account)
 	if err != nil {
-		return nil, err
+		return nil, antigravityProxyUnavailableFailover(c, account, err, gatewayTransportFailoverBody)
 	}
 	return &antigravityCompatUpstreamCall{
 		request:      request,

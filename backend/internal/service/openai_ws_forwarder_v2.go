@@ -205,7 +205,7 @@ func (s *OpenAIGatewayService) forwardOpenAIWSV2(
 	// fail-closed：分配了代理但不可用时拒绝直连（避免出口 IP 泄漏）。
 	proxyURL, proxyErr := account.ProxyURLForOutbound()
 	if proxyErr != nil {
-		return nil, proxyErr
+		return nil, s.handleOpenAIUpstreamTransportError(ctx, c, account, proxyErr, false)
 	}
 	lease, err := s.getOpenAIWSConnPool().Acquire(acquireCtx, openAIWSAcquireRequest{
 		Account: account,

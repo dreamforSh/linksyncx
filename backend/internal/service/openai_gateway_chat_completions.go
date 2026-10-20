@@ -435,7 +435,7 @@ func (s *OpenAIGatewayService) forwardAsChatCompletions(
 	// 7. Send request（fail-closed：分配了代理但不可用时拒绝直连）
 	proxyURL, proxyErr := account.ProxyURLForOutbound()
 	if proxyErr != nil {
-		return nil, proxyErr
+		return nil, s.handleOpenAIUpstreamTransportError(ctx, c, account, proxyErr, false)
 	}
 	resp, err := s.doOpenAIUpstream(upstreamReq, proxyURL, account)
 	if err != nil {

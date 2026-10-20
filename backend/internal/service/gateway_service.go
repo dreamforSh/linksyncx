@@ -1382,7 +1382,8 @@ func (s *GatewayService) DoGrokNativeResponsesJSON(ctx context.Context, account 
 	account.ApplyHeaderOverrides(upstreamReq.Header)
 	proxyURL, proxyErr := account.ProxyURLForOutbound()
 	if proxyErr != nil {
-		return nil, &UpstreamFailoverError{StatusCode: http.StatusBadGateway, Reason: GatewayFailureReason("grok_search_proxy_unavailable")}
+		// 绑定失效是账号自身不可用：与其它数据面一致标 AccountUnavailable。
+		return nil, &UpstreamFailoverError{StatusCode: http.StatusBadGateway, Reason: GatewayFailureReason("grok_search_proxy_unavailable"), AccountUnavailable: true}
 	}
 	resp, err := s.httpUpstream.Do(upstreamReq, proxyURL, account.ID, account.Concurrency)
 	if err != nil {

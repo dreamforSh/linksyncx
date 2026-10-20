@@ -95,7 +95,7 @@ func (s *GeminiMessagesCompatService) forwardClaudeBodyAsChatCompletions(
 
 	proxyURL, proxyErr := account.ProxyURLForOutbound()
 	if proxyErr != nil {
-		return nil, proxyErr
+		return nil, s.handleUpstreamTransportError(ctx, c, account, proxyErr)
 	}
 
 	useUpstreamStream := clientStream

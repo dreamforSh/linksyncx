@@ -92,7 +92,10 @@ func classifyUpstreamTransportError(err error) upstreamTransportErrorClass {
 }
 
 // handleOpenAIUpstreamTransportError handles a transport-level upstream failure
-// (Do/DoWithTLS returned a non-HTTP error: proxy/DNS/TCP/TLS). It:
+// (Do/DoWithTLS returned a non-HTTP error: proxy/DNS/TCP/TLS), and the
+// pre-flight ErrAccountProxyUnavailable from Account.ProxyURLForOutbound (the
+// data-plane call sites route it here so a broken binding fails over instead of
+// becoming a terminal error). It:
 //  1. records the failure in Ops error logs (status 0, kind=request_error);
 //  2. for durable faults (expired/rejected proxy creds, dead proxy, DNS/routing)
 //     temporarily unschedules the account (DB + in-memory) and logs a stable
@@ -124,6 +127,17 @@ func (s *OpenAIGatewayService) handleOpenAIUpstreamTransportError(ctx context.Co
 	// this one — the upstream never had a chance to exhibit a fault.
 	if errors.Is(err, context.Canceled) || (errors.Is(err, context.DeadlineExceeded) && errors.Is(ctx.Err(), context.DeadlineExceeded)) {
 		return err
+	}
+
+	// 分配了代理却解析不出可用 URL（关系缺失 / 与 ProxyID 错配 / URL 无效）：账号本身已不可用，
+	// 换号且粘性会话也要换（AccountUnavailable）。请求根本没有出站，所以不计 Ollama / OpenCode
+	// 活跃、也不按持久故障临时摘号——绑定修好后应立即恢复调度。
+	if errors.Is(err, ErrAccountProxyUnavailable) {
+		return &UpstreamFailoverError{
+			StatusCode:         http.StatusBadGateway,
+			ResponseBody:       openAITransportFailoverBody,
+			AccountUnavailable: true,
+		}
 	}
 
 	// Transport attempt reached the network path; count as Ollama Cloud / OpenCode Go activity.
