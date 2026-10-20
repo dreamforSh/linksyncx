@@ -133,6 +133,54 @@ func TestParse_含密码URL脱敏(t *testing.T) {
 	}
 }
 
+// 解析失败的错误会进入传输层错误、ops 日志与管理端提示，不得带出原始 URL 或其片段。
+// *url.Error 自身会回显完整 URL；内层错误回显的片段在畸形 URL 里也可能截自密码。
+func TestParse_解析失败不泄漏凭据(t *testing.T) {
+	cases := []struct {
+		name   string
+		raw    string
+		secret string
+		prefix string
+	}{
+		// Proxy.URL() 会把 host 里的空格转义成 %20，url.Parse 再以非法转义拒绝。
+		{"host 含转义空格", "http://user:s3cr3tpw@bad%20host:8080", "s3cr3tpw", "invalid proxy URL"},
+		{"host 含空格", "http://user:s3cr3tpw@bad host:8080", "s3cr3tpw", "invalid proxy URL"},
+		// 未转义的 "/" 截断 authority，"/" 之前的密码段被当作端口报错。
+		{"密码含未转义斜杠", "http://user:pa55/w0rd@proxy.local:8080", "pa55", "invalid proxy URL"},
+		// 密码里的非法转义片段本身就是密码的一部分。
+		{"密码含非法转义", "http://user:p%zzword@proxy.local:8080", "%zz", "invalid proxy URL"},
+		// 漏写 "//"：scheme=user、opaque=s3cr3tpw@proxy.local:1080，Redacted() 不会遮住 opaque。
+		{"漏写双斜杠", "user:s3cr3tpw@proxy.local:1080", "s3cr3tpw", "proxy URL missing host"},
+		// 多写一个 "/"：凭据被解析进 path，Redacted() 同样原样输出。
+		{"凭据落入 path", "http:///user:s3cr3tpw@proxy.local:8080", "s3cr3tpw", "proxy URL missing host"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			_, _, err := Parse(tc.raw)
+			if err == nil {
+				t.Fatalf("%q 应返回错误", tc.raw)
+			}
+			if strings.Contains(err.Error(), tc.secret) {
+				t.Errorf("错误信息不应包含凭据片段 %q: got %s", tc.secret, err.Error())
+			}
+			if !strings.HasPrefix(err.Error(), tc.prefix) {
+				t.Errorf("错误信息应以 %q 开头: got %s", tc.prefix, err.Error())
+			}
+		})
+	}
+}
+
+// 去掉回显片段后，内层原因仍保留可读的分类，便于管理员定位配置错误。
+func TestParse_解析失败保留原因分类(t *testing.T) {
+	_, _, err := Parse("http://user:pw@bad host:8080")
+	if err == nil {
+		t.Fatal("host 含空格应返回错误")
+	}
+	if got, want := err.Error(), "invalid proxy URL: invalid character in host name"; got != want {
+		t.Errorf("错误信息不匹配: got %q, want %q", got, want)
+	}
+}
+
 func TestParse_带空白的有效URL(t *testing.T) {
 	trimmed, parsed, err := Parse("  http://proxy.example.com:8080  ")
 	if err != nil {
