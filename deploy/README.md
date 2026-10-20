@@ -186,17 +186,28 @@ Sub2API 按以下顺序退出：
 | 部署方式 | 设置项 | 默认值 |
 |----------|--------|--------|
 | Docker Compose | `stop_grace_period`（`.env` 中的 `SUB2API_STOP_GRACE_PERIOD`） | `90s` |
+| `docker run` | `--stop-timeout` | 无（Docker 默认 10 秒，需显式设为 `90`） |
 | systemd | `sub2api.service` 中的 `TimeoutStopSec` | `90` |
+| Kubernetes | Pod 的 `terminationGracePeriodSeconds` | 无（Kubernetes 默认 30 秒，需显式设为不小于宽限 + 35） |
 | Apple container | `.env` 中的 `APPLE_CONTAINER_STOP_TIMEOUT_SECONDS` | 留空时取 max(90, `.env` 中的宽限 + 60) |
 
-把宽限调到 55 秒以上时请同步调大 Docker Compose 与 systemd 的值；Apple container 会跟随
-`.env` 中的 `SERVER_SHUTDOWN_TIMEOUT_SECONDS` 自动调整，宽限只写在 `config.yaml` 里时需
-显式设置 `APPLE_CONTAINER_STOP_TIMEOUT_SECONDS`。宽限期内服务不接受新请求，宽限越长，
-每次重启的不可用窗口也越长。
+把宽限调到 55 秒以上时请同步调大 Docker Compose、`docker run`、systemd 与 Kubernetes 的值；
+Apple container 会跟随 `.env` 中的 `SERVER_SHUTDOWN_TIMEOUT_SECONDS` 自动调整，宽限只写在
+`config.yaml` 里时需显式设置 `APPLE_CONTAINER_STOP_TIMEOUT_SECONDS`。宽限期内服务不接受
+新请求，宽限越长，每次重启的不可用窗口也越长；管理后台“重启”后等待新进程就绪的时间会按
+宽限自动放宽。
 
 systemd unit 同时设置 `KillMode=mixed`：SIGTERM 只发给主进程，传输插件等子进程由主进程
 在清理阶段按序停止；默认的 `control-group` 会让插件在宽限一开始就退出，经插件转发的请求
 因此拿不到宽限。早先安装的 unit 需要手动加上这一行并执行 `systemctl daemon-reload`。
+
+**升级已有 Docker 部署**：停止超时不会跟着镜像一起更新。`docker compose pull && docker compose up -d`
+只拉取新镜像、不替换 compose 文件，而早先下载的 compose 文件里 `sub2api` 服务没有
+`stop_grace_period`，`.env` 中的 `SUB2API_STOP_GRACE_PERIOD` 因此不起作用，停止超时仍是
+Docker 默认的 10 秒。请改用仓库当前的 compose 文件（保留自己的改动），或手动给 `sub2api`
+服务加上 `stop_grace_period: 90s`（值必须带单位），再执行 `docker compose up -d` 重建容器。
+`docker run` 部署在重新创建容器时加上 `--stop-timeout 90`（以及 `--restart unless-stopped`，
+后台“重启”后容器才会被拉起）；Kubernetes 把 `terminationGracePeriodSeconds` 设为不小于宽限 + 35。
 
 ### Database Migration Notes (PostgreSQL)
 
