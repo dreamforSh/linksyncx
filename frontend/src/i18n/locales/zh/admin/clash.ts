@@ -38,6 +38,8 @@ export default {
       nodesHint: '共 {total} 个节点',
       healthy: '健康节点',
       healthyHint: '{count} 个异常',
+      probesPaused: '自动探测已暂停',
+      probesPausedHint: '健康节点不再定时检测，出现故障不会被自动发现；异常的已绑定节点仍会复测以便恢复。可在设置中恢复自动探测',
       bound: '已绑定账号',
       boundHint: '每个出口最多 {max} 个账号',
       boundHintUnknown: '使用 Clash 出口的账号数',
@@ -497,6 +499,10 @@ export default {
         exit_change_policy: {
           label: '出口 IP 变化时',
           hint: '节点出口 IP 原地变化后的处理方式'
+        },
+        pause_automatic_probes: {
+          label: '暂停自动探测',
+          hint: '暂停后不再探测未绑定节点，只有从未探测过出口的新节点会做一次出口探测，以便绑定（失败则需手动探测）。已绑定节点停止定时延迟检测和 AI 平台检测，但仍按出口探测间隔复核出口 IP，出口变更暂停和本机 IP 自查继续有效；健康检查失败的已绑定节点仍会复测以便恢复。健康的已绑定节点出现故障不再被自动发现，只能靠请求失败切换账号。手动检测和订阅刷新不受影响'
         },
         health_test_url: {
           label: '健康检查 URL',
