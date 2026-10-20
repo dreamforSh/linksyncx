@@ -262,6 +262,13 @@ func TestClaudeCodeFingerprintChars_MatchCLIReferenceValues(t *testing.T) {
 		{name: "ascii_next_version", text: fingerprintTestPromptASCII, version: "2.1.297", want: "37d"},
 		{name: "cjk_indexes_utf16_units", text: fingerprintTestPromptCJK, version: "2.1.296", want: "5eb"},
 		{name: "emoji_surrogate_half_is_replacement_char", text: fingerprintTestPromptEmoji, version: "2.1.296", want: "5bc"},
+		// JS 先把取出的三个码元 join 成一个字符串：相邻取出位是高代理 + 低代理时重新配成完整字符，
+		// 落单的一半才变 U+FFFD。
+		{name: "picked_halves_4_7_repair", text: "😀😀😀😀😀😀😀😀😀😀😀", version: "2.1.296", want: "cb0"},
+		{name: "picked_halves_4_7_repair_then_ascii", text: "abcd😀😀 please review this", version: "2.1.296", want: "55e"},
+		{name: "picked_halves_7_20_repair", text: "abcdefg😀hijklmnopq😀 tail", version: "2.1.296", want: "ee0"},
+		{name: "lone_high_before_zero_padding", text: "abcd😀", version: "2.1.296", want: "bb2"},
+		{name: "pair_split_at_unit_cap", text: "abcdefghijklmnopqrst😀 more", version: "2.1.296", want: "81c"},
 		{name: "session_context_meta_block", text: "<system-reminder>\nAs you answer the user's questions, you can use the following context:", version: "2.1.296", want: "40c"},
 		{name: "empty_pads_with_zero", text: "", version: "2.1.296", want: "406"},
 	} {

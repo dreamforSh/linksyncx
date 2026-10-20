@@ -5,7 +5,7 @@ import (
 	"encoding/hex"
 	"fmt"
 	"strings"
-	"unicode/utf8"
+	"unicode/utf16"
 
 	"github.com/google/uuid"
 	"github.com/tidwall/gjson"
@@ -49,33 +49,36 @@ func claudeCodeFingerprintForChars(chars, version string) string {
 	return hex.EncodeToString(sum[:])[:3]
 }
 
-// claudeCodeFingerprintChars 按 JS `e[i]||"0"` 语义取第 4、7、20 个字符。
+// claudeCodeFingerprintChars 按 JS `[4,7,20].map(i=>e[i]||"0").join("")` 语义取指纹字符。
 //
-// JS 字符串按 UTF-16 码元下标：BMP 外的字符（emoji 等）占两个码元，下标落在其中一半时
-// 取到的是孤立代理项，node crypto 的 update(string) 把它按 UTF-8 编成 U+FFFD（EF BF BD）。
+// JS 字符串按 UTF-16 码元下标：BMP 外的字符（emoji 等）占两个码元，下标可能落在其中一半，
+// 取到代理项。三个码元先 join 成一个字符串再交给 node crypto 的 update(string) 按 UTF-8
+// 编码，所以相邻两个取出位恰好是高代理 + 低代理时会重新配成一个完整字符（4 字节 UTF-8），
+// 只有落单的代理项才编成 U+FFFD（EF BF BD）。utf16.Decode 的语义与此完全一致。
 // 按字节取会让中文、emoji 等 prompt 与 CLI 算出不同的后缀。
 func claudeCodeFingerprintChars(text string) string {
 	// 只需前 21 个码元；长文本（如整段 CLAUDE.md）不必整体转换。
-	var units [21]rune
+	var units [21]uint16
 	n := 0
 	for _, r := range text {
 		if r >= 0x10000 {
-			// 代理对的两半各占一个下标，单独取出时都是孤立代理项。
-			units[n] = utf8.RuneError
+			hi, lo := utf16.EncodeRune(r)
+			units[n] = uint16(hi)
 			n++
 			if n < len(units) {
-				units[n] = utf8.RuneError
+				units[n] = uint16(lo)
 				n++
 			}
 		} else {
-			units[n] = r
+			// Go 解码 string 时不会产出代理项码点（非法 UTF-8 得到 U+FFFD），这里都是 BMP 字符。
+			units[n] = uint16(r)
 			n++
 		}
 		if n == len(units) {
 			break
 		}
 	}
-	picked := make([]rune, 0, 3)
+	picked := make([]uint16, 0, 3)
 	for _, i := range [...]int{4, 7, 20} {
 		if i < n {
 			picked = append(picked, units[i])
@@ -83,7 +86,7 @@ func claudeCodeFingerprintChars(text string) string {
 			picked = append(picked, '0')
 		}
 	}
-	return string(picked)
+	return string(utf16.Decode(picked))
 }
 
 // claudeCodeFingerprintCharsView 取 CLI 指纹的输入字符。输入文本是首条 user 消息中第一个
