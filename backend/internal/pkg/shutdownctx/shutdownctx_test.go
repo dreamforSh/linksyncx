@@ -2,6 +2,7 @@ package shutdownctx
 
 import (
 	"context"
+	"runtime"
 	"testing"
 	"time"
 
@@ -66,6 +67,53 @@ func TestDetachedChildrenAreCancelledByHardStop(t *testing.T) {
 	require.ErrorIs(t, child.Err(), context.Canceled)
 	require.ErrorIs(t, timed.Err(), context.Canceled)
 	require.ErrorIs(t, finished.Err(), context.Canceled)
+}
+
+// Transport 等会在解耦后的 context 上再套一层 WithValue（如 httptrace）后派生
+// WithCancel；这条路径不能为每条上游流多起一个监听硬停止的 goroutine。
+func TestDetachedChildrenBehindValueLayerNeedNoWatcherGoroutine(t *testing.T) {
+	hardStop, fireHardStop := context.WithCancel(context.Background())
+	defer fireHardStop()
+	upstream := Detach(WithHardStop(context.Background(), hardStop))
+	traced := context.WithValue(upstream, testKey("trace"), "on")
+
+	const streams = 200
+	before := runtime.NumGoroutine()
+	children := make([]context.Context, 0, streams)
+	cancels := make([]context.CancelFunc, 0, streams)
+	for i := 0; i < streams; i++ {
+		child, cancel := context.WithCancel(traced)
+		children = append(children, child)
+		cancels = append(cancels, cancel)
+	}
+	defer func() {
+		for _, cancel := range cancels {
+			cancel()
+		}
+	}()
+	grown := runtime.NumGoroutine() - before
+	require.Less(t, grown, streams/4, "every detached stream behind a value layer started a watcher goroutine")
+	require.Equal(t, "on", children[0].Value(testKey("trace")))
+
+	// 一半正常结束，其余由硬停止取消。
+	for _, cancel := range cancels[:streams/2] {
+		cancel()
+	}
+	requireNotDone(t, children[streams-1])
+	fireHardStop()
+	for _, child := range children {
+		requireDone(t, child)
+		require.ErrorIs(t, child.Err(), context.Canceled)
+	}
+}
+
+func TestDetachPrefersRequestValuesOverHardStopValues(t *testing.T) {
+	hardStop, fireHardStop := context.WithCancel(context.WithValue(context.Background(), testKey("k"), "hard-stop"))
+	defer fireHardStop()
+	request := context.WithValue(context.Background(), testKey("k"), "request")
+	upstream := Detach(WithHardStop(request, hardStop))
+
+	require.Equal(t, "request", upstream.Value(testKey("k")))
 }
 
 func TestDetachWithoutHardStopMatchesWithoutCancel(t *testing.T) {
