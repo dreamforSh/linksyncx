@@ -197,6 +197,29 @@ func codeBuddyWhitelistedModels(a *Account, catalog []codebuddy.CatalogModel) []
 	return out
 }
 
+// codeBuddyModelMetadata lays DeepSeek's window and effort scale over any
+// synced entry, so Codex catalogs show a 1M window and default to max. Image
+// input follows the synced catalog when the entry names no modalities.
+func codeBuddyModelMetadata(a *Account, modelID string, metadata UpstreamModelMetadata) (UpstreamModelMetadata, bool) {
+	if !codebuddy.IsDeepSeekModel(modelID) {
+		return metadata, false
+	}
+	reasoning := true
+	metadata.ID = strings.TrimSpace(modelID)
+	metadata.Reasoning = &reasoning
+	metadata.DefaultReasoningLevel = codebuddy.DeepSeekDefaultEffort
+	metadata.SupportedReasoningLevels = append([]string(nil), codebuddy.DeepSeekReasoningLevels...)
+	metadata.ContextWindow = codebuddy.DeepSeekContextWindow
+	metadata.MaxContextWindow = codebuddy.DeepSeekContextWindow
+	if len(metadata.InputModalities) == 0 {
+		metadata.InputModalities = []string{"text"}
+		if model, ok := codebuddy.FindModel(a.GetCodeBuddyCatalog(), codebuddy.UpstreamModel(modelID, a.CodeBuddyProfile())); ok && model.SupportsImages {
+			metadata.InputModalities = append(metadata.InputModalities, "image")
+		}
+	}
+	return metadata, true
+}
+
 // CodeBuddyAvailableOpenAIModels renders the account's models for /v1/models.
 func CodeBuddyAvailableOpenAIModels(account *Account) []openai.Model {
 	if account == nil {

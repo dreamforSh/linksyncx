@@ -280,3 +280,92 @@ func codeBuddyIDs(models []codebuddy.CatalogModel) []string {
 	}
 	return out
 }
+
+func codeBuddyDeepSeekUpstream() *httpUpstreamRecorder {
+	return &httpUpstreamRecorder{resp: &http.Response{
+		StatusCode: http.StatusOK,
+		Header:     http.Header{"Content-Type": []string{"text/event-stream"}},
+		Body: io.NopCloser(strings.NewReader(codeBuddySSE(
+			`{"id":"c1","model":"deepseek-v4-pro","choices":[{"index":0,"delta":{"content":"{\"a\":\"x\"}"},"finish_reason":"stop"}]}`,
+			`{"id":"c1","choices":[],"usage":{"prompt_tokens":3,"completion_tokens":1,"total_tokens":4}}`,
+		))),
+	}}
+}
+
+func TestCodeBuddyResponsesDeepSeekCarriesTextFormatAsInstruction(t *testing.T) {
+	body := []byte(`{"model":"deepseek-v4-pro","stream":false,"input":"hi","text":{"format":{"type":"json_schema","name":"answer","strict":true,"schema":{"type":"object","properties":{"a":{"type":"string"}},"required":["a"]}}}}`)
+	c, rec := newCodeBuddyTestContext("/v1/responses", body)
+	upstream := codeBuddyDeepSeekUpstream()
+	svc := &OpenAIGatewayService{cfg: rawChatCompletionsTestConfig(), httpUpstream: upstream}
+
+	result, err := svc.Forward(context.Background(), c, codeBuddyTestAccount(codebuddy.ProfileCNCLI), body)
+	require.NoError(t, err)
+	require.Equal(t, http.StatusOK, rec.Code)
+	require.False(t, gjson.GetBytes(upstream.lastBody, "response_format").Exists(), "DeepSeek rejects response_format")
+	require.Equal(t, "max", gjson.GetBytes(upstream.lastBody, "reasoning_effort").String(), "no effort named runs max")
+	require.Equal(t, "system", gjson.GetBytes(upstream.lastBody, "messages.0.role").String())
+	require.Contains(t, gjson.GetBytes(upstream.lastBody, "messages.0.content").String(), `{"type":"object","properties":{"a":{"type":"string"}},"required":["a"]}`)
+	require.NotNil(t, result.ReasoningEffort)
+	require.Equal(t, "max", *result.ReasoningEffort)
+}
+
+func TestCodeBuddyMessagesDeepSeekReasoningEffort(t *testing.T) {
+	cases := []struct {
+		name  string
+		extra string
+		want  string
+	}{
+		{name: "no effort named runs max", want: "max"},
+		{name: "low clamps to high", extra: `"output_config":{"effort":"low"},`, want: "high"},
+		{name: "max stays max", extra: `"output_config":{"effort":"max"},`, want: "max"},
+		{name: "thinking disabled omits effort", extra: `"thinking":{"type":"disabled"},`},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			body := []byte(`{` + tc.extra + `"model":"deepseek-v4-pro","max_tokens":64,"messages":[{"role":"user","content":"hi"}]}`)
+			c, _ := newCodeBuddyTestContext("/v1/messages", body)
+			upstream := codeBuddyDeepSeekUpstream()
+			svc := &OpenAIGatewayService{cfg: rawChatCompletionsTestConfig(), httpUpstream: upstream}
+
+			result, err := svc.ForwardAsAnthropic(context.Background(), c, codeBuddyTestAccount(codebuddy.ProfileCNCLI), body, "", "")
+			require.NoError(t, err)
+			effort := gjson.GetBytes(upstream.lastBody, "reasoning_effort")
+			if tc.want == "" {
+				require.False(t, effort.Exists())
+				require.Nil(t, result.ReasoningEffort)
+				return
+			}
+			require.Equal(t, tc.want, effort.String())
+			require.NotNil(t, result.ReasoningEffort)
+			require.Equal(t, tc.want, *result.ReasoningEffort)
+		})
+	}
+}
+
+func TestCodeBuddyDeepSeekModelMetadata(t *testing.T) {
+	account := codeBuddyTestAccount(codebuddy.ProfileCNCLI)
+	metadata, ok := account.GetUpstreamModelMetadata("deepseek-v4-pro")
+	require.True(t, ok)
+	require.Equal(t, int64(1_000_000), metadata.ContextWindow)
+	require.Equal(t, int64(1_000_000), metadata.MaxContextWindow)
+	require.NotNil(t, metadata.Reasoning)
+	require.True(t, *metadata.Reasoning)
+	require.Equal(t, "max", metadata.DefaultReasoningLevel)
+	require.Equal(t, []string{"high", "max"}, metadata.SupportedReasoningLevels)
+	require.Equal(t, []string{"text"}, metadata.InputModalities)
+
+	_, ok = account.GetUpstreamModelMetadata("glm-5.2")
+	require.False(t, ok, "only DeepSeek gets synthesized metadata")
+
+	account.Extra = map[string]any{codeBuddyCatalogExtraKey: CodeBuddyCatalogSnapshot{Models: []codebuddy.CatalogModel{{ID: "deepseek-v4-pro", SupportsImages: true}}}}
+	metadata, ok = account.GetUpstreamModelMetadata("deepseek-v4-pro")
+	require.True(t, ok)
+	require.Equal(t, []string{"text", "image"}, metadata.InputModalities)
+
+	descriptor := newConfiguredCodexModelDescriptor("deepseek-v4-pro")
+	applyUpstreamModelMetadataToCodexDescriptor(&descriptor, codexModelMetadataOverride{UpstreamModelMetadata: metadata})
+	require.NotNil(t, descriptor.DefaultReasoningLevel)
+	require.Equal(t, "max", *descriptor.DefaultReasoningLevel)
+	require.Len(t, descriptor.SupportedReasoningLevels, 2)
+	require.Equal(t, int64(1_000_000), descriptor.ContextWindow)
+}

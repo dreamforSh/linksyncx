@@ -59,7 +59,9 @@ func PublicModel(model string) string {
 //     "required" (upstream accepts string tool_choice only);
 //   - stream is forced on with usage, because the upstream is stream-only;
 //   - "auto" becomes "default-model" internationally, where consecutive user
-//     messages carrying images are merged into one.
+//     messages carrying images are merged into one;
+//   - DeepSeek models get their effort scale and lose response_format (see
+//     applyDeepSeekCompat).
 func PrepareChatBody(body []byte, profile string) ([]byte, error) {
 	var root map[string]json.RawMessage
 	if err := json.Unmarshal(body, &root); err != nil {
@@ -69,6 +71,11 @@ func PrepareChatBody(body []byte, profile string) ([]byte, error) {
 		if _, ok := allowedBodyKeys[key]; !ok {
 			delete(root, key)
 		}
+	}
+	var model string
+	_ = json.Unmarshal(root["model"], &model)
+	if model = strings.TrimSpace(model); model == "" {
+		model = "auto"
 	}
 
 	var messages []map[string]json.RawMessage
@@ -94,6 +101,11 @@ func PrepareChatBody(body []byte, profile string) ([]byte, error) {
 	// Strip third-party coding-agent fingerprints from the system prompt so the
 	// upstream channel risk control (code 11128) does not reject the request.
 	desensitizeSystemMessages(messages)
+	if IsDeepSeekModel(model) {
+		if err := applyDeepSeekCompat(root, messages); err != nil {
+			return nil, err
+		}
+	}
 	encodedMessages, err := marshalNoEscape(messages)
 	if err != nil {
 		return nil, err
@@ -108,11 +120,6 @@ func PrepareChatBody(body []byte, profile string) ([]byte, error) {
 		if json.Unmarshal(raw, &n) == nil && n != 1 {
 			return nil, requestErrorf("n must be 1")
 		}
-	}
-	var model string
-	_ = json.Unmarshal(root["model"], &model)
-	if model = strings.TrimSpace(model); model == "" {
-		model = "auto"
 	}
 	root["model"] = mustRaw(UpstreamModel(model, profile))
 	root["stream"] = json.RawMessage("true")

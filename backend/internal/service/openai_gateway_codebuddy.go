@@ -12,6 +12,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/Wei-Shaw/sub2api/internal/pkg/apicompat"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/codebuddy"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/logger"
 	"github.com/gin-gonic/gin"
@@ -182,6 +183,39 @@ func codeBuddyMessageText(content gjson.Result) string {
 		}
 	}
 	return b.String()
+}
+
+// codeBuddyAnthropicReasoningEffort keeps the Messages bridge's stand-in
+// "medium" (used when output_config names no effort) away from DeepSeek, whose
+// unnamed default is max; thinking.type=disabled turns thinking off.
+func codeBuddyAnthropicReasoningEffort(req *apicompat.AnthropicRequest, upstreamModel, convertedEffort string) string {
+	if req == nil || !codebuddy.IsDeepSeekModel(upstreamModel) {
+		return convertedEffort
+	}
+	if req.Thinking != nil && strings.EqualFold(strings.TrimSpace(req.Thinking.Type), "disabled") {
+		return "none"
+	}
+	if req.OutputConfig == nil || strings.TrimSpace(req.OutputConfig.Effort) == "" {
+		return ""
+	}
+	return convertedEffort
+}
+
+// codeBuddyOutboundReasoningEffort mirrors codebuddy.PrepareChatBody's DeepSeek
+// effort rewrite so usage logs record the level the upstream actually ran.
+func codeBuddyOutboundReasoningEffort(upstreamModel string, requested *string) *string {
+	if !codebuddy.IsDeepSeekModel(upstreamModel) {
+		return requested
+	}
+	raw := ""
+	if requested != nil {
+		raw = *requested
+	}
+	effort, send := codebuddy.DeepSeekReasoningEffort(raw)
+	if !send {
+		return nil
+	}
+	return &effort
 }
 
 func writeCodeBuddyClientError(c *gin.Context, status int, errType, message string) {
