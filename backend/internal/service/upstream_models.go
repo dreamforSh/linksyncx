@@ -127,11 +127,16 @@ func (a *Account) GetUpstreamModelMetadataSnapshot() *UpstreamModelMetadataSnaps
 }
 
 func (a *Account) GetUpstreamModelMetadata(modelID string) (UpstreamModelMetadata, bool) {
-	snapshot := a.GetUpstreamModelMetadataSnapshot()
-	if snapshot == nil {
-		return UpstreamModelMetadata{}, false
+	var metadata UpstreamModelMetadata
+	ok := false
+	if snapshot := a.GetUpstreamModelMetadataSnapshot(); snapshot != nil {
+		metadata, ok = snapshot.Models[strings.TrimSpace(modelID)]
 	}
-	metadata, ok := snapshot.Models[strings.TrimSpace(modelID)]
+	if a.IsCodeBuddy() {
+		if overlaid, applied := codeBuddyModelMetadata(a, modelID, metadata); applied {
+			return overlaid, true
+		}
+	}
 	return metadata, ok
 }
 
