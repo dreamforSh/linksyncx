@@ -179,3 +179,16 @@ describe('ChannelMonitorV3Card success rate', () => {
     expect(wrapper.find('[data-testid="channel-status-sample-badge"]').exists()).toBe(false)
   })
 })
+
+describe('ChannelMonitorV3Card platform', () => {
+  it('labels, colours and draws the CodeBuddy platform instead of falling back to the raw id', () => {
+    const value: MonitorMatrixRow = { platform: 'codebuddy', group_id: 7, group_name: 'cb', metrics: metric(), health: healthy, buckets: [] }
+    const wrapper = mount(ChannelMonitorV3Card, { props: { row: value, axis: axis24h() } })
+    expect(wrapper.text()).toContain('monitorCommon.providers.codebuddy')
+    expect(wrapper.html()).toContain('bg-violet-100')
+    expect(wrapper.get('.channel-signal-card__provider').classes()).toContain('from-violet-50')
+    // PlatformIcon's CodeBuddy mark, not the one-letter fallback.
+    expect(wrapper.get('.channel-signal-card__provider svg').exists()).toBe(true)
+    expect(wrapper.get('.channel-signal-card__provider').text()).toBe('')
+  })
+})

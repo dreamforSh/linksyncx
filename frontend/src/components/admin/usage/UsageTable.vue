@@ -247,6 +247,11 @@
               <span v-else class="text-gray-400 dark:text-gray-500">-</span>
               <span class="text-gray-400 dark:text-gray-500">{{ t('usage.latencyDuration') }}</span>
               <span class="font-medium tabular-nums" :class="LATENCY_TEXT_CLASSES[durationSeverity(row.duration_ms ?? 0)]">{{ formatDuration(row.duration_ms) }}</span>
+              <span class="cursor-help text-gray-400 dark:text-gray-500" :title="t('usage.latencySpeedHint')">{{ t('usage.latencySpeed') }}</span>
+              <span v-if="tokensPerSecondText(row)" data-testid="usage-tokens-per-second" class="font-medium tabular-nums text-gray-700 dark:text-gray-300">
+                {{ tokensPerSecondText(row) }}<span class="ml-0.5 text-[10px] font-normal text-gray-400 dark:text-gray-500">{{ t('usage.tokensPerSecondUnit') }}</span>
+              </span>
+              <span v-else data-testid="usage-tokens-per-second" class="text-gray-400 dark:text-gray-500">-</span>
             </div>
           </div>
         </template>
@@ -571,6 +576,7 @@ import {
   durationSeverity,
   firstTokenSeverity,
 } from '@/utils/latencyHealth'
+import { formatTokensPerSecond, outputTokensPerSecond } from '@/utils/usageThroughput'
 import {
   BILLING_MODE_TOKEN,
   getBillingModeLabel,
@@ -758,6 +764,13 @@ const formatDuration = (ms: number | null | undefined): string => {
   const totalSec = Math.round(ms / 1000)
   if (totalSec < 3600) return `${Math.floor(totalSec / 60)}m ${totalSec % 60}s`
   return `${Math.floor(totalSec / 3600)}h ${Math.floor((totalSec % 3600) / 60)}m`
+}
+
+// 按张计费的图片请求没有有意义的 token 输出速度
+const tokensPerSecondText = (row: AdminUsageLog): string => {
+  if (isImageUsage(row)) return ''
+  const value = outputTokensPerSecond(row)
+  return value == null ? '' : formatTokensPerSecond(value)
 }
 
 // Cost tooltip functions

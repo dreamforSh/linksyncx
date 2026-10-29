@@ -238,7 +238,8 @@ import Icon from '@/components/icons/Icon.vue'
 import UserErrorRequestsTable from '@/components/user/UserErrorRequestsTable.vue'
 import { getPersistedPageSize } from '@/composables/usePersistedPageSize'
 import { formatReasoningEffort } from '@/utils/format'
-import { getBillingModeLabel, getDisplayBillingMode as resolveDisplayBillingMode } from '@/utils/billingMode'
+import { getBillingModeLabel, getDisplayBillingMode as resolveDisplayBillingMode, isImageUsage } from '@/utils/billingMode'
+import { exportTokensPerSecond } from '@/utils/usageThroughput'
 import { resolveUsageRequestType, requestTypeToLegacyStream } from '@/utils/usageRequestType'
 import type {
   ApiKey,
@@ -670,6 +671,7 @@ const exportToCSV = async () => {
       'Original Cost',
       'First Token (ms)',
       'Duration (ms)',
+      'Output Speed (token/s)',
     ]
     const rows = allLogs.map((log) => [
       log.created_at,
@@ -689,6 +691,7 @@ const exportToCSV = async () => {
       log.total_cost.toFixed(8),
       log.first_token_ms ?? '',
       log.duration_ms ?? '',
+      isImageUsage(log) ? '' : exportTokensPerSecond(log),
     ].map(escapeCSVValue))
     const csvContent = [
       headers.map(escapeCSVValue).join(','),

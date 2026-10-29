@@ -25,6 +25,7 @@ import {
   PROVIDER_MINIMAX,
   PROVIDER_OPENCODE_GO,
   PROVIDER_COMMAND_CODE,
+  PLATFORM_CODEBUDDY,
   PROVIDERS,
   STATUS_OPERATIONAL,
   STATUS_DEGRADED,
@@ -70,7 +71,7 @@ export function useChannelMonitorFormat() {
   }
 
   function providerLabel(p: Provider | string): string {
-    if (PROVIDERS.includes(p as Provider)) {
+    if (PROVIDERS.includes(p as Provider) || p === PLATFORM_CODEBUDDY) {
       return t(`monitorCommon.providers.${p}`)
     }
     return p || '-'
@@ -125,6 +126,8 @@ export function useChannelMonitorFormat() {
         return 'bg-amber-100 text-amber-800 dark:bg-amber-500/15 dark:text-amber-300'
       case PROVIDER_COMMAND_CODE:
         return 'bg-slate-100 text-slate-800 dark:bg-slate-500/15 dark:text-slate-300'
+      case PLATFORM_CODEBUDDY:
+        return 'bg-violet-100 text-violet-700 dark:bg-violet-500/15 dark:text-violet-300'
       default:
         return NEUTRAL_BADGE
     }
@@ -289,6 +292,8 @@ export function providerGradient(provider: string): string {
         return 'bg-gradient-to-br from-amber-50 to-amber-100 dark:from-amber-500/10 dark:to-amber-500/20'
       case PROVIDER_COMMAND_CODE:
         return 'bg-gradient-to-br from-slate-50 to-slate-100 dark:from-slate-500/10 dark:to-slate-500/20'
+    case PLATFORM_CODEBUDDY:
+      return 'bg-gradient-to-br from-violet-50 to-violet-100 dark:from-violet-500/10 dark:to-violet-500/20'
     default:
       return 'bg-gradient-to-br from-gray-100 to-gray-200 dark:from-dark-700 dark:to-dark-600'
   }

@@ -902,3 +902,38 @@ describe('admin UsageTable deleted-user badge', () => {
     expect(wrapper.text()).toContain('active@test.com')
   })
 })
+
+describe('admin UsageTable latency speed', () => {
+  const DataTableStubWithLatency = {
+    props: ['data'],
+    template: `
+      <div>
+        <div v-for="row in data" :key="row.request_id" :data-row="row.request_id">
+          <slot name="cell-latency" :row="row" />
+        </div>
+      </div>
+    `,
+  }
+
+  it('shows output tokens per second after the first token and dashes rows without one', () => {
+    const wrapper = mount(UsageTable, {
+      props: {
+        data: [
+          { ...baseImageRow, request_id: 'stream', billing_mode: 'token', image_count: 0, output_tokens: 500, first_token_ms: 1_000, duration_ms: 6_000 },
+          { ...baseImageRow, request_id: 'sync', billing_mode: 'token', image_count: 0, output_tokens: 1_500, first_token_ms: null, duration_ms: 10_000 },
+          { ...baseImageRow, request_id: 'empty', billing_mode: 'token', image_count: 0, output_tokens: 0, first_token_ms: 200, duration_ms: 900 },
+          { ...baseImageRow, request_id: 'image', output_tokens: 4_000, first_token_ms: null, duration_ms: 20_000 },
+        ],
+        columns: [{ key: 'latency', label: 'Latency' }],
+      },
+      global: { stubs: { DataTable: DataTableStubWithLatency, EmptyState: true, Icon: true, Teleport: true } },
+    })
+
+    const speed = (id: string) => wrapper.get(`[data-row="${id}"] [data-testid="usage-tokens-per-second"]`).text()
+    expect(wrapper.get('[data-row="stream"]').text()).toContain('usage.latencySpeed')
+    expect(speed('stream')).toBe(`${(100).toLocaleString()}usage.tokensPerSecondUnit`)
+    expect(speed('sync')).toBe(`${(150).toLocaleString()}usage.tokensPerSecondUnit`)
+    expect(speed('empty')).toBe('-')
+    expect(speed('image')).toBe('-')
+  })
+})

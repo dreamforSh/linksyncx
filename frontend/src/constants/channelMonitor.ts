@@ -22,6 +22,12 @@ export const PROVIDER_MINIMAX: Provider = 'minimax'
 export const PROVIDER_OPENCODE_GO: Provider = 'opencode_go'
 export const PROVIDER_COMMAND_CODE: Provider = 'command_code'
 
+/**
+ * V2/V3 被动监控按使用记录的账号平台分组，平台集合比 V1 provider 多。
+ * CodeBuddy 没有 V1 探活/配额 adapter，这里只用于名称、配色与图标。
+ */
+export const PLATFORM_CODEBUDDY = 'codebuddy'
+
 export const DEFAULT_GROK_ENDPOINT = 'https://api.x.ai'
 export const DEFAULT_GROK_MODEL = 'grok-4.5'
 

@@ -1,5 +1,6 @@
 <template>
   <PlatformIcon v-if="provider === 'perplexity'" platform="perplexity" :style="{ width: `${size}px`, height: `${size}px` }" />
+  <PlatformIcon v-else-if="provider === 'codebuddy'" platform="codebuddy" :style="{ width: `${size}px`, height: `${size}px` }" />
   <svg
     v-else-if="iconInfo"
     :width="size"
