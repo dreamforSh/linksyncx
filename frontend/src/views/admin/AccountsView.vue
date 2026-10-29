@@ -16,6 +16,15 @@
             @refresh="handleManualRefresh"
             @create="openCreateAccount()"
           >
+            <template #before>
+              <SegmentedControl
+                :model-value="viewMode"
+                :options="viewModeOptions"
+                :aria-label="t('admin.accounts.view.label')"
+                test-id="account-view-mode"
+                @update:model-value="setViewMode"
+              />
+            </template>
             <template #after>
               <!-- Auto Refresh Dropdown -->
               <div class="relative" ref="autoRefreshDropdownRef">
@@ -192,7 +201,65 @@
           @select-all-results="handleSelectAllResults"
           @toggle-schedulable="handleBulkToggleSchedulable"
         />
-        <div ref="accountTableRef" class="flex min-h-0 flex-1 flex-col overflow-hidden">
+        <!-- 卡片视图：渲染当前页，单元格与表格同参；拖选依赖表格行，仅表格视图可用 -->
+        <AccountCardGrid
+          v-if="viewMode === 'card'"
+          :accounts="accounts"
+          :loading="loading"
+          :selected-ids="selIds"
+          :sort-columns="sortableColumns"
+          :sort-key="sortState.sort_by"
+          :sort-order="sortState.sort_order"
+          @toggle-select-page="toggleVisible"
+          @sort="handleCardSort"
+        >
+          <template #card="{ account }">
+            <AccountCard
+              :account="account"
+              :selected="isSelected(account.id)"
+              :visible-columns="visibleColumnKeys"
+              :display-email="accountDisplayEmail(account)"
+              :homepage-url="accountHomepageUrl(account)"
+              :auth-mode="getOpenAIAuthMode(account)"
+              :plan-type="getAccountPlanType(account)"
+              :privacy-mode="getAccountPrivacyMode(account)"
+              :tier-label="getAntigravityTierLabel(account)"
+              :tier-class="getAntigravityTierClass(account)"
+              :compact-meta="getOpenAICompactMeta(account)"
+              :compact-title="getOpenAICompactTitle(account)"
+              :groups="accountGroupsForRow(account)"
+              :clash-exit="clashExitFor(account.proxy_id)"
+              :today-stats="todayStatsByAccountId[String(account.id)] ?? null"
+              :today-stats-loading="todayStatsLoading"
+              :today-stats-error="todayStatsError"
+              :manual-refresh-token="usageManualRefreshToken"
+              :batched-usage="usageBatchByAccountId[String(account.id)] ?? null"
+              :batched-usage-error="usageBatchErrorByAccountId[String(account.id)] ?? null"
+              :batched-usage-loading="usageBatchLoadingByAccountId[String(account.id)] === true"
+              :request-batched-usage="isDesktopViewport ? queueBatchedUsage : null"
+              :toggling-schedulable="togglingSchedulable === account.id"
+              :custom-usage-state="customUsageStates[account.id]"
+              :custom-usage-key="customUsagePageKey"
+              :upstream-billing-now="upstreamBillingNow"
+              :upstream-billing-probing="probingUpstreamBilling.has(account.id)"
+              :upstream-billing-global-probe-enabled="upstreamBillingProbeGloballyEnabled"
+              @toggle-select="toggleSel(account.id)"
+              @toggle-schedulable="handleToggleSchedulable(account)"
+              @show-temp-unsched="handleShowTempUnsched"
+              @account-updated="handleAccountUpdated"
+              @usage-loaded="handleAccountUsageLoaded(account.id, $event)"
+              @custom-usage-refresh="refreshCustomUsage(account.id)"
+              @custom-usage-configure="customUsageAccount = account"
+              @custom-usage-visibility="setCustomUsageVisible(account.id, $event)"
+              @probe-upstream-billing="handleProbeUpstreamBilling(account)"
+              @revert-fallback="onRevertFallback(account)"
+              @edit="handleEdit(account)"
+              @delete="handleDelete(account)"
+              @more="openMenu(account, $event)"
+            />
+          </template>
+        </AccountCardGrid>
+        <div v-else ref="accountTableRef" class="flex min-h-0 flex-1 flex-col overflow-hidden">
         <DataTable
           ref="dataTableRef"
           :columns="cols"
@@ -560,10 +627,13 @@ import DataTable from '@/components/common/DataTable.vue'
 import HelpTooltip from '@/components/common/HelpTooltip.vue'
 import Pagination from '@/components/common/Pagination.vue'
 import ConfirmDialog from '@/components/common/ConfirmDialog.vue'
+import SegmentedControl from '@/components/common/SegmentedControl.vue'
 import { CreateAccountModal, EditAccountModal, BulkEditAccountModal, SyncFromCrsModal, TempUnschedStatusModal } from '@/components/account'
 import AccountTableActions from '@/components/admin/account/AccountTableActions.vue'
 import AccountTableFilters from '@/components/admin/account/AccountTableFilters.vue'
 import AccountBulkActionsBar from '@/components/admin/account/AccountBulkActionsBar.vue'
+import AccountCardGrid from '@/components/admin/account/AccountCardGrid.vue'
+import AccountCard from '@/components/admin/account/AccountCard.vue'
 import DeviceProfileBatchDialog from '@/components/admin/account/DeviceProfileBatchDialog.vue'
 import AccountActionMenu from '@/components/admin/account/AccountActionMenu.vue'
 import ImportDataModal from '@/components/admin/account/ImportDataModal.vue'
@@ -773,6 +843,32 @@ const loadInitialAccountSortState = (): AccountSortState => {
   }
 }
 const sortState = reactive<AccountSortState>(loadInitialAccountSortState())
+
+// Table / card view, remembered per browser (defaults to the table)
+type AccountViewMode = 'table' | 'card'
+const ACCOUNT_VIEW_MODE_KEY = 'account-view-mode'
+const readAccountViewMode = (): AccountViewMode => {
+  try {
+    return localStorage.getItem(ACCOUNT_VIEW_MODE_KEY) === 'card' ? 'card' : 'table'
+  } catch {
+    return 'table'
+  }
+}
+const viewMode = ref<AccountViewMode>(readAccountViewMode())
+const viewModeOptions = computed(() => [
+  { value: 'table' as AccountViewMode, icon: 'menu' as const, title: t('admin.accounts.view.table') },
+  { value: 'card' as AccountViewMode, icon: 'grid' as const, title: t('admin.accounts.view.card') }
+])
+const setViewMode = (mode: AccountViewMode) => {
+  viewMode.value = mode
+  // The row menu is anchored to a button of the view being replaced.
+  menu.show = false
+  try {
+    localStorage.setItem(ACCOUNT_VIEW_MODE_KEY, mode)
+  } catch {
+    // Private mode: the choice just isn't remembered.
+  }
+}
 
 // Auto refresh settings
 const showAutoRefreshDropdown = ref(false)
@@ -1429,6 +1525,17 @@ const handleSort = (key: string, order: AccountSortOrder) => {
   load()
 }
 
+// The card view has no table header: persist its choice in the DataTable's format so the
+// header shows the same sort when switching back, then sort through the shared handler.
+const handleCardSort = (key: string, order: AccountSortOrder) => {
+  try {
+    localStorage.setItem(ACCOUNT_SORT_STORAGE_KEY, JSON.stringify({ key, order }))
+  } catch {
+    // Private mode: only the in-memory sort changes.
+  }
+  handleSort(key, order)
+}
+
 watch(loading, (isLoading, wasLoading) => {
   if (wasLoading && !isLoading) {
     upstreamBillingNow.value = Date.now()
@@ -1949,6 +2056,13 @@ const cols = computed(() =>
   allColumns.value.filter(col =>
     col.key === 'select' || col.key === 'name' || col.key === 'actions' || !hiddenColumns.has(col.key)
   )
+)
+
+// Card view: sections follow the same column settings. The sort picker offers the sortable columns the
+// table header shows (plus the active one), so switching back to the table keeps its header in sync.
+const visibleColumnKeys = computed(() => cols.value.map(col => col.key))
+const sortableColumns = computed(() =>
+  allColumns.value.filter(col => col.sortable && (visibleColumnKeys.value.includes(col.key) || col.key === sortState.sort_by))
 )
 
 const accountDetailLoading = new Set<number>()

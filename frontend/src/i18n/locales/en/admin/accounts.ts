@@ -53,6 +53,18 @@ export default {
       toolActions: 'Tools',
       viewColumns: 'Columns',
       selectedCount: '{count} selected',
+      view: {
+        label: 'View',
+        table: 'Table',
+        card: 'Cards'
+      },
+      card: {
+        select: 'Select {name}',
+        selectPage: 'Select page',
+        sortBy: 'Sort by',
+        sortAsc: 'Ascending',
+        sortDesc: 'Descending'
+      },
       dataExportConfirmMessage: 'The exported data contains sensitive account and proxy information. Store it securely.',
       dataExportConfirm: 'Confirm Export',
       dataExported: 'Data exported successfully',

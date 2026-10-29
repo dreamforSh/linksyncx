@@ -759,7 +759,9 @@ func (s *OpenAIGatewayService) handleChatStreamingResponse(
 
 	var usage OpenAIUsage
 	var firstTokenMs *int
-	firstChunk := true
+	// response.created and other preamble events are not tokens; follow the
+	// TTFT mode the native Responses path uses.
+	ttftMode := s.openAITTFTMode(openAICompatBridgeContext(c))
 	clientDisconnected := false
 	clientOutputStarted := false
 	pendingSSE := make([]string, 0, 4)
@@ -778,10 +780,7 @@ func (s *OpenAIGatewayService) handleChatStreamingResponse(
 
 	scanner := s.newUpstreamSSEScanner(resp.Body)
 
-	streamInterval := time.Duration(0)
-	if s.cfg != nil && s.cfg.Gateway.StreamDataIntervalTimeout > 0 {
-		streamInterval = time.Duration(s.cfg.Gateway.StreamDataIntervalTimeout) * time.Second
-	}
+	streamInterval := s.openAICompatStreamIdleTimeout(account)
 	var intervalTicker *time.Ticker
 	if streamInterval > 0 {
 		intervalTicker = time.NewTicker(streamInterval)
@@ -815,11 +814,6 @@ func (s *OpenAIGatewayService) handleChatStreamingResponse(
 
 	processDataLine := func(payload string) bool {
 		payload = string(restoreCodexToolNamesFromContext(c, []byte(payload)))
-		if firstChunk {
-			firstChunk = false
-			ms := int(time.Since(startTime).Milliseconds())
-			firstTokenMs = &ms
-		}
 		if countSearch {
 			searchCount += countGrokNativeSearchCallsInSSEDataDedup([]byte(payload), streamSearchSeen)
 		}
@@ -831,6 +825,10 @@ func (s *OpenAIGatewayService) handleChatStreamingResponse(
 				zap.String("request_id", requestID),
 			)
 			return false
+		}
+		if firstTokenMs == nil && openAIStreamDataStartsTTFT(payload, event.Type, false, ttftMode) {
+			ms := int(time.Since(startTime).Milliseconds())
+			firstTokenMs = &ms
 		}
 		observer.ObserveOpenAI([]byte(payload), event.Type)
 		refusalDetector.ObservePayload([]byte(payload))
@@ -1206,6 +1204,10 @@ func (s *OpenAIGatewayService) handleChatStreamingResponse(
 				zap.String("model", originalModel),
 				zap.Duration("interval", streamInterval),
 			)
+			if failoverErr := s.grokStreamIdleBridgeFailover(openAICompatBridgeContext(c), account, streamInterval, clientOutputStarted); failoverErr != nil {
+				_ = resp.Body.Close()
+				return resultWithUsage(), failoverErr
+			}
 			return resultWithUsage(), fmt.Errorf("stream data interval timeout")
 
 		case <-keepaliveCh:

@@ -407,11 +407,18 @@ func TestOpenAIGatewayService_ClientSessionHeaderPriority(t *testing.T) {
 	svc := &OpenAIGatewayService{}
 	body := []byte(`{"prompt_cache_key":"body-session"}`)
 	for _, header := range headers {
+		if header.name == grokConversationIDHeader {
+			// The Grok conversation header ranks below prompt_cache_key (Grok Build
+			// side-calls label it per call) and only applies without one.
+			require.Equal(t, "body-session", svc.ExtractSessionID(c, body), header.name)
+			require.Equal(t, header.value, svc.ExtractSessionID(c, []byte(`{}`)), header.name)
+			require.Equal(t, fmt.Sprintf("%016x", xxhash.Sum64String(header.value)), svc.GenerateExplicitSessionHash(c, []byte(`{}`)), header.name)
+			c.Request.Header.Del(header.name)
+			continue
+		}
 		require.Equal(t, header.value, svc.ExtractSessionID(c, body), header.name)
 		require.Equal(t, fmt.Sprintf("%016x", xxhash.Sum64String(header.value)), svc.GenerateExplicitSessionHash(c, body), header.name)
-		if header.name != grokConversationIDHeader {
-			require.Equal(t, header.value, explicitOpenAISessionID(c, body), header.name)
-		}
+		require.Equal(t, header.value, explicitOpenAISessionID(c, body), header.name)
 		c.Request.Header.Del(header.name)
 	}
 	require.Equal(t, "body-session", svc.ExtractSessionID(c, body))

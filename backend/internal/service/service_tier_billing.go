@@ -64,6 +64,9 @@ func serviceTierCostRank(tier string) (rank int, known bool) {
 // reports default for effective Fast turns, so OAuth-like credentials retain
 // the final outbound tier while still exposing the observed value.
 func ResolveOpenAIServiceTierBilling(account *Account, requested, observed string) ServiceTierBillingResolution {
+	if account != nil && account.IsGrok() {
+		return resolveGrokServiceTierBilling(requested, observed)
+	}
 	if account != nil && account.IsOpenAIOAuthLike() && codexOAuthResponseTierIsNonAuthoritative(observed) {
 		return ServiceTierBillingResolution{
 			Requested: normalizeBillingServiceTier(requested),
@@ -72,6 +75,25 @@ func ResolveOpenAIServiceTierBilling(account *Account, requested, observed strin
 		}
 	}
 	return ResolveBillingServiceTier(requested, observed)
+}
+
+// resolveGrokServiceTierBilling applies xAI's contract: Priority Processing is
+// billed only when the response confirms "priority" (a missing declaration
+// means the request ran at the standard tier), and xAI has no cheaper tier,
+// so any other tier a client asked for bills at the standard rate.
+func resolveGrokServiceTierBilling(requested, observed string) ServiceTierBillingResolution {
+	requested = normalizeBillingServiceTier(requested)
+	observed = normalizeBillingServiceTier(observed)
+	resolution := ServiceTierBillingResolution{Requested: requested, Observed: observed, Billing: requested}
+	if requested == "" || requested == "default" {
+		return resolution
+	}
+	if (requested == "priority" || requested == "fast") && observed == "priority" {
+		return resolution
+	}
+	resolution.Billing = "default"
+	resolution.Downgraded = serviceTierCostMultiplier(requested) > 1
+	return resolution
 }
 
 func codexOAuthResponseTierIsNonAuthoritative(observed string) bool {
@@ -90,7 +112,9 @@ func ApplyOpenAIServiceTierBillingResolution(account *Account, result *OpenAIFor
 		return ServiceTierBillingResolution{}
 	}
 	resolution := ResolveOpenAIServiceTierBilling(account, optionalStringValue(result.ServiceTier), result.UpstreamResponseServiceTier)
-	if resolution.Downgraded {
+	// Grok can also settle an unsupported cheaper tier at the standard rate,
+	// which is not a downgrade but still changes the billed tier.
+	if resolution.Downgraded || resolution.Billing != resolution.Requested {
 		billing := resolution.Billing
 		result.ServiceTier = &billing
 	}

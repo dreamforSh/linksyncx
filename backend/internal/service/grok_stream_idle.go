@@ -1,9 +1,12 @@
 package service
 
 import (
+	"context"
 	"fmt"
 	"strings"
 	"time"
+
+	"github.com/gin-gonic/gin"
 )
 
 // Default Grok stream idle when gateway.stream_data_interval_timeout is 0.
@@ -22,6 +25,48 @@ func resolveGrokStreamIdleTimeout(cfgStreamIntervalSec int) time.Duration {
 		return time.Duration(cfgStreamIntervalSec) * time.Second
 	}
 	return defaultGrokStreamIdleTimeout
+}
+
+// openAICompatStreamIdleTimeout is the upstream-read idle limit of the Chat
+// Completions and Messages bridges over Responses streams. Grok always gets
+// one, matching the native Responses path, so a hung Grok stream is cut off
+// even when the global gateway setting is disabled.
+func (s *OpenAIGatewayService) openAICompatStreamIdleTimeout(account *Account) time.Duration {
+	cfgSec := 0
+	if s != nil && s.cfg != nil {
+		cfgSec = s.cfg.Gateway.StreamDataIntervalTimeout
+	}
+	if account != nil && account.IsGrok() {
+		return resolveGrokStreamIdleTimeout(cfgSec)
+	}
+	if cfgSec > 0 {
+		return time.Duration(cfgSec) * time.Second
+	}
+	return 0
+}
+
+// openAICompatBridgeContext is the request context of a bridge stream, or
+// Background for contexts built without a request.
+func openAICompatBridgeContext(c *gin.Context) context.Context {
+	if c == nil || c.Request == nil {
+		return context.Background()
+	}
+	return c.Request.Context()
+}
+
+// grokStreamIdleBridgeFailover applies the native Responses path's Grok idle
+// handling in a bridge: cool the account briefly, and fail over when nothing
+// has reached the client yet. It returns nil for other platforms and for
+// streams that already wrote output.
+func (s *OpenAIGatewayService) grokStreamIdleBridgeFailover(ctx context.Context, account *Account, idle time.Duration, outputStarted bool) *UpstreamFailoverError {
+	if account == nil || !account.IsGrok() {
+		return nil
+	}
+	s.tempUnscheduleGrok(ctx, account, grokStreamIdleCooldown, "grok stream idle timeout")
+	if outputStarted {
+		return nil
+	}
+	return grokStreamIdleFailoverError(account, idle)
 }
 
 // grokStreamIdleFailoverError builds a pre-commit/handler-visible failover so

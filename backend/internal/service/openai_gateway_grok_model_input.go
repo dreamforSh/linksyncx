@@ -1,7 +1,6 @@
 package service
 
 import (
-	"bytes"
 	"encoding/json"
 	"fmt"
 	"strings"
@@ -14,7 +13,9 @@ import (
 // shapes into the subset accepted by xAI's ModelInput decoder. Call IDs are
 // assigned in a separate pass so an output can safely appear before its call.
 func sanitizeGrokResponsesModelInput(body []byte) ([]byte, error) {
-	input := gjson.GetBytes(body, "input")
+	// Read input through a view of body: replayed conversations run to
+	// megabytes, and gjson.GetBytes would copy the whole array first.
+	input := gjson.Get(bytesView(body), "input")
 	if !input.Exists() || input.Type == gjson.String {
 		return body, nil
 	}
@@ -24,14 +25,14 @@ func sanitizeGrokResponsesModelInput(body []byte) ([]byte, error) {
 		if err != nil {
 			return nil, fmt.Errorf("wrap Grok Responses model input: %w", err)
 		}
-		input = gjson.GetBytes(body, "input")
+		input = gjson.Get(bytesView(body), "input")
 	}
 	if !input.IsArray() {
 		return body, nil
 	}
 
 	var items []any
-	decoder := json.NewDecoder(bytes.NewReader([]byte(input.Raw)))
+	decoder := json.NewDecoder(strings.NewReader(input.Raw))
 	decoder.UseNumber()
 	if err := decoder.Decode(&items); err != nil {
 		return nil, fmt.Errorf("parse Grok Responses model input: %w", err)

@@ -96,17 +96,23 @@ func openAIRequestPayloadView(body []byte) gjson.Result {
 // session/conversation/prompt_cache_key is present. Non-Grok groups omit this
 // so HTTP OpenAI paths that delete previous_response_id before upstream are
 // unchanged.
+//
+// prompt_cache_key outranks x-grok-conv-id, as in explicitGrokCacheSeed: Grok
+// Build side-calls (turn-summary, title-refresh) label the header per call but
+// carry the parent session in prompt_cache_key. Sticky routing must follow the
+// key too, or the side-call lands on another OAuth account whose server-side
+// cache has never seen the conversation and replays it at full price.
 func explicitOpenAIRequestSessionID(c *gin.Context, body []byte) string {
 	if c == nil {
 		return ""
 	}
 
 	sessionID := explicitOpenAIHeaderSessionID(c)
-	if sessionID == "" && isGrokRequestContext(c) {
-		sessionID = strings.TrimSpace(c.GetHeader(grokConversationIDHeader))
-	}
 	if sessionID == "" && len(body) > 0 {
 		sessionID = strings.TrimSpace(openAIRequestPayloadView(body).Get("prompt_cache_key").String())
+	}
+	if sessionID == "" && isGrokRequestContext(c) {
+		sessionID = strings.TrimSpace(c.GetHeader(grokConversationIDHeader))
 	}
 	if sessionID == "" && isGrokRequestContext(c) && len(body) > 0 {
 		sessionID = grokPreviousResponseSessionSeed(body)
@@ -150,9 +156,10 @@ func (s *OpenAIGatewayService) GenerateExplicitSessionHash(c *gin.Context, body 
 //  2. Header: conversation_id
 //  3. Header: x-session-affinity / x-session-id / x-opencode-session (OpenCode)
 //  4. Header: x-conversation-id (CodeBuddy)
-//  5. Header: x-grok-conv-id (Grok groups only)
-//  6. Body:   prompt_cache_key
-//  7. Body:   content-based fallback (model + system + tools + first user message)
+//  5. Body:   prompt_cache_key
+//  6. Header: x-grok-conv-id (Grok groups only)
+//  7. Body:   previous_response_id (Grok groups only)
+//  8. Body:   content-based fallback (model + system + tools + first user message)
 //
 // Grok sticky affinity is intentionally separate from the upstream
 // prompt_cache_key identity (resolveGrokCacheIdentity): sticky pins an OAuth

@@ -637,7 +637,7 @@ func (a *Account) resolveModelMapping(rawMapping map[string]any) map[string]stri
 			return domain.DefaultAntigravityModelMapping
 		}
 		if a.Platform == domain.PlatformGrok {
-			return xai.DefaultModelMapping()
+			return a.grokDefaultModelMapping()
 		}
 		// Bedrock 默认映射由 forwardBedrock 统一处理（需配合 region prefix 调整）
 		return nil
@@ -651,7 +651,7 @@ func (a *Account) resolveModelMapping(rawMapping map[string]any) map[string]stri
 			return domain.DefaultAntigravityModelMapping
 		}
 		if a.Platform == domain.PlatformGrok {
-			return xai.DefaultModelMapping()
+			return a.grokDefaultModelMapping()
 		}
 		return nil
 	}
@@ -710,9 +710,20 @@ func (a *Account) resolveModelMapping(rawMapping map[string]any) map[string]stri
 		return domain.DefaultAntigravityModelMapping
 	}
 	if a.Platform == domain.PlatformGrok {
-		return xai.DefaultModelMapping()
+		return a.grokDefaultModelMapping()
 	}
 	return nil
+}
+
+// grokDefaultModelMapping is the mapping a Grok account without its own
+// model_mapping serves. OAuth accounts reach cli-chat-proxy and also route
+// the Grok Build-only models such as grok-4.7-fast; the public API does not
+// serve those, so API-key accounts keep the plain catalog.
+func (a *Account) grokDefaultModelMapping() map[string]string {
+	if a.Type == AccountTypeOAuth {
+		return xai.DefaultOAuthModelMapping()
+	}
+	return xai.DefaultModelMapping()
 }
 
 // accountMappingCache 是从 credentials 子映射解析出的结果，连同计算时的来源标识

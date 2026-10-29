@@ -3122,6 +3122,9 @@ func (h *AccountHandler) GetAvailableModels(c *gin.Context) {
 	// Handle Grok accounts
 	if account.Platform == service.PlatformGrok {
 		defaultModels := xai.DefaultModels()
+		if account.IsGrokOAuth() {
+			defaultModels = append(defaultModels, xai.BuildOnlyModels()...)
+		}
 
 		hasExplicitMapping := false
 		switch rawMapping := account.Credentials["model_mapping"].(type) {

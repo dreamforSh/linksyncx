@@ -107,6 +107,24 @@ var defaultModels = []Model{
 	{ID: DefaultImagineVideo15Model, Object: "model", Type: "model", OwnedBy: "xai", DisplayName: "Grok Imagine Video 1.5"},
 }
 
+// GrokBuildFastTextModel is Grok 4.7 Fast: grok-4.7 served on faster
+// infrastructure at a premium rate. xAI offers it only in Grok Build (and
+// Cursor), not on the public API, so only OAuth accounts that reach
+// cli-chat-proxy route it. Grok Build's free tier excludes it.
+const GrokBuildFastTextModel = "grok-4.7-fast"
+
+// grokBuildOnlyTextModelAliases maps the text models Grok Build reaches
+// through cli-chat-proxy but the public API does not serve. Grok Build's Fast
+// toggle has used both names.
+var grokBuildOnlyTextModelAliases = map[string]string{
+	GrokBuildFastTextModel: GrokBuildFastTextModel,
+	"grok-4.7-build-fast":  GrokBuildFastTextModel,
+}
+
+var buildOnlyModels = []Model{
+	{ID: GrokBuildFastTextModel, Object: "model", Type: "model", OwnedBy: "xai", DisplayName: "Grok 4.7 Fast"},
+}
+
 // grokTextResponsesModelAliases is the source of truth for Grok text models
 // accepted by the Responses path: client-facing / undated aliases → canonical
 // upstream ID. Used by DefaultModelMapping and IsGrokTextResponsesModelID.
@@ -144,6 +162,14 @@ func DefaultModels() []Model {
 	return out
 }
 
+// BuildOnlyModels returns the Grok Build-only models that OAuth accounts
+// serve in addition to DefaultModels.
+func BuildOnlyModels() []Model {
+	out := make([]Model, len(buildOnlyModels))
+	copy(out, buildOnlyModels)
+	return out
+}
+
 func DefaultModelIDs() []string {
 	models := DefaultModels()
 	ids := make([]string, 0, len(models))
@@ -160,9 +186,25 @@ func DefaultModelMapping() map[string]string {
 	return ModelMappingWithOptions(RuntimeModelMappingOptions())
 }
 
+// DefaultOAuthModelMapping is DefaultModelMapping plus the Grok Build-only
+// text models, for OAuth accounts that reach cli-chat-proxy.
+func DefaultOAuthModelMapping() map[string]string {
+	return OAuthModelMappingWithOptions(RuntimeModelMappingOptions())
+}
+
 // ModelMappingWithOptions builds the default Grok mapping with optional
 // cross-client wildcards and a configurable default text model.
 func ModelMappingWithOptions(opts ModelMappingOptions) map[string]string {
+	return modelMappingWithOptions(opts, false)
+}
+
+// OAuthModelMappingWithOptions is ModelMappingWithOptions for OAuth accounts:
+// it also routes the Grok Build-only text models.
+func OAuthModelMappingWithOptions(opts ModelMappingOptions) map[string]string {
+	return modelMappingWithOptions(opts, true)
+}
+
+func modelMappingWithOptions(opts ModelMappingOptions, buildOnly bool) map[string]string {
 	defaultText := opts.defaultText()
 	mapping := make(map[string]string, len(defaultModels)+len(grokTextResponsesModelAliases)+48)
 	for _, model := range defaultModels {
@@ -201,6 +243,11 @@ func ModelMappingWithOptions(opts ModelMappingOptions) map[string]string {
 		mapping["o4*"] = defaultText
 		// Claude Code defaults when operators intentionally enable bridging.
 		mapping["claude-*"] = defaultText
+	}
+	if buildOnly {
+		for alias, canonical := range grokBuildOnlyTextModelAliases {
+			mapping[alias] = canonical
+		}
 	}
 	addGrokProviderPrefixedMappings(mapping)
 	return mapping
@@ -288,7 +335,17 @@ func IsGrokImagineModel(model string) bool {
 // for the Responses API. Imagine image/video and unknown custom ids return false.
 func IsGrokTextResponsesModelID(model string) bool {
 	normalized := strings.ToLower(StripGrokProviderPrefix(model))
-	_, ok := grokTextResponsesModelAliases[normalized]
+	if _, ok := grokTextResponsesModelAliases[normalized]; ok {
+		return true
+	}
+	_, ok := grokBuildOnlyTextModelAliases[normalized]
+	return ok
+}
+
+// IsGrokBuildOnlyTextModel reports whether model is a text model only Grok
+// Build (OAuth through cli-chat-proxy) can reach.
+func IsGrokBuildOnlyTextModel(model string) bool {
+	_, ok := grokBuildOnlyTextModelAliases[strings.ToLower(StripGrokProviderPrefix(model))]
 	return ok
 }
 
@@ -308,6 +365,9 @@ func ResolveGrokTextResponsesModelID(model string, defaultText ...string) string
 		if (normalized == "grok" || normalized == "grok-latest") && canonical == DefaultTextModel {
 			return fallback
 		}
+		return canonical
+	}
+	if canonical, ok := grokBuildOnlyTextModelAliases[normalized]; ok {
 		return canonical
 	}
 	return StripGrokProviderPrefix(trimmed)

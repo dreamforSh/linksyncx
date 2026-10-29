@@ -51,6 +51,11 @@ func adaptResponsesClientToolsForFunctionUpstreamWithMapping(
 }
 
 func adaptGrokResponsesClientTools(body []byte) ([]byte, apicompat.ResponsesClientToolMapping, error) {
+	// Most Grok clients declare only function and native tools; skip the full
+	// decode when the adapter could not change anything.
+	if !grokResponsesClientToolsNeedAdaptation(body) {
+		return body, apicompat.ResponsesClientToolMapping{}, nil
+	}
 	return adaptResponsesClientToolsForFunctionUpstream(body, "Grok")
 }
 

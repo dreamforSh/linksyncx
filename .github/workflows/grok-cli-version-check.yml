@@ -3,33 +3,46 @@ name: Grok CLI version check
 # xAI raises the lowest Grok CLI version cli-chat-proxy.grok.com accepts
 # without notice; below it every OAuth inference request fails with HTTP 426.
 # This job fails when the pinned CLIClientVersion falls behind the published
-# stable release, so the bump lands before the floor moves past the pin.
-# Until a release ships, operators can set XAI_GROK_CLI_VERSION instead.
+# stable release, so the bump lands before the floor moves past the pin. A pin
+# ahead of stable only warns. It also fails when the pin is not a plain
+# release, sits below CLIStableVersion, or disagrees with the README row
+# operators read. Until a release ships, operators can set XAI_GROK_CLI_VERSION.
+# The logic lives in .github/scripts/grok-cli-version-check.sh so it can be run
+# locally; backend-ci runs its --offline mode on every push.
 
 on:
   schedule:
     - cron: "17 3 * * *"
   workflow_dispatch:
+  push:
+    branches:
+      - main
+    paths:
+      - backend/internal/pkg/xai/billing.go
+      - backend/internal/pkg/xai/cli_identity.go
+      - README.md
+      - .github/scripts/grok-cli-version-check.sh
+      - .github/workflows/grok-cli-version-check.yml
+  pull_request:
+    paths:
+      - backend/internal/pkg/xai/billing.go
+      - backend/internal/pkg/xai/cli_identity.go
+      - README.md
+      - .github/scripts/grok-cli-version-check.sh
+      - .github/workflows/grok-cli-version-check.yml
 
 permissions:
   contents: read
 
+concurrency:
+  group: grok-cli-version-check-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
 jobs:
   check:
     runs-on: ubuntu-latest
+    timeout-minutes: 5
     steps:
       - uses: actions/checkout@v6
       - name: Compare pinned version with https://x.ai/cli/stable
-        run: |
-          set -eu
-          pinned=$(sed -n 's/^[[:space:]]*CLIClientVersion = "\(.*\)"$/\1/p' backend/internal/pkg/xai/billing.go)
-          stable=$(curl -fsS --retry 3 --max-time 20 https://x.ai/cli/stable | tr -d '[:space:]')
-          echo "pinned=${pinned} stable=${stable}"
-          if [ -z "${pinned}" ] || [ -z "${stable}" ]; then
-            echo "::error::could not read the pinned or the stable Grok CLI version"
-            exit 1
-          fi
-          if [ "${pinned}" != "${stable}" ]; then
-            echo "::error::Grok CLI pin ${pinned} differs from stable ${stable}; bump CLIClientVersion in backend/internal/pkg/xai/billing.go"
-            exit 1
-          fi
+        run: bash .github/scripts/grok-cli-version-check.sh

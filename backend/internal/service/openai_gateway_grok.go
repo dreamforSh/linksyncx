@@ -259,11 +259,15 @@ func (s *OpenAIGatewayService) forwardGrokResponses(
 		Model:           originalModel,
 		UpstreamModel:   upstreamModel,
 		ReasoningEffort: reasoningEffort,
-		Stream:          reqStream,
-		OpenAIWSMode:    false,
-		ResponseHeaders: resp.Header.Clone(),
-		Duration:        time.Since(startTime),
-		FirstTokenMs:    firstTokenMs,
+		// Priority Processing bills only when xAI confirms it; usage recording
+		// settles the requested tier against the response's declaration.
+		ServiceTier:                 extractOpenAIServiceTierFromBody(patchedBody),
+		UpstreamResponseServiceTier: observedUpstreamResponseServiceTier(c),
+		Stream:                      reqStream,
+		OpenAIWSMode:                false,
+		ResponseHeaders:             resp.Header.Clone(),
+		Duration:                    time.Since(startTime),
+		FirstTokenMs:                firstTokenMs,
 	}
 	// Propagate search/image counters from the shared Responses handler — without
 	// this, stream/JSON counting runs but search_price_per_1k / image bills never apply.
@@ -534,7 +538,8 @@ func patchGrokResponsesBodyWithClientTools(body []byte, upstreamModel string) ([
 	if err != nil {
 		return nil, apicompat.ResponsesClientToolMapping{}, err
 	}
-	patched, err := patchGrokResponsesBodyBase(adapted, upstreamModel)
+	// Both stages above emit valid JSON, so skip a second full validation.
+	patched, err := patchValidGrokResponsesBody(adapted, upstreamModel)
 	if err != nil {
 		return nil, apicompat.ResponsesClientToolMapping{}, err
 	}
@@ -545,6 +550,12 @@ func patchGrokResponsesBodyBase(body []byte, upstreamModel string) ([]byte, erro
 	if !json.Valid(body) {
 		return nil, fmt.Errorf("invalid json request body")
 	}
+	return patchValidGrokResponsesBody(body, upstreamModel)
+}
+
+// patchValidGrokResponsesBody is patchGrokResponsesBodyBase for a body the
+// caller has already validated.
+func patchValidGrokResponsesBody(body []byte, upstreamModel string) ([]byte, error) {
 	// sjson may reuse the input backing array; keep the caller's request bytes
 	// unchanged because the same body can be inspected for billing/retry paths.
 	out, err := sjson.SetBytes(append([]byte(nil), body...), "model", upstreamModel)
@@ -552,6 +563,10 @@ func patchGrokResponsesBodyBase(body []byte, upstreamModel string) ([]byte, erro
 		return nil, err
 	}
 	out, err = normalizeGrokResponsesReasoningEffort(out, upstreamModel)
+	if err != nil {
+		return nil, err
+	}
+	out, err = normalizeGrokResponsesServiceTier(out)
 	if err != nil {
 		return nil, err
 	}
@@ -591,9 +606,11 @@ func patchGrokResponsesBodyBase(body []byte, upstreamModel string) ([]byte, erro
 	if err != nil {
 		return nil, err
 	}
-	out, err = convertOpenAICompactInputsForGrok(out)
-	if err != nil {
-		return nil, err
+	if grokResponsesInputMayContainCompaction(out) {
+		out, err = convertOpenAICompactInputsForGrok(out)
+		if err != nil {
+			return nil, err
+		}
 	}
 	out, err = sanitizeGrokResponsesInput(out)
 	if err != nil {
@@ -616,6 +633,34 @@ func patchGrokResponsesBodyBase(body []byte, upstreamModel string) ([]byte, erro
 		return nil, err
 	}
 	return out, nil
+}
+
+// normalizeGrokResponsesServiceTier keeps service_tier within the values xAI
+// accepts: "default" and "priority" (Priority Processing). OpenAI clients also
+// send fast (OpenAI's newer name for priority), flex, auto or ultrafast; fast
+// becomes priority and the rest are dropped, which xAI serves, and the gateway
+// bills, at the standard tier.
+func normalizeGrokResponsesServiceTier(body []byte) ([]byte, error) {
+	tier := gjson.Get(bytesView(body), "service_tier")
+	if !tier.Exists() {
+		return body, nil
+	}
+	want := ""
+	if tier.Type == gjson.String {
+		switch normalizeBillingServiceTier(tier.Str) {
+		case "default":
+			want = "default"
+		case "priority", "fast":
+			want = "priority"
+		}
+	}
+	if want == "" {
+		return sjson.DeleteBytes(body, "service_tier")
+	}
+	if tier.Str == want {
+		return body, nil
+	}
+	return sjson.SetBytes(body, "service_tier", want)
 }
 
 // xAI's Grok 4.20 family and newer models do not support OpenAI's logprobs
@@ -750,7 +795,7 @@ func normalizeGrokReasoningEffortValue(raw, model string) (string, bool) {
 // forwards the xhigh reasoning effort (Grok 4.6/4.7 and their aliases).
 func GrokSupportsXHighReasoningEffort(model string) bool {
 	model = strings.ToLower(xai.StripGrokProviderPrefix(strings.TrimSpace(model)))
-	return model == "grok-4.7" || model == "grok-4.7-latest" ||
+	return model == "grok-4.7" || model == "grok-4.7-latest" || model == xai.GrokBuildFastTextModel ||
 		model == "grok-4.6" || model == "grok-4.6-latest"
 }
 
@@ -758,7 +803,7 @@ func grokSupportsReasoningEffort(model string) bool {
 	model = strings.ToLower(xai.StripGrokProviderPrefix(strings.TrimSpace(model)))
 	switch model {
 	case "grok-4.5", "grok-4.5-latest", "grok-4.6", "grok-4.6-latest",
-		"grok-4.7", "grok-4.7-latest",
+		"grok-4.7", "grok-4.7-latest", xai.GrokBuildFastTextModel,
 		"grok-4.3", "grok-4.3-latest",
 		"grok-3-mini", "grok-3-mini-fast", "grok-4.20-0309-reasoning",
 		"grok-4.20-reasoning", "grok-4.20-multi-agent-0309":
@@ -971,8 +1016,11 @@ func grokResponsesToolDedupKey(tool gjson.Result) string {
 // input items. xAI's untagged ModelInput decoder 422s on those fields.
 // Compaction items stay unmodified per the compact contract.
 func sanitizeGrokReasoningNullContent(body []byte) ([]byte, error) {
-	input := gjson.GetBytes(body, "input")
+	input := gjson.Get(bytesView(body), "input")
 	if !input.Exists() || (!input.IsArray() && !input.IsObject()) {
+		return body, nil
+	}
+	if !grokResponsesInputHasNullLiteral(body) {
 		return body, nil
 	}
 

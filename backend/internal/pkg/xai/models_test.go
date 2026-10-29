@@ -99,3 +99,38 @@ func TestBareGrokAliasesFollowGrok46Default(t *testing.T) {
 	require.Equal(t, "grok-4.6", ResolveGrokTextResponsesModelID("grok-latest"))
 	require.Equal(t, "grok-build-0.1", ResolveGrokTextResponsesModelID("grok-build-latest"))
 }
+
+func TestGrokBuildFastModelIsRoutedOnlyForOAuth(t *testing.T) {
+	original := RuntimeModelMappingOptions()
+	t.Cleanup(func() { SetRuntimeModelMappingOptions(original) })
+	SetRuntimeModelMappingOptions(ModelMappingOptions{})
+
+	oauth := DefaultOAuthModelMapping()
+	for _, requested := range []string{"grok-4.7-fast", "grok-4.7-build-fast", "xai/grok-4.7-fast", "x-ai/grok-4.7-build-fast"} {
+		require.Equal(t, GrokBuildFastTextModel, oauth[requested], requested)
+	}
+	// Everything the API-key mapping routes stays routed for OAuth.
+	apiKey := DefaultModelMapping()
+	for requested, upstream := range apiKey {
+		require.Equal(t, upstream, oauth[requested], requested)
+	}
+	for _, requested := range []string{"grok-4.7-fast", "grok-4.7-build-fast", "xai/grok-4.7-fast"} {
+		_, routed := apiKey[requested]
+		require.False(t, routed, "the public API does not serve %s", requested)
+	}
+}
+
+func TestGrokBuildFastModelIdentity(t *testing.T) {
+	require.Equal(t, GrokBuildFastTextModel, ResolveGrokTextResponsesModelID("grok-4.7-build-fast"))
+	require.Equal(t, GrokBuildFastTextModel, ResolveGrokTextResponsesModelID("xai/grok-4.7-fast"))
+	require.True(t, IsGrokTextResponsesModelID("grok-4.7-fast"))
+	require.True(t, IsGrokBuildOnlyTextModel("Grok-4.7-Build-Fast"))
+	require.False(t, IsGrokBuildOnlyTextModel("grok-4.7"))
+
+	ids := make([]string, 0)
+	for _, model := range BuildOnlyModels() {
+		ids = append(ids, model.ID)
+	}
+	require.Equal(t, []string{GrokBuildFastTextModel}, ids)
+	require.NotContains(t, DefaultModelIDs(), GrokBuildFastTextModel)
+}

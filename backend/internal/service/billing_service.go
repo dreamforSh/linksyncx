@@ -962,6 +962,26 @@ func (s *BillingService) initFallbackPricing() {
 		LongContextInputMultiplier:    2,
 		LongContextOutputMultiplier:   2,
 	}
+	// xAI Grok 4.7 Fast (Grok Build and Cursor only) is grok-4.7 on faster
+	// infrastructure: 2x the standard card below 200k prompt tokens
+	// ($4 / $1 cached / $12) but only 1.5x the long-context card at or above it
+	// ($6 / $1.50 / $18), so its ladder multiplier is 1.5, not 2.
+	// Source: https://docs.x.ai/developers/pricing
+	//
+	// API Priority Processing (service_tier "priority") is a separate premium:
+	// 2x every token type, billed only when the response confirms "priority".
+	// The generic priority multiplier already prices it on the cards above
+	// (see resolveGrokServiceTierBilling).
+	s.fallbackPrices["grok-4.7-fast"] = &ModelPricing{
+		InputPricePerToken:            4e-6,
+		OutputPricePerToken:           12e-6,
+		CacheReadPricePerToken:        1e-6,
+		SupportsCacheBreakdown:        false,
+		LongContextInputThreshold:     200000,
+		LongContextThresholdInclusive: true,
+		LongContextInputMultiplier:    1.5,
+		LongContextOutputMultiplier:   1.5,
+	}
 }
 
 // getFallbackPricing 根据模型系列获取回退价格
@@ -1184,27 +1204,8 @@ func (s *BillingService) getFallbackPricing(model string) *ModelPricing {
 		}
 	}
 
-	switch modelLower {
-	case "grok", "grok-latest", "grok-4.6", "grok-4.6-latest":
-		return s.fallbackPrices["grok-4.6"]
-	case "grok-4.7", "grok-4.7-latest":
-		return s.fallbackPrices["grok-4.7"]
-	case "grok-4.5", "grok-4.5-latest":
-		return s.fallbackPrices["grok-4.5"]
-	case "grok-3-mini":
-		return s.fallbackPrices["grok-3-mini"]
-	case "grok-3-mini-fast":
-		return s.fallbackPrices["grok-3-mini-fast"]
-	case "grok-4.3":
-		return s.fallbackPrices["grok-4.3"]
-	case "grok-4.20-0309-reasoning",
-		"grok-4.20-0309-non-reasoning",
-		"grok-4.20-multi-agent-0309",
-		"grok-4.20-reasoning",
-		"grok-4.20-non-reasoning":
-		return s.fallbackPrices["grok-4.20"]
-	case "grok-build", "grok-build-latest", "grok-build-0.1", "grok-composer", "grok-composer-2.5-fast", "composer-2.5":
-		return s.fallbackPrices["grok-build-0.1"]
+	if card := grokFallbackPricingCard(modelLower); card != "" {
+		return s.fallbackPrices[card]
 	}
 
 	// Unknown Grok text IDs (grok-5, dated snapshots, provider-prefixed) inherit
@@ -1214,6 +1215,64 @@ func (s *BillingService) getFallbackPricing(model string) *ModelPricing {
 	}
 
 	return nil
+}
+
+// grokFallbackPricingCard returns the fallback card that prices a Grok text
+// model (provider prefixes such as xai/ are ignored), or "" for other models.
+// The bare grok / grok-latest aliases are served by the runtime default text
+// model (settings grok_default_text_model) and bill as that model.
+func grokFallbackPricingCard(model string) string {
+	native := strings.ToLower(strings.TrimSpace(xai.StripGrokProviderPrefix(model)))
+	if native == "grok" || native == "grok-latest" {
+		if card := grokModelPricingCard(strings.ToLower(strings.TrimSpace(xai.RuntimeDefaultTextModel()))); card != "" {
+			return card
+		}
+		return "grok-4.6"
+	}
+	return grokModelPricingCard(native)
+}
+
+func grokModelPricingCard(native string) string {
+	switch native {
+	case "grok-4.6", "grok-4.6-latest":
+		return "grok-4.6"
+	case "grok-4.7", "grok-4.7-latest":
+		return "grok-4.7"
+	case xai.GrokBuildFastTextModel, "grok-4.7-build-fast":
+		return "grok-4.7-fast"
+	case "grok-4.5", "grok-4.5-latest":
+		return "grok-4.5"
+	case "grok-3-mini":
+		return "grok-3-mini"
+	case "grok-3-mini-fast":
+		return "grok-3-mini-fast"
+	case "grok-4.3", "grok-4.3-latest":
+		return "grok-4.3"
+	case "grok-4.20-0309-reasoning",
+		"grok-4.20-0309-non-reasoning",
+		"grok-4.20-multi-agent-0309",
+		"grok-4.20-reasoning",
+		"grok-4.20-non-reasoning",
+		"grok-4.20-multi-agent",
+		"grok-4.20-multi-agent-latest":
+		return "grok-4.20"
+	case "grok-build", "grok-build-latest", "grok-build-0.1", "grok-composer", "grok-composer-2.5-fast", "composer-2.5":
+		return "grok-build-0.1"
+	// Retired on 2026-05-15. xAI still resolves these slugs, redirects them
+	// (the fast and Grok 4 models to grok-4.3, grok-code-fast-1 to
+	// grok-build-0.1) and bills the redirect target, so they must not fall
+	// into the unknown-model card. The undated aliases follow their slugs.
+	// Source: https://docs.x.ai/developers/migration/may-15-retirement
+	case "grok-4-1-fast-reasoning", "grok-4-1-fast-non-reasoning", "grok-4-1-fast",
+		"grok-4-fast-reasoning", "grok-4-fast-non-reasoning", "grok-4-fast",
+		"grok-4-0709", "grok-4", "grok-4-latest",
+		"grok-3", "grok-3-latest":
+		return "grok-4.3"
+	case "grok-code-fast-1", "grok-code-fast":
+		return "grok-build-0.1"
+	default:
+		return ""
+	}
 }
 
 func (s *BillingService) grokUnknownTextFamilyFallback(model string) *ModelPricing {

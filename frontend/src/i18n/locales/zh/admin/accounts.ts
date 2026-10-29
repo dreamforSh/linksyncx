@@ -53,6 +53,18 @@ export default {
       toolActions: '工具',
       viewColumns: '列显示',
       selectedCount: '已选 {count}',
+      view: {
+        label: '显示方式',
+        table: '表格',
+        card: '卡片'
+      },
+      card: {
+        select: '选择 {name}',
+        selectPage: '全选本页',
+        sortBy: '排序',
+        sortAsc: '升序',
+        sortDesc: '降序'
+      },
       dataExportConfirmMessage: '导出的数据包含账号与代理的敏感信息，请妥善保存。',
       dataExportConfirm: '确认导出',
       dataExported: '数据导出成功',

@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/require"
+	"golang.org/x/mod/semver"
 )
 
 func TestResolveCLIVersionDefaultsToPinnedClientVersion(t *testing.T) {
@@ -13,6 +14,18 @@ func TestResolveCLIVersionDefaultsToPinnedClientVersion(t *testing.T) {
 	require.Equal(t, CLIClientVersion, ResolveCLIVersion())
 	require.True(t, IsSupportedCLIVersion(CLIClientVersion))
 	require.True(t, IsSupportedCLIVersion(CLIStableVersion))
+}
+
+// The pins are compared with https://x.ai/cli/stable, which only publishes
+// plain releases (.github/scripts/grok-cli-version-check.sh).
+func TestCLIVersionPinsArePlainReleases(t *testing.T) {
+	for _, version := range []string{CLIClientVersion, CLIStableVersion} {
+		canonical := "v" + version
+		require.True(t, semver.IsValid(canonical), version)
+		require.Empty(t, semver.Prerelease(canonical), version)
+		require.Empty(t, semver.Build(canonical), version)
+	}
+	require.GreaterOrEqual(t, semver.Compare("v"+CLIClientVersion, "v"+CLIStableVersion), 0)
 }
 
 func TestResolveCLIVersionAcceptsValidOverride(t *testing.T) {

@@ -238,6 +238,32 @@ func TestResolveGrokCacheIdentitySideCallSharesParentCacheKey(t *testing.T) {
 	require.Equal(t, mainIdentity, titleIdentity)
 }
 
+// TestGrokSideCallStaysOnTheMainTurnAccount pins sticky routing to the same
+// seed as the cache identity: a side-call routed to another OAuth account
+// cannot reuse the main turn's server-side cache however equal its key is.
+func TestGrokSideCallStaysOnTheMainTurnAccount(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	svc := &OpenAIGatewayService{}
+	parentSession := "6f1c2f46-0f5e-4f9d-9d4e-2f0f1c3d5b7a"
+
+	mainTurn := newGrokCacheTestContext(911)
+	mainTurn.Request.Header.Set(grokConversationIDHeader, parentSession)
+	mainHash := svc.GenerateSessionHash(mainTurn, []byte(`{"model":"grok-4.6","prompt_cache_key":"`+parentSession+`","input":"main conversation"}`))
+	require.NotEmpty(t, mainHash)
+
+	for _, label := range []string{"turn-summary-", "title-refresh-"} {
+		sideCall := newGrokCacheTestContext(911)
+		sideCall.Request.Header.Set(grokConversationIDHeader, label+uuidNew())
+		sideHash := svc.GenerateSessionHash(sideCall, []byte(`{"model":"grok-4.6","prompt_cache_key":"`+parentSession+`","input":"summary replay"}`))
+		require.Equal(t, mainHash, sideHash, label)
+	}
+
+	headerOnly := newGrokCacheTestContext(911)
+	headerOnly.Request.Header.Set(grokConversationIDHeader, parentSession)
+	require.Equal(t, mainHash, svc.GenerateSessionHash(headerOnly, []byte(`{"model":"grok-4.6","input":"main conversation"}`)),
+		"a turn that only sends the header keeps the same binding")
+}
+
 func uuidNew() string {
 	return fmt.Sprintf("%08x-%04x-4%03x-9%03x-%012x", 0x1234, 0x5678, 0x9abc, 0xdef0, 0x1234567890ab)
 }
@@ -380,7 +406,9 @@ func TestGrokConversationHeaderIsScopedToGrokRequestScheduling(t *testing.T) {
 
 	grokContext := newGrokCacheTestContext(601)
 	grokContext.Request.Header.Set(grokConversationIDHeader, "native-grok-session")
-	require.Equal(t, "native-grok-session", (&OpenAIGatewayService{}).ExtractSessionID(grokContext, body))
+	require.Equal(t, "native-grok-session", (&OpenAIGatewayService{}).ExtractSessionID(grokContext, []byte(`{"model":"grok","input":"hi"}`)))
+	// The body key outranks the header, as in the upstream cache identity.
+	require.Equal(t, "body-session", (&OpenAIGatewayService{}).ExtractSessionID(grokContext, body))
 
 	openAIContext := newGrokCacheTestContext(601)
 	openAIContext.Set("api_key", &APIKey{ID: 601, Group: &Group{Platform: PlatformOpenAI}})
