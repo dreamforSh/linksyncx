@@ -31,6 +31,10 @@ type ResponsesToChatOptions struct {
 	// longer provide. Return "" on a miss. A nil lookup keeps the original
 	// behavior.
 	ReasoningContentByID func(itemID string) string
+	// EffectiveTools, when non-nil, is the EffectiveResponsesTools(req) result
+	// the caller already resolved for this request. The conversion uses it
+	// instead of decoding the whole input history a second time.
+	EffectiveTools *[]ResponsesTool
 }
 
 // ResponsesToChatCompletionsRequest converts a Responses API request into a
@@ -65,8 +69,10 @@ func ResponsesToChatCompletionsRequestWithOptions(req *ResponsesRequest, opts *R
 	if req.Reasoning != nil {
 		out.ReasoningEffort = req.Reasoning.Effort
 	}
-	effectiveTools, err := EffectiveResponsesTools(req)
-	if err != nil {
+	var effectiveTools []ResponsesTool
+	if opts != nil && opts.EffectiveTools != nil {
+		effectiveTools = *opts.EffectiveTools
+	} else if effectiveTools, err = EffectiveResponsesTools(req); err != nil {
 		return nil, err
 	}
 	if len(effectiveTools) > 0 {

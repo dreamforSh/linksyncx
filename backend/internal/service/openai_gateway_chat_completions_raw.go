@@ -146,7 +146,14 @@ func (s *OpenAIGatewayService) forwardAsRawChatCompletions(
 
 	if clientStream {
 		var usageErr error
-		upstreamBody, usageErr = ensureOpenAIChatStreamUsage(upstreamBody)
+		if account.IsCodeBuddy() {
+			// PrepareChat sets stream_options outright, so rewriting the whole
+			// body here would be discarded; only the request sjson rejects
+			// (an array stream_options) must still fail the same way.
+			usageErr = codeBuddyChatStreamUsageError(upstreamBody)
+		} else {
+			upstreamBody, usageErr = ensureOpenAIChatStreamUsage(upstreamBody)
+		}
 		if usageErr != nil {
 			return nil, fmt.Errorf("enable stream usage: %w", usageErr)
 		}
@@ -352,7 +359,12 @@ func (s *OpenAIGatewayService) streamRawChatCompletions(
 
 	for scanner.Scan() {
 		line := scanner.Text()
-		refusalDetector.ObserveSSELine(line)
+		// The detector only decides whether to hold output back and, at the
+		// end, whether a held-back stream was a silent refusal; once output
+		// has started neither question is asked again.
+		if !clientOutputStarted {
+			refusalDetector.ObserveSSELine(line)
+		}
 		if payload, ok := extractOpenAISSEDataLine(line); ok {
 			trimmedPayload := strings.TrimSpace(payload)
 			terminal.ObserveDataLine(trimmedPayload)
@@ -477,6 +489,18 @@ func ensureOpenAIChatStreamUsage(body []byte) ([]byte, error) {
 		return body, err
 	}
 	return updated, nil
+}
+
+// codeBuddyChatStreamUsageError returns the error ensureOpenAIChatStreamUsage
+// would report for a CodeBuddy body without rewriting it. On an object body
+// sjson fails only when the first stream_options member is an array, which
+// "include_usage" cannot index.
+func codeBuddyChatStreamUsageError(body []byte) error {
+	if !gjson.GetBytes(body, "stream_options").IsArray() {
+		return nil
+	}
+	_, err := ensureOpenAIChatStreamUsage(body)
+	return err
 }
 
 func isOpenAIChatUsageOnlyStreamChunk(payload string) bool {

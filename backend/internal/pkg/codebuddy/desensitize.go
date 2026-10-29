@@ -51,6 +51,9 @@ const (
 type templateReplacement struct {
 	pattern *regexp.Regexp
 	target  string
+	// literal is a word of the template that every match spells out
+	// contiguously unless zero-width spaces split it (see containsFoldASCII).
+	literal string
 }
 
 // templateReplacements rewrite known identity openings. Order is significant:
@@ -58,11 +61,22 @@ type templateReplacement struct {
 // wins. Entry index 3 (the "Main branch" line) is only rewritten inside the
 // gitStatus block, guarded by the suffix check in replaceGitStatusText.
 var templateReplacements = []templateReplacement{
-	{templatePattern(claudeIdentity + ", running within the Claude Agent SDK"), workBuddyIdentity},
-	{templatePattern(claudeIdentity), workBuddyIdentity},
-	{templatePattern("You are a Claude agent, built on Anthropic's Claude Agent SDK"), workBuddyIdentity},
-	{templatePattern("Main branch (you will usually use this for PRs)"), "Main branch (you will usually use this for PR)"},
+	{templatePattern(claudeIdentity + ", running within the Claude Agent SDK"), workBuddyIdentity, "claude"},
+	{templatePattern(claudeIdentity), workBuddyIdentity, "claude"},
+	{templatePattern("You are a Claude agent, built on Anthropic's Claude Agent SDK"), workBuddyIdentity, "claude"},
+	{templatePattern("Main branch (you will usually use this for PRs)"), "Main branch (you will usually use this for PR)", "branch"},
 }
+
+// Literals that every match of the other patterns contains: each sensitive
+// term spells one of sensitiveTermLiterals, and the gitStatus opening spells
+// gitStatusLiteral. A text without any of desensitizeLiterals is returned
+// unchanged even when it carries a gitStatus block: the block's identity
+// lines are templates too.
+var (
+	sensitiveTermLiterals = []string{"claude", "anthropic", "co-authored-by"}
+	gitStatusLiteral      = "of the conver"
+	desensitizeLiterals   = []string{"claude", "anthropic", "co-authored-by", "branch"}
+)
 
 var (
 	sensitiveTermRE = buildSensitiveTermRE()
@@ -114,24 +128,61 @@ func zeroWidthSplit(term string) string {
 	return string(runes[0]) + zwsp + string(runes[1:])
 }
 
-func replaceWorkBuddyTemplates(text string) string {
+// replaceWorkBuddyTemplates applies the identity rewrites. zw reports that the
+// text may hold zero-width spaces, which let a template match without its
+// literal.
+func replaceWorkBuddyTemplates(text string, zw bool) string {
 	for _, tr := range templateReplacements {
-		text = tr.pattern.ReplaceAllLiteralString(text, tr.target)
+		if zw || containsFoldASCII(text, tr.literal) {
+			text = tr.pattern.ReplaceAllLiteralString(text, tr.target)
+		}
 	}
 	return text
 }
 
 // DesensitizeText applies the identity rewrites and term cloaking to a single
 // string, protecting any official gitStatus block it carries.
+//
+// Agent clients resend the same multi-kilobyte system prompt on every turn,
+// and the regex passes over it cost milliseconds before the first token. A
+// text that no pattern can match returns at once, and results for longer
+// texts are remembered (desensitizeMemo); both return exactly what the regex
+// passes would.
 func DesensitizeText(text string) string {
 	if text == "" {
 		return text
 	}
-	if loc := gitStatusContextRE.FindStringIndex(text); loc != nil {
-		return DesensitizeText(text[:loc[0]]) + replaceGitStatusText(text[loc[0]:], false)
+	zw := strings.Contains(text, zwsp)
+	if !zw && !containsAnyFoldASCII(text, desensitizeLiterals) {
+		return text
 	}
-	text = replaceWorkBuddyTemplates(text)
-	return sensitiveTermRE.ReplaceAllStringFunc(text, zeroWidthSplit)
+	if len(text) < desensitizeMemoMinBytes {
+		return desensitizeText(text, zw)
+	}
+	if out, ok := sharedDesensitizeMemo.get(text); ok {
+		return out
+	}
+	out := desensitizeText(text, zw)
+	sharedDesensitizeMemo.put(text, out)
+	return out
+}
+
+// desensitizeText runs the regex passes, skipping a pattern whose literal the
+// text lacks unless zero-width spaces may hide it.
+func desensitizeText(text string, zw bool) string {
+	if text == "" {
+		return text
+	}
+	if zw || containsFoldASCII(text, gitStatusLiteral) {
+		if loc := gitStatusContextRE.FindStringIndex(text); loc != nil {
+			return desensitizeText(text[:loc[0]], zw) + replaceGitStatusText(text[loc[0]:], false)
+		}
+	}
+	text = replaceWorkBuddyTemplates(text, zw)
+	if zw || containsAnyFoldASCII(text, sensitiveTermLiterals) {
+		text = sensitiveTermRE.ReplaceAllStringFunc(text, zeroWidthSplit)
+	}
+	return text
 }
 
 // replaceGitStatusText rewrites only the identity lines inside the gitStatus

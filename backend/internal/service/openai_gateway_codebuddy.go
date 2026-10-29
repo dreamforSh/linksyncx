@@ -66,7 +66,7 @@ func (s *OpenAIGatewayService) sendCodeBuddyUpstreamRequest(
 		writeCodeBuddyClientError(c, http.StatusForbidden, "permission_error", denial)
 		return nil, fmt.Errorf("codebuddy credit policy denied model %s", upstreamModel)
 	}
-	prepared, err := codebuddy.PrepareChatBody(body, creds.Profile)
+	prepared, err := codebuddy.PrepareChat(body, creds.Profile)
 	if err != nil {
 		var reqErr *codebuddy.RequestError
 		if errors.As(err, &reqErr) {
@@ -77,7 +77,7 @@ func (s *OpenAIGatewayService) sendCodeBuddyUpstreamRequest(
 
 	upstreamCtx, releaseUpstreamCtx := detachUpstreamContext(ctx)
 	targetURL := codebuddy.ChatCompletionsURL(creds.Profile)
-	upstreamReq, err := http.NewRequestWithContext(upstreamCtx, http.MethodPost, targetURL, bytes.NewReader(prepared))
+	upstreamReq, err := http.NewRequestWithContext(upstreamCtx, http.MethodPost, targetURL, bytes.NewReader(prepared.Body))
 	releaseUpstreamCtx()
 	if err != nil {
 		return nil, fmt.Errorf("build upstream request: %w", err)
@@ -85,7 +85,7 @@ func (s *OpenAIGatewayService) sendCodeBuddyUpstreamRequest(
 	SetActualOpenAIUpstreamEndpoint(c, codeBuddyChatEndpoint)
 	upstreamReq = upstreamReq.WithContext(WithHTTPUpstreamProfile(upstreamReq.Context(), HTTPUpstreamProfileLongStream))
 	codebuddy.ApplyHeaders(upstreamReq.Header, codebuddy.CredentialHeaders(codebuddy.IdentityOf(creds)))
-	conversationID := codebuddy.ConversationID(creds.Profile, codeBuddySessionKey(c, account, prepared))
+	conversationID := codebuddy.ConversationID(creds.Profile, codeBuddySessionKey(c, account, prepared.Body))
 	codebuddy.ApplyHeaders(upstreamReq.Header, codebuddy.RequestIDHeaders(conversationID))
 	account.ApplyHeaderOverrides(upstreamReq.Header)
 
@@ -100,7 +100,9 @@ func (s *OpenAIGatewayService) sendCodeBuddyUpstreamRequest(
 	if resp.StatusCode >= http.StatusBadRequest {
 		return resp, nil
 	}
-	s.recordCodeBuddyCreditsUsage(ctx, account, gjson.GetBytes(prepared, "model").String())
+	// The first upstream byte is waiting: take the model PrepareChat wrote
+	// instead of searching the rewritten body past its history for it.
+	s.recordCodeBuddyCreditsUsage(ctx, account, prepared.Model)
 	if clientStream {
 		return resp, nil
 	}
@@ -151,22 +153,86 @@ func codeBuddySessionKey(c *gin.Context, account *Account, body []byte) string {
 	}
 	var system strings.Builder
 	firstUser := ""
-	for _, message := range gjson.GetBytes(body, "messages").Array() {
+	forEachCodeBuddyMessage(body, func(message gjson.Result) bool {
 		role := message.Get("role").String()
 		if role == "system" && firstUser == "" {
 			_, _ = system.WriteString(codeBuddyMessageText(message.Get("content")))
-			continue
+			return true
 		}
 		if role == "user" {
 			firstUser = codeBuddyMessageText(message.Get("content"))
-			break
+			return false
 		}
-	}
+		return true
+	})
 	if system.Len() == 0 && firstUser == "" {
 		return ""
 	}
 	sum := sha256.Sum256([]byte(system.String() + "\x00" + firstUser))
 	return fmt.Sprintf("%d:c:%s", account.ID, hex.EncodeToString(sum[:16]))
+}
+
+// forEachCodeBuddyMessage calls fn with each element of the prepared body's
+// messages array, in order and as gjson.GetBytes(body, "messages").Array()
+// gives them, until fn returns false. The session key only needs the leading
+// system messages and the first user message, so the walk stops there
+// instead of first measuring the whole replayed history. A prepared body is
+// a valid object whose unique keys are written plainly; any other shape takes
+// the gjson path.
+func forEachCodeBuddyMessage(body []byte, fn func(gjson.Result) bool) {
+	view := bytesView(body)
+	if start, ok := jsonObjectMemberValueStart(view, "messages"); ok && view[start] == '[' {
+		forEachJSONArrayElementRaw(view[start:], func(raw string) bool {
+			return fn(gjson.Parse(raw))
+		})
+		return
+	}
+	for _, message := range gjson.GetBytes(body, "messages").Array() {
+		if !fn(message) {
+			return
+		}
+	}
+}
+
+// jsonObjectMemberValueStart returns the offset of the value of the first
+// top-level member of the JSON object data whose key is spelled exactly as
+// key, without scanning past that value. data must be a valid object.
+func jsonObjectMemberValueStart(data, key string) (int, bool) {
+	root, ok := jsonRootObject(data)
+	if !ok {
+		return 0, false
+	}
+	for i := root.Index + 1; i < len(data); {
+		switch data[i] {
+		case '}':
+			return 0, false
+		case '"':
+		default:
+			i++ // whitespace and commas
+			continue
+		}
+		keyEnd := jsonStringLiteralEnd(data, i)
+		if keyEnd < 0 {
+			return 0, false
+		}
+		matched := data[i+1:keyEnd-1] == key
+		i = keyEnd
+		for i < len(data) && (data[i] == ':' || data[i] == ' ' || data[i] == '\t' || data[i] == '\n' || data[i] == '\r') {
+			i++
+		}
+		if i >= len(data) {
+			return 0, false
+		}
+		if matched {
+			return i, true
+		}
+		valueEnd := jsonValueEnd(data, i)
+		if valueEnd <= i {
+			return 0, false
+		}
+		i = valueEnd
+	}
+	return 0, false
 }
 
 func codeBuddyMessageText(content gjson.Result) string {

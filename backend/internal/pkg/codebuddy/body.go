@@ -63,9 +63,30 @@ func PublicModel(model string) string {
 //   - DeepSeek models get their effort scale and lose response_format (see
 //     applyDeepSeekCompat).
 func PrepareChatBody(body []byte, profile string) ([]byte, error) {
-	var root map[string]json.RawMessage
-	if err := json.Unmarshal(body, &root); err != nil {
-		return nil, requestErrorf("invalid chat completions body: %v", err)
+	prepared, err := PrepareChat(body, profile)
+	if err != nil {
+		return nil, err
+	}
+	return prepared.Body, nil
+}
+
+// PreparedChat is a Chat Completions body rewritten by PrepareChat.
+type PreparedChat struct {
+	Body []byte
+	// Model is the upstream model id written into Body, as a JSON reader of
+	// Body's "model" field returns it.
+	Model string
+}
+
+// PrepareChat is PrepareChatBody that also reports the upstream model, so
+// callers need not search the rewritten body for it again.
+func PrepareChat(body []byte, profile string) (PreparedChat, error) {
+	root, messages, scanned := splitChatBody(body)
+	if !scanned {
+		var err error
+		if root, messages, err = decodeChatBody(body); err != nil {
+			return PreparedChat{}, err
+		}
 	}
 	for key := range root {
 		if _, ok := allowedBodyKeys[key]; !ok {
@@ -78,14 +99,7 @@ func PrepareChatBody(body []byte, profile string) ([]byte, error) {
 		model = "auto"
 	}
 
-	var messages []map[string]json.RawMessage
-	if err := json.Unmarshal(root["messages"], &messages); err != nil || len(messages) == 0 {
-		return nil, requestErrorf("messages must be a non-empty array of objects")
-	}
 	for _, message := range messages {
-		if message == nil {
-			return nil, requestErrorf("messages must be a non-empty array of objects")
-		}
 		if rawRole(message) == "developer" {
 			message["role"] = mustRaw("system")
 		}
@@ -94,7 +108,7 @@ func PrepareChatBody(body []byte, profile string) ([]byte, error) {
 	if IsInternational(profile) {
 		merged, err := mergeIntlUserImages(messages)
 		if err != nil {
-			return nil, err
+			return PreparedChat{}, err
 		}
 		messages = merged
 	}
@@ -103,27 +117,60 @@ func PrepareChatBody(body []byte, profile string) ([]byte, error) {
 	desensitizeSystemMessages(messages)
 	if IsDeepSeekModel(model) {
 		if err := applyDeepSeekCompat(root, messages); err != nil {
-			return nil, err
+			return PreparedChat{}, err
 		}
+	}
+
+	if err := normalizeToolChoice(root); err != nil {
+		return PreparedChat{}, err
+	}
+	if raw, ok := root["n"]; ok {
+		var n float64
+		if json.Unmarshal(raw, &n) == nil && n != 1 {
+			return PreparedChat{}, requestErrorf("n must be 1")
+		}
+	}
+	upstreamModel := UpstreamModel(model, profile)
+	root["model"] = mustRaw(upstreamModel)
+	root["stream"] = json.RawMessage("true")
+	root["stream_options"] = json.RawMessage(`{"include_usage":true}`)
+	encoded, err := encodeChatBody(root, messages, len(body))
+	if err != nil {
+		return PreparedChat{}, err
+	}
+	return PreparedChat{Body: encoded, Model: upstreamModel}, nil
+}
+
+// decodeChatBody is the encoding/json split of a chat body: the top-level
+// members, then the messages array, each a non-nil object.
+func decodeChatBody(body []byte) (map[string]json.RawMessage, []map[string]json.RawMessage, error) {
+	var root map[string]json.RawMessage
+	if err := json.Unmarshal(body, &root); err != nil {
+		return nil, nil, requestErrorf("invalid chat completions body: %v", err)
+	}
+	var messages []map[string]json.RawMessage
+	if err := json.Unmarshal(root["messages"], &messages); err != nil || len(messages) == 0 {
+		return nil, nil, requestErrorf("messages must be a non-empty array of objects")
+	}
+	for _, message := range messages {
+		if message == nil {
+			return nil, nil, requestErrorf("messages must be a non-empty array of objects")
+		}
+	}
+	return root, messages, nil
+}
+
+// encodeChatBody encodes the prepared body: root with messages in place of its
+// "messages" member.
+func encodeChatBody(root map[string]json.RawMessage, messages []map[string]json.RawMessage, sizeHint int) ([]byte, error) {
+	if encoded, ok := appendChatBody(root, messages, sizeHint); ok {
+		return encoded, nil
 	}
 	encodedMessages, err := marshalNoEscape(messages)
 	if err != nil {
 		return nil, err
 	}
 	root["messages"] = encodedMessages
-
-	if err := normalizeToolChoice(root); err != nil {
-		return nil, err
-	}
-	if raw, ok := root["n"]; ok {
-		var n float64
-		if json.Unmarshal(raw, &n) == nil && n != 1 {
-			return nil, requestErrorf("n must be 1")
-		}
-	}
-	root["model"] = mustRaw(UpstreamModel(model, profile))
-	root["stream"] = json.RawMessage("true")
-	root["stream_options"] = json.RawMessage(`{"include_usage":true}`)
 	return marshalNoEscape(root)
 }
 
