@@ -247,3 +247,32 @@ func TestGrokOAuthAccountsRouteTheFastModel(t *testing.T) {
 	require.False(t, apiKey.IsModelSupported("grok-4.7-fast"), "the public API does not serve Grok 4.7 Fast")
 	require.True(t, apiKey.IsModelSupported("grok-4.7"))
 }
+
+func TestKnownFreeGrokAccountsDoNotRouteTheFastModel(t *testing.T) {
+	grokOAuth := func(credentials map[string]any) *Account {
+		credentials["access_token"] = "token"
+		return &Account{Platform: PlatformGrok, Type: AccountTypeOAuth, Credentials: credentials}
+	}
+
+	free := grokOAuth(map[string]any{"subscription_tier": "free"})
+	require.False(t, free.IsModelSupported("grok-4.7-fast"), "Grok Build's free tier does not include Grok 4.7 Fast")
+	require.False(t, free.IsModelSupported("grok-4.7-build-fast"))
+	require.False(t, free.IsModelSupported("xai/grok-4.7-fast"))
+	require.True(t, free.IsModelSupported("grok-4.7"))
+	require.True(t, free.IsModelSupported("grok-4.6"))
+
+	// A custom route that lands on the Fast model is excluded as well.
+	customFree := grokOAuth(map[string]any{
+		"subscription_tier": "x_basic",
+		"model_mapping":     map[string]any{"speedy": "grok-4.7-fast", "grok-4.6": "grok-4.6"},
+	})
+	require.False(t, customFree.IsModelSupported("speedy"))
+	require.True(t, customFree.IsModelSupported("grok-4.6"))
+
+	paid := grokOAuth(map[string]any{"subscription_tier": "supergrok"})
+	require.True(t, paid.IsModelSupported("grok-4.7-fast"))
+
+	// An unobserved plan is not proof of the free tier.
+	unobserved := grokOAuth(map[string]any{})
+	require.True(t, unobserved.IsModelSupported("grok-4.7-fast"))
+}

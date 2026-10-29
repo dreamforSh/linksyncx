@@ -220,6 +220,11 @@ func TestGrokChatResponsesRuntimeEligibility(t *testing.T) {
 	require.True(t, grokChatResponsesRuntimeEligible("grok-4.5", "isolated-id"))
 	require.True(t, grokChatResponsesRuntimeEligible("grok-4.6", "isolated-id"))
 	require.True(t, grokChatResponsesRuntimeEligible("grok-4.6-latest", "isolated-id"))
+	// Grok 4.7 Fast is grok-4.7 on faster serving: without the bridge, Chat
+	// requests lose the cache identity and drop image inputs.
+	require.True(t, grokChatResponsesRuntimeEligible(xai.GrokBuildFastTextModel, "isolated-id"))
+	require.True(t, grokChatResponsesRuntimeEligible("xai/grok-4.7-build-fast", "isolated-id"))
+	require.False(t, grokChatResponsesRuntimeEligible(xai.GrokBuildFastTextModel, ""))
 	require.False(t, grokChatResponsesRuntimeEligible("grok-4.3", "isolated-id"))
 	require.False(t, grokChatResponsesRuntimeEligible("grok-4.5-build-free", "isolated-id"))
 	require.False(t, grokChatResponsesRuntimeEligible("grok-4.5", ""))

@@ -3123,7 +3123,12 @@ func (h *AccountHandler) GetAvailableModels(c *gin.Context) {
 	if account.Platform == service.PlatformGrok {
 		defaultModels := xai.DefaultModels()
 		if account.IsGrokOAuth() {
-			defaultModels = append(defaultModels, xai.BuildOnlyModels()...)
+			for _, model := range xai.BuildOnlyModels() {
+				// Known free accounts cannot serve the Build-only models.
+				if account.IsModelSupported(model.ID) {
+					defaultModels = append(defaultModels, model)
+				}
+			}
 		}
 
 		hasExplicitMapping := false

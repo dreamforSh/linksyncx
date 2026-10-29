@@ -913,6 +913,9 @@ func resolveRequestedModelInMapping(mapping map[string]string, requestedModel st
 // 例外：DeepSeek 平台的空映射不再是「允许所有」，改按官方模型白名单判定
 // （isDeepseekServableModel）——未知模型名透传上游只会得到 404/400，并误触发
 // per-(账号,模型) 30 分钟冷却；带 [1m] 上下文后缀的写法先归一化再比对。
+//
+// 例外：已知是免费档的 Grok OAuth 账号不承接 Grok Build 专属模型（如
+// grok-4.7-fast），见 grokPlanExcludesModel。
 func (a *Account) IsModelSupported(requestedModel string) bool {
 	// 透传模式仅替换认证、模型语义完全交由上游决定，因此放行所有模型。
 	// 该短路必须在 model_mapping 判定之前：账号从"白名单模式"切换到透传后，
@@ -932,10 +935,27 @@ func (a *Account) IsModelSupported(requestedModel string) bool {
 		return true // 无映射 = 允许所有
 	}
 	if mappingSupportsRequestedModel(mapping, requestedModel) {
-		return true
+		return !a.grokPlanExcludesModel(requestedModel)
 	}
 	normalized := normalizeRequestedModelForLookup(a.Platform, requestedModel)
-	return normalized != requestedModel && mappingSupportsRequestedModel(mapping, normalized)
+	return normalized != requestedModel && mappingSupportsRequestedModel(mapping, normalized) &&
+		!a.grokPlanExcludesModel(normalized)
+}
+
+// grokPlanExcludesModel reports whether a Grok OAuth account's plan cannot
+// serve requestedModel. Grok Build's free tier does not include the Build-only
+// models such as Grok 4.7 Fast (https://docs.x.ai/developers/pricing), and a
+// subscription error from the proxy can cool the whole account for 30 minutes
+// (classifyGrokUpstreamFailure), so known free accounts are not offered them.
+// Accounts whose plan has not been observed stay eligible.
+func (a *Account) grokPlanExcludesModel(requestedModel string) bool {
+	if !a.IsGrokOAuth() {
+		return false
+	}
+	if !xai.IsGrokBuildOnlyTextModel(requestedModel) && !xai.IsGrokBuildOnlyTextModel(a.GetMappedModel(requestedModel)) {
+		return false
+	}
+	return isKnownGrokFreeAccount(a)
 }
 
 // GetMappedModel 获取映射后的模型名（支持通配符，最长优先匹配）

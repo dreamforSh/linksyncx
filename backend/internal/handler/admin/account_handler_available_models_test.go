@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -153,6 +154,56 @@ func TestAccountHandlerGetAvailableModels_GrokDefaultsToXAIModelsWithoutMapping(
 	}
 	require.Contains(t, ids, "grok-4.3")
 	require.Contains(t, ids, "grok-build-0.1")
+}
+
+func TestAccountHandlerGetAvailableModels_GrokFastOnlyForEligibleOAuth(t *testing.T) {
+	tests := []struct {
+		name     string
+		account  service.Account
+		wantFast bool
+	}{
+		{
+			name:     "paid OAuth",
+			account:  service.Account{ID: 46, Platform: service.PlatformGrok, Type: service.AccountTypeOAuth, Credentials: map[string]any{"subscription_tier": "supergrok"}},
+			wantFast: true,
+		},
+		{
+			name:    "known free OAuth",
+			account: service.Account{ID: 47, Platform: service.PlatformGrok, Type: service.AccountTypeOAuth, Credentials: map[string]any{"subscription_tier": "free"}},
+		},
+		{
+			name:    "API key",
+			account: service.Account{ID: 48, Platform: service.PlatformGrok, Type: service.AccountTypeAPIKey, Credentials: map[string]any{"api_key": "key"}},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			tt.account.Status = service.StatusActive
+			router := setupAvailableModelsRouter(&availableModelsAdminService{stubAdminService: newStubAdminService(), account: tt.account})
+
+			rec := httptest.NewRecorder()
+			req := httptest.NewRequest(http.MethodGet, fmt.Sprintf("/api/v1/admin/accounts/%d/models", tt.account.ID), nil)
+			router.ServeHTTP(rec, req)
+			require.Equal(t, http.StatusOK, rec.Code)
+
+			var resp struct {
+				Data []struct {
+					ID string `json:"id"`
+				} `json:"data"`
+			}
+			require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &resp))
+			var ids []string
+			for _, model := range resp.Data {
+				ids = append(ids, model.ID)
+			}
+			require.Contains(t, ids, "grok-4.7")
+			if tt.wantFast {
+				require.Contains(t, ids, "grok-4.7-fast")
+			} else {
+				require.NotContains(t, ids, "grok-4.7-fast")
+			}
+		})
+	}
 }
 
 func TestAccountHandlerGetAvailableModels_OpenAIOAuthUsesExplicitModelMapping(t *testing.T) {

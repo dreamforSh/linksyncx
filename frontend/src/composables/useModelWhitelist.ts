@@ -114,6 +114,8 @@ const metaModels = [
 // xAI Grok
 const xaiModels = [
   'grok-4.7',
+  // Grok Build only: OAuth accounts on a paid plan, not the public API.
+  'grok-4.7-fast',
   'grok-4.6',
   'grok-4.5',
   'grok-4.3',
@@ -307,6 +309,7 @@ const geminiPresetMappings = [
 
 const grokPresetMappings = [
   { label: 'Grok 4.7', from: 'grok-4.7', to: 'grok-4.7', color: 'bg-slate-100 text-slate-700 hover:bg-slate-200 dark:bg-slate-800/50 dark:text-slate-300' },
+  { label: 'Grok 4.7 Fast', from: 'grok-4.7-fast', to: 'grok-4.7-fast', color: 'bg-orange-100 text-orange-700 hover:bg-orange-200 dark:bg-orange-900/30 dark:text-orange-400' },
   { label: 'Grok 4.6', from: 'grok-4.6', to: 'grok-4.6', color: 'bg-slate-100 text-slate-700 hover:bg-slate-200 dark:bg-slate-800/50 dark:text-slate-300' },
   { label: 'Grok 4.5', from: 'grok-4.5', to: 'grok-4.5', color: 'bg-slate-100 text-slate-700 hover:bg-slate-200 dark:bg-slate-800/50 dark:text-slate-300' },
   { label: 'Grok 4.3', from: 'grok-4.3', to: 'grok-4.3', color: 'bg-slate-100 text-slate-700 hover:bg-slate-200 dark:bg-slate-800/50 dark:text-slate-300' },
