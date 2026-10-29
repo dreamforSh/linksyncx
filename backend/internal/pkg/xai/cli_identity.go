@@ -13,9 +13,10 @@ import (
 // These values are intentionally pinned in-binary (not scraped from live CLI).
 // Operators may bump the version via XAI_GROK_CLI_VERSION without a release.
 //
-// The header set mirrors captured Grok Build 1.0.62 traffic from the
+// The header set mirrors captured Grok Build 1.0.70 traffic from the
 // interactive TUI (grok-pager), which is what most real subscribers run.
-// 1.0.46 through 1.0.62 send the same headers and body fields.
+// 1.0.46 through 1.0.70 send the same headers and body fields, apart from
+// Accept-Encoding (zstd added in 1.0.64), which is left to the HTTP transport.
 const (
 	// CLIProxyHost is the hostname that requires the official CLI identity headers.
 	CLIProxyHost = "cli-chat-proxy.grok.com"

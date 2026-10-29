@@ -20,7 +20,7 @@ const (
 	// one bump here covers OAuth traffic and billing probes together.
 	// Keep in sync with https://x.ai/cli/stable; XAI_GROK_CLI_VERSION overrides
 	// it at runtime (see ResolveCLIVersion).
-	CLIClientVersion = "1.0.62"
+	CLIClientVersion = "1.0.70"
 
 	BillingWeeklyPath  = "/billing?format=credits"
 	BillingMonthlyPath = "/billing"

@@ -89,7 +89,7 @@ func applyGrokCLIAccountHeaders(headers http.Header) {
 
 // applyGrokCLISamplerHeaders stamps the Grok Build sampler identity of an
 // inference turn: the client identity plus the per-turn x-grok-* ids captured
-// from Grok Build 1.0.62. convID is the request's x-grok-conv-id; Grok Build
+// from Grok Build 1.0.70. convID is the request's x-grok-conv-id; Grok Build
 // reuses its session id for both values and derives the group id from it.
 //
 // Left out on purpose: x-grok-turn-idx (unknown for relayed history), the
