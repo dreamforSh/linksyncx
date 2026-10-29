@@ -914,8 +914,8 @@ func resolveRequestedModelInMapping(mapping map[string]string, requestedModel st
 // （isDeepseekServableModel）——未知模型名透传上游只会得到 404/400，并误触发
 // per-(账号,模型) 30 分钟冷却；带 [1m] 上下文后缀的写法先归一化再比对。
 //
-// 例外：已知是免费档的 Grok OAuth 账号不承接 Grok Build 专属模型（如
-// grok-4.7-fast），见 grokPlanExcludesModel。
+// 例外：Grok Build 专属模型（如 grok-4.7-fast）不交给走公开 API 的 Grok 账号和
+// 已知免费档的 OAuth 账号，即使映射里有它，见 grokExcludesBuildOnlyModel。
 func (a *Account) IsModelSupported(requestedModel string) bool {
 	// 透传模式仅替换认证、模型语义完全交由上游决定，因此放行所有模型。
 	// 该短路必须在 model_mapping 判定之前：账号从"白名单模式"切换到透传后，
@@ -935,27 +935,34 @@ func (a *Account) IsModelSupported(requestedModel string) bool {
 		return true // 无映射 = 允许所有
 	}
 	if mappingSupportsRequestedModel(mapping, requestedModel) {
-		return !a.grokPlanExcludesModel(requestedModel)
+		return !a.grokExcludesBuildOnlyModel(requestedModel)
 	}
 	normalized := normalizeRequestedModelForLookup(a.Platform, requestedModel)
 	return normalized != requestedModel && mappingSupportsRequestedModel(mapping, normalized) &&
-		!a.grokPlanExcludesModel(normalized)
+		!a.grokExcludesBuildOnlyModel(normalized)
 }
 
-// grokPlanExcludesModel reports whether a Grok OAuth account's plan cannot
-// serve requestedModel. Grok Build's free tier does not include the Build-only
-// models such as Grok 4.7 Fast (https://docs.x.ai/developers/pricing), and a
-// subscription error from the proxy can cool the whole account for 30 minutes
-// (classifyGrokUpstreamFailure), so known free accounts are not offered them.
-// Accounts whose plan has not been observed stay eligible.
-func (a *Account) grokPlanExcludesModel(requestedModel string) bool {
-	if !a.IsGrokOAuth() {
+// grokExcludesBuildOnlyModel reports whether a Grok account cannot serve
+// requestedModel because it resolves to a Grok Build-only model such as Grok
+// 4.7 Fast. xAI serves those through Grok Build's CLI proxy only: not on the
+// public API, and not to Grok Build's free tier
+// (https://docs.x.ai/developers/pricing). Accounts whose text endpoint is the
+// public API (the API-key default) and known free OAuth accounts are therefore
+// excluded even when their model_mapping lists the model; the upstream would
+// reject it, and a subscription error can cool the whole account for 30
+// minutes (classifyGrokUpstreamFailure). Custom relays and OAuth accounts whose
+// plan has not been observed stay eligible.
+func (a *Account) grokExcludesBuildOnlyModel(requestedModel string) bool {
+	if !a.IsGrok() {
 		return false
 	}
 	if !xai.IsGrokBuildOnlyTextModel(requestedModel) && !xai.IsGrokBuildOnlyTextModel(a.GetMappedModel(requestedModel)) {
 		return false
 	}
-	return isKnownGrokFreeAccount(a)
+	if xai.IsPublicAPIBaseURL(a.GetGrokBaseURL()) {
+		return true
+	}
+	return a.IsGrokOAuth() && isKnownGrokFreeAccount(a)
 }
 
 // GetMappedModel 获取映射后的模型名（支持通配符，最长优先匹配）

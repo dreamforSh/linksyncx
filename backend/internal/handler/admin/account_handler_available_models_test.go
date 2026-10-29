@@ -175,6 +175,13 @@ func TestAccountHandlerGetAvailableModels_GrokFastOnlyForEligibleOAuth(t *testin
 			name:    "API key",
 			account: service.Account{ID: 48, Platform: service.PlatformGrok, Type: service.AccountTypeAPIKey, Credentials: map[string]any{"api_key": "key"}},
 		},
+		{
+			name: "API key whitelisting the Fast model",
+			account: service.Account{ID: 49, Platform: service.PlatformGrok, Type: service.AccountTypeAPIKey, Credentials: map[string]any{
+				"api_key":       "key",
+				"model_mapping": map[string]any{"grok-4.7": "grok-4.7", "grok-4.7-fast": "grok-4.7-fast"},
+			}},
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

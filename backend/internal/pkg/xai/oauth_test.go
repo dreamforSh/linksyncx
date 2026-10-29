@@ -310,6 +310,15 @@ func TestValidateTrustedBaseURLAcceptsOfficialRegionalHosts(t *testing.T) {
 	}
 }
 
+func TestIsPublicAPIBaseURL(t *testing.T) {
+	for _, raw := range []string{DefaultBaseURL, DefaultUSEast1BaseURL, DefaultUSWest2BaseURL, DefaultEUWest1BaseURL, "https://API.X.AI./v1"} {
+		require.True(t, IsPublicAPIBaseURL(raw), raw)
+	}
+	for _, raw := range []string{DefaultCLIBaseURL, "https://relay.example.test/v1", "https://api.x.ai.example.test/v1", "", "api.x.ai"} {
+		require.False(t, IsPublicAPIBaseURL(raw), raw)
+	}
+}
+
 func TestBuildResponsesURLPreservesUnsafeOverrideCustomPath(t *testing.T) {
 	t.Setenv(EnvAllowUnsafeURLOverrides, "true")
 

@@ -3124,7 +3124,8 @@ func (h *AccountHandler) GetAvailableModels(c *gin.Context) {
 		defaultModels := xai.DefaultModels()
 		if account.IsGrokOAuth() {
 			for _, model := range xai.BuildOnlyModels() {
-				// Known free accounts cannot serve the Build-only models.
+				// Known free accounts and accounts pinned to the public API
+				// cannot serve the Build-only models.
 				if account.IsModelSupported(model.ID) {
 					defaultModels = append(defaultModels, model)
 				}
@@ -3162,6 +3163,11 @@ func (h *AccountHandler) GetAvailableModels(c *gin.Context) {
 
 		var models []xai.Model
 		for _, requestedModel := range requestedModels {
+			// A Build-only model the account cannot reach stays unlisted even
+			// when the mapping names it.
+			if !account.IsModelSupported(requestedModel) {
+				continue
+			}
 			if defaultModel, found := defaultByID[requestedModel]; found {
 				models = append(models, defaultModel)
 				continue

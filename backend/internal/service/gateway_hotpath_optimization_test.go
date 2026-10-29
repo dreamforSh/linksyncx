@@ -740,6 +740,28 @@ func TestGetAvailableModels_GlobalListPreservesMappedModelsWithOpenAIPassthrough
 	require.Equal(t, []string{"claude-mapped"}, svc.GetAvailableModels(context.Background(), &groupID, ""))
 }
 
+func TestGetAvailableModels_GrokBuildOnlyModelsNeedAReachableAccount(t *testing.T) {
+	groupID := int64(12)
+	whitelist := map[string]any{"grok-4.7": "grok-4.7", "grok-4.7-fast": "grok-4.7-fast"}
+	listFor := func(accounts ...Account) []string {
+		repo := &modelsListAccountRepoStub{byGroup: map[int64][]Account{groupID: accounts}}
+		svc := &GatewayService{
+			accountRepo:        repo,
+			modelsListCache:    gocache.New(time.Minute, time.Minute),
+			modelsListCacheTTL: time.Minute,
+		}
+		return svc.GetAvailableModels(context.Background(), &groupID, PlatformGrok)
+	}
+
+	apiKey := Account{ID: 1, Platform: PlatformGrok, Type: AccountTypeAPIKey,
+		Credentials: map[string]any{"api_key": "key", "model_mapping": whitelist}}
+	require.Equal(t, []string{"grok-4.7"}, listFor(apiKey), "the public API does not serve Grok 4.7 Fast")
+
+	paidOAuth := Account{ID: 2, Platform: PlatformGrok, Type: AccountTypeOAuth,
+		Credentials: map[string]any{"access_token": "token", "subscription_tier": "supergrok", "model_mapping": whitelist}}
+	require.Equal(t, []string{"grok-4.7", "grok-4.7-fast"}, listFor(apiKey, paidOAuth))
+}
+
 func TestGatewayHotpathHelpers_CacheTTLAndStickyContext(t *testing.T) {
 	t.Run("resolve_user_group_rate_cache_ttl", func(t *testing.T) {
 		require.Equal(t, defaultUserGroupRateCacheTTL, resolveUserGroupRateCacheTTL(nil))

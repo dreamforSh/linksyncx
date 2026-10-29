@@ -470,6 +470,17 @@ func IsOfficialBaseURLHost(host string) bool {
 	return false
 }
 
+// IsPublicAPIBaseURL 报告 raw 是否指向公开 xAI API（api.x.ai 或区域 *.api.x.ai），
+// 而不是 Grok Build 的 CLI 网关或自定义中转。Grok Build 专属模型只在 CLI 网关上提供。
+func IsPublicAPIBaseURL(raw string) bool {
+	parsed, err := url.Parse(strings.TrimSpace(raw))
+	if err != nil || parsed.Host == "" {
+		return false
+	}
+	host := strings.ToLower(strings.TrimSuffix(parsed.Hostname(), "."))
+	return host == "api.x.ai" || strings.HasSuffix(host, ".api.x.ai")
+}
+
 // IsParseableBaseURL 报告 raw 是否能解析出 host。
 // 供读取路径判定存量脏数据：无法解析的值应回落默认端点，而不是把流量发往未定义目标。
 func IsParseableBaseURL(raw string) bool {

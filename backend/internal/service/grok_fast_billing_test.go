@@ -276,3 +276,31 @@ func TestKnownFreeGrokAccountsDoNotRouteTheFastModel(t *testing.T) {
 	unobserved := grokOAuth(map[string]any{})
 	require.True(t, unobserved.IsModelSupported("grok-4.7-fast"))
 }
+
+func TestGrokAccountsOnThePublicAPIDoNotRouteTheFastModel(t *testing.T) {
+	whitelist := func() map[string]any {
+		return map[string]any{"grok-4.7": "grok-4.7", "grok-4.7-fast": "grok-4.7-fast"}
+	}
+
+	// The account form prefills the whole Grok catalog as a whitelist, so an
+	// API-key account can list the Fast model; api.x.ai still never serves it.
+	apiKey := &Account{Platform: PlatformGrok, Type: AccountTypeAPIKey,
+		Credentials: map[string]any{"api_key": "key", "model_mapping": whitelist()}}
+	require.False(t, apiKey.IsModelSupported("grok-4.7-fast"))
+	require.True(t, apiKey.IsModelSupported("grok-4.7"))
+
+	regional := &Account{Platform: PlatformGrok, Type: AccountTypeAPIKey,
+		Credentials: map[string]any{"api_key": "key", "base_url": xai.DefaultEUWest1BaseURL, "model_mapping": whitelist()}}
+	require.False(t, regional.IsModelSupported("grok-4.7-fast"))
+
+	// A relay decides for itself what it serves.
+	relay := &Account{Platform: PlatformGrok, Type: AccountTypeAPIKey,
+		Credentials: map[string]any{"api_key": "key", "base_url": "https://grok-relay.example.test/v1", "model_mapping": whitelist()}}
+	require.True(t, relay.IsModelSupported("grok-4.7-fast"))
+
+	// An OAuth account pinned to the public API cannot reach it either.
+	pinnedOAuth := &Account{Platform: PlatformGrok, Type: AccountTypeOAuth,
+		Credentials: map[string]any{"access_token": "token", "base_url": xai.DefaultBaseURL}}
+	require.False(t, pinnedOAuth.IsModelSupported("grok-4.7-fast"))
+	require.True(t, pinnedOAuth.IsModelSupported("grok-4.7"))
+}

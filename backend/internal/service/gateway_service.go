@@ -1499,6 +1499,10 @@ func (s *GatewayService) GetAvailableModels(ctx context.Context, groupID *int64,
 			if platform != "" && acc.Platform != platform && !mixedListingModelAllowed(platform, model) {
 				continue
 			}
+			// Grok Build-only models are listed only by accounts that can reach them.
+			if acc.grokExcludesBuildOnlyModel(model) {
+				continue
+			}
 			modelSet[model] = struct{}{}
 			hasAnyMapping = true
 		}
