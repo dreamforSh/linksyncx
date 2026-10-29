@@ -100,25 +100,41 @@ func (s *OpenAIGatewayService) sendCodeBuddyUpstreamRequest(
 	if resp.StatusCode >= http.StatusBadRequest {
 		return resp, nil
 	}
+	// Every success is read as a stream, so bound each wait on it: a stalled
+	// stream fails over or ends with an error instead of hanging.
+	resp.Body = newStreamIdleBody(resp.Body, s.codeBuddyStreamIdleTimeout())
 	// The first upstream byte is waiting: take the model PrepareChat wrote
 	// instead of searching the rewritten body past its history for it.
 	s.recordCodeBuddyCreditsUsage(ctx, account, prepared.Model)
 	if clientStream {
 		return resp, nil
 	}
-	return s.aggregateCodeBuddyStream(resp), nil
+	aggregated, idleErr := s.aggregateCodeBuddyStream(resp)
+	if idleErr != nil {
+		// Nothing reaches a non-stream client before the stream ends, so a
+		// stall anywhere in it can still fail over.
+		requestID := resp.Header.Get("x-request-id")
+		s.noteCodeBuddyStreamIdle(c, account, prepared.Model, requestID, idleErr, true)
+		return nil, newCodeBuddyStreamIdleFailoverError(requestID, idleErr)
+	}
+	return aggregated, nil
 }
 
 // aggregateCodeBuddyStream swaps the SSE body for an aggregated JSON body. An
 // error frame inside the stream becomes an HTTP error response so the
-// caller's error path (failover, client formatting) handles it.
-func (s *OpenAIGatewayService) aggregateCodeBuddyStream(resp *http.Response) *http.Response {
+// caller's error path (failover, client formatting) handles it. A stream the
+// idle limit cut off returns its error instead.
+func (s *OpenAIGatewayService) aggregateCodeBuddyStream(resp *http.Response) (*http.Response, *upstreamStreamIdleError) {
 	maxLineSize := defaultMaxLineSize
 	if s.cfg != nil && s.cfg.Gateway.MaxLineSize > 0 {
 		maxLineSize = s.cfg.Gateway.MaxLineSize
 	}
 	aggregated, err := codebuddy.AggregateChatStream(resp.Body, maxLineSize)
 	_ = resp.Body.Close()
+	var idleErr *upstreamStreamIdleError
+	if errors.As(err, &idleErr) {
+		return nil, idleErr
+	}
 	resp.Header = resp.Header.Clone()
 	resp.Header.Del("Content-Length")
 	resp.ContentLength = -1
@@ -136,11 +152,11 @@ func (s *OpenAIGatewayService) aggregateCodeBuddyStream(resp *http.Response) *ht
 		resp.Status = fmt.Sprintf("%d %s", status, http.StatusText(status))
 		resp.Header.Set("Content-Type", "application/json")
 		resp.Body = io.NopCloser(bytes.NewReader(body))
-		return resp
+		return resp, nil
 	}
 	resp.Header.Set("Content-Type", "application/json")
 	resp.Body = io.NopCloser(bytes.NewReader(aggregated))
-	return resp
+	return resp, nil
 }
 
 // codeBuddySessionKey keeps X-Conversation-ID stable across the turns of one

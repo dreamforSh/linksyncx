@@ -202,7 +202,7 @@ func (s *OpenAIGatewayService) forwardPerplexityResponses(
 	var result *OpenAIForwardResult
 	var forwardErr error
 	if clientStream {
-		result, forwardErr = s.streamChatCompletionsAsResponses(c, resp, originalModel, nil, nil, false, nil, billingModel, upstreamModel, reasoningEffort, serviceTier, startTime)
+		result, forwardErr = s.streamChatCompletionsAsResponses(c, resp, account, originalModel, nil, nil, false, nil, billingModel, upstreamModel, reasoningEffort, serviceTier, startTime)
 	} else {
 		result, forwardErr = s.bufferChatCompletionsAsResponses(c, resp, originalModel, nil, nil, false, nil, billingModel, upstreamModel, reasoningEffort, serviceTier, startTime)
 	}
@@ -291,7 +291,7 @@ func (s *OpenAIGatewayService) forwardPerplexityMessages(
 	var result *OpenAIForwardResult
 	var forwardErr error
 	if clientStream {
-		result, forwardErr = s.streamChatCompletionsAsAnthropic(c, resp, originalModel, billingModel, upstreamModel, reasoningEffort, serviceTier, startTime)
+		result, forwardErr = s.streamChatCompletionsAsAnthropic(c, resp, account, originalModel, billingModel, upstreamModel, reasoningEffort, serviceTier, startTime)
 	} else {
 		result, forwardErr = s.bufferChatCompletionsAsAnthropic(c, resp, originalModel, billingModel, upstreamModel, reasoningEffort, serviceTier, startTime)
 	}

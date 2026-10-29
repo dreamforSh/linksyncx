@@ -131,7 +131,7 @@ func (s *OpenAIGatewayService) forwardResponsesViaRawChatCompletions(
 	}
 
 	if clientStream {
-		return s.streamChatCompletionsAsResponses(c, resp, originalModel, customTools, functionTools, toolSearch, namespaceTools, billingModel, upstreamModel, reasoningEffort, serviceTier, startTime)
+		return s.streamChatCompletionsAsResponses(c, resp, account, originalModel, customTools, functionTools, toolSearch, namespaceTools, billingModel, upstreamModel, reasoningEffort, serviceTier, startTime)
 	}
 	return s.bufferChatCompletionsAsResponses(c, resp, originalModel, customTools, functionTools, toolSearch, namespaceTools, billingModel, upstreamModel, reasoningEffort, serviceTier, startTime)
 }
@@ -182,6 +182,7 @@ func (s *OpenAIGatewayService) bufferChatCompletionsAsResponses(
 func (s *OpenAIGatewayService) streamChatCompletionsAsResponses(
 	c *gin.Context,
 	resp *http.Response,
+	account *Account,
 	originalModel string,
 	customTools map[string]bool,
 	functionTools map[string]bool,
@@ -236,6 +237,17 @@ func (s *OpenAIGatewayService) streamChatCompletionsAsResponses(
 	})
 
 	if scan.Err != nil {
+		streamErr := fmt.Errorf("stream usage incomplete: %w", scan.Err)
+		failoverErr, stallErr := s.codeBuddyBridgeStreamIdle(c, account, upstreamModel, requestID, scan.Err)
+		if failoverErr != nil {
+			return nil, failoverErr
+		}
+		if stallErr != nil {
+			if !state.CompletedSent {
+				writeEvents([]apicompat.ResponsesStreamEvent{codeBuddyResponsesStreamTimeout(state)})
+			}
+			streamErr = stallErr
+		}
 		if isPerplexityCCResponse(resp) && c.Writer.Written() && !clientDisconnected && !state.CompletedSent &&
 			(c.Request == nil || c.Request.Context().Err() == nil) {
 			writeEvents([]apicompat.ResponsesStreamEvent{perplexityResponsesFailure(state, "Perplexity upstream stream did not complete")})
@@ -256,7 +268,7 @@ func (s *OpenAIGatewayService) streamChatCompletionsAsResponses(
 			Stream:                      true,
 			Duration:                    time.Since(startTime),
 			FirstTokenMs:                scan.FirstTokenMs,
-		}, fmt.Errorf("stream usage incomplete: %w", scan.Err)
+		}, streamErr
 	}
 	if err := state.ValidateToolCallArguments(); err != nil {
 		if isPerplexityCCResponse(resp) && c.Writer.Written() && !clientDisconnected && !state.CompletedSent {

@@ -266,7 +266,7 @@ func BenchmarkCodeBuddyStreamRelay(b *testing.B) {
 		b.ReportAllocs()
 		for i := 0; i < b.N; i += events {
 			c := newCtx("/v1/messages")
-			if _, err := svc.streamChatCompletionsAsAnthropic(c, newResp(), "glm-5.2", "glm-5.2", "glm-5.2", nil, nil, time.Now()); err != nil {
+			if _, err := svc.streamChatCompletionsAsAnthropic(c, newResp(), account, "glm-5.2", "glm-5.2", "glm-5.2", nil, nil, time.Now()); err != nil {
 				b.Fatalf("stream: %v", err)
 			}
 		}

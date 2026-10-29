@@ -17,6 +17,11 @@ const (
 	// no transport error, so without this classification a truncated generation is
 	// indistinguishable from a successful one.
 	OpenAIUpstreamStreamTruncatedCode = "upstream_stream_truncated"
+	// OpenAIUpstreamStreamTimeoutCode is returned when the upstream sent nothing
+	// for longer than the stream idle limit; native paths use the same code.
+	OpenAIUpstreamStreamTimeoutCode = "stream_timeout"
+
+	openAIUpstreamStreamTimeoutMessage = "Upstream response stream timed out"
 )
 
 // ErrOpenAIUpstreamStreamTruncated marks an upstream SSE stream that ended at
@@ -72,6 +77,10 @@ func classifyOpenAIUpstreamStreamReadError(err error) (code, message string) {
 	if err != nil {
 		if errors.Is(err, ErrOpenAIUpstreamStreamTruncated) {
 			return OpenAIUpstreamStreamTruncatedCode, "Upstream response stream ended before completion"
+		}
+		var idleErr *upstreamStreamIdleError
+		if errors.As(err, &idleErr) {
+			return OpenAIUpstreamStreamTimeoutCode, openAIUpstreamStreamTimeoutMessage
 		}
 		lower := strings.ToLower(err.Error())
 		// net/http's HTTP/2 stream error is unexported. Its stable text contains
