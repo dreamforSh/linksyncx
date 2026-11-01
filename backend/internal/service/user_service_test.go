@@ -720,7 +720,9 @@ func TestNewUserService_FieldsAssignment(t *testing.T) {
 }
 
 func TestUpdateProfile_StoresInlineAvatarWithinLimit(t *testing.T) {
-	raw := []byte("small-avatar")
+	var encoded bytes.Buffer
+	require.NoError(t, png.Encode(&encoded, image.NewRGBA(image.Rect(0, 0, 2, 2))))
+	raw := encoded.Bytes()
 	dataURL := "data:image/png;base64," + base64.StdEncoding.EncodeToString(raw)
 	expectedSum := sha256.Sum256(raw)
 	repo := &mockUserRepo{

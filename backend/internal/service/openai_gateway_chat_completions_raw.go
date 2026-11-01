@@ -416,11 +416,26 @@ func (s *OpenAIGatewayService) streamRawChatCompletions(
 	}
 
 	scanErr := scanner.Err()
-	if scanErr != nil && !errors.Is(scanErr, context.Canceled) && !errors.Is(scanErr, context.DeadlineExceeded) {
+	var idleErr *upstreamStreamIdleError
+	if account.IsCodeBuddy() && errors.As(scanErr, &idleErr) && terminal.Terminated() {
+		// The generation already ended and only the close of the stream was
+		// late: finish as if it had arrived.
+		scanErr, idleErr = nil, nil
+	}
+	if scanErr != nil && idleErr == nil && !errors.Is(scanErr, context.Canceled) && !errors.Is(scanErr, context.DeadlineExceeded) {
 		logger.L().Warn("openai chat_completions raw: stream read error",
 			zap.Error(scanErr),
 			zap.String("request_id", requestID),
 		)
+	}
+	if idleErr != nil {
+		// CodeBuddy stalled mid-generation. That is never a clean end, not
+		// even while draining for a client that went away.
+		s.noteCodeBuddyStreamIdle(c, account, upstreamModel, requestID, idleErr, !clientOutputStarted)
+		if !clientOutputStarted {
+			return nil, newCodeBuddyStreamIdleFailoverError(requestID, idleErr)
+		}
+		return resultWithUsage(), newOpenAIUpstreamStreamReadError(idleErr)
 	}
 
 	// 客户端取消/断开后上游读失败与上游截断不可区分（取消会连带取消上游请求），

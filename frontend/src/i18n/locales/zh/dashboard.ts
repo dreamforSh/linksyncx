@@ -979,6 +979,7 @@ export default {
       deleteSuccess: '头像已删除',
       invalidType: '请选择图片文件',
       gifTooLarge: 'GIF 头像必须在 20KB 以内',
+      dimensionsTooLarge: '头像单边不得超过 4096 像素，总像素不得超过 4,194,304',
       compressTooLarge: '无法将图片压缩到 20KB 以内，请换一张更小的图片',
       compressFailed: '压缩所选图片失败',
       readFailed: '读取所选图片失败',

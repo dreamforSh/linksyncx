@@ -99,6 +99,9 @@ const authStore = useAuthStore()
 const appStore = useAppStore()
 
 const targetAvatarUploadBytes = 20 * 1024
+const maxAvatarUploadDimension = 4096
+const maxAvatarUploadPixels = 4 * 1024 * 1024
+const maxCompressedAvatarDimension = 512
 const avatarScaleSteps = [1, 0.92, 0.84, 0.76, 0.68, 0.6, 0.52, 0.44, 0.36]
 const avatarQualitySteps = [0.92, 0.84, 0.76, 0.68, 0.6, 0.52, 0.44, 0.36]
 const avatarDraft = ref('')
@@ -168,9 +171,10 @@ async function compressAvatarFile(file: File): Promise<File> {
     throw new Error(t('profile.avatar.compressFailed'))
   }
 
+  const baseScale = Math.min(1, maxCompressedAvatarDimension / Math.max(image.naturalWidth, image.naturalHeight))
   for (const scale of avatarScaleSteps) {
-    const width = Math.max(1, Math.round(image.naturalWidth * scale))
-    const height = Math.max(1, Math.round(image.naturalHeight * scale))
+    const width = Math.max(1, Math.round(image.naturalWidth * baseScale * scale))
+    const height = Math.max(1, Math.round(image.naturalHeight * baseScale * scale))
     canvas.width = width
     canvas.height = height
     ctx.clearRect(0, 0, width, height)
@@ -180,7 +184,8 @@ async function compressAvatarFile(file: File): Promise<File> {
       const blob = await canvasToBlob(canvas, 'image/webp', quality)
       if (blob.size <= targetAvatarUploadBytes) {
         const fileName = file.name.replace(/\.[^.]+$/, '') || 'avatar'
-        return new File([blob], `${fileName}.webp`, { type: 'image/webp' })
+        const extension = blob.type === 'image/webp' ? 'webp' : 'png'
+        return new File([blob], `${fileName}.${extension}`, { type: blob.type })
       }
     }
   }
@@ -196,9 +201,11 @@ async function prepareAvatarUpload(file: File): Promise<File> {
     if (file.size > targetAvatarUploadBytes) {
       throw new Error(t('profile.avatar.gifTooLarge'))
     }
-    return file
-  }
-  if (file.size <= targetAvatarUploadBytes) {
+    const image = await loadImage(await readFileAsDataURL(file))
+    if (image.naturalWidth > maxAvatarUploadDimension || image.naturalHeight > maxAvatarUploadDimension ||
+      image.naturalWidth * image.naturalHeight > maxAvatarUploadPixels) {
+      throw new Error(t('profile.avatar.dimensionsTooLarge'))
+    }
     return file
   }
   return compressAvatarFile(file)

@@ -42,7 +42,7 @@ func startDrainTestServer(t *testing.T, handler http.HandlerFunc) *httptest.Serv
 func startH2CDrainTestServer(t *testing.T, handler http.HandlerFunc) (*httptest.Server, *http.Client) {
 	t.Helper()
 	server := httptest.NewUnstartedServer(handler)
-	require.NoError(t, http2.ConfigureServer(server.Config, &http2.Server{}))
+	require.NoError(t, http2.ConfigureServer(server.Config, &http2.Server{})) //nolint:staticcheck // Match the production H2C setup and its drain hooks.
 	serverProtocols := new(http.Protocols)
 	serverProtocols.SetHTTP1(true)
 	serverProtocols.SetUnencryptedHTTP2(true)

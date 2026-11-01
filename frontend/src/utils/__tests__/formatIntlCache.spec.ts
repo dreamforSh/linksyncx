@@ -10,7 +10,10 @@ describe('format Intl formatter cache', () => {
   it('reuses one DateTimeFormat per locale and options', () => {
     const value = new Date(2026, 0, 2, 3, 4, 5)
     const first = formatDateTime(value, undefined, 'en-GB')
-    const spy = vi.spyOn(Intl, 'DateTimeFormat')
+    const DateTimeFormat = Intl.DateTimeFormat
+    const spy = vi.spyOn(Intl, 'DateTimeFormat').mockImplementation(function (locales, options) {
+      return new DateTimeFormat(locales, options)
+    })
 
     expect(formatDateTime(value, undefined, 'en-GB')).toBe(first)
     expect(formatDateTime(new Date(2026, 5, 6), undefined, 'en-GB')).toContain('06/06/2026')

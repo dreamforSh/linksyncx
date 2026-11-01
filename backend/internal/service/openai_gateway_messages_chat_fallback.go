@@ -135,7 +135,7 @@ func (s *OpenAIGatewayService) forwardAnthropicViaRawChatCompletions(
 
 	// 5. Convert response
 	if clientStream {
-		return s.streamChatCompletionsAsAnthropic(c, resp, originalModel, billingModel, upstreamModel, reasoningEffort, serviceTier, startTime)
+		return s.streamChatCompletionsAsAnthropic(c, resp, account, originalModel, billingModel, upstreamModel, reasoningEffort, serviceTier, startTime)
 	}
 	return s.bufferChatCompletionsAsAnthropic(c, resp, originalModel, billingModel, upstreamModel, reasoningEffort, serviceTier, startTime)
 }
@@ -180,6 +180,7 @@ func (s *OpenAIGatewayService) bufferChatCompletionsAsAnthropic(
 func (s *OpenAIGatewayService) streamChatCompletionsAsAnthropic(
 	c *gin.Context,
 	resp *http.Response,
+	account *Account,
 	originalModel string,
 	billingModel string,
 	upstreamModel string,
@@ -221,6 +222,17 @@ func (s *OpenAIGatewayService) streamChatCompletionsAsAnthropic(
 	usage := scan.Usage
 
 	if scan.Err != nil {
+		streamErr := fmt.Errorf("stream usage incomplete: %w", scan.Err)
+		failoverErr, stallErr := s.codeBuddyBridgeStreamIdle(c, account, upstreamModel, requestID, scan.Err)
+		if failoverErr != nil {
+			return nil, failoverErr
+		}
+		if stallErr != nil {
+			if !clientDisconnected {
+				writeCodeBuddyAnthropicStreamTimeout(c)
+			}
+			streamErr = stallErr
+		}
 		if isPerplexityCCResponse(resp) && c.Writer.Written() && !clientDisconnected &&
 			(c.Request == nil || c.Request.Context().Err() == nil) {
 			writePerplexityMessagesStreamFailure(c, "Perplexity upstream stream did not complete")
@@ -243,7 +255,7 @@ func (s *OpenAIGatewayService) streamChatCompletionsAsAnthropic(
 			Duration:                    time.Since(startTime),
 			FirstTokenMs:                scan.FirstTokenMs,
 			ClientDisconnect:            clientDisconnected,
-		}, fmt.Errorf("stream usage incomplete: %w", scan.Err)
+		}, streamErr
 	}
 
 	// Finalize: close open blocks + emit message_delta/message_stop.
