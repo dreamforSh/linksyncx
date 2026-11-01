@@ -241,6 +241,7 @@
 import { ref, reactive, computed, onMounted, onUnmounted, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { saveAs } from 'file-saver'
+import type { SheetData } from 'write-excel-file/browser'
 import { useRoute } from 'vue-router'
 import { useAppStore } from '@/stores/app'; import { adminAPI } from '@/api/admin'; import { adminUsageAPI } from '@/api/admin/usage'
 import { getPersistedPageSize } from '@/composables/usePersistedPageSize'
@@ -634,7 +635,7 @@ const exportToExcel = async () => {
   const c = new AbortController(); exportAbortController = c
   try {
     let p = 1; let total = pagination.total; let exportedCount = 0
-    const XLSX = await import('xlsx')
+    const { default: writeXlsxFile } = await import('write-excel-file/browser')
     const headers = [
       t('usage.time'), t('admin.usage.user'), t('usage.apiKeyFilter'),
       t('admin.usage.account'), t('usage.requestedModel'), t('usage.sentUpstreamModel'), t('usage.upstreamResponseModel'), t('usage.upstreamModelMismatch'), t('usage.requestedReasoningEffort'), t('usage.reasoningEffort'), t('admin.usage.group'),
@@ -648,7 +649,7 @@ const exportToExcel = async () => {
       t('usage.firstToken'), t('usage.duration'), t('usage.tokensPerSecond'),
       t('admin.usage.requestId'), t('admin.usage.upstreamRequestId'), t('usage.userAgent'), t('admin.usage.ipAddress')
     ]
-    const ws = XLSX.utils.aoa_to_sheet([headers])
+    const sheetData: SheetData = [headers]
     while (true) {
       const res = await adminUsageAPI.list(
         buildUsageListParams(p, 100, true),
@@ -668,7 +669,7 @@ const exportToExcel = async () => {
         log.request_id || '', log.upstream_request_id || '', log.user_agent || '', log.ip_address || ''
       ])
       if (rows.length) {
-        XLSX.utils.sheet_add_aoa(ws, rows, { origin: -1 })
+        sheetData.push(...rows)
       }
       exportedCount += rows.length
       exportProgress.current = exportedCount
@@ -676,9 +677,9 @@ const exportToExcel = async () => {
       if (exportedCount >= total || res.items.length < 100) break; p++
     }
     if(!c.signal.aborted) {
-      const wb = XLSX.utils.book_new()
-      XLSX.utils.book_append_sheet(wb, ws, 'Usage')
-      saveAs(new Blob([XLSX.write(wb, { bookType: 'xlsx', type: 'array' })], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' }), `usage_${filters.value.start_date}_to_${filters.value.end_date}.xlsx`)
+      const blob = await writeXlsxFile(sheetData, { sheet: 'Usage' }).toBlob()
+      if (c.signal.aborted) return
+      saveAs(blob, `usage_${filters.value.start_date}_to_${filters.value.end_date}.xlsx`)
       appStore.showSuccess(t('usage.exportSuccess'))
     }
   } catch (error) { console.error('Failed to export:', error); appStore.showError('Export Failed') }

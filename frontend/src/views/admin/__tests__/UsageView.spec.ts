@@ -4,7 +4,7 @@ import { defineComponent, ref } from 'vue'
 
 import UsageView from '../UsageView.vue'
 
-const { list, exportList, getStats, getSnapshotV2, getById, getModelStats, listErrorLogs, routeQuery, aoaToSheet, sheetAddAoa, saveAs, xlsxWrite } = vi.hoisted(() => {
+const { list, exportList, getStats, getSnapshotV2, getById, getModelStats, listErrorLogs, routeQuery, saveAs, writeXlsxFile, writeXlsxBlob } = vi.hoisted(() => {
   vi.stubGlobal('localStorage', {
     getItem: vi.fn(() => null),
     setItem: vi.fn(),
@@ -20,10 +20,9 @@ const { list, exportList, getStats, getSnapshotV2, getById, getModelStats, listE
     getModelStats: vi.fn(),
     listErrorLogs: vi.fn(),
     routeQuery: {} as Record<string, string>,
-		aoaToSheet: vi.fn(() => ({})),
-		sheetAddAoa: vi.fn(),
 		saveAs: vi.fn(),
-		xlsxWrite: vi.fn(() => new Uint8Array([1, 2, 3])),
+		writeXlsxFile: vi.fn(),
+		writeXlsxBlob: vi.fn(),
   }
 })
 
@@ -73,15 +72,7 @@ vi.mock('@/api/admin/usage', () => ({
 
 vi.mock('file-saver', () => ({ saveAs }))
 
-vi.mock('xlsx', () => ({
-	utils: {
-		aoa_to_sheet: aoaToSheet,
-		sheet_add_aoa: sheetAddAoa,
-		book_new: vi.fn(() => ({})),
-		book_append_sheet: vi.fn(),
-	},
-	write: xlsxWrite,
-}))
+vi.mock('write-excel-file/browser', () => ({ default: writeXlsxFile }))
 
 vi.mock('@/api/admin/ops', () => ({
   listErrorLogs,
@@ -764,10 +755,9 @@ describe('admin UsageView model audit export', () => {
 		})
 		getSnapshotV2.mockReset().mockResolvedValue({ trend: [], models: [], groups: [] })
 		getModelStats.mockReset().mockResolvedValue({ models: [] })
-		aoaToSheet.mockClear()
-		sheetAddAoa.mockClear()
 		saveAs.mockClear()
-		xlsxWrite.mockClear()
+		writeXlsxBlob.mockReset().mockResolvedValue(new Blob(['xlsx'], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' }))
+		writeXlsxFile.mockReset().mockReturnValue({ toBlob: writeXlsxBlob })
 	})
 
 	afterEach(() => {
@@ -788,15 +778,55 @@ describe('admin UsageView model audit export', () => {
 			expect.anything()
 		)
 
-		const headers = aoaToSheet.mock.calls[0][0][0]
+		const headers = writeXlsxFile.mock.calls[0][0][0]
 		expect(headers.slice(4, 8)).toEqual([
 			'Requested model',
 			'Sent upstream model',
 			'Upstream response model',
 			'Upstream model mismatch',
 		])
-		const row = sheetAddAoa.mock.calls[0][1][0]
+		const row = writeXlsxFile.mock.calls[0][0][1]
 		expect(row.slice(4, 8)).toEqual(['gpt-5.6-sol', 'gpt-5.5', 'gpt-5.4', 'Yes'])
+		expect(writeXlsxFile.mock.calls[0][1]).toEqual({ sheet: 'Usage' })
+		expect(writeXlsxBlob).toHaveBeenCalledTimes(1)
 		expect(saveAs).toHaveBeenCalledTimes(1)
+		expect(saveAs).toHaveBeenCalledWith(expect.any(Blob), expect.stringMatching(/^usage_.*\.xlsx$/))
+	})
+
+	it('preserves every page and formula-like text in the exported rows', async () => {
+		const log = { created_at: '2026-11-01T00:00:00Z', model: '=1+1', api_key: { name: '=HYPERLINK("https://example.com")' }, duration_ms: 10 }
+		exportList.mockReset()
+			.mockResolvedValueOnce({ items: Array.from({ length: 100 }, () => log), total: 101, pages: 2 })
+			.mockResolvedValueOnce({ items: [log], total: 101, pages: 2 })
+		const wrapper = mountRouteFilteredUsageView()
+		vi.advanceTimersByTime(120)
+		await flushPromises()
+
+		await (wrapper.vm as any).exportToExcel()
+
+		expect(exportList).toHaveBeenCalledTimes(2)
+		const rows = writeXlsxFile.mock.calls[0][0]
+		expect(rows).toHaveLength(102)
+		expect(rows[1][2]).toBe('=HYPERLINK("https://example.com")')
+		expect(rows[101][4]).toBe('=1+1')
+		expect(saveAs).toHaveBeenCalledTimes(1)
+	})
+
+	it('does not download if export is cancelled while the workbook is being generated', async () => {
+		let finish!: (blob: Blob) => void
+		writeXlsxBlob.mockImplementationOnce(() => new Promise<Blob>((resolve) => { finish = resolve }))
+		const wrapper = mountRouteFilteredUsageView()
+		vi.advanceTimersByTime(120)
+		await flushPromises()
+
+		const exporting = (wrapper.vm as any).exportToExcel()
+		await flushPromises()
+		expect(writeXlsxBlob).toHaveBeenCalledTimes(1)
+		;(wrapper.vm as any).cancelExport()
+		finish(new Blob(['xlsx']))
+		await exporting
+
+		expect(saveAs).not.toHaveBeenCalled()
+		expect((wrapper.vm as any).exporting).toBe(false)
 	})
 })

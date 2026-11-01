@@ -34,8 +34,8 @@
 ### 开发工具
 
 ```bash
-# golangci-lint（CI 用 v2.13，本地建议装同一版以免版本差异带来的噪音）
-go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v2.13
+# golangci-lint（CI 用 v2.15，本地建议装同一版以免版本差异带来的噪音）
+go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v2.15
 
 # pnpm (前端包管理)
 npm install -g pnpm
@@ -47,13 +47,13 @@ npm install -g pnpm
 
 | Workflow | 触发条件 | 检查内容 |
 |----------|----------|----------|
-| **backend-ci.yml** | PR 到 main，以及 push 到 main | 部署脚本、单元测试、集成测试、前端检查、golangci-lint v2.13 |
+| **backend-ci.yml** | PR 到 main，以及 push 到 main | 部署脚本、单元测试、集成测试、前端检查、golangci-lint v2.15 |
 | **security-scan.yml** | 每周一，或手动 | govulncheck + pnpm audit |
 | **custom-release.yml** | tag `custom-v*`，或手动 | GHCR 镜像和 GitHub Release |
 
 ### CI 要求
 
-- Go 版本必须是 **1.27.0**：`backend-ci.yml` 和 `security-scan.yml` 用 `go-version-file: backend/go.mod` 取版本，随后硬断言 `go version | grep -q 'go1.27.0'`。升级 Go 时要同时改 `backend/go.mod`、`backend-ci.yml`（两处）、`security-scan.yml` 里的这句断言，**以及三个 Dockerfile 里的 Go 构建镜像**（`Dockerfile` / `deploy/Dockerfile` 的 `ARG GOLANG_IMAGE`、`backend/Dockerfile` 的 `FROM golang:`）。前者漏了 CI 会在版本校验步骤直接失败；**后者漏了 CI 不会报，而是等到有人用这些 Dockerfile 构建时才失败**（`go.mod requires go >= X (running Y; GOTOOLCHAIN=local)`）。
+- Go 版本必须是 **1.27.3**：`backend-ci.yml` 和 `security-scan.yml` 用 `go-version-file: backend/go.mod` 取版本，随后硬断言 `go version | grep -q 'go1.27.3'`。升级 Go 时要同时改 `backend/go.mod`、`backend-ci.yml`（两处）、`security-scan.yml` 里的这句断言，**以及三个 Dockerfile 里的 Go 构建镜像**（`Dockerfile` / `deploy/Dockerfile` 的 `ARG GOLANG_IMAGE`、`backend/Dockerfile` 的 `FROM golang:`）。前者漏了 CI 会在版本校验步骤直接失败；**后者漏了 CI 不会报，而是等到有人用这些 Dockerfile 构建时才失败**（`go.mod requires go >= X (running Y; GOTOOLCHAIN=local)`）。
 - 前端使用 `pnpm install --frozen-lockfile`，必须提交 `pnpm-lock.yaml`
 
 ### 本地测试命令
