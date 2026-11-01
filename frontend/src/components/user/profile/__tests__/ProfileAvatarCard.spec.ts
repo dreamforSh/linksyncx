@@ -96,7 +96,7 @@ const originalFileReader = globalThis.FileReader
 const originalImage = globalThis.Image
 const originalCreateElement = document.createElement.bind(document)
 
-function installAvatarCompressionMocks(blobSize = 8 * 1024) {
+function installAvatarCompressionMocks(blobSize = 8 * 1024, width = 1200, height = 1200) {
   class MockFileReader {
     result: string | ArrayBuffer | null = null
     onload: ((this: FileReader, ev: ProgressEvent<FileReader>) => any) | null = null
@@ -107,15 +107,15 @@ function installAvatarCompressionMocks(blobSize = 8 * 1024) {
       if (blob.type === 'image/webp') {
         this.result = 'data:image/webp;base64,' + Buffer.from('compressed-avatar').toString('base64')
       } else {
-        this.result = 'data:image/png;base64,' + Buffer.from('original-avatar').toString('base64')
+        this.result = `data:${blob.type};base64,` + Buffer.from('original-avatar').toString('base64')
       }
       this.onload?.call(this as unknown as FileReader, new ProgressEvent('load'))
     }
   }
 
   class MockImage {
-    naturalWidth = 1200
-    naturalHeight = 1200
+    naturalWidth = width
+    naturalHeight = height
     onload: (() => void) | null = null
     onerror: (() => void) | null = null
 
@@ -124,24 +124,26 @@ function installAvatarCompressionMocks(blobSize = 8 * 1024) {
     }
   }
 
+  const canvas = {
+    width: 0,
+    height: 0,
+    getContext: () => ({
+      clearRect: vi.fn(),
+      drawImage: vi.fn()
+    }),
+    toBlob: vi.fn((callback: BlobCallback) => {
+      callback(new Blob([new Uint8Array(blobSize)], { type: 'image/webp' }))
+    })
+  }
   globalThis.FileReader = MockFileReader as unknown as typeof FileReader
   globalThis.Image = MockImage as unknown as typeof Image
   vi.spyOn(document, 'createElement').mockImplementation(((tagName: string, options?: ElementCreationOptions) => {
     if (tagName === 'canvas') {
-      return {
-        width: 0,
-        height: 0,
-        getContext: () => ({
-          clearRect: vi.fn(),
-          drawImage: vi.fn()
-        }),
-        toBlob: (callback: BlobCallback) => {
-          callback(new Blob([new Uint8Array(blobSize)], { type: 'image/webp' }))
-        }
-      } as unknown as HTMLCanvasElement
+      return canvas as unknown as HTMLCanvasElement
     }
     return originalCreateElement(tagName, options)
   }) as typeof document.createElement)
+  return canvas
 }
 
 describe('ProfileAvatarCard', () => {
@@ -235,6 +237,64 @@ describe('ProfileAvatarCard', () => {
 
     const preview = wrapper.get('[data-testid="profile-avatar-preview"]')
     expect(preview.attributes('src')).toBe('data:image/webp;base64,Y29tcHJlc3NlZC1hdmF0YXI=')
+  })
+
+  it.each(['image/png', 'image/jpeg', 'image/webp', 'image/svg+xml', 'image/avif'])(
+    'rasterizes small %s uploads and bounds their dimensions', async (type) => {
+      const canvas = installAvatarCompressionMocks(8 * 1024, 3000, 2000)
+      authStoreState.user = createUser()
+      updateProfileMock.mockResolvedValue(createUser({ avatar_url: 'data:image/webp;base64,Y29tcHJlc3NlZC1hdmF0YXI=' }))
+      const wrapper = mount(ProfileAvatarCard, { props: { user: authStoreState.user } })
+      const input = wrapper.get('[data-testid="profile-avatar-file-input"]')
+      Object.defineProperty(input.element, 'files', {
+        value: [new File([new Uint8Array(1024)], 'avatar', { type })],
+        configurable: true
+      })
+
+      await input.trigger('change')
+      await flushAsyncWork()
+      expect(canvas.width).toBe(512)
+      expect(canvas.height).toBe(341)
+      expect(canvas.toBlob).toHaveBeenCalled()
+      await wrapper.get('[data-testid="profile-avatar-save"]').trigger('click')
+      expect(updateProfileMock).toHaveBeenCalledWith({ avatar_url: 'data:image/webp;base64,Y29tcHJlc3NlZC1hdmF0YXI=' })
+      expect(showErrorMock).not.toHaveBeenCalled()
+    }
+  )
+
+  it.each([[4097, 1], [3000, 2000]])('rejects a small GIF with oversized dimensions %ix%i', async (width, height) => {
+    const canvas = installAvatarCompressionMocks(1024, width, height)
+    authStoreState.user = createUser()
+    const wrapper = mount(ProfileAvatarCard, { props: { user: authStoreState.user } })
+    const input = wrapper.get('[data-testid="profile-avatar-file-input"]')
+    Object.defineProperty(input.element, 'files', {
+      value: [new File([new Uint8Array(1024)], 'avatar.gif', { type: 'image/gif' })],
+      configurable: true
+    })
+
+    await input.trigger('change')
+    await flushAsyncWork()
+    expect(showErrorMock).toHaveBeenCalledWith('profile.avatar.dimensionsTooLarge')
+    expect(canvas.toBlob).not.toHaveBeenCalled()
+    expect(wrapper.find('[data-testid="profile-avatar-preview"]').exists()).toBe(false)
+    expect(wrapper.get('[data-testid="profile-avatar-save"]').attributes('disabled')).toBeDefined()
+  })
+
+  it('keeps a small GIF within the dimension budget animated', async () => {
+    const canvas = installAvatarCompressionMocks(1024, 256, 256)
+    authStoreState.user = createUser()
+    const wrapper = mount(ProfileAvatarCard, { props: { user: authStoreState.user } })
+    const input = wrapper.get('[data-testid="profile-avatar-file-input"]')
+    Object.defineProperty(input.element, 'files', {
+      value: [new File([new Uint8Array(1024)], 'avatar.gif', { type: 'image/gif' })],
+      configurable: true
+    })
+
+    await input.trigger('change')
+    await flushAsyncWork()
+    expect(canvas.toBlob).not.toHaveBeenCalled()
+    expect(wrapper.get('[data-testid="profile-avatar-preview"]').attributes('src')).toMatch(/^data:image\/gif;/)
+    expect(showErrorMock).not.toHaveBeenCalled()
   })
 
   it('deletes the current avatar', async () => {

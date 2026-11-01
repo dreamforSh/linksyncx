@@ -975,6 +975,7 @@ export default {
       deleteSuccess: 'Avatar removed',
       invalidType: 'Please choose an image file',
       gifTooLarge: 'GIF avatars must already be 20KB or smaller',
+      dimensionsTooLarge: 'Avatar dimensions must not exceed 4096 pixels per side or 4,194,304 pixels in total.',
       compressTooLarge: 'Unable to compress this image below 20KB. Try a smaller image.',
       compressFailed: 'Failed to compress the selected image.',
       readFailed: 'Failed to read the selected image.',

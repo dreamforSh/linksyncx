@@ -37,6 +37,9 @@ var (
 	ErrAvatarInvalid            = infraerrors.BadRequest("AVATAR_INVALID", "avatar must be a valid image data URL or http(s) URL")
 	ErrAvatarTooLarge           = infraerrors.BadRequest("AVATAR_TOO_LARGE", "avatar image must be 100KB or smaller")
 	ErrAvatarNotImage           = infraerrors.BadRequest("AVATAR_NOT_IMAGE", "avatar content must be an image")
+	ErrAvatarDimensionsTooLarge = infraerrors.BadRequest("AVATAR_DIMENSIONS_TOO_LARGE", "avatar image must not exceed 4096 pixels per side or 4194304 pixels in total")
+	ErrAvatarWebPTooLarge       = infraerrors.BadRequest("AVATAR_WEBP_TOO_LARGE", "WebP avatars must be 20KB or smaller; use PNG, JPEG or GIF for server-side compression")
+	ErrAvatarTooComplex         = infraerrors.BadRequest("AVATAR_TOO_COMPLEX", "avatar JPEG must not contain more than 32 scans")
 	ErrIdentityProviderInvalid  = infraerrors.BadRequest("IDENTITY_PROVIDER_INVALID", "identity provider is invalid")
 	ErrIdentityRedirectInvalid  = infraerrors.BadRequest("IDENTITY_REDIRECT_INVALID", "identity redirect path is invalid")
 	ErrIdentityUnbindLastMethod = infraerrors.Conflict(
@@ -647,6 +650,9 @@ func normalizeInlineUserAvatarInput(raw string) (UpsertUserAvatarInput, error) {
 		return UpsertUserAvatarInput{}, ErrAvatarNotImage
 	}
 
+	if len(encoded) > base64.StdEncoding.EncodedLen(maxInlineAvatarBytes) {
+		return UpsertUserAvatarInput{}, ErrAvatarTooLarge
+	}
 	decoded, err := base64.StdEncoding.DecodeString(encoded)
 	if err != nil {
 		return UpsertUserAvatarInput{}, ErrAvatarInvalid
@@ -661,6 +667,8 @@ func normalizeInlineUserAvatarInput(raw string) (UpsertUserAvatarInput, error) {
 			return UpsertUserAvatarInput{}, err
 		}
 		raw = "data:" + contentType + ";base64," + base64.StdEncoding.EncodeToString(decoded)
+	} else if _, err := validateInlineAvatarImage(decoded); err != nil {
+		return UpsertUserAvatarInput{}, err
 	}
 
 	sum := sha256.Sum256(decoded)
@@ -674,19 +682,34 @@ func normalizeInlineUserAvatarInput(raw string) (UpsertUserAvatarInput, error) {
 }
 
 func compressInlineAvatar(decoded []byte) ([]byte, string, error) {
+	format, err := validateInlineAvatarImage(decoded)
+	if err != nil {
+		return nil, "", err
+	}
+	// VP8L Huffman tables (also used by WebP alpha) are not bounded by pixel
+	// dimensions. WebP avatars are only stored as validated, small uploads.
+	if format == "webp" {
+		return nil, "", ErrAvatarWebPTooLarge
+	}
+
 	src, _, err := image.Decode(bytes.NewReader(decoded))
 	if err != nil {
 		return nil, "", ErrAvatarInvalid
 	}
 
 	srcBounds := src.Bounds()
-	if srcBounds.Empty() {
-		return nil, "", ErrAvatarInvalid
+	if err := validateInlineAvatarDimensions(srcBounds.Dx(), srcBounds.Dy()); err != nil {
+		return nil, "", err
+	}
+	baseWidth, baseHeight := srcBounds.Dx(), srcBounds.Dy()
+	if longestSide := max(baseWidth, baseHeight); longestSide > maxCompressedAvatarDimension {
+		baseWidth = max(1, baseWidth*maxCompressedAvatarDimension/longestSide)
+		baseHeight = max(1, baseHeight*maxCompressedAvatarDimension/longestSide)
 	}
 
 	for _, scale := range avatarScaleSteps {
-		width := max(1, int(float64(srcBounds.Dx())*scale))
-		height := max(1, int(float64(srcBounds.Dy())*scale))
+		width := max(1, int(float64(baseWidth)*scale))
+		height := max(1, int(float64(baseHeight)*scale))
 		dst := image.NewRGBA(image.Rect(0, 0, width, height))
 		stddraw.Draw(dst, dst.Bounds(), &image.Uniform{C: color.White}, image.Point{}, stddraw.Src)
 		xdraw.CatmullRom.Scale(dst, dst.Bounds(), src, srcBounds, stddraw.Over, nil)
