@@ -1296,6 +1296,59 @@ export async function refreshOpenCodeGoUsage(id: number): Promise<OpenCodeGoUsag
   return data
 }
 
+export interface TicketCheckSettings {
+  enabled: boolean
+  stop_on_degraded: boolean
+  model?: string
+}
+
+export interface TicketCheckStatus {
+  account_id: number
+  settings: TicketCheckSettings
+  stopped: boolean
+  last_at?: string
+  last_state_length?: number
+  last_healthy?: boolean
+  last_error?: string
+  timezone?: string
+  timezone_ip?: string
+  timezone_mode?: string
+}
+
+export interface TicketProbeResult {
+  healthy: boolean
+  state_length: number
+  http_status: number
+  model: string
+  checked_at: string
+  error?: string
+}
+
+export async function getTicketCheck(id: number): Promise<TicketCheckStatus> {
+  const { data } = await apiClient.get<TicketCheckStatus>(`/admin/accounts/${id}/ticket-check`)
+  return data
+}
+
+export async function updateTicketCheck(id: number, settings: TicketCheckSettings): Promise<TicketCheckStatus> {
+  const { data } = await apiClient.put<TicketCheckStatus>(`/admin/accounts/${id}/ticket-check`, settings)
+  return data
+}
+
+export async function runTicketCheck(id: number): Promise<TicketProbeResult> {
+  const { data } = await apiClient.post<TicketProbeResult>(`/admin/accounts/${id}/ticket-check`)
+  return data
+}
+
+export async function getTicketProxyPool(): Promise<{ ids: number[] }> {
+  const { data } = await apiClient.get<{ ids: number[] }>('/admin/ticket-check/proxies')
+  return data
+}
+
+export async function updateTicketProxyPool(ids: number[]): Promise<{ ids: number[] }> {
+  const { data } = await apiClient.put<{ ids: number[] }>('/admin/ticket-check/proxies', { ids })
+  return data
+}
+
 export const accountsAPI = {
   list,
   listWithEtag,
@@ -1367,6 +1420,11 @@ export const accountsAPI = {
   setOllamaCloudUsageAutoRefresh,
   refreshOllamaCloudUsage,
   getOpenCodeGoUsageSettings,
+  getTicketCheck,
+  updateTicketCheck,
+  runTicketCheck,
+  getTicketProxyPool,
+  updateTicketProxyPool,
   updateOpenCodeGoUsageSettings,
   getOpenCodeGoUsage,
   setOpenCodeGoUsageAutoRefresh,

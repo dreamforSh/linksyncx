@@ -56,6 +56,10 @@ func (s *OpenAIGatewayService) relayOpenAICodexTurnState(c *gin.Context, account
 		return
 	}
 	c.Writer.Header().Set(canonical, state)
+	// 顺手缓存本回合的健康票据，供后续请求注入；降智票据（长度异常）不缓存。
+	if s != nil && account != nil {
+		s.recordCodexTurnTicket(account, state, "")
+	}
 	s.noteOpenAICodexTurnStateProvenance(c, account)
 }
 

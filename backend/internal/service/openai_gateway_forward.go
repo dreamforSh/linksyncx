@@ -29,6 +29,8 @@ func (s *OpenAIGatewayService) Forward(ctx context.Context, c *gin.Context, acco
 		return nil, filterErr
 	}
 	body = filteredBody
+	// Codex 请求环境时区改写：跟随账号出口 IP，避免客户端本地时区暴露。
+	body = normalizeOpenAIRequestLocale(account, body)
 	clearGrokResponsesClientToolMapping(c)
 	clearOpenAIResponsesClientToolMapping(c)
 	clearOpenAIResponsesNamespaceNames(c)
@@ -1469,6 +1471,8 @@ func (s *OpenAIGatewayService) buildUpstreamRequest(ctx context.Context, c *gin.
 	// 客户端回带的 x-codex-turn-state 若已知由其他账号铸造（failover 换号），
 	// 剥离后再出站——异账号 blob 与本账号的（指纹收敛后）出站身份自相矛盾。
 	s.guardOpenAICodexTurnStateEcho(c, account, req.Header)
+	// 注入账号级 Codex 票据（x-codex-turn-state），帮助上游命中满血线路。
+	s.applyCodexTurnTicketHeader(req.Header, account, body)
 	if account.UsesOpenAICodexProtocol() {
 		compatMessagesBridge := isOpenAICompatMessagesBridgeContext(c) || isOpenAICompatMessagesBridgeBody(body)
 		// 清除客户端透传的 session 头，后续用隔离后的值重新设置，防止跨用户会话碰撞。

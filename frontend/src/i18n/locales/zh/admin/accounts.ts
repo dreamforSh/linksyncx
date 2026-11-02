@@ -411,6 +411,23 @@ export default {
         balanceLow: '余额不足',
         noBalanceEndpoint: '该平台暂无余额查询接口',
       },
+      ticketCheck: {
+        title: '打票检测',
+        hint: '每 6 小时检测一次 Codex 票据，降智时可按设置暂停该账号的调用。',
+        stopTitle: '降智时临时停止调用',
+        stopHint: '检测到降智后暂停调度该账号；账号有到期时间则停到到期，否则保持停止，检测恢复健康后自动解除。',
+        runNow: '立即检测',
+        running: '检测中…',
+        saved: '打票检测设置已保存',
+        saveFailed: '保存打票检测设置失败',
+        runFailed: '打票检测失败',
+        lastAt: '上次检测：{time}',
+        lastState: '票据长度 {length}',
+        timezone: '出口时区：{tz}（{ip}）',
+        healthy: '健康',
+        degraded: '已降智',
+        stoppedBadge: '已暂停调用'
+      },
       opencodeGo: {
         accountMode: {
           zen: 'Zen',

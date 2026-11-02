@@ -1009,6 +1009,7 @@ var ProviderSet = wire.NewSet(
 	ProvideUpstreamBillingProbeService,
 	ProvideOllamaCloudUsageService,
 	ProvideOpenCodeGoUsageService,
+	ProvideTicketCheckService,
 	ProvideSettingService,
 	NewDataManagementService,
 	ProvideBackupService,

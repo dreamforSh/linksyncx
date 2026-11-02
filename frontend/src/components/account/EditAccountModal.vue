@@ -908,6 +908,76 @@
         </template>
       </div>
 
+      <!-- 打票检测（仅 OpenAI OAuth / ChatGPT 账号） -->
+      <div
+        v-if="isOpenAIOAuthAccount"
+        class="border-t border-gray-200 pt-4 dark:border-dark-600"
+        data-testid="ticket-check-card"
+      >
+        <div class="flex items-center justify-between gap-4">
+          <div class="min-w-0">
+            <label class="input-label mb-0">{{ t('admin.accounts.ticketCheck.title') }}</label>
+            <p class="mt-1 text-xs text-gray-500 dark:text-gray-400">
+              {{ t('admin.accounts.ticketCheck.hint') }}
+            </p>
+          </div>
+          <Toggle
+            :model-value="ticketCheckState?.settings.enabled ?? false"
+            :disabled="ticketCheckSaving"
+            data-testid="ticket-check-enabled"
+            :aria-label="t('admin.accounts.ticketCheck.title')"
+            @update:model-value="toggleTicketCheck"
+          />
+        </div>
+        <div
+          v-if="ticketCheckState?.settings.enabled"
+          class="mt-4 flex items-center justify-between gap-4"
+        >
+          <div class="min-w-0">
+            <label class="input-label mb-0">{{ t('admin.accounts.ticketCheck.stopTitle') }}</label>
+            <p class="mt-1 text-xs text-gray-500 dark:text-gray-400">
+              {{ t('admin.accounts.ticketCheck.stopHint') }}
+            </p>
+          </div>
+          <Toggle
+            :model-value="ticketCheckState?.settings.stop_on_degraded ?? true"
+            :disabled="ticketCheckSaving"
+            data-testid="ticket-check-stop"
+            :aria-label="t('admin.accounts.ticketCheck.stopTitle')"
+            @update:model-value="toggleTicketCheckStop"
+          />
+        </div>
+        <div
+          v-if="ticketCheckState?.settings.enabled"
+          class="mt-3 flex flex-wrap items-center gap-3 text-xs text-gray-500 dark:text-gray-400"
+        >
+          <button
+            type="button"
+            class="btn btn-secondary"
+            :disabled="ticketCheckRunning"
+            data-testid="ticket-check-run"
+            @click="runTicketCheckNow"
+          >
+            {{ ticketCheckRunning ? t('admin.accounts.ticketCheck.running') : t('admin.accounts.ticketCheck.runNow') }}
+          </button>
+          <span v-if="ticketCheckState?.stopped" class="text-amber-600 dark:text-amber-400">
+            {{ t('admin.accounts.ticketCheck.stoppedBadge') }}
+          </span>
+          <span v-if="ticketCheckState?.timezone">
+            {{ t('admin.accounts.ticketCheck.timezone', { tz: ticketCheckState.timezone, ip: ticketCheckState.timezone_ip || '-' }) }}
+          </span>
+          <span v-if="ticketCheckState?.last_at">
+            {{ t('admin.accounts.ticketCheck.lastAt', { time: formatTicketCheckTime(ticketCheckState.last_at) }) }}
+            <template v-if="ticketCheckState.last_state_length">
+              · {{ t('admin.accounts.ticketCheck.lastState', { length: ticketCheckState.last_state_length }) }}
+            </template>
+          </span>
+          <span v-if="ticketCheckResult" :class="ticketCheckResult.healthy ? 'text-emerald-600 dark:text-emerald-400' : 'text-amber-600 dark:text-amber-400'">
+            {{ ticketCheckResult.healthy ? t('admin.accounts.ticketCheck.healthy') : t('admin.accounts.ticketCheck.degraded') }}
+          </span>
+        </div>
+      </div>
+
       <!-- Upstream fields (only for upstream type) -->
       <div v-if="account.type === 'upstream'" class="space-y-4">
         <div>
@@ -3234,6 +3304,7 @@ import type {
   OpenCodeGoUsageWindow,
   ClashExitList
 } from '@/types'
+import type { TicketCheckStatus, TicketProbeResult } from '@/api/admin/accounts'
 import BaseDialog from '@/components/common/BaseDialog.vue'
 import ConfirmDialog from '@/components/common/ConfirmDialog.vue'
 import Select from '@/components/common/Select.vue'
@@ -3702,6 +3773,89 @@ const deviceProfileResetIdentity = ref(true)
 const headerOverrideCapable = computed(
   () => !!props.account && isHeaderOverrideCapable(props.account.platform, props.account.type)
 )
+
+// 打票检测（OpenAI OAuth）：账号级开关 + 降智时临时停止调用。
+const isOpenAIOAuthAccount = computed(
+  () => props.account?.platform === 'openai' && props.account?.type === 'oauth'
+)
+const ticketCheckState = ref<TicketCheckStatus | null>(null)
+const ticketCheckSaving = ref(false)
+const ticketCheckRunning = ref(false)
+const ticketCheckResult = ref<TicketProbeResult | null>(null)
+
+const formatTicketCheckTime = (raw?: string): string => {
+  if (!raw) return ''
+  const date = new Date(raw)
+  if (Number.isNaN(date.getTime())) return raw
+  return date.toLocaleString()
+}
+
+const loadTicketCheckState = async () => {
+  if (!isOpenAIOAuthAccount.value || !props.account) {
+    ticketCheckState.value = null
+    return
+  }
+  try {
+    ticketCheckState.value = await adminAPI.accounts.getTicketCheck(props.account.id)
+  } catch {
+    ticketCheckState.value = null
+  }
+}
+
+watch(
+  () => [props.account?.id, props.account?.platform, props.account?.type],
+  () => {
+    ticketCheckResult.value = null
+    void loadTicketCheckState()
+  },
+  { immediate: true }
+)
+
+const toggleTicketCheck = async (enabled: boolean) => {
+  if (!props.account || !ticketCheckState.value) return
+  ticketCheckSaving.value = true
+  try {
+    ticketCheckState.value = await adminAPI.accounts.updateTicketCheck(props.account.id, {
+      ...ticketCheckState.value.settings,
+      enabled
+    })
+    appStore.showSuccess(t('admin.accounts.ticketCheck.saved'))
+  } catch (error) {
+    appStore.showError(extractApiErrorMessage(error, t('admin.accounts.ticketCheck.saveFailed')))
+  } finally {
+    ticketCheckSaving.value = false
+  }
+}
+
+const toggleTicketCheckStop = async (stop: boolean) => {
+  if (!props.account || !ticketCheckState.value) return
+  ticketCheckSaving.value = true
+  try {
+    ticketCheckState.value = await adminAPI.accounts.updateTicketCheck(props.account.id, {
+      ...ticketCheckState.value.settings,
+      stop_on_degraded: stop
+    })
+    appStore.showSuccess(t('admin.accounts.ticketCheck.saved'))
+  } catch (error) {
+    appStore.showError(extractApiErrorMessage(error, t('admin.accounts.ticketCheck.saveFailed')))
+  } finally {
+    ticketCheckSaving.value = false
+  }
+}
+
+const runTicketCheckNow = async () => {
+  if (!props.account) return
+  ticketCheckRunning.value = true
+  try {
+    ticketCheckResult.value = await adminAPI.accounts.runTicketCheck(props.account.id)
+    await loadTicketCheckState()
+    emit('updated', { ...props.account })
+  } catch (error) {
+    appStore.showError(extractApiErrorMessage(error, t('admin.accounts.ticketCheck.runFailed')))
+  } finally {
+    ticketCheckRunning.value = false
+  }
+}
 
 // Grok OAuth 自定义上游地址（仅转发端点；OAuth 授权/令牌刷新不受影响）
 const grokOAuthCustomBaseUrlEnabled = ref(false)

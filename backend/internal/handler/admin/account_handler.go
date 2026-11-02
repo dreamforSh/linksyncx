@@ -70,6 +70,7 @@ type AccountHandler struct {
 	identityService         *service.IdentityService
 	settingService          *service.SettingService
 	codeBuddyOAuthService   *service.CodeBuddyOAuthService
+	ticketCheck             *service.TicketCheckService
 }
 
 // SetCodeBuddyOAuthService attaches the CodeBuddy credential service used by

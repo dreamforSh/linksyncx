@@ -56,9 +56,11 @@ func ProvideAdminHandlers(
 	identityService *service.IdentityService,
 	settingService *service.SettingService,
 	codeBuddyOAuthService *service.CodeBuddyOAuthService,
+	ticketCheckService *service.TicketCheckService,
 ) *AdminHandlers {
 	accountHandler.SetUpstreamBillingProbeService(upstreamBillingProbe)
 	accountHandler.SetCodeBuddyOAuthService(codeBuddyOAuthService)
+	accountHandler.SetTicketCheckService(ticketCheckService)
 	accountHandler.SetOllamaCloudUsageService(ollamaCloudUsage)
 	accountHandler.SetOpenCodeGoUsageService(opencodeGoUsage)
 	accountHandler.SetIdentityService(identityService)
