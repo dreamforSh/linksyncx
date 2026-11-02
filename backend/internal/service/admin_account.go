@@ -720,6 +720,21 @@ func (s *adminServiceImpl) UpdateAccount(ctx context.Context, id int64, input *U
 			OpenCodeGoUsageSnapshotExtraKey,
 			// Claude 限流快照由响应头按栅栏写入，编辑弹窗回传的旧副本不能覆盖它
 			claudeRateLimitExtraKey,
+			// 打票检测、票据与出口时区均由后端任务写入，编辑弹窗回传的旧副本不能覆盖
+			OpenAITicketCheckEnabledExtraKey,
+			OpenAITicketCheckStopExtraKey,
+			OpenAITicketCheckModelExtraKey,
+			OpenAITicketCheckLastAtExtraKey,
+			OpenAITicketCheckLastLenExtraKey,
+			OpenAITicketCheckLastHealthyExtraKey,
+			OpenAITicketCheckLastErrorExtraKey,
+			OpenAITicketCheckStoppedExtraKey,
+			codexTurnTicketExtraKey,
+			codexTurnTicketModelExtraKey,
+			codexTurnTicketAtExtraKey,
+			openAIRequestTimezoneExtraKey,
+			openAIRequestTimezoneModeExtraKey,
+			openAIRequestTimezoneDetectedExtraKey,
 		} {
 			if v, ok := account.Extra[key]; ok {
 				normalizedExtra[key] = v
