@@ -52,6 +52,13 @@ export default {
       },
       clashManagedHint: '由 Clash 订阅托管，请在 Clash 订阅页管理',
       createProxy: '添加代理',
+      ticketPool: '打票代理池',
+      ticketPoolTitle: '打票代理池',
+      ticketPoolHint: '勾选参与打票检测的代理；账号被判定降智后会用这些代理轮换探测。',
+      ticketPoolEmpty: '当前页没有可选的代理',
+      ticketPoolSaved: '打票代理池已保存',
+      ticketPoolSaveFailed: '保存打票代理池失败',
+      ticketPoolLoadFailed: '加载打票代理池失败',
       editProxy: '编辑代理',
       deleteProxy: '删除代理',
       ad: {

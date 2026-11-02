@@ -88,6 +88,10 @@
             <button @click="showExportDataDialog = true" class="btn btn-secondary">
               {{ selectedCount > 0 ? t('admin.proxies.dataExportSelected') : t('admin.proxies.dataExport') }}
             </button>
+            <button @click="openTicketPool" class="btn btn-secondary" data-testid="ticket-pool-open">
+              <Icon name="shield" size="md" class="mr-2" />
+              {{ t('admin.proxies.ticketPool') }}
+            </button>
             <button @click="showCreateModal = true" class="btn btn-primary">
               <Icon name="plus" size="md" class="mr-2" />
               {{ t('admin.proxies.createProxy') }}
@@ -977,6 +981,41 @@
         </div>
       </template>
     </BaseDialog>
+
+    <BaseDialog
+      :show="showTicketPool"
+      :title="t('admin.proxies.ticketPoolTitle')"
+      width="normal"
+      @close="showTicketPool = false"
+    >
+      <div class="space-y-3">
+        <p class="text-xs text-gray-500 dark:text-gray-400">{{ t('admin.proxies.ticketPoolHint') }}</p>
+        <div class="max-h-80 space-y-2 overflow-y-auto" data-testid="ticket-pool-list">
+          <label
+            v-for="proxy in ticketPoolCandidates"
+            :key="proxy.id"
+            class="flex items-center gap-3 rounded-lg border border-gray-200 px-3 py-2 dark:border-dark-600"
+          >
+            <input v-model="ticketPoolDraft" type="checkbox" :value="proxy.id" class="checkbox" />
+            <span class="text-sm text-gray-900 dark:text-gray-100">{{ proxy.name }}</span>
+            <span class="text-xs text-gray-400">{{ proxy.protocol }}://{{ proxy.host }}:{{ proxy.port }}</span>
+          </label>
+          <p v-if="ticketPoolCandidates.length === 0" class="text-xs text-gray-400">
+            {{ t('admin.proxies.ticketPoolEmpty') }}
+          </p>
+        </div>
+      </div>
+      <template #footer>
+        <div class="flex justify-end gap-2">
+          <button type="button" class="btn btn-secondary" @click="showTicketPool = false">
+            {{ t('common.cancel') }}
+          </button>
+          <button type="button" class="btn btn-primary" :disabled="ticketPoolSaving" @click="saveTicketPool">
+            {{ t('common.save') }}
+          </button>
+        </div>
+      </template>
+    </BaseDialog>
   </AppLayout>
 </template>
 
@@ -1001,6 +1040,7 @@ import ProxyAdBanner from '@/components/common/ProxyAdBanner.vue'
 import Icon from '@/components/icons/Icon.vue'
 import PlatformTypeBadge from '@/components/common/PlatformTypeBadge.vue'
 import { useClipboard } from '@/composables/useClipboard'
+import { extractApiErrorMessage } from '@/utils/apiError'
 import { useSwipeSelect } from '@/composables/useSwipeSelect'
 import { useTableSelection } from '@/composables/useTableSelection'
 import { getPersistedPageSize } from '@/composables/usePersistedPageSize'
@@ -1010,6 +1050,34 @@ import { proxyExpiryBadgeClass, proxyExpiryLabelKey } from '@/utils/proxyExpiry'
 const { t } = useI18n()
 const appStore = useAppStore()
 const { copyToClipboard } = useClipboard()
+
+const showTicketPool = ref(false)
+const ticketPoolDraft = ref<number[]>([])
+const ticketPoolSaving = ref(false)
+const ticketPoolCandidates = computed(() => proxies.value)
+
+const openTicketPool = async () => {
+  try {
+    const pool = await adminAPI.accounts.getTicketProxyPool()
+    ticketPoolDraft.value = [...(pool?.ids ?? [])]
+    showTicketPool.value = true
+  } catch (error) {
+    appStore.showError(extractApiErrorMessage(error, t('admin.proxies.ticketPoolLoadFailed')))
+  }
+}
+
+const saveTicketPool = async () => {
+  ticketPoolSaving.value = true
+  try {
+    await adminAPI.accounts.updateTicketProxyPool(ticketPoolDraft.value)
+    showTicketPool.value = false
+    appStore.showSuccess(t('admin.proxies.ticketPoolSaved'))
+  } catch (error) {
+    appStore.showError(extractApiErrorMessage(error, t('admin.proxies.ticketPoolSaveFailed')))
+  } finally {
+    ticketPoolSaving.value = false
+  }
+}
 
 const columns = computed<Column[]>(() => [
   { key: 'select', label: '', sortable: false },

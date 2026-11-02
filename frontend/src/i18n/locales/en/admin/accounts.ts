@@ -205,6 +205,23 @@ export default {
         balanceLow: 'Insufficient balance',
         noBalanceEndpoint: 'This platform has no balance query endpoint',
       },
+      ticketCheck: {
+        title: 'Ticket check',
+        hint: 'Probe the Codex turn-state ticket every 6 hours and optionally pause this account when it is degraded.',
+        stopTitle: 'Pause when degraded',
+        stopHint: 'Stop scheduling this account after a degraded probe. It stays paused until the account expiry (or indefinitely), and resumes automatically once a probe is healthy again.',
+        runNow: 'Check now',
+        running: 'Checking…',
+        saved: 'Ticket check settings saved',
+        saveFailed: 'Failed to save ticket check settings',
+        runFailed: 'Ticket check failed',
+        lastAt: 'Last check: {time}',
+        lastState: 'ticket length {length}',
+        timezone: 'Exit timezone: {tz} ({ip})',
+        healthy: 'Healthy',
+        degraded: 'Degraded',
+        stoppedBadge: 'Paused'
+      },
       opencodeGo: {
         accountMode: {
           zen: 'Zen',

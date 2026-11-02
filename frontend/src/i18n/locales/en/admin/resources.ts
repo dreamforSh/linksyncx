@@ -52,6 +52,13 @@ export default {
       title: 'Proxy Management',
       description: 'Manage proxy servers for accounts',
       createProxy: 'Create Proxy',
+      ticketPool: 'Ticket proxy pool',
+      ticketPoolTitle: 'Ticket proxy pool',
+      ticketPoolHint: 'Proxies used for ticket probes; degraded accounts rotate through this pool.',
+      ticketPoolEmpty: 'No proxies on this page',
+      ticketPoolSaved: 'Ticket proxy pool saved',
+      ticketPoolSaveFailed: 'Failed to save ticket proxy pool',
+      ticketPoolLoadFailed: 'Failed to load ticket proxy pool',
       editProxy: 'Edit Proxy',
       deleteProxy: 'Delete Proxy',
       ad: {
