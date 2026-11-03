@@ -229,7 +229,7 @@ func (s *TicketCheckService) CheckAccount(ctx context.Context, account *Account)
 		if account.ExpiresAt != nil && account.ExpiresAt.After(time.Now()) {
 			until = *account.ExpiresAt
 		}
-		if err := s.accountRepo.SetTempUnschedulable(ctx, account.ID, until, "打票检测：账号降智，已暂停调用"); err != nil {
+		if err := s.accountRepo.SetTempUnschedulable(ctx, account.ID, until, ticketCheckStopReasonPrefix + "：账号降智，已暂停调用"); err != nil {
 			logger.LegacyPrintf("service.ticket_check", "account %d set temp unschedulable failed: err=%v", account.ID, err)
 		} else {
 			updates[OpenAITicketCheckStoppedExtraKey] = true
@@ -280,12 +280,28 @@ func (s *TicketCheckService) UpdateSettings(ctx context.Context, accountID int64
 	return s.accountRepo.UpdateExtra(ctx, accountID, updates)
 }
 
+// ticketCheckStopReasonPrefix 标记由打票检测写入的临时停用原因，用来区分
+// 管理员手工停用 / 401 冷却等其他来源。
+const ticketCheckStopReasonPrefix = "打票检测"
+
+// ticketCheckStopped 判断账号当前是否因打票检测而被停用。
+//
+// 以账号自身的临时停用字段为准而不是只看 extra 里的标记：管理员在界面上
+// "重置临时停用" 只会清 temp_unschedulable_*，extra 标记会残留；如果继续
+// 信任残留标记，账号明明可调度却会被判定为"已停用"，于是既不会重新停用、
+// 探测也永远走打票代理池。
 func ticketCheckStopped(account *Account) bool {
-	if account == nil || account.Extra == nil {
+	if account == nil {
 		return false
 	}
-	stopped, _ := account.Extra[OpenAITicketCheckStoppedExtraKey].(bool)
-	return stopped
+	if account.TempUnschedulableUntil != nil && time.Now().Before(*account.TempUnschedulableUntil) {
+		return strings.HasPrefix(account.TempUnschedulableReason, ticketCheckStopReasonPrefix)
+	}
+	if account.Extra == nil {
+		return false
+	}
+	// 账号已经被恢复调度，残留标记一律忽略。
+	return false
 }
 
 // TicketCheckStatus 是给管理端展示的打票检测状态。
