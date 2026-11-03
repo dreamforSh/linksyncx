@@ -426,6 +426,8 @@ export default {
         timezone: '出口时区：{tz}（{ip}）',
         healthy: '健康',
         degraded: '已降智',
+        probeFailed: '检测失败',
+        lastError: '最近错误：{error}',
         stoppedBadge: '已暂停调用'
       },
       opencodeGo: {

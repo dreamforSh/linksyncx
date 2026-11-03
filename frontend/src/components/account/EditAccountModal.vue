@@ -972,8 +972,18 @@
               · {{ t('admin.accounts.ticketCheck.lastState', { length: ticketCheckState.last_state_length }) }}
             </template>
           </span>
-          <span v-if="ticketCheckResult" :class="ticketCheckResult.healthy ? 'text-emerald-600 dark:text-emerald-400' : 'text-amber-600 dark:text-amber-400'">
-            {{ ticketCheckResult.healthy ? t('admin.accounts.ticketCheck.healthy') : t('admin.accounts.ticketCheck.degraded') }}
+          <span
+            v-if="ticketCheckState?.last_error"
+            class="text-amber-600 dark:text-amber-400"
+            data-testid="ticket-check-last-error"
+          >
+            {{ t('admin.accounts.ticketCheck.lastError', { error: ticketCheckState.last_error }) }}
+          </span>
+          <span v-if="ticketCheckResult" :class="ticketCheckResultClass" data-testid="ticket-check-result">
+            {{ ticketCheckResultText }}
+            <template v-if="ticketCheckProbeFailed && ticketCheckResult.error">
+              · {{ ticketCheckResult.error }}
+            </template>
           </span>
         </div>
       </div>
@@ -3783,6 +3793,26 @@ const ticketCheckSaving = ref(false)
 const ticketCheckRunning = ref(false)
 const ticketCheckResult = ref<TicketProbeResult | null>(null)
 
+// 探测本身失败（403/Cloudflare 拦截、超时、缺票据头）不是"降智"判定：
+// 后者必须真的有票据长度。混在一起会把网络问题误报成降智。
+const ticketCheckProbeFailed = computed(() => {
+  const result = ticketCheckResult.value
+  return !!result && !result.healthy && (!!result.error || !result.state_length)
+})
+const ticketCheckResultText = computed(() => {
+  const result = ticketCheckResult.value
+  if (!result) return ''
+  if (ticketCheckProbeFailed.value) return t('admin.accounts.ticketCheck.probeFailed')
+  return result.healthy
+    ? t('admin.accounts.ticketCheck.healthy')
+    : t('admin.accounts.ticketCheck.degraded')
+})
+const ticketCheckResultClass = computed(() =>
+  ticketCheckProbeFailed.value || !ticketCheckResult.value?.healthy
+    ? 'text-amber-600 dark:text-amber-400'
+    : 'text-emerald-600 dark:text-emerald-400'
+)
+
 const formatTicketCheckTime = (raw?: string): string => {
   if (!raw) return ''
   const date = new Date(raw)
@@ -3802,10 +3832,19 @@ const loadTicketCheckState = async () => {
   }
 }
 
+// 只在切换到另一个账号时清空本次检测结果。用数组 getter 会在账号对象被父组件
+// 刷新时（每次 emit('updated') 都会发生）重新触发，把刚显示的结果瞬间清掉，
+// 看起来就像"提示闪一下就消失"。
 watch(
-  () => [props.account?.id, props.account?.platform, props.account?.type],
+  () => props.account?.id,
+  (id, previousId) => {
+    if (id !== previousId) ticketCheckResult.value = null
+  },
+  { immediate: true }
+)
+watch(
+  () => [props.account?.id, props.account?.platform, props.account?.type].join('|'),
   () => {
-    ticketCheckResult.value = null
     void loadTicketCheckState()
   },
   { immediate: true }

@@ -220,6 +220,8 @@ export default {
         timezone: 'Exit timezone: {tz} ({ip})',
         healthy: 'Healthy',
         degraded: 'Degraded',
+        probeFailed: 'Check failed',
+        lastError: 'Last error: {error}',
         stoppedBadge: 'Paused'
       },
       opencodeGo: {

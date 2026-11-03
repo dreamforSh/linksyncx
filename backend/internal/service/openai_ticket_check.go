@@ -164,6 +164,14 @@ func (s *OpenAIGatewayService) ProbeOpenAITicket(ctx context.Context, account *A
 	if resp == nil {
 		return result, fmt.Errorf("probe request returned no response")
 	}
+	// 非 200 时读一小段响应体，用来区分「Cloudflare/风控拦截页」和普通上游错误，
+	// 否则管理员只看到一个 403，无从判断是账号降智还是出口 IP 被封。
+	var probeBody string
+	if resp.StatusCode != http.StatusOK && resp.Body != nil {
+		if raw, err := io.ReadAll(io.LimitReader(resp.Body, 512)); err == nil {
+			probeBody = summarizeOpenAITicketProbeBody(raw)
+		}
+	}
 	defer func() {
 		if resp.Body != nil {
 			_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 1<<20))
@@ -177,11 +185,32 @@ func (s *OpenAIGatewayService) ProbeOpenAITicket(ctx context.Context, account *A
 	result.StateLength = len(state)
 	result.Healthy = resp.StatusCode == http.StatusOK && result.StateLength >= OpenAITicketCheckStateMinHealthy && result.StateLength <= OpenAITicketCheckStateMaxHealthy
 	if resp.StatusCode != http.StatusOK {
-		result.Error = fmt.Sprintf("upstream returned HTTP %d", resp.StatusCode)
+		if probeBody != "" {
+			result.Error = fmt.Sprintf("upstream returned HTTP %d (%s)", resp.StatusCode, probeBody)
+		} else {
+			result.Error = fmt.Sprintf("upstream returned HTTP %d", resp.StatusCode)
+		}
 		return result, nil
 	}
 	if state == "" {
 		result.Error = "missing x-codex-turn-state header"
 	}
 	return result, nil
+}
+
+// summarizeOpenAITicketProbeBody 把探测响应体压缩成一行人话，用于界面提示。
+func summarizeOpenAITicketProbeBody(raw []byte) string {
+	text := strings.ToLower(string(raw))
+	switch {
+	case strings.Contains(text, "cloudflare") || strings.Contains(text, "cf-error") ||
+		strings.Contains(text, "just a moment") || strings.Contains(text, "<html"):
+		return "blocked by Cloudflare/HTML challenge page; the exit IP is likely blocked"
+	case strings.Contains(text, "unauthorized") || strings.Contains(text, "invalid_token"):
+		return "access token rejected"
+	}
+	printable := strings.Join(strings.Fields(string(raw)), " ")
+	if len(printable) > 120 {
+		printable = printable[:120] + "..."
+	}
+	return printable
 }

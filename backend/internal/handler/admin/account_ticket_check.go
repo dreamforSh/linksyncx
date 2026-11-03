@@ -83,6 +83,12 @@ func (h *AccountHandler) RunTicketCheck(c *gin.Context) {
 		return
 	}
 	result, err := h.ticketCheck.RunNow(c.Request.Context(), accountID)
+	// 探测本身失败（出口连不上、Cloudflare 拦截、缺票据头）时，结果里已经带着
+	// 可读原因；这类失败不该伪装成 500，前端要能展示「检测失败 + 原因」。
+	if err != nil && (result.Error != "" || result.HTTPStatus != 0) {
+		response.Success(c, result)
+		return
+	}
 	if err != nil {
 		response.ErrorFrom(c, err)
 		return
