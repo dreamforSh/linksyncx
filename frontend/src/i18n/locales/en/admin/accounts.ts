@@ -221,6 +221,9 @@ export default {
         healthy: 'Healthy',
         degraded: 'Degraded',
         probeFailed: 'Check failed',
+        modelTitle: 'Check model',
+        modelHint: 'Left empty it falls back to the account model mapping and finally gpt-5.4, which ChatGPT accounts reject; set a Codex model such as gpt-6-astra.',
+        modelPlaceholder: 'e.g. gpt-6-astra',
         lastError: 'Last error: {error}',
         stoppedBadge: 'Paused'
       },

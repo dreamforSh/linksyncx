@@ -427,6 +427,9 @@ export default {
         healthy: '健康',
         degraded: '已降智',
         probeFailed: '检测失败',
+        modelTitle: '检测模型',
+        modelHint: '留空会按账号模型映射回落，最后是 gpt-5.4；ChatGPT 账号不接受该模型，建议填 gpt-6-astra 等 Codex 模型。',
+        modelPlaceholder: '例如 gpt-6-astra',
         lastError: '最近错误：{error}',
         stoppedBadge: '已暂停调用'
       },
