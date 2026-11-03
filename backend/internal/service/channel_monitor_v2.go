@@ -777,9 +777,13 @@ func normalizeChannelMonitorV2Config(cfg *ChannelMonitorV2Config) error {
 			return fmt.Errorf("%w: duplicate platform %s", ErrChannelMonitorV2InvalidConfig, p.Platform)
 		}
 		seen[p.Platform] = struct{}{}
-		p.Models = normalizeStringSet(p.Models)
+		// 模型名单保留管理员输入的顺序：排序会让"点一下开关就整列重排"，
+		// 看起来像配置自己在变。只去重，不改序。
+		p.Models = normalizeStringList(p.Models)
 	}
+	// 平台行按名字排序，保证每次读取顺序一致（models 不排序，见上）。
 	sort.Slice(cfg.Platforms, func(i, j int) bool { return cfg.Platforms[i].Platform < cfg.Platforms[j].Platform })
+
 	return nil
 }
 
@@ -904,6 +908,24 @@ func ChannelMonitorV2IgnoredCategorySet(cfg ChannelMonitorV2Config) map[string]s
 		set[c] = struct{}{}
 	}
 	return set
+}
+
+// normalizeStringList 去重并保留输入顺序（配置类名单用它，不要用会排序的版本）。
+func normalizeStringList(values []string) []string {
+	seen := make(map[string]struct{}, len(values))
+	out := make([]string, 0, len(values))
+	for _, value := range values {
+		value = strings.TrimSpace(value)
+		if value == "" {
+			continue
+		}
+		if _, ok := seen[value]; ok {
+			continue
+		}
+		seen[value] = struct{}{}
+		out = append(out, value)
+	}
+	return out
 }
 
 func normalizeStringSet(values []string) []string {

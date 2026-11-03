@@ -158,8 +158,9 @@ func (r *channelMonitorV2Repository) GetDimensions(ctx context.Context, filter s
 		count    int64
 	}
 	groupCounts := map[int64]groupValue{}
+	// 平台的筛选选项只来自"真的有分组"的平台：没有分组的平台不会有流量，
+	// 列出来只是噪音。分组信息在下面 loadChannelMonitorV2GroupInfo 之后补齐。
 	for _, platform := range channelMonitorV2EnabledPlatforms(cfg) {
-		platformCounts[platform] += 0
 		for _, p := range cfg.Platforms {
 			if p.Platform != platform || len(p.Models) == 0 {
 				continue
@@ -175,6 +176,22 @@ func (r *channelMonitorV2Repository) GetDimensions(ctx context.Context, filter s
 	}
 	for groupID, info := range groupInfo {
 		groupCounts[groupID] = groupValue{name: info.name, platform: info.platform, count: 0}
+	}
+	// 平台筛选只列出"该监控范围内真的有分组"的平台：没有分组的平台永远没流量，
+	// 列出来是噪音。cfg.GroupIDs 为空表示全部启用分组。
+	if scopedPlatforms, err := r.loadChannelMonitorV2ScopedPlatforms(ctx, configuredChannelMonitorV2GroupIDs(catalogFilter, cfg)); err == nil {
+		enabled := map[string]struct{}{}
+		for _, platform := range channelMonitorV2EnabledPlatforms(cfg) {
+			enabled[platform] = struct{}{}
+		}
+		for _, platform := range scopedPlatforms {
+			if _, ok := enabled[platform]; !ok {
+				continue
+			}
+			if _, ok := platformCounts[platform]; !ok {
+				platformCounts[platform] = 0
+			}
+		}
 	}
 	for rows.Next() {
 		var platform, groupName, groupPlatform, model string
@@ -213,9 +230,26 @@ func (r *channelMonitorV2Repository) GetDimensions(ctx context.Context, filter s
 	for id, value := range groupCounts {
 		result.Groups = append(result.Groups, service.ChannelMonitorV2GroupDimension{ID: id, Name: value.name, Platform: value.platform, RequestCount: value.count})
 	}
-	sort.Slice(result.Platforms, func(i, j int) bool { return result.Platforms[i].RequestCount > result.Platforms[j].RequestCount })
-	sort.Slice(result.Models, func(i, j int) bool { return result.Models[i].RequestCount > result.Models[j].RequestCount })
-	sort.Slice(result.Groups, func(i, j int) bool { return result.Groups[i].RequestCount > result.Groups[j].RequestCount })
+	// 排序必须完全确定：先按请求量降序，量相同时按名字/ID 升序，
+	// 否则同一次点击刷新后选项顺序会跳（map 迭代顺序随机）。
+	sort.Slice(result.Platforms, func(i, j int) bool {
+		if result.Platforms[i].RequestCount != result.Platforms[j].RequestCount {
+			return result.Platforms[i].RequestCount > result.Platforms[j].RequestCount
+		}
+		return result.Platforms[i].Value < result.Platforms[j].Value
+	})
+	sort.Slice(result.Models, func(i, j int) bool {
+		if result.Models[i].RequestCount != result.Models[j].RequestCount {
+			return result.Models[i].RequestCount > result.Models[j].RequestCount
+		}
+		return result.Models[i].Value < result.Models[j].Value
+	})
+	sort.Slice(result.Groups, func(i, j int) bool {
+		if result.Groups[i].RequestCount != result.Groups[j].RequestCount {
+			return result.Groups[i].RequestCount > result.Groups[j].RequestCount
+		}
+		return result.Groups[i].ID < result.Groups[j].ID
+	})
 	return result, rows.Err()
 }
 
@@ -659,6 +693,31 @@ func (r *channelMonitorV2Repository) listActiveGroupIDs(ctx context.Context) ([]
 		ids = append(ids, id)
 	}
 	return ids, rows.Err()
+}
+
+// loadChannelMonitorV2ScopedPlatforms 返回监控范围内实际存在的分组平台。
+// groupIDs 为空表示不按分组过滤（即全部启用分组）。
+func (r *channelMonitorV2Repository) loadChannelMonitorV2ScopedPlatforms(ctx context.Context, groupIDs []int64) ([]string, error) {
+	query := `SELECT DISTINCT lower(COALESCE(NULLIF(TRIM(platform), ''), 'unknown')) FROM groups WHERE deleted_at IS NULL AND status = 'active'`
+	args := []any{}
+	if len(groupIDs) > 0 {
+		query += ` AND id = ANY($1)`
+		args = append(args, pq.Array(groupIDs))
+	}
+	rows, err := r.db.QueryContext(ctx, query, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = rows.Close() }()
+	var out []string
+	for rows.Next() {
+		var platform string
+		if err := rows.Scan(&platform); err != nil {
+			return nil, err
+		}
+		out = append(out, platform)
+	}
+	return out, rows.Err()
 }
 
 func (r *channelMonitorV2Repository) loadChannelMonitorV2GroupInfo(ctx context.Context, groupIDs []int64) (map[int64]channelMonitorV2GroupInfo, error) {

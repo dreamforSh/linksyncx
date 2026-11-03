@@ -49,6 +49,13 @@ func (s *OpenAIGatewayService) DetectOpenAIRequestTimezone(ctx context.Context, 
 		_ = s.persistOpenAIRequestTimezone(ctx, account, result)
 		return result, fmt.Errorf("exit ip lookup returned no response")
 	}
+	// ip-api 在限流时返回 429 且响应体为空，直接解 JSON 会得到
+	// "unexpected end of JSON input"，看不出是限流。先看状态码再解码。
+	if resp.StatusCode != http.StatusOK {
+		result.Error = fmt.Sprintf("exit ip lookup returned HTTP %d", resp.StatusCode)
+		_ = s.persistOpenAIRequestTimezone(ctx, account, result)
+		return result, fmt.Errorf("%s", result.Error)
+	}
 	defer func() { _ = resp.Body.Close() }()
 	raw, err := io.ReadAll(io.LimitReader(resp.Body, 64*1024))
 	if err != nil {
@@ -66,7 +73,8 @@ func (s *OpenAIGatewayService) DetectOpenAIRequestTimezone(ctx context.Context, 
 		Query      string `json:"query"`
 	}
 	if err := json.Unmarshal(raw, &payload); err != nil {
-		result.Error = fmt.Sprintf("decode exit ip response: %v", err)
+		result.Error = fmt.Sprintf("decode exit ip response: %v (body=%q)", err, truncateForLog(raw, 120))
+		_ = s.persistOpenAIRequestTimezone(ctx, account, result)
 		return result, err
 	}
 	result.IP = payload.Query
