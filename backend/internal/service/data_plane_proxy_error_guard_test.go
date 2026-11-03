@@ -59,6 +59,9 @@ var proxyURLResolvers = map[string]bool{
 	"vertexServiceAccountProxyURL": true,
 	// AccountTestService 的方法，调用方都在账号测试里（不受检）；登记它只是为了让上面的规则没有例外。
 	"grokTestProxyURL": true,
+	// 打票检测按"停用后走代理池、否则走账号代理"选出口，两种分支都只是把解析器的结果返回；
+	// 调用方是探测（ProbeOpenAITicket），没有换号循环，错误会写进检测结果而不是终态。
+	"resolveProbeProxy": true,
 }
 
 // primitiveProxyURLResolvers 是自己完成解析、不委托给其它解析函数的那几个；其余登记项必须确实是委托包装。
@@ -95,6 +98,7 @@ var rawProxyErrorAllowlist = map[string]string{
 	"OpenAIGatewayService.ProbeGrokRealtime":                      "握手探测，不是转发",
 	"GeminiMessagesCompatService.ForwardAIStudioGET":              "模型列表 GET，handler 直接回 502",
 	"AntigravityGatewayService.TestConnection":                    "账号测试，不是转发",
+	"OpenAIGatewayService.DetectOpenAIRequestTimezone":            "出口时区探测，不是转发：失败只记录检测结果并沿用上次时区",
 }
 
 // rawProxyErrorHelpers 是解析代理后把错误原样交给调用方、自己却不是委托包装的包级函数（无 receiver）。

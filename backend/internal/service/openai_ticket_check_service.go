@@ -229,7 +229,7 @@ func (s *TicketCheckService) CheckAccount(ctx context.Context, account *Account)
 		if account.ExpiresAt != nil && account.ExpiresAt.After(time.Now()) {
 			until = *account.ExpiresAt
 		}
-		if err := s.accountRepo.SetTempUnschedulable(ctx, account.ID, until, ticketCheckStopReasonPrefix + "：账号降智，已暂停调用"); err != nil {
+		if err := s.accountRepo.SetTempUnschedulable(ctx, account.ID, until, ticketCheckStopReasonPrefix+"：账号降智，已暂停调用"); err != nil {
 			logger.LegacyPrintf("service.ticket_check", "account %d set temp unschedulable failed: err=%v", account.ID, err)
 		} else {
 			updates[OpenAITicketCheckStoppedExtraKey] = true
