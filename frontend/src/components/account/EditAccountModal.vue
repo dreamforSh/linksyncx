@@ -949,6 +949,26 @@
         </div>
         <div
           v-if="ticketCheckState?.settings.enabled"
+          class="mt-4 flex flex-wrap items-center justify-between gap-3"
+        >
+          <div class="min-w-0 flex-1">
+            <label class="input-label mb-0">{{ t('admin.accounts.ticketCheck.modelTitle') }}</label>
+            <p class="mt-1 text-xs text-gray-500 dark:text-gray-400">
+              {{ t('admin.accounts.ticketCheck.modelHint') }}
+            </p>
+          </div>
+          <input
+            v-model="ticketCheckModelDraft"
+            class="input w-56"
+            :disabled="ticketCheckSaving"
+            data-testid="ticket-check-model"
+            :placeholder="t('admin.accounts.ticketCheck.modelPlaceholder')"
+            @blur="saveTicketCheckModel"
+            @keyup.enter="saveTicketCheckModel"
+          />
+        </div>
+        <div
+          v-if="ticketCheckState?.settings.enabled"
           class="mt-3 flex flex-wrap items-center gap-3 text-xs text-gray-500 dark:text-gray-400"
         >
           <button
@@ -3792,6 +3812,27 @@ const ticketCheckState = ref<TicketCheckStatus | null>(null)
 const ticketCheckSaving = ref(false)
 const ticketCheckRunning = ref(false)
 const ticketCheckResult = ref<TicketProbeResult | null>(null)
+// 打票模型：留空时后端回落到账号模型映射，最后是 gpt-5.4（ChatGPT 账号不支持该模型），
+// 所以这里显式给出输入框，避免默默用一个必然 400 的默认值。
+const ticketCheckModelDraft = ref<string>('')
+const saveTicketCheckModel = async () => {
+  if (!props.account || !ticketCheckState.value) return
+  const model = ticketCheckModelDraft.value.trim()
+  if (model === (ticketCheckState.value.settings.model || '')) return
+  ticketCheckSaving.value = true
+  try {
+    ticketCheckState.value = await adminAPI.accounts.updateTicketCheck(props.account.id, {
+      ...ticketCheckState.value.settings,
+      model
+    })
+    appStore.showSuccess(t('admin.accounts.ticketCheck.saved'))
+    emit('updated', { ...props.account })
+  } catch (error) {
+    appStore.showError(extractApiErrorMessage(error, t('admin.accounts.ticketCheck.saveFailed')))
+  } finally {
+    ticketCheckSaving.value = false
+  }
+}
 
 // 探测本身失败（403/Cloudflare 拦截、超时、缺票据头）不是"降智"判定：
 // 后者必须真的有票据长度。混在一起会把网络问题误报成降智。
@@ -3827,6 +3868,7 @@ const loadTicketCheckState = async () => {
   }
   try {
     ticketCheckState.value = await adminAPI.accounts.getTicketCheck(props.account.id)
+    ticketCheckModelDraft.value = ticketCheckState.value.settings.model || ''
   } catch {
     ticketCheckState.value = null
   }
