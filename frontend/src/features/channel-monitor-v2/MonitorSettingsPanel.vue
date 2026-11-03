@@ -92,7 +92,7 @@
         </div>
         <div class="divide-y divide-gray-100 dark:divide-dark-700">
           <div
-            v-for="platform in draft.platforms"
+            v-for="platform in visiblePlatforms"
             :key="platform.platform"
             class="grid grid-cols-1 items-center gap-3 px-5 py-3 sm:grid-cols-[auto_7rem_minmax(0,1fr)_auto]"
           >
@@ -284,6 +284,14 @@ const saving = ref(false)
 const draft = ref<MonitorConfig | null>(null)
 const original = ref('')
 const groups = ref<AdminGroup[]>([])
+// 只展示"有分组"的平台：没有分组的平台永远不会有流量，列出来只是噪音。
+const visiblePlatforms = computed(() => {
+  const configured = new Set<string>(groups.value.map((group) => String(group.platform)))
+  // 固定按平台名排序：无论配置里存的顺序如何，界面顺序都不变。
+  return (draft.value?.platforms ?? [])
+    .filter((platform) => configured.has(platform.platform))
+    .sort((a, b) => a.platform.localeCompare(b.platform))
+})
 
 const dirty = computed(() => (draft.value ? JSON.stringify(draft.value) !== original.value : false))
 const namedModelCount = computed(
