@@ -111,11 +111,46 @@ func inputContainsText(input []any, needle string) bool {
 	if needle == "" {
 		return false
 	}
+	// json.Marshal escapes <, > and & in every string and key. When the needle
+	// has one of them, an item built only from decoded JSON kinds can never
+	// match, so the per-item marshal is skipped for those items.
+	htmlNeedle := strings.ContainsAny(needle, "<>&")
 	for _, item := range input {
+		if htmlNeedle && isDecodedJSONTreeWithoutRawMarshal(item, 0) {
+			continue
+		}
 		b, err := json.Marshal(item)
 		if err == nil && strings.Contains(string(b), needle) {
 			return true
 		}
+	}
+	return false
+}
+
+// isDecodedJSONTreeWithoutRawMarshal reports whether value holds only the kinds
+// a UseNumber decode produces (plus float64), whose json.Marshal output is
+// HTML-escaped throughout. Other kinds may carry custom or raw encodings.
+func isDecodedJSONTreeWithoutRawMarshal(value any, depth int) bool {
+	if depth > 10000 {
+		return false
+	}
+	switch v := value.(type) {
+	case nil, string, bool, json.Number, float64:
+		return true
+	case map[string]any:
+		for _, child := range v {
+			if !isDecodedJSONTreeWithoutRawMarshal(child, depth+1) {
+				return false
+			}
+		}
+		return true
+	case []any:
+		for _, child := range v {
+			if !isDecodedJSONTreeWithoutRawMarshal(child, depth+1) {
+				return false
+			}
+		}
+		return true
 	}
 	return false
 }

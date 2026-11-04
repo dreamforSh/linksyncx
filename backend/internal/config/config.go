@@ -1041,6 +1041,13 @@ type GatewayConfig struct {
 	// OpenAIHighEffortFirstOutputTimeoutSeconds: high/xhigh/max 推理的首个语义输出超时（秒）。
 	// 0 表示回退到 OpenAIFirstOutputTimeoutSeconds。
 	OpenAIHighEffortFirstOutputTimeoutSeconds int `mapstructure:"openai_high_effort_first_output_timeout_seconds"`
+	// OpenAIResponsesStateEnabled: 为订阅（Codex OAuth）账号模拟 Responses API 的有状态能力
+	// （store / previous_response_id / GET|DELETE /v1/responses/{id}），由网关在 Redis 保存回合。
+	OpenAIResponsesStateEnabled bool `mapstructure:"openai_responses_state_enabled"`
+	// OpenAIResponsesStateTTLSeconds: 已保存回合的保留时长（秒）。
+	OpenAIResponsesStateTTLSeconds int `mapstructure:"openai_responses_state_ttl_seconds"`
+	// OpenAIResponsesStateMaxRecordBytes: 单个回合记录的上限，超出则不保存（该回合无法被续链）。
+	OpenAIResponsesStateMaxRecordBytes int `mapstructure:"openai_responses_state_max_record_bytes"`
 	// 请求体最大字节数，用于网关请求体大小限制
 	MaxBodySize int64 `mapstructure:"max_body_size"`
 	// TextMaxBodySize limits endpoints that cannot carry inline image/video payloads.
@@ -2562,6 +2569,9 @@ func setDefaults() {
 	viper.SetDefault("gateway.openai_ws.metadata_bridge_enabled", true)
 	viper.SetDefault("gateway.openai_ws.sticky_response_id_ttl_seconds", 3600)
 	viper.SetDefault("gateway.openai_ws.sticky_previous_response_ttl_seconds", 3600)
+	viper.SetDefault("gateway.openai_responses_state_enabled", true)
+	viper.SetDefault("gateway.openai_responses_state_ttl_seconds", 86400)
+	viper.SetDefault("gateway.openai_responses_state_max_record_bytes", 16*1024*1024)
 	viper.SetDefault("gateway.openai_ws.scheduler_score_weights.priority", 1.0)
 	viper.SetDefault("gateway.openai_ws.scheduler_score_weights.load", 1.0)
 	viper.SetDefault("gateway.openai_ws.scheduler_score_weights.queue", 0.7)

@@ -40,6 +40,9 @@ func shouldSanitizeOpenAIResponsesToolSchemaPatterns(platform string) bool {
 }
 
 func sanitizeOpenAIResponsesToolSchemasForPlatform(body []byte, platform string) ([]byte, bool, error) {
+	if out, changed, ok := sanitizeOpenAIResponsesToolSchemasSinglePass(body, platform); ok {
+		return out, changed, nil
+	}
 	normalized := body
 	changed := false
 	if shouldRepairOpenAIResponsesNullToolSchemaType(platform) {
@@ -63,6 +66,45 @@ func sanitizeOpenAIResponsesToolSchemasForPlatform(body []byte, platform string)
 		}
 	}
 	return normalized, changed, nil
+}
+
+// sanitizeOpenAIResponsesToolSchemasSinglePass runs the parameter repair and the
+// lookaround cleanup in one parse when both passes apply. The repair pass rarely
+// edits anything; when it does not, the second pass would re-parse the very same
+// bytes, so its edits are exactly the lookaround edits collected here. ok=false
+// (any repair edit, any parse error, any safety limit) means the caller must run
+// the sequential passes, which keep their exact results and error messages.
+func sanitizeOpenAIResponsesToolSchemasSinglePass(body []byte, platform string) ([]byte, bool, bool) {
+	if len(body) == 0 || len(body) > openAIResponsesToolSchemaMaxBodySize ||
+		!shouldRepairOpenAIResponsesNullToolSchemaType(platform) ||
+		!shouldSanitizeOpenAIResponsesToolSchemaPatterns(platform) ||
+		!openAIResponsesBodyMayContainRegexLookaround(body) {
+		return nil, false, false
+	}
+	if !utf8.Valid(body) {
+		return nil, false, false
+	}
+	p := openAIResponsesToolSchemaParser{body: body, options: openAIResponsesToolSchemaOptions{
+		removeLookaroundPatterns:        true,
+		replaceNullParameterTypes:       true,
+		injectObjectUnionRootObjectType: true,
+		dropNullRequired:                true,
+	}}
+	if err := p.parseValue(openAIResponsesToolSchemaDocument, false, 0); err != nil || p.repairEdited {
+		return nil, false, false
+	}
+	p.skipWhitespace()
+	if p.pos != len(body) || !json.Valid(body) {
+		return nil, false, false
+	}
+	if len(p.edits) == 0 {
+		return body, false, true
+	}
+	out, changed, err := applyOpenAIResponsesToolSchemaEdits(body, p.edits)
+	if err != nil {
+		return nil, false, false
+	}
+	return out, changed, true
 }
 
 // sanitizeOpenAIResponsesToolSchemaPatterns removes only schema constraints
@@ -141,6 +183,9 @@ type openAIResponsesToolSchemaParser struct {
 	options   openAIResponsesToolSchemaOptions
 	edits     []openAIResponsesToolSchemaEdit
 	probeType string
+	// repairEdited records that a parameter-repair option (not the lookaround
+	// cleanup) decided to edit; the single-pass caller then falls back.
+	repairEdited bool
 }
 
 func sanitizeOpenAIResponsesToolSchemas(
@@ -201,7 +246,11 @@ func (p *openAIResponsesToolSchemaParser) parseValue(
 		case "additional_tools":
 			context = openAIResponsesToolSchemaToolCarrier
 		default:
-			context = openAIResponsesToolSchemaSkip
+			// The probe already parsed this item with the same syntax and depth
+			// checks, and a skipped subtree never edits, so re-parsing it could
+			// only reproduce the probe's result.
+			p.pos = probe.pos
+			return nil
 		}
 	}
 	switch p.body[p.pos] {
@@ -287,6 +336,7 @@ func (p *openAIResponsesToolSchemaParser) parseObject(
 			openAIResponsesJSONStringEquals(key, "required") &&
 			bytes.Equal(p.body[valueStart:valueEnd], []byte("null")) {
 			deleteMember = true
+			p.repairEdited = true
 		}
 		if context == openAIResponsesToolSchema && schemaRoot && openAIResponsesJSONStringEquals(key, "type") {
 			// Duplicate JSON keys have parser-dependent effective values. Repair a
@@ -334,6 +384,7 @@ func (p *openAIResponsesToolSchemaParser) parseObject(
 			}
 		}
 		if p.options.replaceNullParameterTypes && rootTypeCount == 1 && nullRootTypeStart >= 0 {
+			p.repairEdited = true
 			if err := p.addEdit(nullRootTypeStart, nullRootTypeEnd, openAIResponsesToolSchemaFallbackType); err != nil {
 				return err
 			}
@@ -344,6 +395,7 @@ func (p *openAIResponsesToolSchemaParser) parseObject(
 			if edit, ok := openAIMissingRootObjectUnionTypeEdit(
 				p.body[parameterValueStart:parameterValueEnd], parameterValueStart,
 			); ok {
+				p.repairEdited = true
 				if err := p.addEdit(edit.start, edit.end, edit.replacement); err != nil {
 					return err
 				}
@@ -512,8 +564,18 @@ func (p *openAIResponsesToolSchemaParser) parseString() (int, int, error) {
 	}
 	start := p.pos
 	p.pos++
-	for p.pos < len(p.body) {
-		switch p.body[p.pos] {
+	body := p.body
+	for p.pos < len(body) {
+		// Most string bytes need no inspection: skip them in a tight loop.
+		pos := p.pos
+		for pos < len(body) && openAIResponsesJSONStringPlainByte[body[pos]] {
+			pos++
+		}
+		p.pos = pos
+		if pos >= len(body) {
+			break
+		}
+		switch body[pos] {
 		case '"':
 			p.pos++
 			return start, p.pos, nil
@@ -548,6 +610,17 @@ func (p *openAIResponsesToolSchemaParser) parseString() (int, int, error) {
 	}
 	return 0, 0, p.syntaxError("unterminated string")
 }
+
+// openAIResponsesJSONStringPlainByte marks bytes parseString accepts inside a
+// string without further checks: everything except '"', '\\' and controls.
+var openAIResponsesJSONStringPlainByte = func() (plain [256]bool) {
+	for b := 0x20; b < len(plain); b++ {
+		plain[b] = true
+	}
+	plain['"'] = false
+	plain['\\'] = false
+	return plain
+}()
 
 func isOpenAIResponsesJSONHexDigit(value byte) bool {
 	return value >= '0' && value <= '9' || value >= 'a' && value <= 'f' || value >= 'A' && value <= 'F'

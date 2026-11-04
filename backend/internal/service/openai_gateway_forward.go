@@ -558,6 +558,20 @@ func (s *OpenAIGatewayService) Forward(ctx context.Context, c *gin.Context, acco
 		if !isCompactRequest && applyCodexClientMetadata(decoded, account) {
 			markDecodedModified()
 		}
+		// API SDK 客户端通常不带 prompt_cache_key：补一个跨轮稳定的键，让上游拿到
+		// session_id/conversation_id 并命中前缀缓存（缩短首 token）。之后与客户端
+		// 自带的键走同一条账号 namespace 与会话隔离链路。Codex 官方客户端保持原样。
+		if !isCodexCLI && !compatMessagesBridge && !isCompactRequest {
+			sdkModel := upstreamModel
+			if codexResult.NormalizedModel != "" {
+				sdkModel = codexResult.NormalizedModel
+			}
+			if key := deriveOpenAIResponsesSDKPromptCacheKey(c, decoded, sdkModel); key != "" {
+				decoded["prompt_cache_key"] = key
+				markDecodedModified()
+				logger.LegacyPrintf("service.openai_gateway", "[OpenAI] Injected SDK prompt_cache_key for Codex OAuth (account: %s, key_sha256: %s)", account.Name, hashSensitiveValueForLog(key))
+			}
+		}
 		if currentClientPromptCacheKey, ok := decoded["prompt_cache_key"].(string); ok {
 			clientPromptCacheKey = currentClientPromptCacheKey
 		}
@@ -730,6 +744,9 @@ func (s *OpenAIGatewayService) Forward(ctx context.Context, c *gin.Context, acco
 		}
 	}
 
+	// A body freshly marshalled from the request map lets the compaction trigger
+	// check read that map instead of decoding the encoded body a second time.
+	compactionTriggerOrderSettled := false
 	if bodyModified {
 		if requestView.HasPatches() {
 			if patchedBody, patchErr := requestView.ApplyPatches(); patchErr == nil {
@@ -750,16 +767,19 @@ func (s *OpenAIGatewayService) Forward(ctx context.Context, c *gin.Context, acco
 				return nil, fmt.Errorf("serialize request body: %w", marshalErr)
 			}
 			requestView = newOpenAIRequestView(body)
+			compactionTriggerOrderSettled = !compactionTriggerOrderMayChange(decoded)
 		}
 	}
 	// Run after orphan-output filtering and all request-map rebuilds so a
 	// compaction trigger cannot remain ahead of surviving history items.
-	if normalizedBody, changed, normalizeErr := NormalizeCompactionTriggerInputOrder(body); normalizeErr != nil {
-		return nil, fmt.Errorf("normalize compaction trigger order: %w", normalizeErr)
-	} else if changed {
-		body = normalizedBody
-		requestView = newOpenAIRequestView(body)
-		reqBody = nil
+	if !compactionTriggerOrderSettled {
+		if normalizedBody, changed, normalizeErr := NormalizeCompactionTriggerInputOrder(body); normalizeErr != nil {
+			return nil, fmt.Errorf("normalize compaction trigger order: %w", normalizeErr)
+		} else if changed {
+			body = normalizedBody
+			requestView = newOpenAIRequestView(body)
+			reqBody = nil
+		}
 	}
 	// 剥离本会话已被上游判定失效的加密项（invalid_encrypted_content lineage），
 	// 阻断同一失效密文随客户端历史在每一轮重复触发"被拒→剥离→重试/重连"。
@@ -1245,6 +1265,7 @@ func (s *OpenAIGatewayService) Forward(ctx context.Context, c *gin.Context, acco
 		imageCount := 0
 		searchCount := 0
 		var imageOutputSizes []string
+		var storedResponse []byte
 		if reqStream {
 			streamResult, err := s.handleStreamingResponseWithReasoning(ctx, resp, c, account, startTime, originalModel, upstreamModel, reasoningEffortValue)
 			if err != nil {
@@ -1292,6 +1313,7 @@ func (s *OpenAIGatewayService) Forward(ctx context.Context, c *gin.Context, acco
 			imageCount = streamResult.imageCount
 			imageOutputSizes = streamResult.imageOutputSizes
 			searchCount = streamResult.searchCount
+			storedResponse = streamResult.terminalResponse
 		} else {
 			nonStreamResult, err := s.handleNonStreamingResponse(ctx, resp, c, account, originalModel, upstreamModel)
 			if err != nil {
@@ -1315,8 +1337,10 @@ func (s *OpenAIGatewayService) Forward(ctx context.Context, c *gin.Context, acco
 			imageCount = nonStreamResult.imageCount
 			imageOutputSizes = nonStreamResult.imageOutputSizes
 			searchCount = nonStreamResult.searchCount
+			storedResponse = nonStreamResult.responseBody
 		}
 		s.bindHTTPResponseAccount(ctx, c, account, responseID)
+		s.recordOpenAIResponsesState(ctx, c, account, responseID, storedResponse)
 
 		// Extract and save Codex usage snapshot from response headers (for OAuth accounts).
 		// 排除 spark 影子:其 codex_* 仅由 QueryUsage(/wham/usage bengalfox)更新(外审第7轮 P1)。

@@ -8,9 +8,80 @@ import (
 
 	"github.com/Wei-Shaw/sub2api/internal/pkg/apicompat"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/openai"
+	"github.com/gin-gonic/gin"
 )
 
-const compatPromptCacheKeyPrefix = "compat_cc_"
+const (
+	compatPromptCacheKeyPrefix          = "compat_cc_"
+	compatResponsesPromptCacheKeyPrefix = "compat_resp_"
+)
+
+// deriveOpenAIResponsesSDKPromptCacheKey gives native /v1/responses requests from
+// API SDK clients a stable prompt_cache_key on Codex OAuth upstreams. Codex CLI
+// always sends one (its thread id); SDK callers usually do not, which leaves the
+// upstream request without session_id/conversation_id and with poor prompt-cache
+// affinity, so every turn re-prefills the shared prefix. An explicit client
+// session header wins; otherwise the seed is what stays fixed across turns of one
+// conversation: model, effort, instructions, tools and the first user message.
+// The returned key is unscoped; the account namespace and the per-key session
+// isolation are applied downstream exactly as for a client-supplied key.
+func deriveOpenAIResponsesSDKPromptCacheKey(c *gin.Context, reqBody map[string]any, upstreamModel string) string {
+	if reqBody == nil || !shouldAutoInjectPromptCacheKeyForCompat(upstreamModel) {
+		return ""
+	}
+	if existing, ok := reqBody["prompt_cache_key"]; ok {
+		if key, isString := existing.(string); !isString || strings.TrimSpace(key) != "" {
+			return ""
+		}
+	}
+	if sessionID := explicitOpenAIHeaderSessionID(c); sessionID != "" {
+		return compatResponsesPromptCacheKeyPrefix + hashSensitiveValueForLog("session="+sessionID)
+	}
+
+	normalizedModel := normalizeCodexModel(strings.TrimSpace(upstreamModel))
+	if normalizedModel == "" {
+		normalizedModel = strings.TrimSpace(upstreamModel)
+	}
+	seedParts := []string{"model=" + normalizedModel}
+	if reasoning, ok := reqBody["reasoning"].(map[string]any); ok {
+		if effort, ok := reasoning["effort"].(string); ok && strings.TrimSpace(effort) != "" {
+			seedParts = append(seedParts, "reasoning_effort="+strings.TrimSpace(effort))
+		}
+	}
+	if instructions, ok := reqBody["instructions"].(string); ok && strings.TrimSpace(instructions) != "" {
+		seedParts = append(seedParts, "instructions="+instructions)
+	}
+	for _, field := range []string{"tool_choice", "tools"} {
+		if value, ok := reqBody[field]; ok && value != nil {
+			if raw, err := json.Marshal(value); err == nil {
+				seedParts = append(seedParts, field+"="+string(raw))
+			}
+		}
+	}
+	firstUser := ""
+	if input, ok := reqBody["input"].([]any); ok {
+		for _, rawItem := range input {
+			item, ok := rawItem.(map[string]any)
+			if !ok || item["role"] != "user" {
+				continue
+			}
+			if itemType, hasType := item["type"]; hasType && itemType != "message" {
+				continue
+			}
+			if raw, err := json.Marshal(item["content"]); err == nil {
+				firstUser = string(raw)
+			}
+			break
+		}
+	}
+	if firstUser == "" {
+		// Without a conversation anchor the key would pin unrelated prompts
+		// of one API key to one cache bucket.
+		return ""
+	}
+	seedParts = append(seedParts, "first_user="+firstUser)
+	return compatResponsesPromptCacheKeyPrefix + hashSensitiveValueForLog(strings.Join(seedParts, "|"))
+}
 
 func shouldAutoInjectPromptCacheKeyForCompat(model string) bool {
 	trimmed := strings.TrimSpace(strings.ToLower(model))

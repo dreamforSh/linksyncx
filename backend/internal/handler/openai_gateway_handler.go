@@ -20,6 +20,7 @@ import (
 	"github.com/Wei-Shaw/sub2api/internal/pkg/ctxkey"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/ip"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/logger"
+	"github.com/Wei-Shaw/sub2api/internal/pkg/openai"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/requestmodel"
 	"github.com/Wei-Shaw/sub2api/internal/securityaudit"
 	middleware2 "github.com/Wei-Shaw/sub2api/internal/server/middleware"
@@ -494,6 +495,13 @@ func (h *OpenAIGatewayHandler) Responses(c *gin.Context) {
 	}
 	reqLog = reqLog.With(zap.String("model", reqModel), zap.Bool("stream", reqStream))
 	previousResponseID := strings.TrimSpace(gjson.GetBytes(body, "previous_response_id").String())
+	// schedulingPreviousResponseID keeps response→account affinity (and so the
+	// upstream prompt cache) after a gateway-stored continuation is expanded.
+	schedulingPreviousResponseID := previousResponseID
+	stateGroupID := int64(0)
+	if apiKey.GroupID != nil {
+		stateGroupID = *apiKey.GroupID
+	}
 	if previousResponseID != "" {
 		previousResponseIDKind := service.ClassifyOpenAIPreviousResponseIDKind(previousResponseID)
 		reqLog = reqLog.With(
@@ -508,10 +516,36 @@ func (h *OpenAIGatewayHandler) Responses(c *gin.Context) {
 			h.errorResponse(c, http.StatusBadRequest, "invalid_request_error", "previous_response_id must be a response.id (resp_*), not a message id")
 			return
 		}
-		groupID := int64(0)
-		if apiKey.GroupID != nil {
-			groupID = *apiKey.GroupID
+		// Turns the gateway stored for subscription accounts are expanded into a
+		// self-contained request here, so any account (OAuth included) can serve it.
+		continuation, expandErr := h.gatewayService.ExpandOpenAIResponsesContinuation(c.Request.Context(), stateGroupID, subject.UserID, apiKey.ID, body)
+		switch {
+		case errors.Is(expandErr, service.ErrOpenAIResponsesStateNotOwned):
+			reqLog.Warn("openai.request_validation_failed", zap.String("reason", "previous_response_owner_mismatch"))
+			h.errorResponse(c, http.StatusBadRequest, "invalid_request_error", "previous_response_id is not available for this user")
+			return
+		case errors.Is(expandErr, service.ErrOpenAIResponsesStateBroken):
+			reqLog.Warn("openai.request_validation_failed", zap.String("reason", "previous_response_chain_expired"))
+			h.errorResponse(c, http.StatusBadRequest, "invalid_request_error", fmt.Sprintf("Previous response with id '%s' not found.", previousResponseID))
+			return
+		case expandErr != nil:
+			reqLog.Warn("openai.previous_response_state_lookup_failed", zap.Error(expandErr))
+		case continuation != nil:
+			body = continuation.Body
+			sessionHashBody = body
+			service.SetOpenAIResponsesStatePending(c, continuation.Pending)
+			previousResponseID = ""
+			reqLog.Debug("openai.previous_response_state_expanded", zap.Int("ancestors", len(continuation.Pending.Ancestors)))
 		}
+	} else if !legacyCompact && !openai.IsCodexOfficialClientByHeaders(c.GetHeader("User-Agent"), c.GetHeader("originator")) {
+		// Codex clients always send store=false; only API SDK callers can come
+		// back with previous_response_id or GET /v1/responses/{id}.
+		if pending := h.gatewayService.NewOpenAIResponsesStatePending(stateGroupID, subject.UserID, apiKey.ID, body); pending != nil {
+			service.SetOpenAIResponsesStatePending(c, pending)
+		}
+	}
+	if previousResponseID != "" {
+		groupID := stateGroupID
 		owned, ownershipErr := h.gatewayService.ValidateOpenAIHTTPResponseOwner(
 			c.Request.Context(),
 			groupID,
@@ -656,7 +690,7 @@ func (h *OpenAIGatewayHandler) Responses(c *gin.Context) {
 		selection, scheduleDecision, err := h.gatewayService.SelectAccountWithSchedulerForCapability(
 			c.Request.Context(),
 			apiKey.GroupID,
-			previousResponseID,
+			schedulingPreviousResponseID,
 			sessionHash,
 			forwardModel,
 			failedAccountIDs,

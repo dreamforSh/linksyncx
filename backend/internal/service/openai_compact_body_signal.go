@@ -1,6 +1,7 @@
 package service
 
 import (
+	"encoding/json"
 	"net/http"
 	"strings"
 
@@ -32,35 +33,100 @@ func NormalizeCompactionTriggerInputOrder(body []byte) ([]byte, bool, error) {
 	if err := decodeOpenAIJSONUseNumber(body, &payload); err != nil {
 		return body, false, err
 	}
-	input, ok := payload["input"].([]any)
-	if !ok || len(input) == 0 {
+	if !normalizeCompactionTriggerInputOrderMap(payload) {
 		return body, false, nil
 	}
-	triggerCount := 0
-	normalized := make([]any, 0, len(input))
-	for _, raw := range input {
-		item, itemOK := raw.(map[string]any)
-		if itemOK && item["type"] == "compaction_trigger" {
-			triggerCount++
-			continue
-		}
-		normalized = append(normalized, raw)
-	}
-	if triggerCount == 0 {
-		return body, false, nil
-	}
-	if triggerCount == 1 {
-		if last, ok := input[len(input)-1].(map[string]any); ok && last["type"] == "compaction_trigger" {
-			return body, false, nil
-		}
-	}
-	normalized = append(normalized, map[string]any{"type": "compaction_trigger"})
-	payload["input"] = normalized
 	encoded, err := marshalOpenAIUpstreamJSON(payload)
 	if err != nil {
 		return body, false, err
 	}
 	return encoded, true, nil
+}
+
+// compactionTriggerOrderMayChange reports whether NormalizeCompactionTriggerInputOrder
+// could change marshalOpenAIUpstreamJSON(payload). It answers false only when the
+// map proves the decode of that output has no misplaced compaction trigger: input
+// and its items hold only values that decode back to the same Go kinds. Anything
+// else (typed slices, structs, named strings) keeps the caller on the byte pass.
+func compactionTriggerOrderMayChange(payload map[string]any) bool {
+	rawInput, present := payload["input"]
+	if !present {
+		return false
+	}
+	input, ok := rawInput.([]any)
+	if !ok {
+		return !isPlainDecodedJSONScalar(rawInput)
+	}
+	triggerCount := 0
+	for i, raw := range input {
+		item, isMap := raw.(map[string]any)
+		if !isMap {
+			if _, isSlice := raw.([]any); isSlice || isPlainDecodedJSONScalar(raw) {
+				continue
+			}
+			return true
+		}
+		typ, hasType := item["type"]
+		if !hasType {
+			continue
+		}
+		if !isPlainDecodedJSONScalar(typ) {
+			if _, isSlice := typ.([]any); !isSlice {
+				if _, isObj := typ.(map[string]any); !isObj {
+					return true
+				}
+			}
+			continue
+		}
+		if typ == "compaction_trigger" {
+			triggerCount++
+			if triggerCount > 1 || i != len(input)-1 {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func isPlainDecodedJSONScalar(value any) bool {
+	switch value.(type) {
+	case nil, string, bool, json.Number, float64:
+		return true
+	}
+	return false
+}
+
+// normalizeCompactionTriggerInputOrderMap applies the compaction trigger
+// ordering rule to a decoded request map.
+func normalizeCompactionTriggerInputOrderMap(payload map[string]any) bool {
+	input, ok := payload["input"].([]any)
+	if !ok || len(input) == 0 {
+		return false
+	}
+	triggerCount := 0
+	for _, raw := range input {
+		if item, itemOK := raw.(map[string]any); itemOK && item["type"] == "compaction_trigger" {
+			triggerCount++
+		}
+	}
+	if triggerCount == 0 {
+		return false
+	}
+	if triggerCount == 1 {
+		if last, ok := input[len(input)-1].(map[string]any); ok && last["type"] == "compaction_trigger" {
+			return false
+		}
+	}
+	normalized := make([]any, 0, len(input)-triggerCount+1)
+	for _, raw := range input {
+		if item, itemOK := raw.(map[string]any); itemOK && item["type"] == "compaction_trigger" {
+			continue
+		}
+		normalized = append(normalized, raw)
+	}
+	normalized = append(normalized, map[string]any{"type": "compaction_trigger"})
+	payload["input"] = normalized
+	return true
 }
 
 func isOpenAINativeCompactionV2(c *gin.Context) bool {

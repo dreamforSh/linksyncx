@@ -44,7 +44,9 @@ func IsImageGenerationIntent(endpoint string, requestedModel string, body []byte
 	if isOpenAIImageGenerationModel(requestedModel) {
 		return true
 	}
-	if len(body) == 0 || !gjson.ValidBytes(body) {
+	// The walk below is a pure function of the bytes, so the full validity
+	// scan only has to run when it finds image intent.
+	if len(body) == 0 {
 		return false
 	}
 
@@ -76,7 +78,7 @@ func IsImageGenerationIntent(endpoint string, requestedModel string, body []byte
 		}
 		return !imageIntent && (!modelSeen || !toolsSeen || !inputSeen || !toolChoiceSeen)
 	})
-	return imageIntent
+	return imageIntent && gjson.ValidBytes(body)
 }
 
 // IsExplicitImageGenerationIntent 仅检测原生 image_generation 工具、图片模型和显式 tool_choice，
@@ -86,7 +88,9 @@ func IsExplicitImageGenerationIntent(endpoint string, requestedModel string, bod
 	if IsImageGenerationEndpoint(endpoint) || isOpenAIImageGenerationModel(requestedModel) {
 		return true
 	}
-	if len(body) == 0 || !gjson.ValidBytes(body) {
+	// The walk below is a pure function of the bytes, so the full validity
+	// scan only has to run when it finds image intent.
+	if len(body) == 0 {
 		return false
 	}
 	var modelSeen, toolsSeen, toolChoiceSeen bool
@@ -111,7 +115,7 @@ func IsExplicitImageGenerationIntent(endpoint string, requestedModel string, bod
 		}
 		return !imageIntent && (!modelSeen || !toolsSeen || !toolChoiceSeen)
 	})
-	return imageIntent
+	return imageIntent && gjson.ValidBytes(body)
 }
 
 // IsImageGenerationIntentForPlatform applies platform-specific intent rules.
@@ -133,7 +137,9 @@ func isExplicitGrokImageGenerationIntent(endpoint string, requestedModel string,
 	if IsImageGenerationEndpoint(endpoint) || isOpenAIImageGenerationModel(requestedModel) {
 		return true
 	}
-	if len(body) == 0 || !gjson.ValidBytes(body) {
+	// The walk below is a pure function of the bytes, so the full validity
+	// scan only has to run when it finds image intent.
+	if len(body) == 0 {
 		return false
 	}
 
@@ -161,7 +167,7 @@ func isExplicitGrokImageGenerationIntent(endpoint string, requestedModel string,
 		}
 		return !imageIntent && (!modelSeen || !toolsSeen || !toolChoiceSeen)
 	})
-	return imageIntent
+	return imageIntent && gjson.ValidBytes(body)
 }
 
 // IsImageGenerationIntentMap is the map-backed variant used after service-side request mutation.
@@ -281,9 +287,15 @@ func openAIRequestBodyHasImageGenerationDeclaration(body []byte) bool {
 }
 
 func openAIRequestBodyImageGenerationToolNeedsNormalization(body []byte) bool {
-	if len(body) == 0 || !gjson.ValidBytes(body) {
+	// The tool walk is a pure function of the bytes, so the full validity scan
+	// only has to run when the walk asks for normalization.
+	if len(body) == 0 {
 		return false
 	}
+	return openAIRequestBodyImageGenerationToolsNeedNormalization(body) && gjson.ValidBytes(body)
+}
+
+func openAIRequestBodyImageGenerationToolsNeedNormalization(body []byte) bool {
 	tools := gjson.GetBytes(body, "tools")
 	if !tools.IsArray() {
 		return false

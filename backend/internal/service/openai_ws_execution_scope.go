@@ -143,8 +143,16 @@ func openAIWSExecutionScopeSeed(apiKeyID int64, identity, value, lane string) st
 // 两种身份都没有时返回空作用域：按请求内容推导的粘性种子只服务账号亲和，
 // 不是可靠身份，不参与抢占。
 func resolveOpenAIWSExecutionScope(c *gin.Context, body []byte, apiKeyID int64) (scope, threadID string) {
-	lane := resolveOpenAIWSExecutionLane(c, body)
-	if threadID = resolveOpenAIWSClientThreadID(c, body); threadID != "" {
+	// Lane and thread fall back to up to four client_metadata.* lookups, each a
+	// full skim of a large body when client_metadata is absent. gjson cannot
+	// match a client_metadata.* path without a client_metadata member, so a
+	// single miss settles all of them.
+	metadataBody := body
+	if len(body) > 0 && !gjson.GetBytes(body, "client_metadata").Exists() {
+		metadataBody = nil
+	}
+	lane := resolveOpenAIWSExecutionLane(c, metadataBody)
+	if threadID = resolveOpenAIWSClientThreadID(c, metadataBody); threadID != "" {
 		scope, _ = deriveOpenAISessionHashes(openAIWSExecutionScopeSeed(apiKeyID, "thread", threadID, lane))
 		return scope, threadID
 	}

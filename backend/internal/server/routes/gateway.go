@@ -228,6 +228,11 @@ func RegisterGatewayRoutes(
 		gateway.GET("/responses", func(c *gin.Context) {
 			h.OpenAIGateway.ResponsesWebSocket(c)
 		})
+		// Responses the gateway stored for subscription accounts (OpenAI SDK
+		// responses.retrieve / delete / input_items.list).
+		gateway.GET("/responses/:response_id", h.OpenAIGateway.GetStoredResponse)
+		gateway.DELETE("/responses/:response_id", h.OpenAIGateway.DeleteStoredResponse)
+		gateway.GET("/responses/:response_id/input_items", h.OpenAIGateway.ListStoredResponseInputItems)
 		// OpenAI Chat Completions API: auto-route based on group platform
 		gateway.POST("/chat/completions", func(c *gin.Context) {
 			if isOpenAIResponsesCompatibleGatewayPlatform(c) {
