@@ -381,6 +381,7 @@ func convertChatContentPartsToResponses(parts []ChatContentPart) []ResponsesCont
 					PromptCacheBreakpoint: p.PromptCacheBreakpoint,
 					Type:                  "input_image",
 					ImageURL:              p.ImageURL.URL,
+					Detail:                p.ImageURL.Detail,
 				})
 			}
 		case "file":

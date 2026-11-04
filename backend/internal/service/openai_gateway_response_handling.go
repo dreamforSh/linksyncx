@@ -659,6 +659,7 @@ func (s *OpenAIGatewayService) handleStreamingResponseWithReasoning(ctx context.
 				return
 			}
 			restoredData = restoreCodexToolNamesFromSSEContext(c, restoredData, eventType)
+			restoredData = restoreOpenAIResponsesPreviousResponseIDInEvent(c, restoredData, eventType)
 			if !bytes.Equal(restoredData, dataBytes) {
 				dataBytes = restoredData
 				data = string(restoredData)
@@ -1675,6 +1676,7 @@ func (s *OpenAIGatewayService) handleNonStreamingResponse(ctx context.Context, r
 		return nil, fmt.Errorf("restore OpenAI namespace response: %w", err)
 	}
 	body = restoreCodexToolNamesFromContext(c, body)
+	body = restoreOpenAIResponsesPreviousResponseID(c, body)
 	responseheaders.WriteFilteredHeaders(c.Writer.Header(), resp.Header, s.responseHeaderFilter)
 	// Codex 协议要求 /responses/compact JSON 响应携带 x-codex-turn-state
 	// （codex-api/src/endpoint/compact.rs 从响应头捕获），显式回传。
@@ -1776,6 +1778,7 @@ func (s *OpenAIGatewayService) handleSSEToJSON(resp *http.Response, c *gin.Conte
 			return nil, fmt.Errorf("restore OpenAI namespace response: %w", restoreErr)
 		}
 		restoredBody = restoreCodexToolNamesFromContext(c, restoredBody)
+		restoredBody = restoreOpenAIResponsesPreviousResponseID(c, restoredBody)
 		body = restoredBody
 	} else {
 		if originalModel != mappedModel {
@@ -1795,6 +1798,11 @@ func (s *OpenAIGatewayService) handleSSEToJSON(resp *http.Response, c *gin.Conte
 			contentType = "text/event-stream"
 		}
 	}
+	// The forced-stream upstream's text/event-stream was copied above, and
+	// c.Data only sets a type when none exists: without this Set an aggregated
+	// JSON body reaches the client labelled as SSE, which the OpenAI Node SDK
+	// then returns as a raw string.
+	c.Writer.Header().Set("Content-Type", contentType)
 	if !writeOpenAICompactSSEBridge(c, resp.StatusCode, body) {
 		c.Data(resp.StatusCode, contentType, body)
 	}

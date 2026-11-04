@@ -329,6 +329,42 @@ func (s *OpenAIGatewayService) ExpandOpenAIResponsesContinuation(ctx context.Con
 	return &OpenAIResponsesContinuation{Body: expanded, Pending: pending}, nil
 }
 
+// openAIResponsesClientPreviousResponseID is the previous_response_id the client
+// sent when the gateway expanded it; the upstream never saw that id.
+func openAIResponsesClientPreviousResponseID(c *gin.Context) string {
+	pending := openAIResponsesStatePendingFromContext(c)
+	if pending == nil || !pending.Continuation {
+		return ""
+	}
+	return pending.PreviousResponseID
+}
+
+// restoreOpenAIResponsesPreviousResponseID puts the client's previous_response_id
+// back on a JSON response object, as the official API echoes it.
+func restoreOpenAIResponsesPreviousResponseID(c *gin.Context, body []byte) []byte {
+	previousID := openAIResponsesClientPreviousResponseID(c)
+	if previousID == "" || gjson.GetBytes(body, "object").String() != "response" {
+		return body
+	}
+	if patched, err := sjson.SetBytes(body, "previous_response_id", previousID); err == nil {
+		return patched
+	}
+	return body
+}
+
+// restoreOpenAIResponsesPreviousResponseIDInEvent does the same for the response
+// object carried by stream lifecycle events.
+func restoreOpenAIResponsesPreviousResponseIDInEvent(c *gin.Context, data []byte, eventType string) []byte {
+	previousID := openAIResponsesClientPreviousResponseID(c)
+	if previousID == "" || !strings.HasPrefix(eventType, "response.") || !gjson.GetBytes(data, "response").IsObject() {
+		return data
+	}
+	if patched, err := sjson.SetBytes(data, "response.previous_response_id", previousID); err == nil {
+		return patched
+	}
+	return data
+}
+
 // NewOpenAIResponsesStatePending prepares storage for a request that does not
 // continue a stored turn. It returns nil when the client opted out (store=false).
 func (s *OpenAIGatewayService) NewOpenAIResponsesStatePending(groupID, userID, apiKeyID int64, body []byte) *OpenAIResponsesStatePending {
