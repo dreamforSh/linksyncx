@@ -534,7 +534,7 @@ func (m *openAIResponsesStateMemoryStore) SetOpenAIResponsesState(_ context.Cont
 	m.entries[key] = m.order.PushFront(entry)
 	m.bytes += len(entry.payload)
 	for m.bytes > m.budget && m.order.Len() > 0 {
-		m.removeLocked(m.order.Back().Value.(*openAIResponsesStateMemoryEntry).key)
+		m.removeElementLocked(m.order.Back())
 	}
 	return nil
 }
@@ -549,8 +549,8 @@ func (m *openAIResponsesStateMemoryStore) GetOpenAIResponsesStates(_ context.Con
 		if !ok {
 			continue
 		}
-		entry := element.Value.(*openAIResponsesStateMemoryEntry)
-		if !now.Before(entry.expiresAt) {
+		entry, ok := element.Value.(*openAIResponsesStateMemoryEntry)
+		if !ok || !now.Before(entry.expiresAt) {
 			m.removeLocked(key)
 			continue
 		}
@@ -568,12 +568,16 @@ func (m *openAIResponsesStateMemoryStore) DeleteOpenAIResponsesState(_ context.C
 }
 
 func (m *openAIResponsesStateMemoryStore) removeLocked(key string) {
-	element, ok := m.entries[key]
-	if !ok {
-		return
+	if element, ok := m.entries[key]; ok {
+		m.removeElementLocked(element)
+		delete(m.entries, key)
 	}
-	entry := element.Value.(*openAIResponsesStateMemoryEntry)
-	m.bytes -= len(entry.payload)
+}
+
+func (m *openAIResponsesStateMemoryStore) removeElementLocked(element *list.Element) {
 	m.order.Remove(element)
-	delete(m.entries, key)
+	if entry, ok := element.Value.(*openAIResponsesStateMemoryEntry); ok {
+		m.bytes -= len(entry.payload)
+		delete(m.entries, entry.key)
+	}
 }
