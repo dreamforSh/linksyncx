@@ -228,8 +228,9 @@ func RegisterGatewayRoutes(
 		gateway.GET("/responses", func(c *gin.Context) {
 			h.OpenAIGateway.ResponsesWebSocket(c)
 		})
-		// Responses the gateway stored for subscription accounts (OpenAI SDK
-		// responses.retrieve / delete / input_items.list).
+		// OpenAI SDK responses.retrieve / delete / input_items.list: answered from
+		// the gateway's store for subscription accounts, else by the API-key
+		// account that created the response.
 		gateway.GET("/responses/:response_id", h.OpenAIGateway.GetStoredResponse)
 		gateway.DELETE("/responses/:response_id", h.OpenAIGateway.DeleteStoredResponse)
 		gateway.GET("/responses/:response_id/input_items", h.OpenAIGateway.ListStoredResponseInputItems)

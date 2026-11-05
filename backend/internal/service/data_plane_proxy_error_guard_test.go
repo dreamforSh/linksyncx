@@ -99,6 +99,7 @@ var rawProxyErrorAllowlist = map[string]string{
 	"GeminiMessagesCompatService.ForwardAIStudioGET":              "模型列表 GET，handler 直接回 502",
 	"AntigravityGatewayService.TestConnection":                    "账号测试，不是转发",
 	"OpenAIGatewayService.DetectOpenAIRequestTimezone":            "出口时区探测，不是转发：失败只记录检测结果并沿用上次时区",
+	"OpenAIGatewayService.ForwardOpenAIResponsesLookup":           "response 只存在于创建它的 API Key 账号，无号可换：handler 直接回 502",
 }
 
 // rawProxyErrorHelpers 是解析代理后把错误原样交给调用方、自己却不是委托包装的包级函数（无 receiver）。

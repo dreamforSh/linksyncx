@@ -14,10 +14,12 @@ import (
 	"go.uber.org/zap"
 )
 
-// Retrieval endpoints for Responses the gateway stored on behalf of
-// subscription accounts (see service/openai_responses_state.go). Unknown ids,
-// other users' ids and ids stored natively upstream all answer 404, as
-// OpenAI does for a response the caller cannot see.
+// Retrieval endpoints for Responses. Turns the gateway stored on behalf of
+// subscription accounts are answered locally (see
+// service/openai_responses_state.go); responses an OpenAI API-key account
+// created are fetched from that account's upstream while the gateway still
+// knows the account. Unknown ids and other users' ids answer 404, as OpenAI
+// does for a response the caller cannot see.
 
 type storedResponseCaller struct {
 	groupID  int64
@@ -43,6 +45,22 @@ func (h *OpenAIGatewayHandler) storedResponseCaller(c *gin.Context) (storedRespo
 	return caller, true
 }
 
+// forwardUpstreamResponseLookup asks the API-key account that created the
+// response, answering 404 when the gateway cannot place it.
+func (h *OpenAIGatewayHandler) forwardUpstreamResponseLookup(c *gin.Context, caller storedResponseCaller, responseID, method, suffix string) {
+	handled, err := h.gatewayService.ForwardOpenAIResponsesLookup(c.Request.Context(), c, caller.groupID, responseID, caller.userID, caller.apiKeyID, method, suffix)
+	if err != nil {
+		requestLogger(c, "handler.openai_gateway.responses_lookup").Warn("openai.responses_upstream_lookup_failed", zap.Error(err))
+		if !c.Writer.Written() {
+			h.errorResponse(c, http.StatusBadGateway, "upstream_error", "Upstream response lookup failed")
+		}
+		return
+	}
+	if !handled {
+		storedResponseNotFound(c, responseID)
+	}
+}
+
 func storedResponseNotFound(c *gin.Context, responseID string) {
 	c.JSON(http.StatusNotFound, gin.H{"error": gin.H{
 		"type":    "invalid_request_error",
@@ -66,7 +84,7 @@ func (h *OpenAIGatewayHandler) GetStoredResponse(c *gin.Context) {
 		return
 	}
 	if !found {
-		storedResponseNotFound(c, responseID)
+		h.forwardUpstreamResponseLookup(c, caller, responseID, http.MethodGet, "")
 		return
 	}
 	c.Data(http.StatusOK, "application/json; charset=utf-8", response)
@@ -86,7 +104,7 @@ func (h *OpenAIGatewayHandler) DeleteStoredResponse(c *gin.Context) {
 		return
 	}
 	if !deleted {
-		storedResponseNotFound(c, responseID)
+		h.forwardUpstreamResponseLookup(c, caller, responseID, http.MethodDelete, "")
 		return
 	}
 	c.JSON(http.StatusOK, gin.H{"id": responseID, "object": "response.deleted", "deleted": true})
@@ -121,7 +139,7 @@ func (h *OpenAIGatewayHandler) ListStoredResponseInputItems(c *gin.Context) {
 		return
 	}
 	if !found {
-		storedResponseNotFound(c, responseID)
+		h.forwardUpstreamResponseLookup(c, caller, responseID, http.MethodGet, "/input_items")
 		return
 	}
 	page, hasMore := paginateStoredResponseInputItems(responseID, items, order, limit, c.Query("after"), c.Query("before"))
