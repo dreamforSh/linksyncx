@@ -20,7 +20,7 @@ import (
 func TestCodexDirectImagesMultipartEdit(t *testing.T) {
 	var body bytes.Buffer
 	w := multipart.NewWriter(&body)
-	for key, value := range map[string]string{"model": "gpt-image-2.5-sunburst", "prompt": "编辑", "quality": "xhigh", "n": "2", "output_format": "webp", "output_compression": "75", "partial_images": "2", "input_fidelity": "high"} {
+	for key, value := range map[string]string{"model": "gpt-image-2.5-sunburst", "prompt": "编辑", "quality": "xhigh", "n": "2", "output_format": "webp", "output_compression": "75", "partial_images": "2", "input_fidelity": "high", "complexity": "medium", "size": "1024x1024"} {
 		require.NoError(t, w.WriteField(key, value))
 	}
 	for _, field := range []string{"image[]", "image[]", "mask"} {
@@ -46,6 +46,8 @@ func TestCodexDirectImagesMultipartEdit(t *testing.T) {
 	require.Equal(t, "data:image/png;base64,cG5nLWNvbnRlbnQ=", gjson.GetBytes(upstreamBody, "mask.image_url").String())
 	require.Equal(t, "xhigh", gjson.GetBytes(upstreamBody, "quality").String())
 	require.Equal(t, "high", gjson.GetBytes(upstreamBody, "input_fidelity").String())
+	require.Equal(t, "medium", gjson.GetBytes(upstreamBody, "complexity").String())
+	require.Equal(t, "1024x1024", gjson.GetBytes(upstreamBody, "size").String())
 	require.EqualValues(t, 2, gjson.GetBytes(upstreamBody, "n").Int())
 	require.EqualValues(t, 75, gjson.GetBytes(upstreamBody, "output_compression").Int())
 	require.EqualValues(t, 2, gjson.GetBytes(upstreamBody, "partial_images").Int())
@@ -54,7 +56,7 @@ func TestCodexDirectImagesMultipartEdit(t *testing.T) {
 
 func TestCodexDirectImagesPricingAndUsage(t *testing.T) {
 	prices := &PricingService{pricingData: map[string]*LiteLLMModelPricing{"gpt-image-2": {InputCostPerToken: 1}}}
-	for _, model := range []string{"gpt-image-2.5-flare", "gpt-image-2.5-sunburst", "gpt-image-2.5-flare-2026-09-08", "gpt-image-2.5-sunburst-2026-09-08"} {
+	for _, model := range []string{"gpt-image-2.5-flare", "gpt-image-2.5-sunburst", "gpt-image-2.5-flare-2026-09-08", "gpt-image-2.5-sunburst-2026-09-08", "gpt-image-2.6-flare", "gpt-image-2.6-sunburst"} {
 		price := prices.matchOpenAIModel(model)
 		require.Equal(t, 5e-6, price.InputCostPerToken)
 		require.Equal(t, 8e-6, price.InputCostPerImageToken)
@@ -66,6 +68,9 @@ func TestCodexDirectImagesPricingAndUsage(t *testing.T) {
 	var catalog map[string]LiteLLMModelPricing
 	require.NoError(t, json.Unmarshal(body, &catalog))
 	require.Equal(t, 2e-6, catalog["gpt-image-2.5-flare"].CacheReadInputImageTokenCost)
+	for _, model := range []string{"gpt-image-2.6-flare", "gpt-image-2.6-sunburst"} {
+		require.Equal(t, catalog["gpt-image-2.5-flare"], catalog[model], model)
+	}
 	usage, ok := codexDirectImagesUsage([]byte(`{"usage":{"input_tokens":100,"input_tokens_details":{"text_tokens":20,"image_tokens":80,"cached_tokens":50,"cached_tokens_details":{"text_tokens":10,"image_tokens":40}},"output_tokens":200}}`))
 	require.True(t, ok)
 	require.Equal(t, 40, usage.ImageCacheReadTokens)
@@ -120,4 +125,38 @@ func TestCodexDirectImagesShadowCredentials(t *testing.T) {
 	require.Equal(t, "Bearer test-token", upstream.lastReq.Header.Get("Authorization"))
 	require.Equal(t, "test-account", upstream.lastReq.Header.Get("Chatgpt-Account-Id"))
 	require.Equal(t, "/backend-api/codex/images/generations", upstream.lastReq.URL.Path)
+}
+
+// GPT Image 2.6 adds complexity; the gateway forwards only what the client sent.
+func TestOpenAIImagesComplexityPassthrough(t *testing.T) {
+	body := []byte(`{"model":"gpt-image-2.6-flare","prompt":"a red apple, pixel art","size":"1024x1024","quality":"low","complexity":"low","background":"transparent","output_format":"png","n":1}`)
+	c, _ := newOpenAIImagesTestContext(t, body)
+	parsed, err := newOpenAIImagesTestService(nil).ParseOpenAIImagesRequest(c, body)
+	require.NoError(t, err)
+	require.Equal(t, "low", parsed.Complexity)
+	require.True(t, parsed.HasNativeOptions)
+	upstreamBody, target, err := buildOpenAIImagesOAuthPayload(parsed, parsed.Model)
+	require.NoError(t, err)
+	require.Equal(t, "https://chatgpt.com/backend-api/codex/images/generations", target)
+	for key, want := range map[string]string{"complexity": "low", "quality": "low", "size": "1024x1024", "background": "transparent", "output_format": "png"} {
+		require.Equal(t, want, gjson.GetBytes(upstreamBody, key).String(), key)
+	}
+	require.False(t, gjson.GetBytes(upstreamBody, "reasoning").Exists())
+
+	parsed.Complexity = ""
+	upstreamBody, _, err = buildOpenAIImagesOAuthPayload(parsed, parsed.Model)
+	require.NoError(t, err)
+	require.False(t, gjson.GetBytes(upstreamBody, "complexity").Exists())
+
+	// The Responses bridge maps reasoning.effort to the image complexity upstream.
+	for _, complexity := range []string{"", "high"} {
+		bridged, target, err := buildOpenAIImagesOAuthPayload(&OpenAIImagesRequest{Prompt: "draw", Complexity: complexity}, "gpt-image-1")
+		require.NoError(t, err)
+		require.Equal(t, chatgptCodexURL, target)
+		require.Equal(t, "auto", gjson.GetBytes(bridged, "reasoning.summary").String())
+		effort := gjson.GetBytes(bridged, "reasoning.effort")
+		require.Equal(t, complexity != "", effort.Exists(), complexity)
+		require.Equal(t, complexity, effort.String())
+		require.False(t, gjson.GetBytes(bridged, "tools.0.complexity").Exists())
+	}
 }
