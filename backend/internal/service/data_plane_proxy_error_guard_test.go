@@ -97,7 +97,7 @@ var rawProxyErrorAllowlist = map[string]string{
 	"OpenAIGatewayService.OpenGrokRealtime":                       "handler 的候选循环遇到任何错误都换下一个账号",
 	"OpenAIGatewayService.ProbeGrokRealtime":                      "握手探测，不是转发",
 	"GeminiMessagesCompatService.ForwardAIStudioGET":              "模型列表 GET，handler 直接回 502",
-	"AntigravityGatewayService.TestConnection":                    "账号测试，不是转发",
+	"AntigravityGatewayService.TestConnectionWithOptions":         "账号测试，不是转发",
 	"OpenAIGatewayService.DetectOpenAIRequestTimezone":            "出口时区探测，不是转发：失败只记录检测结果并沿用上次时区",
 	"OpenAIGatewayService.ForwardOpenAIResponsesLookup":           "response 只存在于创建它的 API Key 账号，无号可换：handler 直接回 502",
 }
