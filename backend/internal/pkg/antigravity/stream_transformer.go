@@ -476,7 +476,10 @@ func (p *StreamingProcessor) formatEvents(events []apicompat.AnthropicStreamEven
 	if len(events) == 0 {
 		return nil
 	}
-	buf := sseEventBufPool.Get().(*bytes.Buffer)
+	buf, ok := sseEventBufPool.Get().(*bytes.Buffer)
+	if !ok || buf == nil {
+		buf = new(bytes.Buffer)
+	}
 	buf.Reset()
 	defer func() {
 		if buf.Cap() <= 64<<10 {
@@ -545,11 +548,11 @@ func (p *StreamingProcessor) formatEvents(events []apicompat.AnthropicStreamEven
 			}
 			return nil
 		}
-		buf.WriteString("event: ")
-		buf.WriteString(event.Type)
-		buf.WriteString("\ndata: ")
-		buf.Write(jsonData)
-		buf.WriteString("\n\n")
+		_, _ = buf.WriteString("event: ")
+		_, _ = buf.WriteString(event.Type)
+		_, _ = buf.WriteString("\ndata: ")
+		_, _ = buf.Write(jsonData)
+		_, _ = buf.WriteString("\n\n")
 	}
 	out := make([]byte, buf.Len())
 	copy(out, buf.Bytes())

@@ -366,16 +366,11 @@ func (s *AntigravityOAuthService) RefreshAccountToken(ctx context.Context, accou
 	return tokenInfo, nil
 }
 
-// loadCodeAssistResult 封装 loadProjectIDWithRetry 的返回结果，
+// loadCodeAssistResult 封装 loadProjectIDForAccount / loadProjectIDWithClient 的返回结果，
 // 同时携带从 LoadCodeAssist 响应中提取的 plan_type 信息。
 type loadCodeAssistResult struct {
 	ProjectID    string
 	Subscription *AntigravitySubscriptionResult
-}
-
-// loadProjectIDWithRetry 带重试机制获取 project_id，同时从响应中提取 plan_type。
-func (s *AntigravityOAuthService) loadProjectIDWithRetry(ctx context.Context, accessToken, proxyURL string, maxRetries int) (*loadCodeAssistResult, error) {
-	return s.loadProjectIDForAccount(ctx, accessToken, proxyURL, maxRetries, 0, nil)
 }
 
 func (s *AntigravityOAuthService) loadProjectIDForAccount(ctx context.Context, accessToken, proxyURL string, maxRetries int, accountID int64, tlsProfile *tlsfingerprint.Profile) (*loadCodeAssistResult, error) {

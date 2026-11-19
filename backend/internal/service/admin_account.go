@@ -735,6 +735,8 @@ func (s *adminServiceImpl) UpdateAccount(ctx context.Context, id int64, input *U
 			openAIRequestTimezoneExtraKey,
 			openAIRequestTimezoneModeExtraKey,
 			openAIRequestTimezoneDetectedExtraKey,
+			AntigravityModelCatalogExtraKey,
+			UpstreamModelMetadataExtraKey,
 		} {
 			if v, ok := account.Extra[key]; ok {
 				normalizedExtra[key] = v

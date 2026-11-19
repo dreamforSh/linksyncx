@@ -1194,12 +1194,12 @@ func (s *OpenAIGatewayService) handleOpenAIImagesStreamingResponse(
 			var frame bytes.Buffer
 			for _, line := range lines {
 				data := openAIImagesStreamDataURL([]byte(line), *apiKeyURLFormat)
-				frame.WriteString("data: ")
-				frame.Write(bytes.ReplaceAll(data, []byte("\n"), []byte("\ndata: ")))
-				frame.WriteByte('\n')
+				_, _ = frame.WriteString("data: ")
+				_, _ = frame.Write(bytes.ReplaceAll(data, []byte("\n"), []byte("\ndata: ")))
+				_ = frame.WriteByte('\n')
 			}
 			if appendTerminator {
-				frame.WriteByte('\n')
+				_ = frame.WriteByte('\n')
 			}
 			writeRaw(frame.Bytes())
 		}

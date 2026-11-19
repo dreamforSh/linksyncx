@@ -462,25 +462,6 @@ handleSuccess:
 	}, nil
 }
 
-// cleanGeminiRequest 清理 Gemini 请求体中的 Schema
-func cleanGeminiRequest(body []byte) ([]byte, error) {
-	if !bytes.Contains(body, []byte(`"tools"`)) {
-		var probe any
-		if err := json.Unmarshal(body, &probe); err != nil {
-			return nil, err
-		}
-		return body, nil
-	}
-	var payload map[string]any
-	if err := json.Unmarshal(body, &payload); err != nil {
-		return nil, err
-	}
-	if !cleanGeminiRequestMap(payload) {
-		return body, nil
-	}
-	return json.Marshal(payload)
-}
-
 // filterEmptyPartsFromGeminiRequest 过滤掉 parts 为空的消息
 // Gemini API 不接受空 parts，需要在请求前过滤
 func filterEmptyPartsFromGeminiRequest(body []byte) ([]byte, error) {

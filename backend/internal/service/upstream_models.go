@@ -1310,18 +1310,15 @@ func (s *AccountTestService) fetchAntigravityOAuthUpstreamModels(ctx context.Con
 	if accountID <= 0 {
 		defer client.CloseIdleConnections()
 	}
-	projectID := strings.TrimSpace(account.GetCredential("project_id"))
-	if projectID == "" {
-		projectID = strings.TrimSpace(account.GetCredential(antigravityProjectIDFallbackCredentialKey))
-	}
-	if projectID == "" {
-		projectID = strings.TrimSpace(account.GetExtraString(antigravityProjectIDFallbackCredentialKey))
-	}
-	modelsResp, _, err := client.FetchAvailableModels(
+	projectID := resolveAntigravityAccountProjectID(account)
+	modelsURLs, fallbackOnAuthError := resolveAntigravityModelsBaseURLs(account)
+	modelsResp, _, err := client.FetchAvailableModelsWithURLs(
 		ctx,
 		accessToken,
 		projectID,
 		resolveModelsListReadLimit(s.cfg),
+		modelsURLs,
+		fallbackOnAuthError,
 	)
 	if err != nil {
 		return nil, nil, newUpstreamModelSyncUpstreamError("Failed to fetch Antigravity available models", err)

@@ -88,6 +88,37 @@ func accountHasAntigravityPaidTier(account *Account) bool {
 	}
 }
 
+// resolveAntigravityModelsBaseURLs 解析模型列表与配额发现请求的 base URL 顺序及是否允许 401/403 降级。
+// 除显式配置为 prod 外，优先请求 daily（与 ForwardBaseURLs 或测试双端点首尾交换对齐）以获取预发布新模型，
+// 若返回 401/403、429/5xx 或空列表再自动回退到 prod；不会标记账号不可调度。
+func resolveAntigravityModelsBaseURLs(_ *Account) ([]string, bool) {
+	mode := strings.ToLower(strings.TrimSpace(os.Getenv(antigravityForwardBaseURLEnv)))
+	if mode == "prod" {
+		return antigravity.BaseURLs, false
+	}
+	urls := antigravity.ForwardBaseURLs()
+	if len(urls) > 1 && len(antigravity.BaseURLs) > 1 && urls[0] == antigravity.BaseURLs[0] {
+		reordered := make([]string, 0, len(urls))
+		reordered = append(reordered, urls[1], urls[0])
+		reordered = append(reordered, urls[2:]...)
+		urls = reordered
+	}
+	return urls, true
+}
+
+func resolveAntigravityAccountProjectID(account *Account) string {
+	if account == nil {
+		return ""
+	}
+	if projectID := strings.TrimSpace(account.GetCredential("project_id")); projectID != "" {
+		return projectID
+	}
+	if projectID := strings.TrimSpace(account.GetCredential(antigravityProjectIDFallbackCredentialKey)); projectID != "" {
+		return projectID
+	}
+	return strings.TrimSpace(account.GetExtraString(antigravityProjectIDFallbackCredentialKey))
+}
+
 // smartRetryAction 智能重试的处理结果
 type smartRetryAction int
 

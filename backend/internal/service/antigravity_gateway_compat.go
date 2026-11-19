@@ -305,30 +305,6 @@ func (s *AntigravityGatewayService) buildAntigravityCompatGeminiBodyForAccount(
 	return antigravity.TransformClaudeToGeminiWithOptions(claudeRequest, projectID, mappedModel, options)
 }
 
-// enableMixedGeminiToolInvocations reconciles Antigravity v1internal tool payloads.
-//
-// Antigravity's cloudcode-pa v1internal endpoint rejects mixing built-in tools
-// (googleSearch / codeExecution) with client functionDeclarations — even when
-// includeServerSideToolInvocations is set (issue #6464). Prefer client function
-// tools (Codex/agent workflows) and drop the incompatible built-ins.
-func enableMixedGeminiToolInvocations(body []byte) ([]byte, error) {
-	if !strings.Contains(string(body), `"tools"`) {
-		var probe any
-		if err := json.Unmarshal(body, &probe); err != nil {
-			return nil, err
-		}
-		return body, nil
-	}
-	var request map[string]any
-	if err := json.Unmarshal(body, &request); err != nil {
-		return nil, err
-	}
-	if !enableMixedGeminiToolsInMap(request) {
-		return body, nil
-	}
-	return json.Marshal(request)
-}
-
 // antigravityCompatProxyURL fail-closed：分配了代理但不可用时返回错误，绝不回退直连。
 func antigravityCompatProxyURL(account *Account) (string, error) {
 	return account.ProxyURLForOutbound()

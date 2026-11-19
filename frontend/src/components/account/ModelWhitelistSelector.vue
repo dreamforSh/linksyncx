@@ -154,7 +154,7 @@ import { useClipboard } from '@/composables/useClipboard'
 import { extractApiErrorMessage } from '@/utils/apiError'
 import ModelIcon from '@/components/common/ModelIcon.vue'
 import Icon from '@/components/icons/Icon.vue'
-import { allModels, getModelsByPlatform } from '@/composables/useModelWhitelist'
+import { allModels, fetchAntigravityDefaultMappings, getModelsByPlatform } from '@/composables/useModelWhitelist'
 
 const { t } = useI18n()
 
@@ -243,20 +243,39 @@ const canSyncUpstream = computed(() => {
   return false
 })
 
+watch(normalizedPlatforms, (platforms) => {
+  if (platforms.includes('antigravity')) {
+    void fetchAntigravityDefaultMappings()
+  }
+}, { immediate: true })
+
+const allModelsMap = new Map(allModels.map(model => [model.value, model]))
+
 const availableOptions = computed(() => {
   const platforms = normalizedPlatforms.value
-  const allowedModels = new Set<string>()
-  for (const platform of platforms) {
-    for (const model of getModelsByPlatform(platform)) {
-      allowedModels.add(model)
+  const options = new Map<string, { value: string; label: string }>()
+  if (platforms.length === 0) {
+    for (const model of allModels) {
+      options.set(model.value, model)
+    }
+  } else {
+    for (const platform of platforms) {
+      for (const rawModel of getModelsByPlatform(platform)) {
+        const model = rawModel.trim()
+        if (!model || model.includes('*')) continue
+        if (!options.has(model)) {
+          options.set(model, allModelsMap.get(model) ?? { value: model, label: model })
+        }
+      }
     }
   }
-  const defaults = platforms.length === 0
-    ? allModels
-    : allModels.filter(model => allowedModels.has(model.value))
-  const options = new Map(defaults.map(model => [model.value, model]))
   for (const model of syncedOptions.value) {
     options.set(model.value, model)
+  }
+  for (const rawSelected of props.modelValue) {
+    const selected = rawSelected.trim()
+    if (!selected || options.has(selected)) continue
+    options.set(selected, allModelsMap.get(selected) ?? { value: selected, label: selected })
   }
   return [...options.values()]
 })
@@ -305,10 +324,18 @@ const handleEnter = () => {
   if (!isComposing.value) addCustom()
 }
 
-const fillRelated = () => {
+const fillRelated = async () => {
+  if (
+    normalizedPlatforms.value.includes('antigravity') &&
+    getModelsByPlatform('antigravity').length === 0
+  ) {
+    await fetchAntigravityDefaultMappings()
+  }
   const newModels = [...props.modelValue]
   for (const platform of normalizedPlatforms.value) {
-    for (const model of getModelsByPlatform(platform)) {
+    for (const rawModel of getModelsByPlatform(platform)) {
+      const model = rawModel.trim()
+      if (!model || model.includes('*')) continue
       if (!newModels.includes(model)) {
         newModels.push(model)
       }

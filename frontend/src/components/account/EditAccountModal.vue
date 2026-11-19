@@ -1559,7 +1559,7 @@
         </div>
       </div>
 
-      <!-- Antigravity model restriction (applies to all antigravity types) -->
+      <!-- Antigravity model restriction (aligned with OpenAI) -->
       <div v-if="account.platform === 'antigravity'" class="border-t border-gray-200 pt-4 dark:border-dark-600">
         <label class="input-label">{{ t('admin.accounts.modelRestriction') }}</label>
 
@@ -1576,6 +1576,19 @@
                 : 'bg-gray-100 text-gray-600 hover:bg-gray-200 dark:bg-dark-600 dark:text-gray-400 dark:hover:bg-dark-500'
             ]"
           >
+            <svg
+              class="mr-1.5 inline h-4 w-4"
+              fill="none"
+              viewBox="0 0 24 24"
+              stroke="currentColor"
+            >
+              <path
+                stroke-linecap="round"
+                stroke-linejoin="round"
+                stroke-width="2"
+                d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z"
+              />
+            </svg>
             {{ t('admin.accounts.modelWhitelist') }}
           </button>
           <button
@@ -1589,6 +1602,19 @@
                 : 'bg-gray-100 text-gray-600 hover:bg-gray-200 dark:bg-dark-600 dark:text-gray-400 dark:hover:bg-dark-500'
             ]"
           >
+            <svg
+              class="mr-1.5 inline h-4 w-4"
+              fill="none"
+              viewBox="0 0 24 24"
+              stroke="currentColor"
+            >
+              <path
+                stroke-linecap="round"
+                stroke-linejoin="round"
+                stroke-width="2"
+                d="M8 7h12m0 0l-4-4m4 4l-4 4m0 6H4m0 0l4 4m-4-4l4-4"
+              />
+            </svg>
             {{ t('admin.accounts.modelMapping') }}
           </button>
         </div>
@@ -1611,27 +1637,22 @@
         <!-- Mapping Mode -->
         <div v-else>
           <div class="mb-3 rounded-lg bg-purple-50 p-3 dark:bg-purple-900/20">
-            <p class="text-xs text-purple-700 dark:text-purple-400">{{ t('admin.accounts.mapRequestModels') }}</p>
-          </div>
-
-          <div class="mb-3 flex flex-wrap gap-2">
-            <button
-              type="button"
-              @click="syncAntigravityUpstreamModels"
-              :disabled="isSyncingAntigravityUpstream || !account?.id"
-              class="rounded-lg border border-emerald-200 px-3 py-1.5 text-sm text-emerald-600 hover:bg-emerald-50 disabled:cursor-not-allowed disabled:opacity-60 dark:border-emerald-800 dark:text-emerald-400 dark:hover:bg-emerald-900/30"
-            >
-              {{ isSyncingAntigravityUpstream ? t('admin.accounts.syncUpstreamModelsLoading') : t('admin.accounts.syncUpstreamModels') }}
-            </button>
-            <button
-              v-if="antigravityModelMappings.length > 0"
-              type="button"
-              data-testid="edit-antigravity-clear-mappings"
-              @click="clearAntigravityModelMappings"
-              class="rounded-lg border border-red-200 px-3 py-1.5 text-sm text-red-600 hover:bg-red-50 dark:border-red-800 dark:text-red-400 dark:hover:bg-red-900/30"
-            >
-              {{ t('admin.accounts.clearAllModels') }}
-            </button>
+            <p class="text-xs text-purple-700 dark:text-purple-400">
+              <svg
+                class="mr-1 inline h-4 w-4"
+                fill="none"
+                viewBox="0 0 24 24"
+                stroke="currentColor"
+              >
+                <path
+                  stroke-linecap="round"
+                  stroke-linejoin="round"
+                  stroke-width="2"
+                  d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"
+                />
+              </svg>
+              {{ t('admin.accounts.mapRequestModels') }}
+            </p>
           </div>
 
           <div v-if="antigravityModelMappings.length > 0" class="mb-3 space-y-2">
@@ -4138,10 +4159,9 @@ const readUpstreamRequestIdHeader = (extra: unknown): string => {
 }
 const allowOverages = ref(false) // For antigravity accounts: enable AI Credits overages
 const antigravityProjectId = ref('')
-const antigravityModelRestrictionMode = ref<'whitelist' | 'mapping'>('mapping')
+const antigravityModelRestrictionMode = ref<'whitelist' | 'mapping'>('whitelist')
 const antigravityWhitelistModels = ref<string[]>([])
 const antigravityModelMappings = ref<ModelMapping[]>([])
-const isSyncingAntigravityUpstream = ref(false)
 const tempUnschedEnabled = ref(false)
 const accountSchedulingThresholdOverrideEnabled = ref(false)
 const accountSchedulingThresholdOverrideValue = ref(100)
@@ -4816,21 +4836,38 @@ const syncFormFromAccount = (newAccount: Account | null) => {
     resetQuotaNotify()
   }
 
-  antigravityModelRestrictionMode.value = 'mapping'
+  antigravityModelRestrictionMode.value = 'whitelist'
   antigravityWhitelistModels.value = []
   antigravityModelMappings.value = []
   if (newAccount.platform === 'antigravity') {
     const mapping = credentials?.model_mapping as Record<string, string> | undefined
+    const entries = mapping && typeof mapping === 'object' ? Object.entries(mapping) : []
     if (credentials?.model_restriction_mode === 'whitelist') {
       antigravityModelRestrictionMode.value = 'whitelist'
       antigravityWhitelistModels.value = Object.keys(mapping || {})
-    } else if (mapping && typeof mapping === 'object') {
-      antigravityModelMappings.value = Object.entries(mapping).map(([from, to]) => ({ from, to }))
-    } else if (Array.isArray(credentials?.model_whitelist)) {
-      antigravityModelMappings.value = credentials.model_whitelist
+    } else if (credentials?.model_restriction_mode === 'mapping') {
+      antigravityModelRestrictionMode.value = 'mapping'
+      antigravityModelMappings.value = entries.map(([from, to]) => ({ from, to }))
+    } else if (entries.length > 0) {
+      const isPurePassthrough = entries.every(
+        ([from, to]) =>
+          typeof to === 'string' &&
+          from.trim() !== '' &&
+          from.trim() === to.trim() &&
+          !from.includes('*')
+      )
+      if (isPurePassthrough) {
+        antigravityModelRestrictionMode.value = 'whitelist'
+        antigravityWhitelistModels.value = entries.map(([from]) => from.trim())
+      } else {
+        antigravityModelRestrictionMode.value = 'mapping'
+        antigravityModelMappings.value = entries.map(([from, to]) => ({ from, to }))
+      }
+    } else if (Array.isArray(credentials?.model_whitelist) && credentials.model_whitelist.length > 0) {
+      antigravityModelRestrictionMode.value = 'whitelist'
+      antigravityWhitelistModels.value = credentials.model_whitelist
         .map((m) => String(m).trim())
         .filter(Boolean)
-        .map((m) => ({ from: m, to: m }))
     }
   }
 
@@ -5122,10 +5159,6 @@ const removeAntigravityModelMapping = (index: number) => {
   antigravityModelMappings.value.splice(index, 1)
 }
 
-const clearAntigravityModelMappings = () => {
-  antigravityModelMappings.value = []
-}
-
 const switchAntigravityRestrictionMode = (mode: 'whitelist' | 'mapping') => {
   if (antigravityModelRestrictionMode.value === mode) return
   if (mode === 'whitelist' && antigravityWhitelistModels.value.length === 0 && antigravityModelMappings.value.length > 0) {
@@ -5148,54 +5181,6 @@ const addAntigravityPresetMapping = (from: string, to: string) => {
     return
   }
   antigravityModelMappings.value.push({ from, to })
-}
-
-const syncAntigravityUpstreamModels = async () => {
-  if (!props.account?.id || isSyncingAntigravityUpstream.value) return
-
-  isSyncingAntigravityUpstream.value = true
-  try {
-    const result = await adminAPI.accounts.syncUpstreamModels(props.account.id)
-    const upstreamModels = result.models.map((model) => model.trim()).filter(Boolean)
-    if (upstreamModels.length === 0) {
-      appStore.showInfo(t('admin.accounts.syncUpstreamModelsEmpty'))
-      return
-    }
-
-    let addedCount = 0
-    for (const model of upstreamModels) {
-      const exists = antigravityModelMappings.value.some((mapping) => mapping.from === model)
-      if (!exists) {
-        antigravityModelMappings.value.push({ from: model, to: model })
-        addedCount += 1
-      }
-    }
-
-    const warnings = result.warnings ?? []
-    const hasPartialMetadata = warnings.some(
-      (warning) => warning.code === 'upstream_model_metadata_partial'
-    )
-    const hasIncompleteMetadata = warnings.some(
-      (warning) => warning.code === 'upstream_model_metadata_incomplete'
-    )
-    if (hasIncompleteMetadata) {
-      appStore.showWarning(t('admin.accounts.syncUpstreamModelsMetadataIncomplete'))
-      return
-    }
-    if (addedCount > 0) {
-      appStore.showSuccess(t('admin.accounts.syncUpstreamModelsSuccess', { count: addedCount, total: upstreamModels.length }))
-    } else {
-      appStore.showInfo(t('admin.accounts.syncUpstreamModelsNoChanges', { count: upstreamModels.length }))
-    }
-    if (hasPartialMetadata) {
-      appStore.showWarning(t('admin.accounts.syncUpstreamModelsMetadataPartial'))
-    }
-  } catch (error) {
-    const message = extractApiErrorMessage(error, t('admin.accounts.syncUpstreamModelsFailed'))
-    appStore.showError(t('admin.accounts.syncUpstreamModelsError', { message }))
-  } finally {
-    isSyncingAntigravityUpstream.value = false
-  }
 }
 
 // Error code toggle helper

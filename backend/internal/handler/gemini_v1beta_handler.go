@@ -64,6 +64,35 @@ func (h *GatewayHandler) GeminiV1BetaListModels(c *gin.Context) {
 	var agModels []gemini.Model
 	var discovered bool
 	if h.antigravityGatewayService != nil {
+		if !requireMixed && apiKey.Group != nil &&
+			apiKey.Group.Platform == service.PlatformAntigravity &&
+			apiKey.Group.CodexModelsManifestConfig.Enabled {
+			var (
+				selected *service.Account
+				err      error
+			)
+			agModels, selected, err = h.antigravityGatewayService.FetchPinnedAntigravityGeminiModels(
+				c.Request.Context(),
+				apiKey.Group,
+				h.maxAccountSwitchesGemini,
+			)
+			if c.Request.Context().Err() != nil {
+				return
+			}
+			if err != nil {
+				if errors.Is(err, service.ErrNoPinnedCodexModelsAccounts) {
+					googleError(c, http.StatusServiceUnavailable, "No available Antigravity model discovery accounts")
+					return
+				}
+				googleError(c, http.StatusBadGateway, err.Error())
+				return
+			}
+			if selected != nil {
+				setOpsSelectedAccount(c, selected.ID, selected.Platform)
+			}
+			c.JSON(http.StatusOK, gemini.ModelsListResponse{Models: filterGeminiModels(agModels)})
+			return
+		}
 		agModels, discovered = h.antigravityGatewayService.FetchGroupGeminiModels(c.Request.Context(), apiKey.GroupID, requireMixed, h.maxAccountSwitchesGemini)
 	}
 	if !discovered && h.geminiCompatService != nil {

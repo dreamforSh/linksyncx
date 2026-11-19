@@ -1,12 +1,14 @@
 package handler
 
 import (
+	"context"
 	"encoding/json"
 	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/Wei-Shaw/sub2api/internal/pkg/antigravity"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/gemini"
@@ -134,4 +136,136 @@ func TestGatewayAntigravityModels_SyncsLiveUpstreamAndSupportsSingleModelRetriev
 	require.Contains(t, names, "models/gemini-4-carbon-high")
 	require.Contains(t, names, "models/gemini-4-carbon")
 	require.NotContains(t, names, "models/claude-opus-5-6")
+}
+
+type antigravityHandlerRoutingUpstream struct {
+	bodies    map[int64]string
+	statuses  map[int64]int
+	calledIDs []int64
+}
+
+func (u *antigravityHandlerRoutingUpstream) Do(_ *http.Request, _ string, accountID int64, _ int) (*http.Response, error) {
+	u.calledIDs = append(u.calledIDs, accountID)
+	status := u.statuses[accountID]
+	if status == 0 {
+		status = http.StatusOK
+	}
+	return &http.Response{
+		StatusCode: status,
+		Body:       io.NopCloser(strings.NewReader(u.bodies[accountID])),
+		Header:     make(http.Header),
+	}, nil
+}
+
+func (u *antigravityHandlerRoutingUpstream) DoWithTLS(req *http.Request, proxyURL string, accountID int64, accountConcurrency int, _ *tlsfingerprint.Profile) (*http.Response, error) {
+	return u.Do(req, proxyURL, accountID, accountConcurrency)
+}
+
+func TestGatewayAntigravityModels_PinnedAccountsAndErrors(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	groupID := int64(89)
+	overloaded := time.Now().Add(time.Hour)
+	repo := &gatewayModelsAccountRepoStub{
+		byGroup: map[int64][]service.Account{
+			groupID: {
+				{
+					ID:                     601,
+					Platform:               service.PlatformAntigravity,
+					Type:                   service.AccountTypeUpstream,
+					Status:                 service.StatusActive,
+					Schedulable:            true,
+					OverloadUntil:          &overloaded,
+					TempUnschedulableUntil: &overloaded,
+					Credentials: map[string]any{
+						"base_url": "https://relay-a.antigravity.example",
+						"api_key":  "key-a",
+					},
+				},
+				{
+					ID:          602,
+					Platform:    service.PlatformAntigravity,
+					Type:        service.AccountTypeUpstream,
+					Status:      service.StatusActive,
+					Schedulable: true,
+					Credentials: map[string]any{
+						"base_url": "https://relay-b.antigravity.example",
+						"api_key":  "key-b",
+					},
+				},
+			},
+		},
+	}
+	upstream := &antigravityHandlerRoutingUpstream{
+		bodies: map[int64]string{
+			601: `{"data":[{"id":"gemini-4-argon-high","display_name":"Gemini 4 Argon (High)"}]}`,
+			602: `{"data":[{"id":"claude-opus-5-6","display_name":"Claude Opus 5.6"}]}`,
+		},
+	}
+	agSvc := service.NewAntigravityGatewayService(repo, nil, nil, nil, nil, upstream, nil, nil)
+	h := &GatewayHandler{
+		gatewayService: service.NewGatewayService(
+			repo, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil,
+			nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil,
+		),
+		antigravityGatewayService: agSvc,
+		maxAccountSwitches:        3,
+		maxAccountSwitchesGemini:  3,
+	}
+
+	pinnedGroup := &service.Group{
+		ID:       groupID,
+		Platform: service.PlatformAntigravity,
+		CodexModelsManifestConfig: service.GroupCodexModelsManifestConfig{
+			Enabled:    true,
+			AccountIDs: []int64{601, 602},
+		},
+	}
+
+	// 1. /antigravity/v1/models merges pinned accounts (including transiently overloaded 601)
+	rec := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(rec)
+	c.Request = httptest.NewRequest(http.MethodGet, "/antigravity/v1/models", nil)
+	c.Set(string(middleware.ContextKeyAPIKey), &service.APIKey{GroupID: &groupID, Group: pinnedGroup})
+	h.AntigravityModels(c)
+	require.Equal(t, http.StatusOK, rec.Code)
+	require.Contains(t, rec.Body.String(), "gemini-4-argon-high")
+	require.Contains(t, rec.Body.String(), "claude-opus-5-6")
+
+	// 2. /v1beta/models on /antigravity/v1beta/models uses pinned Gemini models
+	recBeta := httptest.NewRecorder()
+	cBeta, _ := gin.CreateTestContext(recBeta)
+	cBeta.Request = httptest.NewRequest(http.MethodGet, "/antigravity/v1beta/models", nil)
+	cBeta.Set(string(middleware.ContextKeyForcePlatform), service.PlatformAntigravity)
+	cBeta.Set(string(middleware.ContextKeyAPIKey), &service.APIKey{GroupID: &groupID, Group: pinnedGroup})
+	h.GeminiV1BetaListModels(cBeta)
+	require.Equal(t, http.StatusOK, recBeta.Code)
+	var betaResp gemini.ModelsListResponse
+	require.NoError(t, json.Unmarshal(recBeta.Body.Bytes(), &betaResp))
+	betaNames := make([]string, 0, len(betaResp.Models))
+	for _, gm := range betaResp.Models {
+		betaNames = append(betaNames, gm.Name)
+	}
+	require.Contains(t, betaNames, "models/gemini-4-argon-high")
+	require.Contains(t, betaNames, "models/gemini-4-argon")
+
+	// 3. codexModelIDsForGroup uses live/pinned Antigravity discovery
+	codexIDs := h.codexModelIDsForGroup(context.Background(), pinnedGroup, "")
+	require.Equal(t, []string{"claude-opus-5-6", "gemini-4-argon-high"}, codexIDs)
+
+	// 4. Pinned group with no usable accounts returns 503 instead of stale static list
+	noUsableGroup := &service.Group{
+		ID:       groupID,
+		Platform: service.PlatformAntigravity,
+		CodexModelsManifestConfig: service.GroupCodexModelsManifestConfig{
+			Enabled:    true,
+			AccountIDs: []int64{9999},
+		},
+	}
+	rec503 := httptest.NewRecorder()
+	c503, _ := gin.CreateTestContext(rec503)
+	c503.Request = httptest.NewRequest(http.MethodGet, "/antigravity/v1/models", nil)
+	c503.Set(string(middleware.ContextKeyAPIKey), &service.APIKey{GroupID: &groupID, Group: noUsableGroup})
+	h.AntigravityModels(c503)
+	require.Equal(t, http.StatusServiceUnavailable, rec503.Code)
 }

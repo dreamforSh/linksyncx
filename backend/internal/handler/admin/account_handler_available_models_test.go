@@ -892,7 +892,7 @@ func TestAccountHandlerSyncUpstreamModelsPreview_HonorsWhitelistAndHeaderOverrid
 
 	require.Equal(t, http.StatusOK, rec.Code)
 	require.NotEmpty(t, upstream.requests)
-	require.Equal(t, []string{"gate-pass"}, upstream.requests[0].Header["x-relay-gate"])
+	require.Equal(t, []string{"gate-pass"}, map[string][]string(upstream.requests[0].Header)["x-relay-gate"])
 	require.Contains(t, rec.Body.String(), `"claude-sonnet-4-6"`)
 
 	// 黑名单请求头（如 Authorization）在预览阶段同样返回 400 拒绝

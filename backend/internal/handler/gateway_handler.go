@@ -1314,6 +1314,33 @@ func (h *GatewayHandler) codexModelIDsForGroup(ctx context.Context, group *servi
 		return fallbackModels
 	}
 
+	if platform == service.PlatformAntigravity && h.antigravityGatewayService != nil {
+		var (
+			agModels   []antigravity.ClaudeModel
+			discovered bool
+		)
+		if group.Platform == service.PlatformAntigravity && group.CodexModelsManifestConfig.Enabled {
+			if pinned, _, err := h.antigravityGatewayService.FetchPinnedAntigravityModelsList(ctx, group, h.maxAccountSwitches, false); err == nil {
+				agModels = pinned
+				discovered = true
+			}
+		} else {
+			agModels, _, discovered = h.antigravityGatewayService.FetchGroupModels(ctx, groupID, false, h.maxAccountSwitches)
+		}
+		if discovered {
+			ids := make([]string, 0, len(agModels))
+			for _, model := range agModels {
+				if id := strings.TrimSpace(model.ID); id != "" {
+					ids = append(ids, id)
+				}
+			}
+			if group.ModelAllowlistEnabled() {
+				return group.ModelAllowlist.FilterForListing(ids)
+			}
+			return ids
+		}
+	}
+
 	availableModels := h.gatewayService.GetAvailableModels(ctx, groupID, platform)
 	fallbackModels := defaultCodexModelIDsForPlatform(platform)
 	if group.ModelAllowlistEnabled() {
@@ -1587,12 +1614,43 @@ func (h *GatewayHandler) AntigravityModels(c *gin.Context) {
 		discovered      bool
 	)
 	if h != nil && h.antigravityGatewayService != nil {
-		models, selectedAccount, discovered = h.antigravityGatewayService.FetchGroupModels(
-			c.Request.Context(),
-			groupID,
-			false,
-			h.maxAccountSwitches,
-		)
+		if apiKey != nil && apiKey.Group != nil &&
+			apiKey.Group.Platform == service.PlatformAntigravity &&
+			apiKey.Group.CodexModelsManifestConfig.Enabled {
+			var err error
+			models, selectedAccount, err = h.antigravityGatewayService.FetchPinnedAntigravityModelsList(
+				c.Request.Context(),
+				apiKey.Group,
+				h.maxAccountSwitches,
+				false,
+			)
+			if c.Request.Context().Err() != nil {
+				return
+			}
+			if err != nil {
+				if errors.Is(err, service.ErrNoPinnedCodexModelsAccounts) {
+					writeOpenAIModelsError(c, http.StatusServiceUnavailable, "upstream_error", "No available Antigravity model discovery accounts")
+					return
+				}
+				status := pkgerrors.Code(err)
+				if status == http.StatusInternalServerError {
+					var appErr *pkgerrors.ApplicationError
+					if !errors.As(err, &appErr) {
+						status = http.StatusBadGateway
+					}
+				}
+				writeOpenAIModelsError(c, status, "upstream_error", pkgerrors.Message(err))
+				return
+			}
+			discovered = true
+		} else {
+			models, selectedAccount, discovered = h.antigravityGatewayService.FetchGroupModels(
+				c.Request.Context(),
+				groupID,
+				false,
+				h.maxAccountSwitches,
+			)
+		}
 	}
 	if selectedAccount != nil {
 		setOpsSelectedAccount(c, selectedAccount.ID, selectedAccount.Platform)

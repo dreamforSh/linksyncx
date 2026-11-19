@@ -146,6 +146,20 @@ func (s *adminServiceImpl) GetGroupModelsListCandidates(ctx context.Context, id 
 			seen[model] = struct{}{}
 			candidates = append(candidates, model)
 		}
+		if acc.Platform == PlatformAntigravity {
+			observedIDs, _ := acc.AntigravityObservedModelIDs()
+			for _, model := range observedIDs {
+				model = strings.TrimSpace(model)
+				if model == "" {
+					continue
+				}
+				if _, ok := seen[model]; ok {
+					continue
+				}
+				seen[model] = struct{}{}
+				candidates = append(candidates, model)
+			}
+		}
 	}
 	return candidates, nil
 }
@@ -1124,12 +1138,15 @@ func (s *adminServiceImpl) UpdateGroup(ctx context.Context, id int64, input *Upd
 		group.AllowLive = false
 	}
 	sanitizeGroupReasoningEffortPolicy(group)
-	// 固定账号 manifest 配置：按最终平台归一化（切出 openai 平台时静默归零，
-	// 与 ForceOpenAIFast 同一收口）；校验仅在本次显式携带配置时进行，
+	// 固定账号 manifest 配置：跨平台切换未显式重传时清空旧账号集合，再按最终平台归一化
+	// （非 openai / antigravity 平台静默归零）；校验仅在本次显式携带配置时进行，
 	// 避免脏 ID 阻塞无关字段更新。
+	if group.Platform != previousPlatform && input.CodexModelsManifestConfig == nil {
+		group.CodexModelsManifestConfig = GroupCodexModelsManifestConfig{}
+	}
 	group.CodexModelsManifestConfig = normalizeCodexModelsManifestConfig(group.Platform, group.CodexModelsManifestConfig)
 	if input.CodexModelsManifestConfig != nil {
-		if err := s.validateCodexModelsManifestConfig(ctx, id, group.CodexModelsManifestConfig); err != nil {
+		if err := s.validateCodexModelsManifestConfig(ctx, id, group.Platform, group.CodexModelsManifestConfig); err != nil {
 			return nil, err
 		}
 	}

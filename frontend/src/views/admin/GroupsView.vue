@@ -3195,11 +3195,12 @@
           </div>
         </div>
 
-        <!-- 固定账号获取 Codex Model Manifest（仅 openai 平台，仅编辑对话框） -->
+        <!-- 固定账号获取模型列表（openai / antigravity 平台，仅编辑对话框） -->
         <CodexManifestAccountsField
-          v-if="editForm.platform === 'openai' && editingGroup"
+          v-if="supportsPinnedModelsManifest(editForm.platform) && editingGroup"
           ref="editCodexManifestRef"
           :group-id="editingGroup.id"
+          :platform="editForm.platform"
           :model-value="editCodexManifestConfig"
           @update:model-value="Object.assign(editCodexManifestConfig, $event)"
           :account-names="editCodexManifestAccountNames"
@@ -5006,7 +5007,9 @@ type ReasoningEffortPolicyFieldsExpose = {
 const createReasoningEffortPolicyRef = ref<ReasoningEffortPolicyFieldsExpose | null>(null);
 const editReasoningEffortPolicyRef = ref<ReasoningEffortPolicyFieldsExpose | null>(null);
 
-// 固定账号获取 Codex Model Manifest（仅 openai 分组编辑对话框）
+// 固定账号获取模型列表（openai / antigravity 分组编辑对话框）
+const supportsPinnedModelsManifest = (platform: string) =>
+  platform === "openai" || platform === "antigravity";
 type CodexManifestAccountsFieldExpose = {
   validate: () => boolean;
   resetValidation: () => void;
@@ -6404,9 +6407,9 @@ const handleUpdateGroup = async () => {
     appStore.showError(t("admin.groups.modelAllowlist.emptySelectionError"));
     return;
   }
-  // 固定账号 manifest：开启后至少一个账号，前端阻止提交并提示。
+  // 固定账号获取模型列表：开启后至少一个账号，前端阻止提交并提示。
   if (
-    editForm.platform === "openai" &&
+    supportsPinnedModelsManifest(editForm.platform) &&
     editCodexManifestConfig.value.enabled &&
     editCodexManifestConfig.value.account_ids.length === 0
   ) {
@@ -6454,9 +6457,9 @@ const handleUpdateGroup = async () => {
         editModelRoutingRules.value,
       ),
       model_allowlist: buildModelAllowlistConfig(editModelAllowlistState),
-      // 非 openai 平台提交关闭状态，与后端归一化一致
+      // 非 openai / antigravity 平台提交关闭状态，与后端归一化一致
       codex_models_manifest_config:
-        editForm.platform === "openai"
+        supportsPinnedModelsManifest(editForm.platform)
           ? {
               enabled: editCodexManifestConfig.value.enabled,
               account_ids: [...editCodexManifestConfig.value.account_ids],

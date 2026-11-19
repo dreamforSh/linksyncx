@@ -42,11 +42,20 @@ vi.mock('@/stores/app', () => ({
   })
 }))
 
+const getAntigravityDefaultModelMapping = vi.hoisted(() =>
+  vi.fn().mockResolvedValue({
+    'claude-*': 'claude-sonnet-4-6',
+    'claude-opus-4-6-thinking': 'claude-opus-4-6-thinking',
+    'gemini-pro-agent': 'gemini-pro-agent',
+  })
+)
+
 vi.mock('@/api/admin/accounts', () => ({
   accountsAPI: {
     syncUpstreamModels,
     syncUpstreamModelsPreview
-  }
+  },
+  getAntigravityDefaultModelMapping,
 }))
 
 vi.mock('@/composables/useClipboard', () => ({
@@ -298,5 +307,69 @@ describe('ModelWhitelistSelector', () => {
 
     expect(syncButton).toBeDefined()
     expect(syncButton?.exists()).toBe(true)
+  })
+
+  it('auto-loads antigravity mappings, filters wildcards, fills related models, and syncs preview', async () => {
+    getAntigravityDefaultModelMapping.mockClear()
+    syncUpstreamModelsPreview.mockReset().mockResolvedValue({
+      models: ['claude-opus-4-8', 'gemini-3.5-pro'],
+    })
+
+    const wrapper = mountSelector({
+      platform: 'antigravity',
+      syncCredentials: {
+        platform: 'antigravity',
+        type: 'apikey',
+        base_url: 'https://relay.example',
+        api_key: 'sk-ag',
+      },
+    })
+    await Promise.resolve()
+    await Promise.resolve()
+    await wrapper.vm.$nextTick()
+
+    expect(getAntigravityDefaultModelMapping).toHaveBeenCalled()
+
+    await wrapper.find('.cursor-pointer').trigger('click')
+    await wrapper.vm.$nextTick()
+    const optionValues = wrapper.findAll('[data-testid="select-model"]').map(item => item.text().trim())
+    expect(optionValues).toContain('claude-opus-4-6-thinking')
+    expect(optionValues).toContain('gemini-pro-agent')
+    expect(optionValues).not.toContain('claude-*')
+
+    const fillButton = wrapper
+      .findAll('button')
+      .find(button => button.text() === 'admin.accounts.fillRelatedModels')
+    expect(fillButton).toBeDefined()
+    await fillButton?.trigger('click')
+    await Promise.resolve()
+    await wrapper.vm.$nextTick()
+
+    const afterFillEmits = wrapper.emitted('update:modelValue') || []
+    expect(afterFillEmits.length).toBeGreaterThan(0)
+    const filled = afterFillEmits[afterFillEmits.length - 1]?.[0] as string[]
+    expect(filled).toContain('claude-opus-4-6-thinking')
+    expect(filled).toContain('gemini-pro-agent')
+    expect(filled).not.toContain('claude-*')
+
+    const syncButton = wrapper
+      .findAll('button')
+      .find(button => button.text() === 'admin.accounts.syncUpstreamModels')
+    expect(syncButton).toBeDefined()
+    await syncButton?.trigger('click')
+    await Promise.resolve()
+    await Promise.resolve()
+    await wrapper.vm.$nextTick()
+
+    expect(syncUpstreamModelsPreview).toHaveBeenCalledWith({
+      platform: 'antigravity',
+      type: 'apikey',
+      base_url: 'https://relay.example',
+      api_key: 'sk-ag',
+    })
+    const afterSyncEmits = wrapper.emitted('update:modelValue') || []
+    const synced = afterSyncEmits[afterSyncEmits.length - 1]?.[0] as string[]
+    expect(synced).toContain('claude-opus-4-8')
+    expect(synced).toContain('gemini-3.5-pro')
   })
 })

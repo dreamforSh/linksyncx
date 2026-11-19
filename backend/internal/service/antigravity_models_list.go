@@ -17,6 +17,7 @@ import (
 
 	"github.com/Wei-Shaw/sub2api/internal/config"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/antigravity"
+	infraerrors "github.com/Wei-Shaw/sub2api/internal/pkg/errors"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/gemini"
 	"github.com/Wei-Shaw/sub2api/internal/util/urlvalidator"
 	"golang.org/x/sync/singleflight"
@@ -94,12 +95,6 @@ func (c *antigravityModelsCacheStore) set(key string, models []antigravity.Claud
 		freshUntil: now.Add(antigravityModelsFreshTTL),
 		expiresAt:  now.Add(antigravityModelsCacheTTL),
 	}
-}
-
-func (c *antigravityModelsCacheStore) clear() {
-	c.mu.Lock()
-	c.items = map[string]antigravityModelsCacheEntry{}
-	c.mu.Unlock()
 }
 
 func cloneAntigravityClaudeModels(models []antigravity.ClaudeModel) []antigravity.ClaudeModel {
@@ -389,18 +384,15 @@ func loadAntigravityOAuthModelsWithDeps(
 	if accountID <= 0 {
 		defer client.CloseIdleConnections()
 	}
-	projectID := strings.TrimSpace(account.GetCredential("project_id"))
-	if projectID == "" {
-		projectID = strings.TrimSpace(account.GetCredential(antigravityProjectIDFallbackCredentialKey))
-	}
-	if projectID == "" {
-		projectID = strings.TrimSpace(account.GetExtraString(antigravityProjectIDFallbackCredentialKey))
-	}
-	modelsResp, _, err := client.FetchAvailableModels(
+	projectID := resolveAntigravityAccountProjectID(account)
+	modelsURLs, fallbackOnAuthError := resolveAntigravityModelsBaseURLs(account)
+	modelsResp, _, err := client.FetchAvailableModelsWithURLs(
 		ctx,
 		accessToken,
 		projectID,
 		resolveModelsListReadLimit(cfg),
+		modelsURLs,
+		fallbackOnAuthError,
 	)
 	if err != nil {
 		return nil, err
@@ -472,6 +464,193 @@ func (s *AntigravityGatewayService) FetchGroupModels(
 	return s.fetchGroupModels(ctx, groupID, requireMixed, maxSwitches, false)
 }
 
+func mergeProjectedAntigravityModels(
+	byID map[string]antigravity.ClaudeModel,
+	acc *Account,
+	items []antigravity.ClaudeModel,
+	includeGeminiAliases bool,
+) {
+	raw := rawAntigravityModelMapping(acc)
+	for _, item := range items {
+		id := strings.TrimSpace(item.ID)
+		if id == "" || strings.Contains(id, "*") {
+			continue
+		}
+		if includeGeminiAliases {
+			if bare, ok := bareGeminiModelFromThinkingVariant(id); ok && (len(raw) == 0 || mappingSupportsRequestedModel(raw, bare)) {
+				if _, exists := byID[bare]; !exists {
+					byID[bare] = antigravity.ClaudeModel{ID: bare, Type: "model", DisplayName: bare}
+				}
+			}
+		}
+		item.ID = id
+		if existing, exists := byID[id]; exists {
+			if (existing.DisplayName == "" || existing.DisplayName == id) && item.DisplayName != "" && item.DisplayName != id {
+				byID[id] = item
+			}
+			continue
+		}
+		if strings.TrimSpace(item.DisplayName) == "" {
+			item.DisplayName = id
+		}
+		if strings.TrimSpace(item.Type) == "" {
+			item.Type = "model"
+		}
+		byID[id] = item
+	}
+}
+
+func finalizeMergedAntigravityModels(byID map[string]antigravity.ClaudeModel) []antigravity.ClaudeModel {
+	out := make([]antigravity.ClaudeModel, 0, len(byID))
+	for _, model := range byID {
+		out = append(out, model)
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].ID < out[j].ID })
+	return out
+}
+
+func antigravityClaudeModelsToGemini(claudeModels []antigravity.ClaudeModel) []gemini.Model {
+	methods := []string{"generateContent", "streamGenerateContent"}
+	byName := make(map[string]gemini.Model)
+	addGemini := func(id, display string) {
+		id = strings.TrimSpace(strings.TrimPrefix(id, "models/"))
+		if !isAntigravityGeminiModel(id) || strings.Contains(id, "*") {
+			return
+		}
+		name := "models/" + id
+		if _, exists := byName[name]; exists {
+			return
+		}
+		byName[name] = gemini.Model{
+			Name:                       name,
+			DisplayName:                strings.TrimSpace(display),
+			SupportedGenerationMethods: methods,
+		}
+	}
+	for _, m := range claudeModels {
+		addGemini(m.ID, m.DisplayName)
+	}
+	names := make([]string, 0, len(byName))
+	for name := range byName {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	out := make([]gemini.Model, 0, len(names))
+	for _, name := range names {
+		out = append(out, byName[name])
+	}
+	return out
+}
+
+// FetchPinnedAntigravityModelsList fetches Antigravity models using only the
+// accounts pinned on group.CodexModelsManifestConfig, ignoring scheduler
+// priorities, load factors, and transient rate-limit/overload windows. All
+// usable accounts are fetched concurrently; results are merged in config order.
+func (s *AntigravityGatewayService) FetchPinnedAntigravityModelsList(
+	ctx context.Context,
+	group *Group,
+	maxSwitches int,
+	includeGeminiAliases bool,
+) ([]antigravity.ClaudeModel, *Account, error) {
+	if s == nil || s.accountRepo == nil || group == nil {
+		return nil, nil, ErrNoPinnedCodexModelsAccounts
+	}
+	cfg := group.CodexModelsManifestConfig
+	if group.Platform != PlatformAntigravity || !cfg.Enabled || len(cfg.AccountIDs) == 0 {
+		return nil, nil, ErrNoPinnedCodexModelsAccounts
+	}
+
+	fallbackToScheduler := func(cause error) ([]antigravity.ClaudeModel, *Account, error) {
+		if ctx.Err() == nil && cfg.FallbackToScheduler {
+			if models, selected, ok := s.fetchGroupModels(ctx, &group.ID, false, maxSwitches, includeGeminiAliases); ok {
+				return models, selected, nil
+			}
+		}
+		return nil, nil, cause
+	}
+
+	members, err := s.accountRepo.ListByGroup(ctx, group.ID)
+	if err != nil {
+		return nil, nil, fmt.Errorf("load pinned antigravity models accounts: %w", err)
+	}
+	memberByID := make(map[int64]Account, len(members))
+	for _, member := range members {
+		memberByID[member.ID] = member
+	}
+
+	usable := make([]Account, 0, len(cfg.AccountIDs))
+	for _, id := range cfg.AccountIDs {
+		member, ok := memberByID[id]
+		if !ok || member.Platform != PlatformAntigravity {
+			continue
+		}
+		if !isPinnedCodexModelsAccountUsable(&member) {
+			continue
+		}
+		usable = append(usable, member)
+	}
+	if len(usable) == 0 {
+		return fallbackToScheduler(ErrNoPinnedCodexModelsAccounts)
+	}
+
+	results := make([][]antigravity.ClaudeModel, len(usable))
+	fetchErrs := make([]error, len(usable))
+	var fetchGroup sync.WaitGroup
+	for i := range usable {
+		fetchGroup.Add(1)
+		go func(idx int) {
+			defer fetchGroup.Done()
+			models, fetchErr := s.FetchAccountModels(ctx, &usable[idx])
+			results[idx] = models
+			fetchErrs[idx] = fetchErr
+		}(i)
+	}
+	fetchGroup.Wait()
+	if err := ctx.Err(); err != nil {
+		return nil, nil, err
+	}
+
+	byID := make(map[string]antigravity.ClaudeModel)
+	var firstSuccess *Account
+	failedIDs := make([]int64, 0)
+	var lastErr error
+	for i := range usable {
+		if fetchErrs[i] != nil {
+			failedIDs = append(failedIDs, usable[i].ID)
+			lastErr = fetchErrs[i]
+			continue
+		}
+		if firstSuccess == nil {
+			firstSuccess = &usable[i]
+		}
+		mergeProjectedAntigravityModels(byID, &usable[i], results[i], includeGeminiAliases)
+	}
+	if firstSuccess == nil {
+		if lastErr == nil || infraerrors.Code(lastErr) == http.StatusInternalServerError {
+			lastErr = infraerrors.New(http.StatusBadGateway, "ANTIGRAVITY_MODELS_UPSTREAM_FAILED", "pinned model discovery accounts all failed")
+		}
+		return fallbackToScheduler(lastErr)
+	}
+	if len(failedIDs) > 0 {
+		slog.Warn("antigravity_models_pinned_partial_failure", "group_id", group.ID, "failed_account_ids", failedIDs)
+	}
+	return finalizeMergedAntigravityModels(byID), firstSuccess, nil
+}
+
+// FetchPinnedAntigravityGeminiModels discovers Gemini-family models from
+// pinned Antigravity accounts on the group.
+func (s *AntigravityGatewayService) FetchPinnedAntigravityGeminiModels(
+	ctx context.Context,
+	group *Group,
+	maxSwitches int,
+) ([]gemini.Model, *Account, error) {
+	claudeModels, selected, err := s.FetchPinnedAntigravityModelsList(ctx, group, maxSwitches, true)
+	if err != nil {
+		return nil, nil, err
+	}
+	return antigravityClaudeModelsToGemini(claudeModels), selected, nil
+}
+
 func (s *AntigravityGatewayService) fetchGroupModels(
 	ctx context.Context,
 	groupID *int64,
@@ -491,19 +670,36 @@ func (s *AntigravityGatewayService) fetchGroupModels(
 	} else {
 		accounts, err = s.accountRepo.ListSchedulable(ctx)
 	}
-	if err != nil || len(accounts) == 0 {
+	if err != nil {
 		return nil, nil, false
 	}
 
-	candidates := make([]Account, 0, len(accounts))
-	for _, acc := range accounts {
-		if acc.Platform != PlatformAntigravity {
-			continue
+	filterCandidates := func(list []Account) []Account {
+		out := make([]Account, 0, len(list))
+		for _, acc := range list {
+			if acc.Platform != PlatformAntigravity {
+				continue
+			}
+			if requireMixed && !acc.IsMixedSchedulingEnabled() {
+				continue
+			}
+			out = append(out, acc)
 		}
-		if requireMixed && !acc.IsMixedSchedulingEnabled() {
-			continue
+		return out
+	}
+
+	candidates := filterCandidates(accounts)
+	if len(candidates) == 0 && groupID != nil {
+		// 分组内账号全部处于临时限流/过载时，仍从活跃成员获取模型目录，避免退回静态列表。
+		if members, listErr := s.accountRepo.ListByGroup(ctx, *groupID); listErr == nil {
+			usable := make([]Account, 0, len(members))
+			for _, member := range members {
+				if isPinnedCodexModelsAccountUsable(&member) {
+					usable = append(usable, member)
+				}
+			}
+			candidates = filterCandidates(usable)
 		}
-		candidates = append(candidates, acc)
 	}
 	if len(candidates) == 0 {
 		return nil, nil, false
@@ -522,34 +718,7 @@ func (s *AntigravityGatewayService) fetchGroupModels(
 
 	byID := make(map[string]antigravity.ClaudeModel)
 	addModels := func(acc *Account, items []antigravity.ClaudeModel) {
-		raw := rawAntigravityModelMapping(acc)
-		for _, item := range items {
-			id := strings.TrimSpace(item.ID)
-			if id == "" || strings.Contains(id, "*") {
-				continue
-			}
-			if includeGeminiAliases {
-				if bare, ok := bareGeminiModelFromThinkingVariant(id); ok && (len(raw) == 0 || mappingSupportsRequestedModel(raw, bare)) {
-					if _, exists := byID[bare]; !exists {
-						byID[bare] = antigravity.ClaudeModel{ID: bare, Type: "model", DisplayName: bare}
-					}
-				}
-			}
-			item.ID = id
-			if existing, exists := byID[id]; exists {
-				if (existing.DisplayName == "" || existing.DisplayName == id) && item.DisplayName != "" && item.DisplayName != id {
-					byID[id] = item
-				}
-				continue
-			}
-			if strings.TrimSpace(item.DisplayName) == "" {
-				item.DisplayName = id
-			}
-			if strings.TrimSpace(item.Type) == "" {
-				item.Type = "model"
-			}
-			byID[id] = item
-		}
+		mergeProjectedAntigravityModels(byID, acc, items, includeGeminiAliases)
 	}
 
 	var primaryAccount *Account
@@ -618,12 +787,7 @@ func (s *AntigravityGatewayService) fetchGroupModels(
 		}
 	}
 
-	out := make([]antigravity.ClaudeModel, 0, len(byID))
-	for _, model := range byID {
-		out = append(out, model)
-	}
-	sort.Slice(out, func(i, j int) bool { return out[i].ID < out[j].ID })
-	return out, primaryAccount, true
+	return finalizeMergedAntigravityModels(byID), primaryAccount, true
 }
 
 // FetchGroupGeminiModels discovers Gemini-family models served by Antigravity accounts
@@ -638,36 +802,7 @@ func (s *AntigravityGatewayService) FetchGroupGeminiModels(
 	if !ok {
 		return nil, false
 	}
-	methods := []string{"generateContent", "streamGenerateContent"}
-	byName := make(map[string]gemini.Model)
-	addGemini := func(id, display string) {
-		id = strings.TrimSpace(strings.TrimPrefix(id, "models/"))
-		if !isAntigravityGeminiModel(id) || strings.Contains(id, "*") {
-			return
-		}
-		name := "models/" + id
-		if _, exists := byName[name]; exists {
-			return
-		}
-		byName[name] = gemini.Model{
-			Name:                       name,
-			DisplayName:                strings.TrimSpace(display),
-			SupportedGenerationMethods: methods,
-		}
-	}
-	for _, m := range claudeModels {
-		addGemini(m.ID, m.DisplayName)
-	}
-	names := make([]string, 0, len(byName))
-	for name := range byName {
-		names = append(names, name)
-	}
-	sort.Strings(names)
-	out := make([]gemini.Model, 0, len(names))
-	for _, name := range names {
-		out = append(out, byName[name])
-	}
-	return out, true
+	return antigravityClaudeModelsToGemini(claudeModels), true
 }
 
 func parseAntigravityAPIKeyModels(body []byte) ([]antigravity.ClaudeModel, error) {

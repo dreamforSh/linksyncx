@@ -11,11 +11,25 @@ import (
 	"sync"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/Wei-Shaw/sub2api/internal/pkg/antigravity"
+	pkgerrors "github.com/Wei-Shaw/sub2api/internal/pkg/errors"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/tlsfingerprint"
 	"github.com/stretchr/testify/require"
 )
+
+func (c *antigravityModelsCacheStore) clear() {
+	c.mu.Lock()
+	c.items = map[string]antigravityModelsCacheEntry{}
+	c.mu.Unlock()
+}
+
+func resetAntigravityObservedModels() {
+	antigravityObservedModels.mu.Lock()
+	antigravityObservedModels.items = make(map[int64]antigravityObservedEntry)
+	antigravityObservedModels.mu.Unlock()
+}
 
 func resetAntigravityModelsCache() {
 	antigravityModelsCache.clear()
@@ -241,6 +255,10 @@ func (r *antigravityCatalogPersistRepoStub) ListSchedulableByGroupID(_ context.C
 	return append([]Account(nil), r.byGroup[groupID]...), nil
 }
 
+func (r *antigravityCatalogPersistRepoStub) ListByGroup(_ context.Context, groupID int64) ([]Account, error) {
+	return append([]Account(nil), r.byGroup[groupID]...), nil
+}
+
 func TestSyncUpstreamModelCatalog_AntigravityPersistsCatalogAndUnlocksNewUpstreamModels(t *testing.T) {
 	resetAntigravityModelsCache()
 	t.Cleanup(resetAntigravityModelsCache)
@@ -409,4 +427,393 @@ func TestAntigravityGatewayService_FetchGroupModels_FailoverAndSnapshotFallback(
 	require.Contains(t, geminiNames, "models/gemini-4-carbon-high")
 	require.Contains(t, geminiNames, "models/gemini-4-carbon")
 	require.NotContains(t, geminiNames, "models/claude-sonnet-4-6")
+}
+
+type antigravityPinnedTestRepo struct {
+	AccountRepository
+	mu            sync.Mutex
+	accounts      map[int64]*Account
+	schedulable   []Account
+	groupMembers  []Account
+	updatedExtras map[int64]map[string]any
+}
+
+func (r *antigravityPinnedTestRepo) GetByID(_ context.Context, id int64) (*Account, error) {
+	acc, ok := r.accounts[id]
+	if !ok {
+		return nil, ErrAccountNotFound
+	}
+	return acc, nil
+}
+
+func (r *antigravityPinnedTestRepo) GetByIDs(_ context.Context, ids []int64) ([]*Account, error) {
+	out := make([]*Account, 0, len(ids))
+	for _, id := range ids {
+		if acc, ok := r.accounts[id]; ok {
+			out = append(out, acc)
+		}
+	}
+	return out, nil
+}
+
+func (r *antigravityPinnedTestRepo) ListSchedulableByGroupID(_ context.Context, _ int64) ([]Account, error) {
+	return append([]Account(nil), r.schedulable...), nil
+}
+
+func (r *antigravityPinnedTestRepo) ListByGroup(_ context.Context, _ int64) ([]Account, error) {
+	return append([]Account(nil), r.groupMembers...), nil
+}
+
+func (r *antigravityPinnedTestRepo) UpdateExtra(_ context.Context, id int64, updates map[string]any) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.updatedExtras == nil {
+		r.updatedExtras = make(map[int64]map[string]any)
+	}
+	r.updatedExtras[id] = updates
+	return nil
+}
+
+type antigravityPinnedUpstreamStub struct {
+	do func(req *http.Request, accountID int64) (*http.Response, error)
+}
+
+func (s *antigravityPinnedUpstreamStub) Do(req *http.Request, _ string, accountID int64, _ int) (*http.Response, error) {
+	return s.do(req, accountID)
+}
+
+func (s *antigravityPinnedUpstreamStub) DoWithTLS(req *http.Request, _ string, accountID int64, _ int, _ *tlsfingerprint.Profile) (*http.Response, error) {
+	return s.do(req, accountID)
+}
+
+func newAntigravityJSONResponse(statusCode int, body string) *http.Response {
+	return &http.Response{
+		StatusCode: statusCode,
+		Header:     make(http.Header),
+		Body:       io.NopCloser(strings.NewReader(body)),
+	}
+}
+
+func TestResolveAntigravityModelsBaseURLs(t *testing.T) {
+	require.GreaterOrEqual(t, len(antigravity.BaseURLs), 2)
+	expectedDailyFirst := append([]string{antigravity.BaseURLs[1], antigravity.BaseURLs[0]}, antigravity.BaseURLs[2:]...)
+
+	t.Run("default prefers daily then prod with auth fallback", func(t *testing.T) {
+		t.Setenv(antigravityForwardBaseURLEnv, "")
+		urls, fallback := resolveAntigravityModelsBaseURLs(nil)
+		require.Equal(t, expectedDailyFirst, urls)
+		require.True(t, fallback)
+	})
+
+	t.Run("prod pin preserves upstream base order without auth fallback", func(t *testing.T) {
+		t.Setenv(antigravityForwardBaseURLEnv, "prod")
+		urls, fallback := resolveAntigravityModelsBaseURLs(nil)
+		require.Equal(t, antigravity.BaseURLs, urls)
+		require.False(t, fallback)
+	})
+
+	for _, envVal := range []string{"daily", "sandbox"} {
+		t.Run("env "+envVal+" prefers daily then prod", func(t *testing.T) {
+			t.Setenv(antigravityForwardBaseURLEnv, envVal)
+			urls, fallback := resolveAntigravityModelsBaseURLs(nil)
+			require.Equal(t, expectedDailyFirst, urls)
+			require.True(t, fallback)
+		})
+	}
+}
+
+func TestAntigravityGatewayService_FetchPinnedAntigravityModelsList(t *testing.T) {
+	antigravityModelsCache.clear()
+	resetAntigravityObservedModels()
+	defer func() {
+		antigravityModelsCache.clear()
+		resetAntigravityObservedModels()
+	}()
+
+	future := time.Now().Add(10 * time.Minute)
+	newRelayAccount := func(id int64, overloaded bool) *Account {
+		var overloadUntil *time.Time
+		if overloaded {
+			overloadUntil = &future
+		}
+		return &Account{
+			ID:            id,
+			Name:          "relay",
+			Platform:      PlatformAntigravity,
+			Type:          AccountTypeAPIKey,
+			Status:        StatusActive,
+			Schedulable:   true,
+			OverloadUntil: overloadUntil,
+			Concurrency:   2,
+			Credentials: map[string]any{
+				"base_url": "https://relay.example",
+				"api_key":  "sk-test",
+			},
+		}
+	}
+
+	t.Run("merges in config order including transiently overloaded accounts", func(t *testing.T) {
+		antigravityModelsCache.clear()
+		acc101 := newRelayAccount(101, false)
+		acc102 := newRelayAccount(102, true)
+		disabled := newRelayAccount(109, false)
+		disabled.Status = StatusDisabled
+		wrongPlatform := newRelayAccount(110, false)
+		wrongPlatform.Platform = PlatformOpenAI
+
+		repo := &antigravityPinnedTestRepo{
+			accounts: map[int64]*Account{
+				101: acc101,
+				102: acc102,
+				109: disabled,
+				110: wrongPlatform,
+			},
+			groupMembers: []Account{*acc101, *acc102, *disabled, *wrongPlatform},
+		}
+		upstream := &antigravityPinnedUpstreamStub{
+			do: func(_ *http.Request, accountID int64) (*http.Response, error) {
+				switch accountID {
+				case 102:
+					return newAntigravityJSONResponse(http.StatusOK, `{"object":"list","data":[{"id":"claude-opus-4-8"},{"id":"claude-sonnet-4-6","display_name":"Sonnet From 102"}]}`), nil
+				case 101:
+					return newAntigravityJSONResponse(http.StatusOK, `{"object":"list","data":[{"id":"claude-sonnet-4-6","display_name":"Sonnet From 101"},{"id":"claude-haiku-4-5"}]}`), nil
+				default:
+					return newAntigravityJSONResponse(http.StatusInternalServerError, `{"error":"unexpected"}`), nil
+				}
+			},
+		}
+		svc := NewAntigravityGatewayService(repo, nil, nil, nil, nil, upstream, nil, nil)
+		group := &Group{
+			ID:       7,
+			Platform: PlatformAntigravity,
+			CodexModelsManifestConfig: GroupCodexModelsManifestConfig{
+				Enabled:    true,
+				AccountIDs: []int64{109, 102, 110, 999, 101},
+			},
+		}
+
+		models, selected, err := svc.FetchPinnedAntigravityModelsList(context.Background(), group, 3, false)
+		require.NoError(t, err)
+		require.NotNil(t, selected)
+		require.Equal(t, int64(102), selected.ID)
+		var ids []string
+		byID := make(map[string]antigravity.ClaudeModel, len(models))
+		for _, m := range models {
+			ids = append(ids, m.ID)
+			byID[m.ID] = m
+		}
+		require.Equal(t, []string{"claude-haiku-4-5", "claude-opus-4-8", "claude-sonnet-4-6"}, ids)
+		require.Equal(t, "Sonnet From 102", byID["claude-sonnet-4-6"].DisplayName)
+	})
+
+	t.Run("partial failure succeeds when at least one pinned account succeeds", func(t *testing.T) {
+		antigravityModelsCache.clear()
+		acc103 := newRelayAccount(103, false)
+		acc104 := newRelayAccount(104, false)
+		repo := &antigravityPinnedTestRepo{
+			accounts:     map[int64]*Account{103: acc103, 104: acc104},
+			groupMembers: []Account{*acc103, *acc104},
+		}
+		upstream := &antigravityPinnedUpstreamStub{
+			do: func(_ *http.Request, accountID int64) (*http.Response, error) {
+				if accountID == 103 {
+					return newAntigravityJSONResponse(http.StatusInternalServerError, `{"error":"upstream fail"}`), nil
+				}
+				return newAntigravityJSONResponse(http.StatusOK, `{"object":"list","data":[{"id":"claude-opus-4-8"},{"id":"claude-haiku-4-5"}]}`), nil
+			},
+		}
+		svc := NewAntigravityGatewayService(repo, nil, nil, nil, nil, upstream, nil, nil)
+		group := &Group{
+			ID:       7,
+			Platform: PlatformAntigravity,
+			CodexModelsManifestConfig: GroupCodexModelsManifestConfig{
+				Enabled:    true,
+				AccountIDs: []int64{103, 104},
+			},
+		}
+
+		models, selected, err := svc.FetchPinnedAntigravityModelsList(context.Background(), group, 3, false)
+		require.NoError(t, err)
+		require.NotNil(t, selected)
+		var ids []string
+		for _, m := range models {
+			ids = append(ids, m.ID)
+		}
+		require.Contains(t, ids, "claude-opus-4-8")
+		require.Contains(t, ids, "claude-haiku-4-5")
+	})
+
+	t.Run("all pinned fail returns 502 when FallbackToScheduler is false", func(t *testing.T) {
+		antigravityModelsCache.clear()
+		acc105 := newRelayAccount(105, false)
+		repo := &antigravityPinnedTestRepo{
+			accounts:     map[int64]*Account{105: acc105},
+			groupMembers: []Account{*acc105},
+		}
+		upstream := &antigravityPinnedUpstreamStub{
+			do: func(_ *http.Request, _ int64) (*http.Response, error) {
+				return newAntigravityJSONResponse(http.StatusInternalServerError, `{"error":"down"}`), nil
+			},
+		}
+		svc := NewAntigravityGatewayService(repo, nil, nil, nil, nil, upstream, nil, nil)
+		group := &Group{
+			ID:       7,
+			Platform: PlatformAntigravity,
+			CodexModelsManifestConfig: GroupCodexModelsManifestConfig{
+				Enabled:             true,
+				AccountIDs:          []int64{105},
+				FallbackToScheduler: false,
+			},
+		}
+
+		_, _, err := svc.FetchPinnedAntigravityModelsList(context.Background(), group, 3, false)
+		require.Error(t, err)
+		require.Equal(t, http.StatusBadGateway, pkgerrors.Code(err))
+	})
+
+	t.Run("all pinned fail falls back to scheduler when FallbackToScheduler is true", func(t *testing.T) {
+		antigravityModelsCache.clear()
+		acc106 := newRelayAccount(106, false)
+		acc107 := newRelayAccount(107, false)
+		repo := &antigravityPinnedTestRepo{
+			accounts:     map[int64]*Account{106: acc106, 107: acc107},
+			schedulable:  []Account{*acc107},
+			groupMembers: []Account{*acc106, *acc107},
+		}
+		upstream := &antigravityPinnedUpstreamStub{
+			do: func(_ *http.Request, accountID int64) (*http.Response, error) {
+				if accountID == 106 {
+					return newAntigravityJSONResponse(http.StatusInternalServerError, `{"error":"pinned down"}`), nil
+				}
+				return newAntigravityJSONResponse(http.StatusOK, `{"object":"list","data":[{"id":"claude-sonnet-4-6"}]}`), nil
+			},
+		}
+		svc := NewAntigravityGatewayService(repo, nil, nil, nil, nil, upstream, nil, nil)
+		group := &Group{
+			ID:       7,
+			Platform: PlatformAntigravity,
+			CodexModelsManifestConfig: GroupCodexModelsManifestConfig{
+				Enabled:             true,
+				AccountIDs:          []int64{106},
+				FallbackToScheduler: true,
+			},
+		}
+
+		models, selected, err := svc.FetchPinnedAntigravityModelsList(context.Background(), group, 3, false)
+		require.NoError(t, err)
+		require.NotNil(t, selected)
+		require.Equal(t, int64(107), selected.ID)
+		var ids []string
+		for _, m := range models {
+			ids = append(ids, m.ID)
+		}
+		require.Contains(t, ids, "claude-sonnet-4-6")
+	})
+
+	t.Run("no usable pinned accounts returns ErrNoPinnedCodexModelsAccounts", func(t *testing.T) {
+		antigravityModelsCache.clear()
+		disabled := newRelayAccount(108, false)
+		disabled.Status = StatusDisabled
+		repo := &antigravityPinnedTestRepo{
+			accounts:     map[int64]*Account{108: disabled},
+			groupMembers: []Account{*disabled},
+		}
+		svc := NewAntigravityGatewayService(repo, nil, nil, nil, nil, &antigravityPinnedUpstreamStub{}, nil, nil)
+		group := &Group{
+			ID:       7,
+			Platform: PlatformAntigravity,
+			CodexModelsManifestConfig: GroupCodexModelsManifestConfig{
+				Enabled:             true,
+				AccountIDs:          []int64{108},
+				FallbackToScheduler: false,
+			},
+		}
+
+		_, _, err := svc.FetchPinnedAntigravityModelsList(context.Background(), group, 3, false)
+		require.ErrorIs(t, err, ErrNoPinnedCodexModelsAccounts)
+	})
+}
+
+func TestAntigravityGatewayService_FetchGroupModels_FallsBackToActiveMembers(t *testing.T) {
+	antigravityModelsCache.clear()
+	resetAntigravityObservedModels()
+	defer func() {
+		antigravityModelsCache.clear()
+		resetAntigravityObservedModels()
+	}()
+
+	groupID := int64(21)
+	future := time.Now().Add(10 * time.Minute)
+	member := Account{
+		ID:            210,
+		Name:          "active-overloaded",
+		Platform:      PlatformAntigravity,
+		Type:          AccountTypeAPIKey,
+		Status:        StatusActive,
+		Schedulable:   true,
+		OverloadUntil: &future,
+		Concurrency:   2,
+		Credentials: map[string]any{
+			"base_url": "https://relay.example",
+			"api_key":  "sk-group",
+		},
+	}
+	repo := &antigravityPinnedTestRepo{
+		accounts:     map[int64]*Account{210: &member},
+		schedulable:  nil,
+		groupMembers: []Account{member},
+	}
+	upstream := &antigravityPinnedUpstreamStub{
+		do: func(_ *http.Request, accountID int64) (*http.Response, error) {
+			require.Equal(t, int64(210), accountID)
+			return newAntigravityJSONResponse(http.StatusOK, `{"object":"list","data":[{"id":"claude-opus-4-8"}]}`), nil
+		},
+	}
+	svc := NewAntigravityGatewayService(repo, nil, nil, nil, nil, upstream, nil, nil)
+
+	models, selected, hasUpstream := svc.FetchGroupModels(context.Background(), &groupID, false, 3)
+	require.True(t, hasUpstream)
+	require.NotNil(t, selected)
+	require.Equal(t, int64(210), selected.ID)
+	var ids []string
+	for _, m := range models {
+		ids = append(ids, m.ID)
+	}
+	require.Contains(t, ids, "claude-opus-4-8")
+}
+
+func TestAdminService_UpdateAccount_PreservesAntigravityCatalogSnapshots(t *testing.T) {
+	accountID := int64(301)
+	catalogSnapshot := map[string]any{
+		"models":     []string{"claude-opus-4-8", "gemini-3.5-pro"},
+		"updated_at": "2026-11-19T00:00:00Z",
+	}
+	metadataSnapshot := map[string]any{
+		"source": "antigravity",
+		"models": map[string]any{
+			"claude-opus-4-8": map[string]any{"display_name": "Claude Opus 4.8"},
+		},
+	}
+	repo := &upstreamBillingProbeAccountRepo{accounts: map[int64]*Account{
+		accountID: {
+			ID:       accountID,
+			Name:     "ag-oauth",
+			Platform: PlatformAntigravity,
+			Type:     AccountTypeOAuth,
+			Status:   StatusActive,
+			Extra: map[string]any{
+				AntigravityModelCatalogExtraKey: catalogSnapshot,
+				UpstreamModelMetadataExtraKey:   metadataSnapshot,
+			},
+		},
+	}}
+	svc := &adminServiceImpl{accountRepo: repo}
+
+	updated, err := svc.UpdateAccount(context.Background(), accountID, &UpdateAccountInput{
+		Extra: map[string]any{},
+	})
+
+	require.NoError(t, err)
+	require.Equal(t, catalogSnapshot, updated.Extra[AntigravityModelCatalogExtraKey])
+	require.Equal(t, metadataSnapshot, updated.Extra[UpstreamModelMetadataExtraKey])
 }

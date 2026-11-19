@@ -86,7 +86,9 @@ const ModelWhitelistSelectorStub = defineComponent({
     modelValue: {
       type: Array,
       default: () => []
-    }
+    },
+    platform: String,
+    accountId: Number
   },
   emits: ['update:modelValue'],
   template: `
@@ -1924,30 +1926,40 @@ describe('EditAccountModal', () => {
     )
   })
 
-  it('antigravity 编辑态同步上游模型，已有映射保留并追加 from=to', async () => {
-    syncUpstreamModelsMock.mockReset().mockResolvedValue({
-      models: ['gemini-2.5-flash', 'claude-opus-4-8']
-    })
+  it('antigravity 纯透传映射账号默认进入白名单模式并回填模型', async () => {
     const wrapper = mountModal(buildAntigravityAccount())
     await flushPromises()
 
-    const button = wrapper
-      .findAll('button')
-      .find((candidate) => candidate.text() === 'admin.accounts.syncUpstreamModels')
-    expect(button).toBeDefined()
-    expect(button?.attributes('disabled')).toBeUndefined()
+    expect(wrapper.get('[data-testid="edit-antigravity-mode-whitelist"]').classes()).toContain('bg-primary-100')
+    const selector = wrapper.getComponent(ModelWhitelistSelectorStub)
+    expect(selector.props('platform')).toBe('antigravity')
+    expect(selector.props('accountId')).toBe(3)
+    expect(selector.props('modelValue')).toEqual(['gemini-2.5-flash'])
+    expect(syncUpstreamModelsMock).not.toHaveBeenCalled()
+  })
 
-    await button?.trigger('click')
+  it('antigravity 自定义映射账号打开时保留映射模式并支持切回白名单', async () => {
+    const customAccount = buildAntigravityAccount()
+    customAccount.credentials.model_mapping = {
+      'gemini-3-pro': 'gemini-pro-agent'
+    }
+    const wrapper = mountModal(customAccount)
     await flushPromises()
 
-    expect(syncUpstreamModelsMock).toHaveBeenCalledWith(3)
+    expect(wrapper.get('[data-testid="edit-antigravity-mode-mapping"]').classes()).toContain('bg-purple-100')
     const values = (placeholder: string) =>
       wrapper
         .findAll('input')
         .filter((candidate) => candidate.attributes('placeholder') === placeholder)
         .map((candidate) => (candidate.element as HTMLInputElement).value)
-    expect(values('admin.accounts.requestModel')).toEqual(['gemini-2.5-flash', 'claude-opus-4-8'])
-    expect(values('admin.accounts.actualModel')).toEqual(['gemini-2.5-flash', 'claude-opus-4-8'])
+    expect(values('admin.accounts.requestModel')).toEqual(['gemini-3-pro'])
+    expect(values('admin.accounts.actualModel')).toEqual(['gemini-pro-agent'])
+
+    await wrapper.get('[data-testid="edit-antigravity-mode-whitelist"]').trigger('click')
+    await flushPromises()
+
+    expect(wrapper.get('[data-testid="edit-antigravity-mode-whitelist"]').classes()).toContain('bg-primary-100')
+    expect(wrapper.getComponent(ModelWhitelistSelectorStub).props('platform')).toBe('antigravity')
   })
 })
 

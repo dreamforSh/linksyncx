@@ -1447,7 +1447,7 @@
         </div>
       </div>
 
-      <!-- Antigravity model restriction (applies to OAuth + Upstream) -->
+      <!-- Antigravity model restriction (aligned with OpenAI) -->
       <div v-if="form.platform === 'antigravity'" class="border-t border-gray-200 pt-4 dark:border-dark-600">
         <label class="input-label">{{ t('admin.accounts.modelRestriction') }}</label>
 
@@ -1464,6 +1464,19 @@
                 : 'bg-gray-100 text-gray-600 hover:bg-gray-200 dark:bg-dark-600 dark:text-gray-400 dark:hover:bg-dark-500'
             ]"
           >
+            <svg
+              class="mr-1.5 inline h-4 w-4"
+              fill="none"
+              viewBox="0 0 24 24"
+              stroke="currentColor"
+            >
+              <path
+                stroke-linecap="round"
+                stroke-linejoin="round"
+                stroke-width="2"
+                d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z"
+              />
+            </svg>
             {{ t('admin.accounts.modelWhitelist') }}
           </button>
           <button
@@ -1477,6 +1490,19 @@
                 : 'bg-gray-100 text-gray-600 hover:bg-gray-200 dark:bg-dark-600 dark:text-gray-400 dark:hover:bg-dark-500'
             ]"
           >
+            <svg
+              class="mr-1.5 inline h-4 w-4"
+              fill="none"
+              viewBox="0 0 24 24"
+              stroke="currentColor"
+            >
+              <path
+                stroke-linecap="round"
+                stroke-linejoin="round"
+                stroke-width="2"
+                d="M8 7h12m0 0l-4-4m4 4l-4 4m0 6H4m0 0l4 4m-4-4l4-4"
+              />
+            </svg>
             {{ t('admin.accounts.modelMapping') }}
           </button>
         </div>
@@ -1502,31 +1528,20 @@
         <div v-else>
           <div class="mb-3 rounded-lg bg-purple-50 p-3 dark:bg-purple-900/20">
             <p class="text-xs text-purple-700 dark:text-purple-400">
+              <svg
+                class="mr-1 inline h-4 w-4"
+                fill="none"
+                viewBox="0 0 24 24"
+                stroke="currentColor"
+              >
+                <path
+                  stroke-linecap="round"
+                  stroke-linejoin="round"
+                  stroke-width="2"
+                  d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"
+                />
+              </svg>
               {{ t('admin.accounts.mapRequestModels') }}
-            </p>
-          </div>
-
-          <div class="mb-3 flex flex-wrap items-center gap-2">
-            <button
-              type="button"
-              data-testid="antigravity-sync-upstream"
-              @click="syncAntigravityUpstreamModels"
-              :disabled="!canSyncAntigravityUpstream || isSyncingAntigravityUpstream"
-              class="rounded-lg border border-emerald-200 px-3 py-1.5 text-sm text-emerald-600 hover:bg-emerald-50 disabled:cursor-not-allowed disabled:opacity-60 dark:border-emerald-800 dark:text-emerald-400 dark:hover:bg-emerald-900/30"
-            >
-              {{ isSyncingAntigravityUpstream ? t('admin.accounts.syncUpstreamModelsLoading') : t('admin.accounts.syncUpstreamModels') }}
-            </button>
-            <button
-              v-if="antigravityModelMappings.length > 0"
-              type="button"
-              data-testid="antigravity-clear-mappings"
-              @click="clearAntigravityModelMappings"
-              class="rounded-lg border border-red-200 px-3 py-1.5 text-sm text-red-600 hover:bg-red-50 dark:border-red-800 dark:text-red-400 dark:hover:bg-red-900/30"
-            >
-              {{ t('admin.accounts.clearAllModels') }}
-            </button>
-            <p v-if="antigravityAccountType !== 'upstream'" class="text-xs text-gray-500 dark:text-gray-400">
-              {{ t('admin.accounts.syncUpstreamModelsOAuthHint') }}
             </p>
           </div>
 
@@ -4961,13 +4976,12 @@ const antigravityAccountType = ref<'oauth' | 'upstream'>('oauth') // For antigra
 const antigravityProjectId = ref('')
 const upstreamBaseUrl = ref('') // For upstream type: base URL
 const upstreamApiKey = ref('') // For upstream type: API key
-const isSyncingAntigravityUpstream = ref(false)
 const canSyncAntigravityUpstream = computed(() =>
   antigravityAccountType.value === 'upstream' &&
   upstreamBaseUrl.value.trim() !== '' &&
   upstreamApiKey.value.trim() !== ''
 )
-const antigravityModelRestrictionMode = ref<'whitelist' | 'mapping'>('mapping')
+const antigravityModelRestrictionMode = ref<'whitelist' | 'mapping'>('whitelist')
 const antigravityWhitelistModels = ref<string[]>([])
 const antigravityModelMappings = ref<ModelMapping[]>([])
 const antigravityRestrictionCredentials = computed(() => buildAntigravityModelRestriction(
@@ -5359,15 +5373,15 @@ watch(
         .catch(() => { tlsFingerprintProfiles.value = [] })
       // Modal opened - fill related models
       allowedModels.value = [...getModelsByPlatform(form.platform)]
-      // Antigravity 映射留空，由「同步上游」填入，不预置默认目录。
+      // Antigravity 默认白名单模式（与 OpenAI 一致），不预置默认目录。
       if (form.platform === 'antigravity') {
-        antigravityModelRestrictionMode.value = 'mapping'
+        antigravityModelRestrictionMode.value = 'whitelist'
         antigravityModelMappings.value = []
         antigravityWhitelistModels.value = []
       } else {
         antigravityWhitelistModels.value = []
         antigravityModelMappings.value = []
-        antigravityModelRestrictionMode.value = 'mapping'
+        antigravityModelRestrictionMode.value = 'whitelist'
       }
     } else {
       resetForm()
@@ -5426,9 +5440,9 @@ watch(
     modelMappings.value = []
     // Claude（OS / 架构）与 Codex（完整 UA）的画像形态不同，换平台时清空手填值。
     deviceProfile.value = emptyDeviceProfile()
-    // Antigravity 映射留空，由「同步上游」填入，不预置默认目录。
+    // Antigravity 默认白名单模式（与 OpenAI 一致），不预置默认目录。
     if (newPlatform === 'antigravity') {
-      antigravityModelRestrictionMode.value = 'mapping'
+      antigravityModelRestrictionMode.value = 'whitelist'
       antigravityModelMappings.value = []
       antigravityWhitelistModels.value = []
       accountCategory.value = 'oauth-based'
@@ -5438,7 +5452,7 @@ watch(
       antigravityProjectId.value = ''
       antigravityWhitelistModels.value = []
       antigravityModelMappings.value = []
-      antigravityModelRestrictionMode.value = 'mapping'
+      antigravityModelRestrictionMode.value = 'whitelist'
     }
     if (newPlatform === 'grok') {
       accountCategory.value = 'oauth-based'
@@ -5626,10 +5640,6 @@ const removeAntigravityModelMapping = (index: number) => {
   antigravityModelMappings.value.splice(index, 1)
 }
 
-const clearAntigravityModelMappings = () => {
-  antigravityModelMappings.value = []
-}
-
 const switchAntigravityRestrictionMode = (mode: 'whitelist' | 'mapping') => {
   if (antigravityModelRestrictionMode.value === mode) return
   if (mode === 'whitelist' && antigravityWhitelistModels.value.length === 0 && antigravityModelMappings.value.length > 0) {
@@ -5651,47 +5661,6 @@ const addAntigravityPresetMapping = (from: string, to: string) => {
     return
   }
   antigravityModelMappings.value.push({ from, to })
-}
-
-const syncAntigravityUpstreamModels = async () => {
-  if (!canSyncAntigravityUpstream.value || isSyncingAntigravityUpstream.value) return
-
-  isSyncingAntigravityUpstream.value = true
-  try {
-    const result = await adminAPI.accounts.syncUpstreamModelsPreview({
-      platform: 'antigravity',
-      type: 'apikey',
-      base_url: upstreamBaseUrl.value.trim(),
-      api_key: upstreamApiKey.value.trim(),
-      ...(form.proxy_id != null ? { proxy_id: form.proxy_id } : {})
-    })
-    const upstreamModels = result.models.map((model) => model.trim()).filter(Boolean)
-    if (upstreamModels.length === 0) {
-      appStore.showInfo(t('admin.accounts.syncUpstreamModelsEmpty'))
-      return
-    }
-    upstreamModelsPreviewed.value = true
-
-    let addedCount = 0
-    for (const model of upstreamModels) {
-      const exists = antigravityModelMappings.value.some((mapping) => mapping.from === model)
-      if (!exists) {
-        antigravityModelMappings.value.push({ from: model, to: model })
-        addedCount += 1
-      }
-    }
-
-    if (addedCount > 0) {
-      appStore.showSuccess(t('admin.accounts.syncUpstreamModelsSuccess', { count: addedCount, total: upstreamModels.length }))
-    } else {
-      appStore.showInfo(t('admin.accounts.syncUpstreamModelsNoChanges', { count: upstreamModels.length }))
-    }
-  } catch (error) {
-    const message = extractApiErrorMessage(error, t('admin.accounts.syncUpstreamModelsFailed'))
-    appStore.showError(t('admin.accounts.syncUpstreamModelsError', { message }))
-  } finally {
-    isSyncingAntigravityUpstream.value = false
-  }
 }
 
 // Error code toggle helper
@@ -5910,13 +5879,14 @@ const submitCreateAccount = async (payload: CreateAccountRequest) => {
   try {
     const account = await adminAPI.accounts.create(withAntigravityConfirmFlag(payload))
     const modelMapping = payload.credentials.model_mapping
-    const hasConcreteMappedTarget = payload.type === 'apikey' &&
+    const hasConcreteMappedTarget = (payload.type === 'apikey' || payload.type === 'upstream') &&
       typeof modelMapping === 'object' &&
       modelMapping !== null &&
       Object.values(modelMapping).some((target) =>
         typeof target === 'string' && target.trim() !== '' && !target.includes('*')
       )
-    if (upstreamModelsPreviewed.value || hasConcreteMappedTarget) {
+    const shouldSyncAntigravityOAuth = payload.platform === 'antigravity' && payload.type === 'oauth'
+    if (upstreamModelsPreviewed.value || hasConcreteMappedTarget || shouldSyncAntigravityOAuth) {
       try {
         const result = await adminAPI.accounts.syncUpstreamModels(account.id)
         const warnings = result.warnings ?? []
@@ -6003,7 +5973,7 @@ const resetForm = () => {
   modelRestrictionMode.value = 'whitelist'
   allowedModels.value = [...claudeModels] // Default fill related models
 
-  antigravityModelRestrictionMode.value = 'mapping'
+  antigravityModelRestrictionMode.value = 'whitelist'
   antigravityWhitelistModels.value = []
   antigravityModelMappings.value = []
   poolModeEnabled.value = false
@@ -7547,7 +7517,10 @@ const handleAntigravityValidateRT = async (refreshTokenInput: string) => {
           expires_at: form.expires_at,
           auto_pause_on_expired: autoPauseOnExpired.value
         })
-        await adminAPI.accounts.create(createPayload)
+        const created = await adminAPI.accounts.create(createPayload)
+        if (created?.id) {
+          await adminAPI.accounts.syncUpstreamModels(created.id).catch(() => {})
+        }
         successCount++
       } catch (error: any) {
         failedCount++

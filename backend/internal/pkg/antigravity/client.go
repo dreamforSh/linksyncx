@@ -384,6 +384,7 @@ func buildPooledStandardTransport(parsedProxy *url.URL) (*http.Transport, error)
 		// 与真实客户端一致，直连与走代理均协商 HTTP/2 并开启死连接主动 PING 探测。
 		ForceAttemptHTTP2: true,
 	}
+	//nolint:staticcheck // Keep HTTP/2 keepalive PING configuration compatible with existing x/net upstream clients.
 	if h2, err := http2.ConfigureTransports(transport); err == nil && h2 != nil {
 		h2.ReadIdleTimeout = clientHTTP2ReadIdleTimeout
 		h2.PingTimeout = clientHTTP2PingTimeout
@@ -916,13 +917,32 @@ type FetchAvailableModelsResponse struct {
 }
 
 // FetchAvailableModels 获取可用模型和配额信息，返回解析后的结构体和原始 JSON
-// 支持 URL fallback：sandbox → daily → prod
+// 固定顺序：prod -> daily
 func (c *Client) FetchAvailableModels(ctx context.Context, accessToken, projectID string, bodyLimit int64) (*FetchAvailableModelsResponse, map[string]any, error) {
+	return c.FetchAvailableModelsWithURLs(ctx, accessToken, projectID, bodyLimit, BaseURLs, false)
+}
+
+// FetchAvailableModelsWithURLs 按指定顺序获取可用模型和配额信息，支持在 401/403 或空模型列表时降级到后续端点。
+func (c *Client) FetchAvailableModelsWithURLs(
+	ctx context.Context,
+	accessToken, projectID string,
+	bodyLimit int64,
+	baseURLs []string,
+	fallbackOnAuthError bool,
+) (*FetchAvailableModelsResponse, map[string]any, error) {
 	if c == nil || c.httpClient == nil {
 		return nil, nil, errors.New("antigravity client is not configured")
 	}
 	if bodyLimit <= 0 {
 		return nil, nil, errors.New("fetchAvailableModels body limit must be positive")
+	}
+
+	availableURLs := baseURLs
+	if len(availableURLs) == 0 {
+		availableURLs = BaseURLs
+	}
+	if len(availableURLs) == 0 {
+		return nil, nil, errors.New("no antigravity base URLs configured")
 	}
 
 	reqBody := FetchAvailableModelsRequest{Project: projectID}
@@ -931,11 +951,13 @@ func (c *Client) FetchAvailableModels(ctx context.Context, accessToken, projectI
 		return nil, nil, fmt.Errorf("序列化请求失败: %w", err)
 	}
 
-	// 固定顺序：prod -> daily
-	availableURLs := BaseURLs
-
 	fetchClient := c.fetchAvailableModelsHTTPClient()
-	var lastErr error
+	var (
+		lastErr      error
+		emptyResp    *FetchAvailableModelsResponse
+		emptyRaw     map[string]any
+		hasEmptyResp bool
+	)
 	for urlIdx, baseURL := range availableURLs {
 		apiURL := baseURL + "/v1internal:fetchAvailableModels"
 		req, err := http.NewRequestWithContext(ctx, http.MethodPost, apiURL, bytes.NewReader(bodyBytes))
@@ -952,6 +974,9 @@ func (c *Client) FetchAvailableModels(ctx context.Context, accessToken, projectI
 				log.Printf("[antigravity] fetchAvailableModels URL fallback: %s -> %s", baseURL, availableURLs[urlIdx+1])
 				continue
 			}
+			if hasEmptyResp {
+				return emptyResp, emptyRaw, nil
+			}
 			return nil, nil, lastErr
 		}
 
@@ -965,7 +990,16 @@ func (c *Client) FetchAvailableModels(ctx context.Context, accessToken, projectI
 		}
 
 		// 检查是否需要 URL 降级
-		if shouldFallbackToNextURL(nil, resp.StatusCode) && urlIdx < len(availableURLs)-1 {
+		isAuthErr := resp.StatusCode == http.StatusUnauthorized || resp.StatusCode == http.StatusForbidden
+		if (shouldFallbackToNextURL(nil, resp.StatusCode) || (fallbackOnAuthError && isAuthErr)) && urlIdx < len(availableURLs)-1 {
+			if resp.StatusCode == http.StatusForbidden {
+				lastErr = &ForbiddenError{
+					StatusCode: resp.StatusCode,
+					Body:       string(respBodyBytes),
+				}
+			} else {
+				lastErr = fmt.Errorf("fetchAvailableModels 失败 (HTTP %d): %s", resp.StatusCode, string(respBodyBytes))
+			}
 			log.Printf("[antigravity] fetchAvailableModels URL fallback (HTTP %d): %s -> %s", resp.StatusCode, baseURL, availableURLs[urlIdx+1])
 			continue
 		}
@@ -978,11 +1012,17 @@ func (c *Client) FetchAvailableModels(ctx context.Context, accessToken, projectI
 		}
 
 		if resp.StatusCode != http.StatusOK {
+			if hasEmptyResp {
+				return emptyResp, emptyRaw, nil
+			}
 			return nil, nil, fmt.Errorf("fetchAvailableModels 失败 (HTTP %d): %s", resp.StatusCode, string(respBodyBytes))
 		}
 
 		var modelsResp FetchAvailableModelsResponse
 		if err := json.Unmarshal(respBodyBytes, &modelsResp); err != nil {
+			if hasEmptyResp {
+				return emptyResp, emptyRaw, nil
+			}
 			return nil, nil, fmt.Errorf("响应解析失败: %w", err)
 		}
 
@@ -990,11 +1030,22 @@ func (c *Client) FetchAvailableModels(ctx context.Context, accessToken, projectI
 		var rawResp map[string]any
 		_ = json.Unmarshal(respBodyBytes, &rawResp)
 
+		if len(modelsResp.Models) == 0 && urlIdx < len(availableURLs)-1 {
+			emptyResp = &modelsResp
+			emptyRaw = rawResp
+			hasEmptyResp = true
+			log.Printf("[antigravity] fetchAvailableModels empty models fallback: %s -> %s", baseURL, availableURLs[urlIdx+1])
+			continue
+		}
+
 		// 标记成功的 URL，下次优先使用
 		DefaultURLAvailability.MarkSuccess(baseURL)
 		return &modelsResp, rawResp, nil
 	}
 
+	if hasEmptyResp {
+		return emptyResp, emptyRaw, nil
+	}
 	return nil, nil, lastErr
 }
 

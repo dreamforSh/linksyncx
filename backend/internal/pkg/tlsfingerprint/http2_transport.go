@@ -28,6 +28,7 @@ type HTTP2TransportConfig struct {
 	PingTimeout           time.Duration
 }
 
+//nolint:staticcheck // uTLS *utls.UConn requires x/net/http2.Transport for custom DialTLSContext with h2 ALPN.
 type http2AdaptiveTransport struct {
 	h2Transport *http2.Transport
 	h1Transport *http.Transport
@@ -67,6 +68,8 @@ func NewHTTP2CapableTransport(profile *Profile, proxyURL *url.URL, dialOpts Dial
 	// Let x/net/http2 retain a minimal t1 reference solely so ResponseHeaderTimeout
 	// is armed after request upload and disarmed upon receiving response headers.
 	// Connection pooling for H2 is owned by h2Tr itself once ConnPool is cleared below.
+	//
+	//nolint:staticcheck // uTLS *utls.UConn requires x/net/http2.Transport for custom DialTLSContext with h2 ALPN.
 	h2Tr, err := http2.ConfigureTransports(&http.Transport{
 		Protocols:             new(http.Protocols),
 		ResponseHeaderTimeout: cfg.ResponseHeaderTimeout,
@@ -75,11 +78,11 @@ func NewHTTP2CapableTransport(profile *Profile, proxyURL *url.URL, dialOpts Dial
 		return nil, err
 	}
 	// RoundTrip on this transport owns its connection pool and uTLS dialer.
-	h2Tr.ConnPool = nil
-	h2Tr.IdleConnTimeout = cfg.IdleConnTimeout
-	h2Tr.ReadIdleTimeout = cfg.ReadIdleTimeout
-	h2Tr.PingTimeout = cfg.PingTimeout
-	h2Tr.DialTLSContext = func(ctx context.Context, network, addr string, _ *tls.Config) (net.Conn, error) {
+	h2Tr.ConnPool = nil                                                                                      //nolint:staticcheck // See ConfigureTransports note above.
+	h2Tr.IdleConnTimeout = cfg.IdleConnTimeout                                                               //nolint:staticcheck // See ConfigureTransports note above.
+	h2Tr.ReadIdleTimeout = cfg.ReadIdleTimeout                                                               //nolint:staticcheck // See ConfigureTransports note above.
+	h2Tr.PingTimeout = cfg.PingTimeout                                                                       //nolint:staticcheck // See ConfigureTransports note above.
+	h2Tr.DialTLSContext = func(ctx context.Context, network, addr string, _ *tls.Config) (net.Conn, error) { //nolint:staticcheck // See ConfigureTransports note above.
 		conn, err := h2Dialer.DialTLSContext(ctx, network, addr)
 		if err != nil {
 			return nil, err
@@ -119,6 +122,7 @@ func (t *http2AdaptiveTransport) RoundTrip(req *http.Request) (*http.Response, e
 		}
 	}
 
+	//nolint:staticcheck // uTLS *utls.UConn requires x/net/http2.Transport for custom DialTLSContext with h2 ALPN.
 	resp, err := t.h2Transport.RoundTrip(req)
 	if err == nil || !errors.Is(err, errALPNFallbackHTTP1) {
 		return resp, err
@@ -161,6 +165,7 @@ func canonicalHTTPSHostKey(req *http.Request) string {
 
 func (t *http2AdaptiveTransport) CloseIdleConnections() {
 	if t.h2Transport != nil {
+		//nolint:staticcheck // uTLS *utls.UConn requires x/net/http2.Transport for custom DialTLSContext with h2 ALPN.
 		t.h2Transport.CloseIdleConnections()
 	}
 	if t.h1Transport != nil {

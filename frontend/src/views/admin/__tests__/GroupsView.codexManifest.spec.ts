@@ -2,6 +2,7 @@ import { defineComponent, h, type PropType } from "vue";
 import { flushPromises, mount } from "@vue/test-utils";
 import { createPinia } from "pinia";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { adminAPI } from "@/api/admin";
 
 import type { AdminGroup, CodexModelsManifestConfig } from "@/types";
 import GroupsView from "@/views/admin/GroupsView.vue";
@@ -161,6 +162,7 @@ const CodexManifestAccountsFieldStub = defineComponent({
       type: Object as PropType<CodexModelsManifestConfig>,
       required: true,
     },
+    platform: String,
   },
   emits: ["update:modelValue"],
   setup(props, { emit, expose }) {
@@ -280,6 +282,62 @@ describe("GroupsView Codex manifest binding", () => {
         enabled: true,
         account_ids: [17],
         fallback_to_scheduler: false,
+      }),
+    );
+
+    wrapper.unmount();
+  });
+
+  it("renders CodexManifestAccountsField with platform=antigravity and submits codex_models_manifest_config", async () => {
+    const antigravityGroup = {
+      ...sourceGroup,
+      id: 77,
+      name: "Antigravity Group",
+      platform: "antigravity",
+      codex_models_manifest_config: {
+        enabled: false,
+        account_ids: [],
+        fallback_to_scheduler: false,
+      },
+    };
+    listGroups.mockResolvedValue({
+      items: [antigravityGroup],
+      total: 1,
+      page: 1,
+      page_size: 20,
+      pages: 1,
+    });
+    vi.mocked(adminAPI.groups.update).mockReset().mockResolvedValue(antigravityGroup as never);
+
+    const wrapper = mountView();
+    await flushPromises();
+
+    const editButton = wrapper
+      .findAll("button")
+      .find((button) => button.text().includes("common.edit"));
+    expect(editButton).toBeTruthy();
+    await editButton!.trigger("click");
+    await flushPromises();
+
+    const field = wrapper.getComponent(CodexManifestAccountsFieldStub);
+    expect(field.props("platform")).toBe("antigravity");
+
+    await wrapper.get('[data-testid="codex-manifest-enable"]').trigger("click");
+    await wrapper.get('[data-testid="codex-manifest-select-account"]').trigger("click");
+    await flushPromises();
+
+    await wrapper.get("form#edit-group-form").trigger("submit.prevent");
+    await flushPromises();
+
+    expect(adminAPI.groups.update).toHaveBeenCalledWith(
+      77,
+      expect.objectContaining({
+        platform: "antigravity",
+        codex_models_manifest_config: {
+          enabled: true,
+          account_ids: [17],
+          fallback_to_scheduler: false,
+        },
       }),
     );
 

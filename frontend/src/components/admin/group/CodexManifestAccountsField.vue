@@ -6,7 +6,11 @@
           {{ t("admin.groups.codexModelsManifest.title") }}
         </label>
         <p class="mt-1 text-xs text-gray-500 dark:text-gray-400">
-          {{ t("admin.groups.codexModelsManifest.hint") }}
+          {{
+            isAntigravity
+              ? t("admin.groups.codexModelsManifest.antigravityHint")
+              : t("admin.groups.codexModelsManifest.hint")
+          }}
         </p>
       </div>
       <Toggle
@@ -22,7 +26,11 @@
         v-if="config.enabled"
         class="mb-2 text-xs text-gray-500 dark:text-gray-400"
       >
-        {{ t("admin.groups.codexModelsManifest.enabledHint") }}
+        {{
+          isAntigravity
+            ? t("admin.groups.codexModelsManifest.antigravityEnabledHint")
+            : t("admin.groups.codexModelsManifest.enabledHint")
+        }}
       </p>
 
       <label class="input-label">
@@ -59,7 +67,11 @@
           type="text"
           class="input text-sm"
           data-testid="codex-manifest-search"
-          :placeholder="t('admin.groups.codexModelsManifest.searchPlaceholder')"
+          :placeholder="
+            isAntigravity
+              ? t('admin.groups.codexModelsManifest.antigravitySearchPlaceholder')
+              : t('admin.groups.codexModelsManifest.searchPlaceholder')
+          "
           @input="searchAccounts"
           @focus="onSearchFocus"
         />
@@ -120,13 +132,17 @@
       </p>
     </div>
     <p v-else class="text-xs text-gray-500 dark:text-gray-400">
-      {{ t("admin.groups.codexModelsManifest.disabledHint") }}
+      {{
+        isAntigravity
+          ? t("admin.groups.codexModelsManifest.antigravityDisabledHint")
+          : t("admin.groups.codexModelsManifest.disabledHint")
+      }}
     </p>
   </div>
 </template>
 
 <script setup lang="ts">
-import { computed, onMounted, onUnmounted, ref } from "vue";
+import { computed, onMounted, onUnmounted, ref, watch } from "vue";
 import { useI18n } from "vue-i18n";
 import Icon from "@/components/icons/Icon.vue";
 import Toggle from "@/components/common/Toggle.vue";
@@ -141,10 +157,14 @@ interface SimpleAccount {
 
 const props = defineProps<{
   groupId: number;
+  platform?: string;
   modelValue: CodexModelsManifestConfig;
   /** 已选账号 ID → 名称映射；无法解析的 ID 以 #<id> 展示 */
   accountNames?: Record<number, string>;
 }>();
+
+const resolvedPlatform = computed(() => props.platform || "openai");
+const isAntigravity = computed(() => resolvedPlatform.value === "antigravity");
 
 const emit = defineEmits<{
   (event: "update:modelValue", value: CodexModelsManifestConfig): void;
@@ -193,7 +213,7 @@ const searchRunner = useKeyedDebouncedSearch<SimpleAccount[]>({
       20,
       {
         search: keyword,
-        platform: "openai",
+        platform: resolvedPlatform.value,
         group: String(props.groupId),
       },
       { signal },
@@ -209,6 +229,11 @@ const searchRunner = useKeyedDebouncedSearch<SimpleAccount[]>({
   onError: () => {
     searchResults.value = [];
   },
+});
+
+watch([() => props.groupId, resolvedPlatform], () => {
+  searchResults.value = [];
+  searchKeyword.value = "";
 });
 
 const searchAccounts = () => {

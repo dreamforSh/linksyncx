@@ -2344,3 +2344,83 @@ func TestAdminService_CreateGroup_CodexModelsManifestConfigDisabledAccepted(t *t
 	require.Equal(t, []int64{1, 2}, group.CodexModelsManifestConfig.AccountIDs)
 	require.False(t, repo.created.CodexModelsManifestConfig.Enabled)
 }
+
+func antigravityGroupCodexManifestAccounts(ids ...int64) []Account {
+	accounts := make([]Account, 0, len(ids))
+	for _, id := range ids {
+		accounts = append(accounts, Account{
+			ID: id, Platform: PlatformAntigravity, Type: AccountTypeOAuth,
+			Status: StatusActive, Schedulable: true,
+		})
+	}
+	return accounts
+}
+
+func TestAdminService_UpdateGroup_CodexModelsManifestConfigSupportsAntigravity(t *testing.T) {
+	t.Run("accepts active antigravity accounts in group", func(t *testing.T) {
+		existing := &Group{ID: 1, Name: "ag", Platform: PlatformAntigravity, Status: StatusActive}
+		repo := &groupRepoStubForAdmin{getByID: existing}
+		svc := &adminServiceImpl{
+			groupRepo:   repo,
+			accountRepo: &accountRepoStubForGroupCodexManifest{accounts: antigravityGroupCodexManifestAccounts(10, 20)},
+		}
+
+		group, err := svc.UpdateGroup(context.Background(), existing.ID, &UpdateGroupInput{
+			CodexModelsManifestConfig: &GroupCodexModelsManifestConfig{
+				Enabled:             true,
+				AccountIDs:          []int64{20, 10, 20},
+				FallbackToScheduler: true,
+			},
+		})
+
+		require.NoError(t, err)
+		require.True(t, group.CodexModelsManifestConfig.Enabled)
+		require.Equal(t, []int64{20, 10}, repo.updated.CodexModelsManifestConfig.AccountIDs)
+		require.True(t, repo.updated.CodexModelsManifestConfig.FallbackToScheduler)
+	})
+
+	t.Run("rejects openai accounts on antigravity group", func(t *testing.T) {
+		existing := &Group{ID: 1, Name: "ag", Platform: PlatformAntigravity, Status: StatusActive}
+		repo := &groupRepoStubForAdmin{getByID: existing}
+		accounts := append(antigravityGroupCodexManifestAccounts(10), openAIGroupCodexManifestAccounts(30)...)
+		svc := &adminServiceImpl{
+			groupRepo:   repo,
+			accountRepo: &accountRepoStubForGroupCodexManifest{accounts: accounts},
+		}
+
+		_, err := svc.UpdateGroup(context.Background(), existing.ID, &UpdateGroupInput{
+			CodexModelsManifestConfig: &GroupCodexModelsManifestConfig{
+				Enabled:    true,
+				AccountIDs: []int64{10, 30},
+			},
+		})
+
+		require.Error(t, err)
+		require.Equal(t, http.StatusBadRequest, infraerrors.Code(err))
+		require.Equal(t, "INVALID_CODEX_MODELS_MANIFEST_CONFIG", infraerrors.Reason(err))
+		require.Contains(t, err.Error(), "antigravity")
+		require.Contains(t, err.Error(), "30")
+		require.Nil(t, repo.updated)
+	})
+
+	t.Run("switching openai group to antigravity without config clears stale pinned accounts", func(t *testing.T) {
+		existing := &Group{
+			ID: 1, Name: "switched", Platform: PlatformOpenAI, Status: StatusActive,
+			CodexModelsManifestConfig: GroupCodexModelsManifestConfig{
+				Enabled:             true,
+				AccountIDs:          []int64{10},
+				FallbackToScheduler: true,
+			},
+		}
+		repo := &groupRepoStubForAdmin{getByID: existing}
+		svc := &adminServiceImpl{groupRepo: repo}
+
+		group, err := svc.UpdateGroup(context.Background(), existing.ID, &UpdateGroupInput{
+			Platform: PlatformAntigravity,
+		})
+
+		require.NoError(t, err)
+		require.Equal(t, GroupCodexModelsManifestConfig{}, repo.updated.CodexModelsManifestConfig)
+		require.Equal(t, GroupCodexModelsManifestConfig{}, group.CodexModelsManifestConfig)
+	})
+}

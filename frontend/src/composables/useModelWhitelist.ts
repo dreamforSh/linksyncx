@@ -1,3 +1,5 @@
+import { ref } from 'vue'
+
 // =====================
 // 模型列表（硬编码，与 new-api 一致）
 // =====================
@@ -58,7 +60,7 @@ const geminiModels = [
 ]
 
 // Antigravity 模型 ID 只来自默认映射接口，失败时保持为空，不缓存失败结果。
-let antigravityModelIDs: string[] = []
+const antigravityModelIDs = ref<string[]>([])
 
 // 智谱 GLM
 const zhipuModels = [
@@ -403,7 +405,7 @@ export async function fetchAntigravityDefaultMappings(): Promise<{ from: string;
   try {
     const mapping = await getAntigravityDefaultModelMapping()
     _antigravityDefaultMappingsCache = Object.entries(mapping).map(([from, to]) => ({ from, to }))
-    antigravityModelIDs = Object.keys(mapping)
+    antigravityModelIDs.value = Object.keys(mapping)
   } catch (e) {
     console.warn('[fetchAntigravityDefaultMappings] API failed, using empty fallback', e)
     return []
@@ -436,7 +438,7 @@ export function getModelsByPlatform(platform: string): string[] {
     case 'anthropic':
     case 'claude': return claudeModels
     case 'gemini': return geminiModels
-    case 'antigravity': return antigravityModelIDs
+    case 'antigravity': return antigravityModelIDs.value
     case 'zhipu': return zhipuModels
     case 'qwen': return qwenModels
     case 'deepseek': return deepseekModels

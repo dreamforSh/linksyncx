@@ -59,12 +59,17 @@ const mountInteractive = (initial: CodexModelsManifestConfig, accountNames?: Rec
   });
 };
 
-const mountField = (modelValue: CodexModelsManifestConfig, accountNames?: Record<number, string>) =>
+const mountField = (
+  modelValue: CodexModelsManifestConfig,
+  accountNames?: Record<number, string>,
+  platform?: string,
+) =>
   mount(CodexManifestAccountsField, {
     props: {
       groupId: 7,
       modelValue,
       ...(accountNames ? { accountNames } : {}),
+      ...(platform ? { platform } : {}),
     },
     global: {
       stubs: {
@@ -207,6 +212,41 @@ describe("CodexManifestAccountsField", () => {
     await search.trigger("click");
     await search.trigger("focus");
     expect(wrapper.find('[data-testid="codex-manifest-dropdown"]').exists()).toBe(true);
+    wrapper.unmount();
+  });
+
+  it("queries antigravity accounts and renders antigravity copy when platform is antigravity", async () => {
+    vi.mocked(adminAPI.accounts.list).mockResolvedValue({
+      items: [{ id: 12, name: "ag-pinned" }],
+    } as never);
+    const disabledWrapper = mountField(
+      { enabled: false, account_ids: [], fallback_to_scheduler: false },
+      undefined,
+      "antigravity",
+    );
+    expect(disabledWrapper.text()).toContain("admin.groups.codexModelsManifest.antigravityHint");
+    expect(disabledWrapper.text()).toContain(
+      "admin.groups.codexModelsManifest.antigravityDisabledHint",
+    );
+    disabledWrapper.unmount();
+
+    const wrapper = mountField(enabledConfig(), undefined, "antigravity");
+    expect(wrapper.text()).toContain("admin.groups.codexModelsManifest.antigravityEnabledHint");
+    const search = wrapper.find('[data-testid="codex-manifest-search"]');
+    expect(search.attributes("placeholder")).toBe(
+      "admin.groups.codexModelsManifest.antigravitySearchPlaceholder",
+    );
+    await search.trigger("focus");
+    await search.setValue("ag");
+    vi.advanceTimersByTime(300);
+    await flushPromises();
+
+    expect(adminAPI.accounts.list).toHaveBeenCalledWith(
+      1,
+      20,
+      { search: "ag", platform: "antigravity", group: "7" },
+      expect.anything(),
+    );
     wrapper.unmount();
   });
 });

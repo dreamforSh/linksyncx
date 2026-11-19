@@ -67,7 +67,7 @@ func (f *AntigravityQuotaFetcher) CanFetch(account *Account) bool {
 func (f *AntigravityQuotaFetcher) FetchQuota(ctx context.Context, account *Account, proxyURL string) (*QuotaResult, error) {
 	ctx = withAntigravityDevice(ctx, account)
 	accessToken := account.GetCredential("access_token")
-	projectID := account.GetCredential("project_id")
+	projectID := resolveAntigravityAccountProjectID(account)
 
 	var accountID int64
 	if account != nil {
@@ -82,7 +82,15 @@ func (f *AntigravityQuotaFetcher) FetchQuota(ctx context.Context, account *Accou
 	}
 
 	// 调用 API 获取配额
-	modelsResp, modelsRaw, err := client.FetchAvailableModels(ctx, accessToken, projectID, resolveModelsListReadLimit(f.cfg))
+	modelsURLs, fallbackOnAuthError := resolveAntigravityModelsBaseURLs(account)
+	modelsResp, modelsRaw, err := client.FetchAvailableModelsWithURLs(
+		ctx,
+		accessToken,
+		projectID,
+		resolveModelsListReadLimit(f.cfg),
+		modelsURLs,
+		fallbackOnAuthError,
+	)
 	if err != nil {
 		// 403 Forbidden: 不报错，返回 is_forbidden 标记
 		var forbiddenErr *antigravity.ForbiddenError

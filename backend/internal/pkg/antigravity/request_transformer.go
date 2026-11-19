@@ -137,11 +137,6 @@ func firstUserMessageText(contents []GeminiContent) string {
 	return ""
 }
 
-// generateStableSessionID 基于用户消息内容生成稳定的 session ID
-func generateStableSessionID(contents []GeminiContent) string {
-	return DeriveAntigravitySessionID("", firstUserMessageText(contents), "", false, false)
-}
-
 type TransformOptions struct {
 	EnableIdentityPatch bool
 	// IdentityPatch 可选：自定义注入到 systemInstruction 开头的身份防护提示词；

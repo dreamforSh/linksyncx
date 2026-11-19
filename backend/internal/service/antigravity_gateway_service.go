@@ -1017,28 +1017,6 @@ func marshalWrappedV1InternalRequest(projectID, model string, request any) ([]by
 	return json.Marshal(wrapped)
 }
 
-// injectIdentityPatchToGeminiRequest 为 Gemini 格式请求注入身份提示词
-// 如果请求中已包含 "You are Antigravity" 则不重复注入
-func injectIdentityPatchToGeminiRequest(body []byte) ([]byte, error) {
-	var request map[string]any
-	if err := json.Unmarshal(body, &request); err != nil {
-		return nil, fmt.Errorf("解析 Gemini 请求失败: %w", err)
-	}
-	if sysInst, ok := request["systemInstruction"].(map[string]any); ok {
-		if parts, ok := sysInst["parts"].([]any); ok {
-			for _, part := range parts {
-				if partMap, ok := part.(map[string]any); ok {
-					if text, ok := partMap["text"].(string); ok && strings.Contains(text, "You are Antigravity") {
-						return body, nil
-					}
-				}
-			}
-		}
-	}
-	injectIdentityPatchToGeminiMap(request)
-	return json.Marshal(request)
-}
-
 // wrapV1InternalRequest 包装请求为 v1internal 格式
 func (s *AntigravityGatewayService) wrapV1InternalRequest(projectID, model string, originalBody []byte) ([]byte, error) {
 	var request any

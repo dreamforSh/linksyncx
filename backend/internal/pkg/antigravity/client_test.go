@@ -5,6 +5,7 @@ package antigravity
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net"
 	"net/http"
@@ -1969,4 +1970,135 @@ func TestClient_RetrieveUserQuotaSummary_FallsBackOn500(t *testing.T) {
 	if summary == nil || len(summary.Buckets) != 1 || summary.Buckets[0].BucketID != "pool" {
 		t.Fatalf("summary = %#v", summary)
 	}
+}
+
+func TestClient_FetchAvailableModelsWithURLs_AuthAndEmptyFallback(t *testing.T) {
+	t.Run("daily returns 401 and falls back to prod when fallbackOnAuthError is true", func(t *testing.T) {
+		dailyCalls := 0
+		prodCalls := 0
+		dailyServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			dailyCalls++
+			w.WriteHeader(http.StatusUnauthorized)
+			_, _ = w.Write([]byte(`{"error":"unauthorized"}`))
+		}))
+		defer dailyServer.Close()
+
+		prodServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			prodCalls++
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"models":{"gemini-3.5-flash":{"displayName":"Gemini 3.5 Flash"}}}`))
+		}))
+		defer prodServer.Close()
+
+		withMockBaseURLs(t, []string{prodServer.URL, dailyServer.URL})
+		client := mustNewClient(t, "")
+		resp, _, err := client.FetchAvailableModelsWithURLs(
+			context.Background(),
+			"token",
+			"proj",
+			defaultFetchAvailableModelsBodyLimit,
+			[]string{dailyServer.URL, prodServer.URL},
+			true,
+		)
+		if err != nil {
+			t.Fatalf("expected fallback success, got %v", err)
+		}
+		if dailyCalls != 1 || prodCalls != 1 {
+			t.Fatalf("unexpected call counts: daily=%d prod=%d", dailyCalls, prodCalls)
+		}
+		if _, ok := resp.Models["gemini-3.5-flash"]; !ok {
+			t.Fatalf("expected model from prod fallback, got %#v", resp.Models)
+		}
+	})
+
+	t.Run("daily returns 403 and falls back to prod when fallbackOnAuthError is true", func(t *testing.T) {
+		dailyServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			w.WriteHeader(http.StatusForbidden)
+			_, _ = w.Write([]byte(`{"error":"forbidden on daily"}`))
+		}))
+		defer dailyServer.Close()
+
+		prodServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"models":{"claude-opus-4-8":{"displayName":"Claude Opus 4.8"}}}`))
+		}))
+		defer prodServer.Close()
+
+		withMockBaseURLs(t, []string{prodServer.URL, dailyServer.URL})
+		client := mustNewClient(t, "")
+		resp, _, err := client.FetchAvailableModelsWithURLs(
+			context.Background(),
+			"token",
+			"proj",
+			defaultFetchAvailableModelsBodyLimit,
+			[]string{dailyServer.URL, prodServer.URL},
+			true,
+		)
+		if err != nil {
+			t.Fatalf("expected fallback success, got %v", err)
+		}
+		if _, ok := resp.Models["claude-opus-4-8"]; !ok {
+			t.Fatalf("expected model from prod fallback, got %#v", resp.Models)
+		}
+	})
+
+	t.Run("daily returns empty models and falls back to prod", func(t *testing.T) {
+		dailyServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"models":{}}`))
+		}))
+		defer dailyServer.Close()
+
+		prodServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"models":{"gemini-4-argon":{"displayName":"Gemini 4 Argon"}}}`))
+		}))
+		defer prodServer.Close()
+
+		withMockBaseURLs(t, []string{prodServer.URL, dailyServer.URL})
+		client := mustNewClient(t, "")
+		resp, _, err := client.FetchAvailableModelsWithURLs(
+			context.Background(),
+			"token",
+			"proj",
+			defaultFetchAvailableModelsBodyLimit,
+			[]string{dailyServer.URL, prodServer.URL},
+			true,
+		)
+		if err != nil {
+			t.Fatalf("expected fallback success, got %v", err)
+		}
+		if _, ok := resp.Models["gemini-4-argon"]; !ok {
+			t.Fatalf("expected model from prod fallback, got %#v", resp.Models)
+		}
+	})
+
+	t.Run("final URL returning 403 returns ForbiddenError", func(t *testing.T) {
+		dailyServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			w.WriteHeader(http.StatusForbidden)
+			_, _ = w.Write([]byte(`{"error":"forbidden daily"}`))
+		}))
+		defer dailyServer.Close()
+
+		prodServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			w.WriteHeader(http.StatusForbidden)
+			_, _ = w.Write([]byte(`{"error":"forbidden prod"}`))
+		}))
+		defer prodServer.Close()
+
+		withMockBaseURLs(t, []string{prodServer.URL, dailyServer.URL})
+		client := mustNewClient(t, "")
+		_, _, err := client.FetchAvailableModelsWithURLs(
+			context.Background(),
+			"token",
+			"proj",
+			defaultFetchAvailableModelsBodyLimit,
+			[]string{dailyServer.URL, prodServer.URL},
+			true,
+		)
+		var forbiddenErr *ForbiddenError
+		if !errors.As(err, &forbiddenErr) {
+			t.Fatalf("expected ForbiddenError, got %T (%v)", err, err)
+		}
+	})
 }

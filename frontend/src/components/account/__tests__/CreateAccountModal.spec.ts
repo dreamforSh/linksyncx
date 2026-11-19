@@ -64,6 +64,25 @@ vi.mock('@/api/admin', () => ({
       randomDeviceProfiles: randomDeviceProfilesMock,
       refreshOpenAIToken: refreshOpenAITokenMock,
     },
+    antigravity: {
+      generateAuthUrl: vi.fn().mockResolvedValue({
+        auth_url: 'https://accounts.google.com/o/oauth2/auth',
+        session_id: 'ag-session-1',
+        state: 'ag-state-1',
+      }),
+      exchangeCode: vi.fn().mockResolvedValue({
+        access_token: 'ag-at',
+        refresh_token: 'ag-rt',
+        token_type: 'Bearer',
+        expires_in: 3600,
+      }),
+      refreshAntigravityToken: vi.fn().mockResolvedValue({
+        access_token: 'ag-at',
+        refresh_token: 'ag-rt',
+        token_type: 'Bearer',
+        expires_in: 3600,
+      }),
+    },
     settings: {
       getWebSearchEmulationConfig: vi.fn().mockResolvedValue({ enabled: false, providers: [] }),
       getSettings: vi.fn().mockResolvedValue({}),
@@ -760,32 +779,44 @@ describe('CreateAccountModal OpenAI long-context billing', () => {
     wrapper.unmount()
   })
 
-  it('antigravity OAuth 创建时同步按钮禁用并提示去编辑窗口', async () => {
+  it('antigravity OAuth 默认白名单模式并提示同步时机，创建后触发模型同步', async () => {
+    createAccountMock.mockResolvedValueOnce({
+      id: 99,
+      platform: 'antigravity',
+      type: 'oauth',
+    })
     const wrapper = mountModal()
     await selectButtonByText(wrapper, 'Antigravity')
     await flushPromises()
 
-    const button = wrapper.get('[data-testid="antigravity-sync-upstream"]')
-    expect(button.attributes('disabled')).toBeDefined()
+    expect(wrapper.get('[data-testid="antigravity-mode-whitelist"]').classes()).toContain('bg-primary-100')
+    const selector = wrapper.getComponent(ModelWhitelistSelectorStub)
+    expect(selector.props('platform')).toBe('antigravity')
+    expect(selector.props('syncCredentials')).toBeUndefined()
     expect(wrapper.text()).toContain('admin.accounts.syncUpstreamModelsOAuthHint')
+    expect(syncUpstreamModelsPreviewMock).not.toHaveBeenCalled()
 
-    await button.trigger('click')
+    await wrapper.get('form#create-account-form input[type="text"]').setValue('Antigravity OAuth')
+    await wrapper.get('form#create-account-form').trigger('submit.prevent')
     await flushPromises()
 
-    expect(syncUpstreamModelsPreviewMock).not.toHaveBeenCalled()
+    wrapper.getComponent(OAuthAuthorizationFlowStub).vm.$emit('validate-refresh-token', 'rt-antigravity-1')
+    await flushPromises()
+
+    expect(createAccountMock).toHaveBeenCalledTimes(1)
+    expect(syncUpstreamModelsMock).toHaveBeenCalledWith(99)
   })
 
-  it('antigravity upstream 同步预览把上游模型填成 from=to 映射', async () => {
-    syncUpstreamModelsPreviewMock.mockResolvedValue({
-      models: ['claude-opus-4-8', 'gemini-3.5-flash'],
-    })
+  it('antigravity upstream 默认白名单模式并传入 syncCredentials，支持切换自定义映射', async () => {
     const wrapper = mountModal()
     await selectButtonByText(wrapper, 'Antigravity')
     await selectButtonByText(wrapper, 'admin.accounts.types.antigravityApikey')
     await flushPromises()
 
-    const button = wrapper.get('[data-testid="antigravity-sync-upstream"]')
-    expect(button.attributes('disabled')).toBeDefined()
+    expect(wrapper.get('[data-testid="antigravity-mode-whitelist"]').classes()).toContain('bg-primary-100')
+    const initialSelector = wrapper.getComponent(ModelWhitelistSelectorStub)
+    expect(initialSelector.props('platform')).toBe('antigravity')
+    expect(initialSelector.props('syncCredentials')).toBeUndefined()
 
     const baseInput = wrapper
       .findAll('input')
@@ -793,46 +824,40 @@ describe('CreateAccountModal OpenAI long-context billing', () => {
     expect(baseInput).toBeDefined()
     await baseInput?.setValue('https://relay.example')
     await wrapper.get('form#create-account-form input[type="password"]').setValue('sk-upstream')
-    expect(button.attributes('disabled')).toBeUndefined()
-
-    await button.trigger('click')
-    await flushPromises()
-
-    expect(syncUpstreamModelsPreviewMock).toHaveBeenCalledWith({
-      platform: 'antigravity',
-      type: 'apikey',
-      base_url: 'https://relay.example',
-      api_key: 'sk-upstream',
-    })
     const vm = wrapper.vm as unknown as { form: { proxy_id: number | null } }
     vm.form.proxy_id = 15
-    await button.trigger('click')
     await flushPromises()
-    expect(syncUpstreamModelsPreviewMock).toHaveBeenLastCalledWith({
+
+    expect(wrapper.getComponent(ModelWhitelistSelectorStub).props('syncCredentials')).toEqual({
       platform: 'antigravity',
       type: 'apikey',
       base_url: 'https://relay.example',
       api_key: 'sk-upstream',
       proxy_id: 15,
+      model_restriction_mode: 'whitelist',
     })
-    const values = (placeholder: string) =>
-      wrapper
-        .findAll('input')
-        .filter((candidate) => candidate.attributes('placeholder') === placeholder)
-        .map((candidate) => (candidate.element as HTMLInputElement).value)
-    expect(values('admin.accounts.requestModel')).toEqual(['claude-opus-4-8', 'gemini-3.5-flash'])
-    expect(values('admin.accounts.actualModel')).toEqual(['claude-opus-4-8', 'gemini-3.5-flash'])
-
-    // 支持一键清空映射或切换到白名单模式提交
-    await wrapper.get('[data-testid="antigravity-mode-whitelist"]').trigger('click')
-    await flushPromises()
-    expect(wrapper.findComponent(ModelWhitelistSelectorStub).exists()).toBe(true)
 
     await wrapper.get('[data-testid="antigravity-mode-mapping"]').trigger('click')
     await flushPromises()
-    await wrapper.get('[data-testid="antigravity-clear-mappings"]').trigger('click')
+    expect(wrapper.get('[data-testid="antigravity-mode-mapping"]').classes()).toContain('bg-purple-100')
+    const addMappingButton = wrapper
+      .findAll('button')
+      .find((candidate) => candidate.text().includes('admin.accounts.addMapping'))
+    expect(addMappingButton).toBeDefined()
+    await addMappingButton?.trigger('click')
     await flushPromises()
-    expect(values('admin.accounts.requestModel')).toEqual([])
+
+    const inputs = (placeholder: string) =>
+      wrapper
+        .findAll('input')
+        .filter((candidate) => candidate.attributes('placeholder') === placeholder)
+    await inputs('admin.accounts.requestModel')[0]?.setValue('gemini-custom')
+    await inputs('admin.accounts.actualModel')[0]?.setValue('gemini-3.5-pro')
+    await flushPromises()
+
+    await wrapper.get('[data-testid="antigravity-mode-whitelist"]').trigger('click')
+    await flushPromises()
+    expect(wrapper.findComponent(ModelWhitelistSelectorStub).exists()).toBe(true)
   })
 
   it('leaves Codex session import billing ownership to the backend', async () => {

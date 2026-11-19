@@ -123,12 +123,6 @@ func getAntigravityObservedLiveModels(accountID int64) ([]string, uint64) {
 	return out, entry.sig
 }
 
-func resetAntigravityObservedModels() {
-	antigravityObservedModels.mu.Lock()
-	antigravityObservedModels.items = make(map[int64]antigravityObservedEntry)
-	antigravityObservedModels.mu.Unlock()
-}
-
 // SetAntigravityModelCatalogSnapshot stores the synced Antigravity catalog in account.Extra.
 func (a *Account) SetAntigravityModelCatalogSnapshot(snapshot AntigravityModelCatalogSnapshot) {
 	if a == nil {
@@ -383,62 +377,6 @@ func mergeAntigravityObservedModelsIntoMapping(base map[string]string, a *Accoun
 		}
 	}
 	return merged
-}
-
-func buildAntigravityCatalogSnapshotFromAvailable(resp *antigravity.FetchAvailableModelsResponse) AntigravityModelCatalogSnapshot {
-	models := make(map[string]AntigravityCatalogModel)
-	if resp != nil {
-		for rawID, info := range resp.Models {
-			id := strings.TrimSpace(rawID)
-			if id == "" || strings.Contains(id, "*") {
-				continue
-			}
-			entry := AntigravityCatalogModel{
-				ID:          id,
-				DisplayName: strings.TrimSpace(info.DisplayName),
-			}
-			if entry.DisplayName == "" {
-				entry.DisplayName = id
-			}
-			if info.SupportsThinking != nil {
-				v := *info.SupportsThinking
-				entry.SupportsThinking = &v
-			}
-			if info.SupportsImages != nil {
-				v := *info.SupportsImages
-				entry.SupportsImages = &v
-			}
-			if info.MaxTokens != nil && *info.MaxTokens > 0 {
-				entry.MaxTokens = *info.MaxTokens
-			}
-			if info.MaxOutputTokens != nil && *info.MaxOutputTokens > 0 {
-				entry.MaxOutputTokens = *info.MaxOutputTokens
-			}
-			models[id] = entry
-		}
-	}
-	var deprecated map[string]string
-	if resp != nil && len(resp.DeprecatedModelIDs) > 0 {
-		deprecated = make(map[string]string, len(resp.DeprecatedModelIDs))
-		for oldID, dep := range resp.DeprecatedModelIDs {
-			oldTrimmed := strings.TrimSpace(oldID)
-			newTrimmed := strings.TrimSpace(dep.NewModelID)
-			if oldTrimmed == "" || newTrimmed == "" {
-				continue
-			}
-			deprecated[oldTrimmed] = newTrimmed
-			if entry, ok := models[oldTrimmed]; ok {
-				entry.DeprecatedTo = newTrimmed
-				models[oldTrimmed] = entry
-			}
-		}
-	}
-	return AntigravityModelCatalogSnapshot{
-		Source:             "antigravity_oauth",
-		SyncedAt:           time.Now().UTC().Format(time.RFC3339),
-		Models:             models,
-		DeprecatedModelIDs: deprecated,
-	}
 }
 
 func buildAntigravityCatalogSnapshotFromRelayModels(claudeModels []antigravity.ClaudeModel, metadata map[string]UpstreamModelMetadata) AntigravityModelCatalogSnapshot {
