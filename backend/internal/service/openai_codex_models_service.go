@@ -17,6 +17,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/Wei-Shaw/sub2api/internal/pkg/antigravity"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/claude"
 	infraerrors "github.com/Wei-Shaw/sub2api/internal/pkg/errors"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/httpclient"
@@ -503,6 +504,20 @@ func newConfiguredCodexModelDescriptor(modelID string) configuredCodexModelDescr
 		}
 	}
 
+	if isGeminiCodexModel(modelID) {
+		descriptor.Description = "Gemini coding and reasoning model routed through Sub2API."
+		descriptor.SupportsParallelToolCalls = true
+		descriptor.InputModalities = []string{"text", "image"}
+		if antigravity.IsGeminiThinkingLevelModel(modelID) {
+			defaultReasoningLevel := "high"
+			if variant, ok := antigravity.SplitGeminiThinkingVariant(modelID); ok && variant.ThinkingLevel != "" {
+				defaultReasoningLevel = variant.ThinkingLevel
+			}
+			descriptor.DefaultReasoningLevel = &defaultReasoningLevel
+			descriptor.SupportedReasoningLevels = configuredCodexGeminiReasoningLevels()
+		}
+	}
+
 	if isOpenAICodexGPTModel(modelID) {
 		descriptor.DisplayName = openaiCodexDisplayName(modelID)
 		descriptor.Description = "OpenAI GPT coding model routed through Sub2API."
@@ -764,6 +779,20 @@ func isDeepSeekCodexModel(modelID string) bool {
 
 func isGrokCodexModel(modelID string) bool {
 	return xai.IsGrokModelID(modelID)
+}
+
+func isGeminiCodexModel(modelID string) bool {
+	lower := strings.ToLower(strings.TrimSpace(strings.TrimPrefix(strings.TrimSpace(modelID), "models/")))
+	return strings.HasPrefix(lower, "gemini-") && !strings.Contains(lower, "-image")
+}
+
+func configuredCodexGeminiReasoningLevels() []configuredCodexReasoningLevel {
+	return []configuredCodexReasoningLevel{
+		{Effort: "minimal", Description: "Minimal reasoning for lowest latency"},
+		{Effort: "low", Description: "Fast responses with lighter reasoning"},
+		{Effort: "medium", Description: "Balanced reasoning for most coding tasks"},
+		{Effort: "high", Description: "Greater reasoning depth for coding and agent tasks"},
+	}
 }
 
 func grokCodexSupportsReasoningEffort(modelID string) bool {

@@ -128,6 +128,9 @@ func (s *AntigravityGatewayService) ForwardGemini(ctx context.Context, c *gin.Co
 	if err != nil {
 		return nil, s.writeGoogleError(c, http.StatusBadRequest, "Invalid request body")
 	}
+	// 当客户端请求了特定思考后缀变体（如 gemini-4-argon-low）并被路由到实际存在的上游变体
+	// （如 gemini-4-argon-high）时，若请求体未显式携带 thinkingConfig，则补齐对应 thinkingLevel。
+	applyAntigravityGeminiThinkingConfigToMap(preparedReq, originalModel, mappedModel, geminiThinkingIntent{}, true)
 
 	// 单次序列化封装 v1internal 请求
 	wrappedBody, err := marshalWrappedV1InternalRequest(projectID, mappedModel, preparedReq)

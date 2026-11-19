@@ -50,10 +50,11 @@ func (s *AntigravityGatewayService) Forward(ctx context.Context, c *gin.Context,
 	}
 
 	originalModel := claudeReq.Model
+	thinkingIntent := resolveGeminiThinkingIntent(nil, claudeReq.Thinking, claudeReq.OutputConfig, claudeReq.Model)
 	mappedModel := s.getMappedModelForThinkingLevel(
 		account,
 		claudeReq.Model,
-		geminiThinkingLevelFromClaudeThinking(claudeReq.Thinking),
+		thinkingIntent.Level,
 	)
 	if mappedModel == "" {
 		MarkOpsClientBusinessLimited(c, OpsClientBusinessLimitedReasonLocalFeatureGate)
@@ -92,6 +93,13 @@ func (s *AntigravityGatewayService) Forward(ctx context.Context, c *gin.Context,
 	// Antigravity 上游要求必须包含身份提示词，否则会返回 429
 	transformOpts := s.getClaudeTransformOptionsForAccount(ctx, c, account)
 	transformOpts.EnableIdentityPatch = true // 强制启用，Antigravity 上游必需
+	if isAntigravityGeminiModel(mappedModel) && (thinkingIntent.Explicit || thinkingIntent.FromModelSuffix) {
+		if thinkingIntent.Disabled {
+			transformOpts.PreferredThinkingLevel = "none"
+		} else {
+			transformOpts.PreferredThinkingLevel = thinkingIntent.Level
+		}
+	}
 
 	// 转换 Claude 请求为 Gemini 格式
 	geminiBody, err := antigravity.TransformClaudeToGeminiWithOptions(&claudeReq, projectID, mappedModel, transformOpts)

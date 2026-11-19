@@ -151,6 +151,8 @@ type TransformOptions struct {
 	SanitizeSessionID bool
 	// ClientSessionHint 可选：来自请求头（如 session_id / x-claude-code-session-id）的会话线索兜底。
 	ClientSessionHint string
+	// PreferredThinkingLevel 可选：从原始模型后缀或协议层拆分出的 Gemini 思考档位（minimal/low/medium/high）。
+	PreferredThinkingLevel string
 }
 
 func DefaultTransformOptions() TransformOptions {
@@ -232,19 +234,26 @@ func TransformClaudeToGeminiWithOptions(claudeReq *ClaudeRequest, projectID, map
 
 	// 3. 构建 generationConfig
 	reqForConfig := claudeReq
+	preferredThinkingLevel := opts.PreferredThinkingLevel
 	if strippedThinking {
 		// If we had to downgrade thinking blocks to plain text due to missing/invalid signatures,
 		// disable upstream thinking mode to avoid signature/structure validation errors.
 		reqCopy := *claudeReq
-		reqCopy.Thinking = nil
+		if IsGeminiThinkingLevelModel(targetModel) {
+			reqCopy.Thinking = &ThinkingConfig{Type: "disabled"}
+		} else {
+			reqCopy.Thinking = nil
+		}
+		reqCopy.OutputConfig = nil
 		reqForConfig = &reqCopy
+		preferredThinkingLevel = ""
 	}
 	if targetModel != "" && targetModel != reqForConfig.Model {
 		reqCopy := *reqForConfig
 		reqCopy.Model = targetModel
 		reqForConfig = &reqCopy
 	}
-	generationConfig := buildGenerationConfig(reqForConfig)
+	generationConfig := buildGenerationConfigWithOptions(reqForConfig, preferredThinkingLevel)
 
 	// 4. 构建 tools
 	tools := buildTools(claudeReq.Tools)
@@ -770,6 +779,10 @@ func isAntigravityOpusHighTierModel(model string) bool {
 }
 
 func buildGenerationConfig(req *ClaudeRequest) *GeminiGenerationConfig {
+	return buildGenerationConfigWithOptions(req, "")
+}
+
+func buildGenerationConfigWithOptions(req *ClaudeRequest, preferredThinkingLevel string) *GeminiGenerationConfig {
 	maxLimit := maxOutputTokensLimit(req.Model)
 	config := &GeminiGenerationConfig{
 		MaxOutputTokens: defaultMaxOutputTokens, // 默认最大输出
@@ -785,8 +798,38 @@ func buildGenerationConfig(req *ClaudeRequest) *GeminiGenerationConfig {
 		config.MaxOutputTokens = req.MaxTokens
 	}
 
-	// Thinking 配置
-	if req.Thinking != nil && (req.Thinking.Type == "enabled" || req.Thinking.Type == "adaptive") {
+	// Thinking 配置：
+	// - Gemini 3 / Gemini 4 模型走 thinkingLevel 适配（与 thinkingBudget 互斥），避免上游拒绝或忽略思考档位。
+	// - Claude 及旧版 Gemini 2.5 模型保持 thinkingBudget 语义不变。
+	if IsGeminiThinkingLevelModel(req.Model) {
+		thinkingType := ""
+		if req.Thinking != nil {
+			thinkingType = strings.ToLower(strings.TrimSpace(req.Thinking.Type))
+		}
+		effortRaw := strings.TrimSpace(preferredThinkingLevel)
+		if effortRaw == "" && req.OutputConfig != nil {
+			effortRaw = strings.TrimSpace(req.OutputConfig.Effort)
+		}
+		switch {
+		case thinkingType == "disabled":
+			config.ThinkingConfig = BuildGeminiThinkingConfig(req.Model, "", true, nil, false)
+		case thinkingType == "enabled" || thinkingType == "adaptive":
+			var budgetPtr *int
+			if req.Thinking.BudgetTokens > 0 {
+				b := req.Thinking.BudgetTokens
+				budgetPtr = &b
+			}
+			config.ThinkingConfig = BuildGeminiThinkingConfig(req.Model, effortRaw, false, budgetPtr, true)
+		case effortRaw != "":
+			level, disabled, ok := NormalizeGeminiThinkingLevel(effortRaw)
+			if ok {
+				config.ThinkingConfig = BuildGeminiThinkingConfig(req.Model, level, disabled, nil, !disabled)
+			}
+		case IsGemini4Model(req.Model):
+			// Gemini 4 推理模型默认开启思考；若模型名自带档位后缀（如 gemini-4-argon-high）则拆分并对齐档位。
+			config.ThinkingConfig = BuildGeminiThinkingConfig(req.Model, "", false, nil, true)
+		}
+	} else if req.Thinking != nil && (req.Thinking.Type == "enabled" || req.Thinking.Type == "adaptive") {
 		config.ThinkingConfig = &GeminiThinkingConfig{
 			IncludeThoughts: true,
 		}

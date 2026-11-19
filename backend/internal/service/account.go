@@ -680,6 +680,7 @@ func (a *Account) resolveModelMapping(rawMapping map[string]any) map[string]stri
 	}
 	if len(result) > 0 {
 		if a.Platform == domain.PlatformAntigravity && !a.antigravityWhitelistEnabled() {
+			hasRawGemini := antigravityMappingHasGeminiEntry(result)
 			ensureAntigravityDefaultPassthroughs(result, []string{
 				"gemini-3-flash",
 				"gemini-3.1-pro-high",
@@ -714,6 +715,9 @@ func (a *Account) resolveModelMapping(rawMapping map[string]any) map[string]stri
 				"gpt-oss-20b-maas",
 			})
 			applyAntigravityGemini31ProAliases(result)
+			if a.GetCredential(AntigravityModelRestrictionModeKey) == "mapping" || hasRawGemini {
+				result = mergeAntigravityObservedModelsIntoMapping(result, a)
+			}
 		}
 		return result
 	}

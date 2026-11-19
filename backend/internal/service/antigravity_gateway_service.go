@@ -432,7 +432,8 @@ type TestConnectionImage struct {
 
 // TestConnectionResult 测试连接结果
 type TestConnectionResult struct {
-	Text        string                // 响应文本
+	Text        string                // 响应文本（非思考正文）
+	Thinking    string                // 思考过程文本（thought=true 拆分输出）
 	Images      []TestConnectionImage // 图片输出（图像生成模型）
 	MappedModel string                // 实际使用的模型
 }
@@ -441,6 +442,11 @@ type TestConnectionResult struct {
 // 复用 antigravityRetryLoop 的完整重试 / credits overages / 智能重试逻辑，
 // 与真实调度行为一致。差异：不做账号切换（测试指定账号）、不记录 ops 错误。
 func (s *AntigravityGatewayService) TestConnection(ctx context.Context, account *Account, modelID string, prompt string) (*TestConnectionResult, error) {
+	return s.TestConnectionWithOptions(ctx, account, modelID, prompt, "")
+}
+
+// TestConnectionWithOptions 测试 Antigravity 账号连接并支持显式指定思考深度（minimal/low/medium/high/none）。
+func (s *AntigravityGatewayService) TestConnectionWithOptions(ctx context.Context, account *Account, modelID string, prompt string, thinkingLevel string) (*TestConnectionResult, error) {
 	ctx = withAntigravityDevice(ctx, account)
 
 	// 获取 token
@@ -457,16 +463,24 @@ func (s *AntigravityGatewayService) TestConnection(ctx context.Context, account 
 		return nil, err
 	}
 
-	// 模型映射
-	mappedModel := s.getMappedModel(account, modelID)
+	// 模型映射：结合显式 thinkingLevel 或模型后缀选择真实上游变体
+	preferredLevel := strings.TrimSpace(thinkingLevel)
+	if normalized, disabled, ok := antigravity.NormalizeGeminiThinkingLevel(preferredLevel); ok {
+		if disabled {
+			preferredLevel = "low"
+		} else {
+			preferredLevel = normalized
+		}
+	}
+	mappedModel := s.getMappedModelForThinkingLevel(account, modelID, preferredLevel)
 	if mappedModel == "" {
 		return nil, fmt.Errorf("model %s not in whitelist", modelID)
 	}
 
 	// 构建请求体
 	var requestBody []byte
-	if strings.HasPrefix(modelID, "gemini-") {
-		requestBody, err = s.buildGeminiTestRequest(projectID, mappedModel, prompt)
+	if isAntigravityGeminiModel(modelID) || isAntigravityGeminiModel(mappedModel) {
+		requestBody, err = s.buildGeminiTestRequestWithThinking(projectID, modelID, mappedModel, prompt, thinkingLevel)
 	} else {
 		requestBody, err = s.buildClaudeTestRequest(projectID, mappedModel, prompt)
 	}
@@ -522,8 +536,13 @@ func (s *AntigravityGatewayService) TestConnection(ctx context.Context, account 
 		return nil, fmt.Errorf("API 返回 %d: %s", result.resp.StatusCode, string(respBody))
 	}
 
-	text, images := extractTestContentFromSSEResponse(respBody)
-	return &TestConnectionResult{Text: text, Images: images, MappedModel: mappedModel}, nil
+	text, thinking, images := extractTestPartsFromSSEResponse(respBody)
+	return &TestConnectionResult{
+		Text:        text,
+		Thinking:    thinking,
+		Images:      images,
+		MappedModel: mappedModel,
+	}, nil
 }
 
 // testConnectionHandleError 是 TestConnection 使用的轻量 handleError 回调。
@@ -539,10 +558,10 @@ func testConnectionHandleError(
 	return nil
 }
 
-// buildGeminiTestRequest 构建 Gemini 格式测试请求
+// buildGeminiTestRequestWithThinking 构建 Gemini 格式测试请求，支持显式思考深度与 Gemini 4 思考配置。
 // prompt 为空时用内置默认；图像模型走图片生成路径（不限输出 token，与 AI Studio 测试一致）。
-func (s *AntigravityGatewayService) buildGeminiTestRequest(projectID, model, prompt string) ([]byte, error) {
-	if isImageGenerationModel(model) {
+func (s *AntigravityGatewayService) buildGeminiTestRequestWithThinking(projectID, originalModel, mappedModel, prompt, thinkingLevel string) ([]byte, error) {
+	if isImageGenerationModel(mappedModel) {
 		imagePrompt := strings.TrimSpace(prompt)
 		if imagePrompt == "" {
 			imagePrompt = defaultGeminiImageTestPrompt
@@ -566,12 +585,36 @@ func (s *AntigravityGatewayService) buildGeminiTestRequest(projectID, model, pro
 			},
 		}
 		payloadBytes, _ := json.Marshal(payload)
-		return s.wrapV1InternalRequest(projectID, model, payloadBytes)
+		return s.wrapV1InternalRequest(projectID, mappedModel, payloadBytes)
 	}
 
 	textPrompt := strings.TrimSpace(prompt)
 	if textPrompt == "" {
 		textPrompt = defaultGeminiTextTestPrompt
+	}
+	maxOut := antigravityTestMaxOutputTokens
+	genCfg := map[string]any{
+		"maxOutputTokens": maxOut,
+	}
+	// 对 Gemini 4 / Gemini 思考模型显式适配 thinkingConfig，并预留思考+正文的 token 空间。
+	explicitLevel := strings.TrimSpace(thinkingLevel)
+	if explicitLevel != "" || antigravity.IsGemini4Model(mappedModel) || antigravity.HasGeminiThinkingVariantSuffix(originalModel) || antigravity.HasGeminiThinkingVariantSuffix(mappedModel) {
+		level, disabled, ok := antigravity.NormalizeGeminiThinkingLevel(explicitLevel)
+		if !ok {
+			if variant, hasSuffix := antigravity.SplitGeminiThinkingVariant(originalModel); hasSuffix && variant.ThinkingLevel != "" {
+				level = variant.ThinkingLevel
+			} else if variant, hasSuffix := antigravity.SplitGeminiThinkingVariant(mappedModel); hasSuffix && variant.ThinkingLevel != "" {
+				level = variant.ThinkingLevel
+			} else {
+				level = "high"
+			}
+		}
+		if tc := antigravity.BuildGeminiThinkingConfigMap(mappedModel, level, disabled, nil, !disabled); tc != nil {
+			genCfg["thinkingConfig"] = tc
+			if !disabled {
+				genCfg["maxOutputTokens"] = antigravityThinkingTestMaxOutputTokens
+			}
+		}
 	}
 	payload := map[string]any{
 		"contents": []map[string]any{
@@ -588,12 +631,10 @@ func (s *AntigravityGatewayService) buildGeminiTestRequest(projectID, model, pro
 		},
 		// thinking 模型会把输出额度先花在思考上，maxOutputTokens=1 时拿不到任何
 		// 可见文本，测试弹窗只剩“测试成功”；给足一次短回复的空间。
-		"generationConfig": map[string]any{
-			"maxOutputTokens": antigravityTestMaxOutputTokens,
-		},
+		"generationConfig": genCfg,
 	}
 	payloadBytes, _ := json.Marshal(payload)
-	return s.wrapV1InternalRequest(projectID, model, payloadBytes)
+	return s.wrapV1InternalRequest(projectID, mappedModel, payloadBytes)
 }
 
 // buildClaudeTestRequest 构建 Claude 格式测试请求并转换为 Gemini 格式
@@ -673,12 +714,15 @@ func (s *AntigravityGatewayService) getClaudeTransformOptionsForAccount(
 }
 
 // antigravityTestMaxOutputTokens 测试连接的输出 token 上限：
-// 足够 thinking 模型完成思考并给出一句短回复，又不至于在长测试中消耗过多配额。
+// 足够普通模型给出一句短回复，又不至于消耗过多配额。
 const antigravityTestMaxOutputTokens = 512
 
-// extractTestContentFromSSEResponse 从 SSE 流式响应中提取文本与图片。
-// 文本优先取非思考部分；只有思考内容时退回思考文本，避免测试结果显示为空。
-func extractTestContentFromSSEResponse(respBody []byte) (string, []TestConnectionImage) {
+// antigravityThinkingTestMaxOutputTokens 为启用 thinking 的 Gemini 4 / 思考变体模型预留更高上限，
+// 避免思考过程耗尽 512 token 导致正文为空。
+const antigravityThinkingTestMaxOutputTokens = 2048
+
+// extractTestPartsFromSSEResponse 从 SSE 流式响应中分别提取正文、思考过程（thought=true）与图片。
+func extractTestPartsFromSSEResponse(respBody []byte) (string, string, []TestConnectionImage) {
 	var texts []string
 	var thoughtTexts []string
 	var images []TestConnectionImage
@@ -759,10 +803,7 @@ func extractTestContentFromSSEResponse(respBody []byte) (string, []TestConnectio
 		}
 	}
 
-	if len(texts) == 0 {
-		texts = thoughtTexts
-	}
-	return strings.Join(texts, ""), images
+	return strings.Join(texts, ""), strings.Join(thoughtTexts, ""), images
 }
 
 // injectIdentityPatchToGeminiMap 原地为 Gemini 请求 map 注入身份提示词（避免重复 Unmarshal/Marshal）。

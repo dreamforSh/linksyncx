@@ -20,7 +20,7 @@ func TestBuildGeminiTestRequest_TextModelUsesPromptAndSufficientTokens(t *testin
 	t.Parallel()
 
 	svc := &AntigravityGatewayService{}
-	body, err := svc.buildGeminiTestRequest("proj-1", "gemini-3.1-pro", "hi there")
+	body, err := svc.buildGeminiTestRequestWithThinking("proj-1", "gemini-3.1-pro", "gemini-3.1-pro", "hi there", "")
 	require.NoError(t, err)
 
 	var wrapped map[string]any
@@ -45,7 +45,7 @@ func TestBuildGeminiTestRequest_DefaultPromptWhenEmpty(t *testing.T) {
 	t.Parallel()
 
 	svc := &AntigravityGatewayService{}
-	body, err := svc.buildGeminiTestRequest("proj-1", "gemini-3.1-pro", "  ")
+	body, err := svc.buildGeminiTestRequestWithThinking("proj-1", "gemini-3.1-pro", "gemini-3.1-pro", "  ", "")
 	require.NoError(t, err)
 	require.Contains(t, string(body), defaultGeminiTextTestPrompt)
 }
@@ -54,7 +54,7 @@ func TestBuildGeminiTestRequest_ImageModel(t *testing.T) {
 	t.Parallel()
 
 	svc := &AntigravityGatewayService{}
-	body, err := svc.buildGeminiTestRequest("proj-1", "gemini-3.1-flash-image", "draw a cat")
+	body, err := svc.buildGeminiTestRequestWithThinking("proj-1", "gemini-3.1-flash-image", "gemini-3.1-flash-image", "draw a cat", "")
 	require.NoError(t, err)
 
 	var wrapped map[string]any
@@ -86,30 +86,33 @@ func TestBuildClaudeTestRequest_UsesPromptAndSufficientTokens(t *testing.T) {
 	require.Contains(t, string(body), "hello")
 }
 
-func TestExtractTestContentFromSSEResponse_PrefersAnswerOverThought(t *testing.T) {
+func TestExtractTestPartsFromSSEResponse_SplitsThoughtAndAnswer(t *testing.T) {
 	t.Parallel()
 
 	sse := "data: {\"response\":{\"candidates\":[{\"content\":{\"role\":\"model\",\"parts\":[{\"text\":\"thinking...\",\"thought\":true}]}}]}}\n" +
 		"data: {\"response\":{\"candidates\":[{\"content\":{\"role\":\"model\",\"parts\":[{\"text\":\"Hello!\"}]}}]}}\n\n"
-	text, images := extractTestContentFromSSEResponse([]byte(sse))
+	text, thinking, images := extractTestPartsFromSSEResponse([]byte(sse))
 	require.Equal(t, "Hello!", text)
+	require.Equal(t, "thinking...", thinking)
 	require.Empty(t, images)
 }
 
-func TestExtractTestContentFromSSEResponse_ThoughtFallback(t *testing.T) {
+func TestExtractTestPartsFromSSEResponse_ThoughtOnlyPreserved(t *testing.T) {
 	t.Parallel()
 
 	sse := "data: {\"response\":{\"candidates\":[{\"content\":{\"role\":\"model\",\"parts\":[{\"text\":\"ponder\",\"thought\":true}]}}]}}\n\n"
-	text, _ := extractTestContentFromSSEResponse([]byte(sse))
-	require.Equal(t, "ponder", text, "只有思考内容时退回思考文本，避免测试结果显示为空")
+	text, thinking, _ := extractTestPartsFromSSEResponse([]byte(sse))
+	require.Empty(t, text)
+	require.Equal(t, "ponder", thinking)
 }
 
-func TestExtractTestContentFromSSEResponse_Image(t *testing.T) {
+func TestExtractTestPartsFromSSEResponse_Image(t *testing.T) {
 	t.Parallel()
 
 	sse := "data: {\"response\":{\"candidates\":[{\"content\":{\"role\":\"model\",\"parts\":[{\"inlineData\":{\"mimeType\":\"image/png\",\"data\":\"QUJD\"}}]}}]}}\n\n"
-	text, images := extractTestContentFromSSEResponse([]byte(sse))
+	text, thinking, images := extractTestPartsFromSSEResponse([]byte(sse))
 	require.Empty(t, text)
+	require.Empty(t, thinking)
 	require.Len(t, images, 1)
 	require.Equal(t, "data:image/png;base64,QUJD", images[0].URL)
 	require.Equal(t, "image/png", images[0].MimeType)

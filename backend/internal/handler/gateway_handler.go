@@ -1211,6 +1211,22 @@ func (h *GatewayHandler) Models(c *gin.Context) {
 
 	// Get available models from account configurations for the selected group platform.
 	availableModels := h.gatewayService.GetAvailableModels(c.Request.Context(), groupID, platform)
+	if platform == service.PlatformGemini && h.antigravityGatewayService != nil {
+		if mixedGemini, ok := h.antigravityGatewayService.FetchGroupGeminiModels(
+			c.Request.Context(),
+			groupID,
+			true,
+			h.maxAccountSwitchesGemini,
+		); ok && len(mixedGemini) > 0 {
+			extra := make([]string, 0, len(mixedGemini))
+			for _, gm := range mixedGemini {
+				if id := strings.TrimSpace(strings.TrimPrefix(gm.Name, "models/")); id != "" {
+					extra = append(extra, id)
+				}
+			}
+			availableModels = mergeModelIDs(availableModels, extra)
+		}
+	}
 	if apiKey != nil && apiKey.Group != nil && apiKey.Group.ModelAllowlistEnabled() {
 		source := modelListingSource(platform, availableModels, defaultModelIDsForPlatform(platform))
 		writeAllowlistedModelsList(c, platform, apiKey.Group.ModelAllowlist.FilterForListing(source))
@@ -1360,7 +1376,24 @@ func (h *GatewayHandler) compositeAvailableModels(ctx context.Context, groupID *
 	models := make([]string, 0)
 	schedulablePlatforms := h.gatewayService.GetSchedulablePlatforms(ctx, groupID)
 	for _, platform := range []string{service.PlatformAnthropic, service.PlatformGemini, service.PlatformOpenAI, service.PlatformAntigravity, service.PlatformGrok, service.PlatformPerplexity, service.PlatformCodeBuddy, service.PlatformKimi, service.PlatformZhipu, service.PlatformDeepseek, service.PlatformMiniMax, service.PlatformOpenCodeGo, service.PlatformCommandCode} {
-		platformModels := h.gatewayService.GetAvailableModels(ctx, groupID, platform)
+		var platformModels []string
+		if platform == service.PlatformAntigravity && h.antigravityGatewayService != nil {
+			if agModels, _, ok := h.antigravityGatewayService.FetchGroupModels(ctx, groupID, false, h.maxAccountSwitches); ok && len(agModels) > 0 {
+				platformModels = make([]string, 0, len(agModels))
+				for _, m := range agModels {
+					if id := strings.TrimSpace(m.ID); id != "" {
+						platformModels = append(platformModels, id)
+					}
+				}
+			}
+		}
+		if configuredModels := h.gatewayService.GetAvailableModels(ctx, groupID, platform); len(configuredModels) > 0 {
+			if len(platformModels) == 0 {
+				platformModels = configuredModels
+			} else {
+				platformModels = mergeModelIDs(platformModels, configuredModels)
+			}
+		}
 		if len(platformModels) == 0 {
 			// CN 供应商没有静态默认模型列表（defaultModelIDsForPlatform 的
 			// default 分支是 Claude 列表），composite 下只暴露账号映射键。
@@ -1677,7 +1710,37 @@ func (h *GatewayHandler) AntigravityModels(c *gin.Context) {
 		}
 		models = filtered
 	}
-	writeModelsListResponse(c, models)
+	writeAntigravityModelsList(c, models)
+}
+
+type antigravityModelListItem struct {
+	antigravity.ClaudeModel
+	SupportsReasoningEffort bool                        `json:"supportsReasoningEffort,omitempty"`
+	ReasoningEffort         string                      `json:"reasoningEffort,omitempty"`
+	ReasoningEfforts        []grokReasoningEffortOption `json:"reasoningEfforts,omitempty"`
+}
+
+func writeAntigravityModelsList(c *gin.Context, models []antigravity.ClaudeModel) {
+	items := make([]antigravityModelListItem, 0, len(models))
+	for _, model := range models {
+		item := antigravityModelListItem{ClaudeModel: model}
+		if antigravity.IsGeminiThinkingLevelModel(model.ID) {
+			defaultEffort := "high"
+			if variant, ok := antigravity.SplitGeminiThinkingVariant(model.ID); ok && variant.ThinkingLevel != "" {
+				defaultEffort = variant.ThinkingLevel
+			}
+			item.SupportsReasoningEffort = true
+			item.ReasoningEffort = defaultEffort
+			item.ReasoningEfforts = []grokReasoningEffortOption{
+				{Value: "minimal", Label: "Minimal", Default: defaultEffort == "minimal"},
+				{Value: "low", Label: "Low", Default: defaultEffort == "low"},
+				{Value: "medium", Label: "Medium", Default: defaultEffort == "medium"},
+				{Value: "high", Label: "High", Default: defaultEffort == "high"},
+			}
+		}
+		items = append(items, item)
+	}
+	writeModelsListResponse(c, items)
 }
 
 func antigravityClaudeModelsFromIDs(modelIDs []string) []antigravity.ClaudeModel {

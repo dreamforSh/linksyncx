@@ -215,10 +215,16 @@ func (s *AntigravityGatewayService) prepareAntigravityCompatCall(
 		return nil, s.writeAntigravityCompatError(c, http.StatusBadRequest, "invalid_request_error", "Invalid request body")
 	}
 
+	thinkingIntent := resolveGeminiThinkingIntent(
+		request.reasoningEffort,
+		claudeRequest.Thinking,
+		claudeRequest.OutputConfig,
+		request.originalModel,
+	)
 	mappedModel := s.getMappedModelForThinkingLevel(
 		account,
 		request.originalModel,
-		geminiThinkingLevelFromClaudeThinking(claudeRequest.Thinking),
+		thinkingIntent.Level,
 	)
 	if mappedModel == "" {
 		MarkOpsClientBusinessLimited(c, OpsClientBusinessLimitedReasonLocalFeatureGate)
@@ -245,7 +251,9 @@ func (s *AntigravityGatewayService) prepareAntigravityCompatCall(
 		_ = s.writeAntigravityCompatError(c, http.StatusBadRequest, "invalid_request_error", err.Error())
 		return nil, err
 	}
-	geminiBody, err := s.buildAntigravityCompatGeminiBodyForAccount(ctx, c, account, request.claudeBody, &claudeRequest, projectID, mappedModel)
+	geminiBody, err := s.buildAntigravityCompatGeminiBodyForAccountWithThinking(
+		ctx, c, account, request.claudeBody, &claudeRequest, projectID, request.originalModel, mappedModel, thinkingIntent,
+	)
 	if err != nil {
 		return nil, s.writeAntigravityCompatError(c, http.StatusBadRequest, "invalid_request_error", "Invalid request")
 	}
@@ -284,6 +292,33 @@ func (s *AntigravityGatewayService) buildAntigravityCompatGeminiBodyForAccount(
 	projectID string,
 	mappedModel string,
 ) ([]byte, error) {
+	originalModel := mappedModel
+	var thinking *antigravity.ThinkingConfig
+	var outputConfig *antigravity.ClaudeOutputConfig
+	if claudeRequest != nil {
+		if strings.TrimSpace(claudeRequest.Model) != "" {
+			originalModel = claudeRequest.Model
+		}
+		thinking = claudeRequest.Thinking
+		outputConfig = claudeRequest.OutputConfig
+	}
+	intent := resolveGeminiThinkingIntent(nil, thinking, outputConfig, originalModel)
+	return s.buildAntigravityCompatGeminiBodyForAccountWithThinking(
+		ctx, c, account, claudeBody, claudeRequest, projectID, originalModel, mappedModel, intent,
+	)
+}
+
+func (s *AntigravityGatewayService) buildAntigravityCompatGeminiBodyForAccountWithThinking(
+	ctx context.Context,
+	c *gin.Context,
+	account *Account,
+	claudeBody []byte,
+	claudeRequest *antigravity.ClaudeRequest,
+	projectID string,
+	originalModel string,
+	mappedModel string,
+	thinkingIntent geminiThinkingIntent,
+) ([]byte, error) {
 	if strings.HasPrefix(strings.ToLower(mappedModel), "gemini-") {
 		body, err := convertClaudeMessagesToGeminiGenerateContent(claudeBody)
 		if err != nil {
@@ -297,6 +332,7 @@ func (s *AntigravityGatewayService) buildAntigravityCompatGeminiBodyForAccount(
 		if err != nil {
 			return nil, err
 		}
+		applyAntigravityGeminiThinkingConfigToMap(reqMap, originalModel, mappedModel, thinkingIntent, false)
 		return marshalWrappedV1InternalRequest(projectID, mappedModel, reqMap)
 	}
 

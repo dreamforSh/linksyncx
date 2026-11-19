@@ -66,11 +66,12 @@ type TestEvent struct {
 	Error    string `json:"error,omitempty"`
 }
 
-// AccountTestOptions carries optional media for admin connectivity tests.
+// AccountTestOptions carries optional media and thinking settings for admin connectivity tests.
 // ImageDataURL / AudioDataURL are full data URLs (data:<mime>;base64,...).
 type AccountTestOptions struct {
-	ImageDataURL string
-	AudioDataURL string
+	ImageDataURL  string
+	AudioDataURL  string
+	ThinkingLevel string
 }
 
 func firstAccountTestOptions(opts []AccountTestOptions) AccountTestOptions {
@@ -437,7 +438,7 @@ func (s *AccountTestService) TestAccountConnection(c *gin.Context, accountID int
 	}
 
 	if account.Platform == PlatformAntigravity {
-		return s.routeAntigravityTest(c, account, modelID, prompt)
+		return s.routeAntigravityTest(c, account, modelID, prompt, testOpts.ThinkingLevel)
 	}
 
 	if account.IsOpenCodeGo() || account.IsCommandCode() {
@@ -2551,7 +2552,11 @@ func (s *AccountTestService) testGeminiAccountConnection(c *gin.Context, account
 
 // routeAntigravityTest 路由 Antigravity 账号的测试请求。
 // APIKey / Upstream 中转类型走中转协议（支持请求头覆写与 TLS 指纹），OAuth 走官方 v1internal 链路。
-func (s *AccountTestService) routeAntigravityTest(c *gin.Context, account *Account, modelID string, prompt string) error {
+func (s *AccountTestService) routeAntigravityTest(c *gin.Context, account *Account, modelID string, prompt string, thinkingLevel ...string) error {
+	level := ""
+	if len(thinkingLevel) > 0 {
+		level = thinkingLevel[0]
+	}
 	if account.Type == AccountTypeAPIKey || account.Type == AccountTypeUpstream {
 		effectiveModel := resolveAntigravityRelayTestModel(account, modelID)
 		if strings.HasPrefix(effectiveModel, "gemini-") || strings.HasPrefix(account.GetMappedModel(effectiveModel), "gemini-") {
@@ -2559,7 +2564,7 @@ func (s *AccountTestService) routeAntigravityTest(c *gin.Context, account *Accou
 		}
 		return s.testClaudeAccountConnection(c, account, effectiveModel)
 	}
-	return s.testAntigravityAccountConnection(c, account, modelID, prompt)
+	return s.testAntigravityAccountConnection(c, account, modelID, prompt, level)
 }
 
 func resolveAntigravityRelayTestModel(account *Account, modelID string) string {
@@ -2619,8 +2624,8 @@ func pickFirstExactAccountModel(account *Account) string {
 }
 
 // testAntigravityAccountConnection tests an Antigravity account's connection
-// 支持 Claude 和 Gemini 两种协议，使用非流式请求
-func (s *AccountTestService) testAntigravityAccountConnection(c *gin.Context, account *Account, modelID string, prompt string) error {
+// 支持 Claude 和 Gemini 两种协议，使用非流式请求，并将思考过程与正文独立下发。
+func (s *AccountTestService) testAntigravityAccountConnection(c *gin.Context, account *Account, modelID string, prompt string, thinkingLevel string) error {
 	ctx := c.Request.Context()
 
 	testModelID := antigravityConnectionTestModel(modelID)
@@ -2639,13 +2644,16 @@ func (s *AccountTestService) testAntigravityAccountConnection(c *gin.Context, ac
 	// Send test_start event
 	s.sendEvent(c, TestEvent{Type: "test_start", Model: testModelID})
 
-	// 调用 AntigravityGatewayService.TestConnection（复用协议转换逻辑）
-	result, err := s.antigravityGatewayService.TestConnection(ctx, account, testModelID, prompt)
+	// 调用 AntigravityGatewayService.TestConnectionWithOptions（复用协议转换与思考适配逻辑）
+	result, err := s.antigravityGatewayService.TestConnectionWithOptions(ctx, account, testModelID, prompt, thinkingLevel)
 	if err != nil {
 		return s.sendErrorAndEnd(c, err.Error())
 	}
 
-	// 发送响应内容
+	// 先单独下发思考内容，再下发正文内容，避免混排或被吞掉
+	if result.Thinking != "" {
+		s.sendEvent(c, TestEvent{Type: "thinking", Text: result.Thinking})
+	}
 	if result.Text != "" {
 		s.sendEvent(c, TestEvent{Type: "content", Text: result.Text})
 	}
@@ -2860,7 +2868,11 @@ func (s *AccountTestService) processGeminiStream(c *gin.Context, body io.Reader)
 						for _, part := range parts {
 							if partMap, ok := part.(map[string]any); ok {
 								if text, ok := partMap["text"].(string); ok && text != "" {
-									s.sendEvent(c, TestEvent{Type: "content", Text: text})
+									if thought, _ := partMap["thought"].(bool); thought {
+										s.sendEvent(c, TestEvent{Type: "thinking", Text: text})
+									} else {
+										s.sendEvent(c, TestEvent{Type: "content", Text: text})
+									}
 								}
 								if inlineData, ok := partMap["inlineData"].(map[string]any); ok {
 									mimeType, _ := inlineData["mimeType"].(string)

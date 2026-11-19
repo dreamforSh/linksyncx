@@ -9,17 +9,23 @@ import (
 
 // ClaudeRequest Claude Messages API 请求
 type ClaudeRequest struct {
-	Model       string          `json:"model"`
-	Messages    []ClaudeMessage `json:"messages"`
-	MaxTokens   int             `json:"max_tokens,omitempty"`
-	System      json.RawMessage `json:"system,omitempty"` // string 或 []SystemBlock
-	Stream      bool            `json:"stream,omitempty"`
-	Temperature *float64        `json:"temperature,omitempty"`
-	TopP        *float64        `json:"top_p,omitempty"`
-	TopK        *int            `json:"top_k,omitempty"`
-	Tools       []ClaudeTool    `json:"tools,omitempty"`
-	Thinking    *ThinkingConfig `json:"thinking,omitempty"`
-	Metadata    *ClaudeMetadata `json:"metadata,omitempty"`
+	Model        string              `json:"model"`
+	Messages     []ClaudeMessage     `json:"messages"`
+	MaxTokens    int                 `json:"max_tokens,omitempty"`
+	System       json.RawMessage     `json:"system,omitempty"` // string 或 []SystemBlock
+	Stream       bool                `json:"stream,omitempty"`
+	Temperature  *float64            `json:"temperature,omitempty"`
+	TopP         *float64            `json:"top_p,omitempty"`
+	TopK         *int                `json:"top_k,omitempty"`
+	Tools        []ClaudeTool        `json:"tools,omitempty"`
+	Thinking     *ThinkingConfig     `json:"thinking,omitempty"`
+	OutputConfig *ClaudeOutputConfig `json:"output_config,omitempty"`
+	Metadata     *ClaudeMetadata     `json:"metadata,omitempty"`
+}
+
+// ClaudeOutputConfig Claude 输出与推理强度配置
+type ClaudeOutputConfig struct {
+	Effort string `json:"effort,omitempty"`
 }
 
 // ClaudeMessage Claude 消息
@@ -281,7 +287,13 @@ func FallbackGeminiModel(model string) GeminiModel {
 
 // IsGeminiReasoningModel 判断是否为不支持参数和强制 ToolConfig 的 Gemini 推理模型
 func IsGeminiReasoningModel(modelID string) bool {
-	lowerID := strings.ToLower(modelID)
+	lowerID := strings.ToLower(strings.TrimSpace(strings.TrimPrefix(strings.TrimSpace(modelID), "models/")))
+	if !strings.HasPrefix(lowerID, "gemini-") || strings.Contains(lowerID, "-image") {
+		return false
+	}
+	if IsGemini4Model(lowerID) || HasGeminiThinkingVariantSuffix(lowerID) || strings.HasSuffix(lowerID, "-thinking") {
+		return true
+	}
 	for _, m := range geminiModels {
 		if strings.Contains(lowerID, m.ID) && m.IsReasoning {
 			return true

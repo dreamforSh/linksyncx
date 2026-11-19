@@ -38,6 +38,7 @@ const (
 type antigravityModelsLoader func(ctx context.Context, account *Account) ([]antigravity.ClaudeModel, error)
 
 type antigravityModelsCacheEntry struct {
+	accountID  int64
 	models     []antigravity.ClaudeModel
 	freshUntil time.Time
 	expiresAt  time.Time
@@ -87,13 +88,27 @@ func (c *antigravityModelsCacheStore) get(key string, now time.Time) ([]antigrav
 	return models, state != antigravityCacheMiss
 }
 
-func (c *antigravityModelsCacheStore) set(key string, models []antigravity.ClaudeModel, now time.Time) {
+func (c *antigravityModelsCacheStore) set(key string, accountID int64, models []antigravity.ClaudeModel, now time.Time) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	c.items[key] = antigravityModelsCacheEntry{
+		accountID:  accountID,
 		models:     cloneAntigravityClaudeModels(models),
 		freshUntil: now.Add(antigravityModelsFreshTTL),
 		expiresAt:  now.Add(antigravityModelsCacheTTL),
+	}
+}
+
+func (c *antigravityModelsCacheStore) deleteByAccountID(accountID int64) {
+	if accountID <= 0 {
+		return
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	for k, entry := range c.items {
+		if entry.accountID == accountID {
+			delete(c.items, k)
+		}
 	}
 }
 
@@ -128,10 +143,12 @@ func antigravityRawModelsCacheKey(account *Account) string {
 }
 
 // antigravityModelsCacheKey fingerprints the account without the access token.
-// A token refresh must not miss the cache; a mapping, base URL, or key change must.
+// A token refresh must not miss the cache; a mapping, restriction mode, base URL, or key change must.
 func antigravityModelsCacheKey(account *Account) string {
 	h := sha256.New()
 	_, _ = h.Write([]byte(antigravityRawModelsCacheKey(account)))
+	_, _ = h.Write([]byte{'\n'})
+	_, _ = h.Write([]byte(strings.TrimSpace(account.GetCredential(AntigravityModelRestrictionModeKey))))
 	// Fingerprint the stored mapping only. GetModelMapping injects the
 	// default catalog, which would make an empty mapping look custom.
 	mapping := rawAntigravityModelMapping(account)
@@ -208,10 +225,10 @@ func fetchCachedAntigravityProjectedModels(
 					}
 					if recordObserved && accountCopy.ID > 0 {
 						recordAntigravityObservedClaudeModels(accountCopy.ID, loaded)
-						antigravityRawModelsCache.set(antigravityRawModelsCacheKey(&accountCopy), loaded, time.Now())
+						antigravityRawModelsCache.set(antigravityRawModelsCacheKey(&accountCopy), accountCopy.ID, loaded, time.Now())
 					}
 					projected := projectAntigravityAccountModels(loaded, &accountCopy)
-					antigravityModelsCache.set(key, projected, time.Now())
+					antigravityModelsCache.set(key, accountCopy.ID, projected, time.Now())
 					return projected, nil
 				})
 			}()
@@ -227,7 +244,7 @@ func fetchCachedAntigravityProjectedModels(
 		if recordObserved {
 			if rawCached, ok := antigravityRawModelsCache.get(antigravityRawModelsCacheKey(account), time.Now()); ok {
 				projected := projectAntigravityAccountModels(rawCached, account)
-				antigravityModelsCache.set(key, projected, time.Now())
+				antigravityModelsCache.set(key, account.ID, projected, time.Now())
 				return cloneAntigravityClaudeModels(projected), nil
 			}
 		}
@@ -240,10 +257,10 @@ func fetchCachedAntigravityProjectedModels(
 		}
 		if recordObserved && account.ID > 0 {
 			recordAntigravityObservedClaudeModels(account.ID, loaded)
-			antigravityRawModelsCache.set(antigravityRawModelsCacheKey(account), loaded, time.Now())
+			antigravityRawModelsCache.set(antigravityRawModelsCacheKey(account), account.ID, loaded, time.Now())
 		}
 		projected := projectAntigravityAccountModels(loaded, account)
-		antigravityModelsCache.set(key, projected, time.Now())
+		antigravityModelsCache.set(key, account.ID, projected, time.Now())
 		return cloneAntigravityClaudeModels(projected), nil
 	})
 	if err != nil {
@@ -260,15 +277,24 @@ func invalidateAntigravityAccountModelsCache(account *Account, rawModels []antig
 	if account == nil {
 		return
 	}
+	if account.ID > 0 {
+		antigravityModelsCache.deleteByAccountID(account.ID)
+	}
 	now := time.Now()
 	if rawModels != nil {
 		if account.ID > 0 {
 			recordAntigravityObservedClaudeModels(account.ID, rawModels)
 		}
-		antigravityRawModelsCache.set(antigravityRawModelsCacheKey(account), rawModels, now)
+		antigravityRawModelsCache.set(antigravityRawModelsCacheKey(account), account.ID, rawModels, now)
 		projected := projectAntigravityAccountModels(rawModels, account)
-		antigravityModelsCache.set(antigravityModelsCacheKey(account), projected, now)
+		antigravityModelsCache.set(antigravityModelsCacheKey(account), account.ID, projected, now)
 	}
+}
+
+// InvalidateAntigravityAccountModelsCacheByID evicts cached model projections for accountID
+// so account mapping / restriction mode edits take effect immediately.
+func InvalidateAntigravityAccountModelsCacheByID(accountID int64) {
+	antigravityModelsCache.deleteByAccountID(accountID)
 }
 
 func (s *AccountTestService) loadAntigravityUpstreamModels(ctx context.Context, account *Account) ([]antigravity.ClaudeModel, error) {
@@ -477,9 +503,13 @@ func mergeProjectedAntigravityModels(
 			continue
 		}
 		if includeGeminiAliases {
-			if bare, ok := bareGeminiModelFromThinkingVariant(id); ok && (len(raw) == 0 || mappingSupportsRequestedModel(raw, bare)) {
-				if _, exists := byID[bare]; !exists {
-					byID[bare] = antigravity.ClaudeModel{ID: bare, Type: "model", DisplayName: bare}
+			if bare, ok := bareGeminiModelFromThinkingVariant(id); ok && antigravityAllowsBareGeminiAlias(acc, raw, bare) {
+				bareDisplay := antigravity.BaseDisplayNameFromThinkingVariant(item.DisplayName, bare)
+				if existing, exists := byID[bare]; !exists {
+					byID[bare] = antigravity.ClaudeModel{ID: bare, Type: "model", DisplayName: bareDisplay, CreatedAt: item.CreatedAt}
+				} else if (existing.DisplayName == "" || existing.DisplayName == bare) && bareDisplay != "" && bareDisplay != bare {
+					existing.DisplayName = bareDisplay
+					byID[bare] = existing
 				}
 			}
 		}
@@ -722,18 +752,47 @@ func (s *AntigravityGatewayService) fetchGroupModels(
 	}
 
 	var primaryAccount *Account
+	probedPaidTier := false
+	probedUnrestricted := false
 	attempts := 0
 	for i := range candidates {
 		if ctx.Err() != nil {
 			break
 		}
 		acc := &candidates[i]
-		// If primary already succeeded, only query additional accounts from warm cache,
-		// persisted snapshots, or explicit custom mappings to avoid fanout storms.
+		// If primary already succeeded, normally rely on warm cache, persisted snapshots,
+		// or explicit custom mappings to avoid fanout storms. However, if primary was a
+		// non-paid or restricted account and a paid-tier / unrestricted sibling has no
+		// warm cache yet, probe one such sibling (within maxSwitches) so newer Pro/Ultra
+		// models (e.g. Gemini 4 series) are not hidden behind a lower-tier priority-1 account.
 		if primaryAccount != nil {
 			if cached, ok := antigravityModelsCache.get(antigravityModelsCacheKey(acc), time.Now()); ok {
 				addModels(acc, cached)
+				if accountHasAntigravityPaidTier(acc) {
+					probedPaidTier = true
+				}
+				if len(rawAntigravityModelMapping(acc)) == 0 {
+					probedUnrestricted = true
+				}
 				continue
+			}
+			needsSupplementalProbe := attempts < maxSwitches &&
+				((!probedPaidTier && accountHasAntigravityPaidTier(acc)) ||
+					(!probedUnrestricted && len(rawAntigravityModelMapping(acc)) == 0))
+			if needsSupplementalProbe {
+				attempts++
+				if models, fetchErr := s.FetchAccountModels(ctx, acc); fetchErr == nil {
+					addModels(acc, models)
+					if accountHasAntigravityPaidTier(acc) {
+						probedPaidTier = true
+					}
+					if len(rawAntigravityModelMapping(acc)) == 0 {
+						probedUnrestricted = true
+					}
+					continue
+				} else {
+					slog.Warn("antigravity supplemental group model discovery failed", "account_id", acc.ID, "error", fetchErr)
+				}
 			}
 			if snapModels, ok := fallbackAntigravityAccountModels(acc); ok {
 				addModels(acc, snapModels)
@@ -758,6 +817,12 @@ func (s *AntigravityGatewayService) fetchGroupModels(
 			continue
 		}
 		primaryAccount = acc
+		if accountHasAntigravityPaidTier(acc) {
+			probedPaidTier = true
+		}
+		if len(rawAntigravityModelMapping(acc)) == 0 {
+			probedUnrestricted = true
+		}
 		addModels(acc, models)
 	}
 
@@ -878,12 +943,20 @@ func claudeModelsFromAvailable(resp *antigravity.FetchAvailableModelsResponse) [
 	return out
 }
 
-// projectAntigravityAccountModels publishes names the same way the GPT model
-// list does. An empty stored mapping returns this account's upstream IDs
-// unchanged. A custom mapping keeps a public name only when the raw mapping
-// resolves it onto a model this account actually returned. Wildcard keys are
-// not names, but upstream IDs they match stay candidates. Default aliases are
-// not injected here; request routing still applies those on an empty mapping.
+// projectAntigravityAccountModels publishes an account's public model list:
+//   - Empty stored mapping: returns all upstream models plus split bare Gemini names
+//     derived from thinking-suffixed upstream IDs (e.g. gemini-4-argon-high -> also
+//     publishes gemini-4-argon so clients can select the model and thinking effort independently).
+//   - Strict whitelist mode (model_restriction_mode="whitelist"): only publishes models
+//     matched by raw model_mapping, resolving Gemini bare/thinking-tier targets against
+//     available upstream thinking variants.
+//   - Explicit mapping mode (model_restriction_mode="mapping"): publishes configured
+//     aliases (whose targets exist upstream) alongside all live upstream models and their
+//     split bare Gemini names so newly released models (such as Gemini 4) are never hidden.
+//   - Legacy stored mapping without model_restriction_mode: respects custom restrictions,
+//     while allowing newly released upstream Gemini models through when the legacy mapping
+//     already covers Gemini models (consistent with Account.resolveModelMapping after
+//     migration 254 removed default gemini-4-argon* keys from stored mappings).
 func projectAntigravityAccountModels(upstream []antigravity.ClaudeModel, account *Account) []antigravity.ClaudeModel {
 	if account == nil {
 		return []antigravity.ClaudeModel{}
@@ -899,26 +972,60 @@ func projectAntigravityAccountModels(upstream []antigravity.ClaudeModel, account
 			continue
 		}
 		model.ID = id
+		if strings.TrimSpace(model.Type) == "" {
+			model.Type = "model"
+		}
+		if strings.TrimSpace(model.DisplayName) == "" {
+			model.DisplayName = id
+		}
 		byID[id] = model
 		upstreamIDs = append(upstreamIDs, id)
 	}
 	sort.Strings(upstreamIDs)
+
 	raw := rawAntigravityModelMapping(account)
+	mode := strings.TrimSpace(account.GetCredential(AntigravityModelRestrictionModeKey))
 	if len(raw) == 0 {
 		out := make([]antigravity.ClaudeModel, 0, len(upstreamIDs))
+		seen := make(map[string]struct{}, len(upstreamIDs))
 		for _, id := range upstreamIDs {
+			seen[id] = struct{}{}
 			out = append(out, byID[id])
 		}
+		out = appendSplitBareGeminiModels(out, seen, func(string) bool { return true })
+		sort.Slice(out, func(i, j int) bool { return out[i].ID < out[j].ID })
 		return out
 	}
-	aliases := make([]string, 0, len(raw))
-	for alias := range raw {
+
+	strictWhitelist := account.antigravityWhitelistEnabled()
+	isMappingOverlay := !strictWhitelist && mode == "mapping"
+	legacyAllowsUpstreamGemini := !strictWhitelist && mode == "" && antigravityMappingHasGeminiEntry(raw)
+
+	effectiveMapping := raw
+	if isMappingOverlay || legacyAllowsUpstreamGemini {
+		effectiveMapping = make(map[string]string, len(raw)+len(upstreamIDs))
+		for k, v := range raw {
+			effectiveMapping[k] = v
+		}
+		for _, id := range upstreamIDs {
+			if !isMappingOverlay && !isAntigravityGeminiModel(id) {
+				continue
+			}
+			if _, exists := effectiveMapping[id]; !exists && !mappingHasWildcardForModel(effectiveMapping, id) {
+				effectiveMapping[id] = id
+			}
+		}
+	}
+
+	aliases := make([]string, 0, len(effectiveMapping))
+	for alias := range effectiveMapping {
 		aliases = append(aliases, alias)
 	}
 	sort.Strings(aliases)
 	candidates := make([]string, 0, len(upstreamIDs)+len(aliases))
 	candidates = append(candidates, upstreamIDs...)
 	candidates = append(candidates, aliases...)
+
 	out := make([]antigravity.ClaudeModel, 0, len(candidates))
 	seen := make(map[string]struct{}, len(candidates))
 	for _, id := range candidates {
@@ -929,15 +1036,25 @@ func projectAntigravityAccountModels(upstream []antigravity.ClaudeModel, account
 		if _, ok := seen[id]; ok {
 			continue
 		}
-		target, matched := resolveRequestedModelInMapping(raw, id)
+		target, matched := resolveRequestedModelInMapping(effectiveMapping, id)
 		target = strings.TrimSpace(target)
-		src, available := byID[target]
-		if !matched || !available {
+		if !matched {
+			continue
+		}
+		src, matchedUpstreamID, available := findAntigravityUpstreamModelForTarget(byID, target)
+		if !available {
 			continue
 		}
 		seen[id] = struct{}{}
 		display := strings.TrimSpace(src.DisplayName)
-		if id != target || display == "" {
+		if id != matchedUpstreamID {
+			if bare, ok := bareGeminiModelFromThinkingVariant(matchedUpstreamID); ok && strings.EqualFold(bare, id) {
+				display = antigravity.BaseDisplayNameFromThinkingVariant(src.DisplayName, id)
+			} else {
+				display = id
+			}
+		}
+		if display == "" {
 			display = id
 		}
 		modelType := src.Type
@@ -951,8 +1068,113 @@ func projectAntigravityAccountModels(upstream []antigravity.ClaudeModel, account
 			CreatedAt:   src.CreatedAt,
 		})
 	}
+
+	out = appendSplitBareGeminiModels(out, seen, func(bare string) bool {
+		return antigravityAllowsBareGeminiAlias(account, effectiveMapping, bare)
+	})
+
 	sort.Slice(out, func(i, j int) bool { return out[i].ID < out[j].ID })
 	return out
+}
+
+func appendSplitBareGeminiModels(
+	models []antigravity.ClaudeModel,
+	seen map[string]struct{},
+	allow func(bare string) bool,
+) []antigravity.ClaudeModel {
+	if len(models) == 0 {
+		return models
+	}
+	extras := make([]antigravity.ClaudeModel, 0)
+	for _, m := range models {
+		bare, ok := bareGeminiModelFromThinkingVariant(m.ID)
+		if !ok {
+			continue
+		}
+		if _, exists := seen[bare]; exists {
+			continue
+		}
+		if allow != nil && !allow(bare) {
+			continue
+		}
+		seen[bare] = struct{}{}
+		modelType := m.Type
+		if modelType == "" {
+			modelType = "model"
+		}
+		extras = append(extras, antigravity.ClaudeModel{
+			ID:          bare,
+			Type:        modelType,
+			DisplayName: antigravity.BaseDisplayNameFromThinkingVariant(m.DisplayName, bare),
+			CreatedAt:   m.CreatedAt,
+		})
+	}
+	return append(models, extras...)
+}
+
+func findAntigravityUpstreamModelForTarget(
+	byID map[string]antigravity.ClaudeModel,
+	target string,
+) (antigravity.ClaudeModel, string, bool) {
+	target = strings.TrimSpace(strings.TrimPrefix(target, "models/"))
+	if target == "" {
+		return antigravity.ClaudeModel{}, "", false
+	}
+	if src, ok := byID[target]; ok {
+		return src, target, true
+	}
+	if !isAntigravityGeminiModel(target) {
+		return antigravity.ClaudeModel{}, "", false
+	}
+	base := target
+	preferred := "high"
+	if variant, ok := antigravity.SplitGeminiThinkingVariant(target); ok {
+		base = variant.BaseModel
+		if variant.ThinkingLevel != "" {
+			preferred = variant.ThinkingLevel
+		}
+	}
+	for _, level := range geminiThinkingVariantOrder(preferred) {
+		candidate := base + "-" + level
+		if src, ok := byID[candidate]; ok {
+			return src, candidate, true
+		}
+	}
+	if src, ok := byID[base]; ok {
+		return src, base, true
+	}
+	return antigravity.ClaudeModel{}, "", false
+}
+
+func antigravityMappingHasGeminiEntry(mapping map[string]string) bool {
+	for alias, target := range mapping {
+		if isAntigravityGeminiModel(alias) || isAntigravityGeminiModel(target) {
+			return true
+		}
+	}
+	return false
+}
+
+func antigravityAllowsBareGeminiAlias(account *Account, mapping map[string]string, bare string) bool {
+	if strings.TrimSpace(bare) == "" {
+		return false
+	}
+	if len(mapping) == 0 {
+		return true
+	}
+	if account != nil && account.antigravityWhitelistEnabled() {
+		return mappingSupportsRequestedModel(mapping, bare)
+	}
+	if mappingSupportsRequestedModel(mapping, bare) {
+		return true
+	}
+	// Non-whitelist account that already exposes at least one thinking variant for this base model.
+	for alias := range mapping {
+		if variantBase, ok := bareGeminiModelFromThinkingVariant(alias); ok && strings.EqualFold(variantBase, bare) {
+			return true
+		}
+	}
+	return false
 }
 
 func rawAntigravityModelMapping(account *Account) map[string]string {

@@ -967,6 +967,10 @@ func (s *adminServiceImpl) UpdateAccount(ctx context.Context, id int64, input *U
 		}
 	}
 
+	if account.Platform == PlatformAntigravity {
+		InvalidateAntigravityAccountModelsCacheByID(id)
+	}
+
 	// 重新查询以确保返回完整数据（包括正确的 Proxy 关联对象）
 	updated, err := s.accountRepo.GetByID(ctx, id)
 	if err != nil {

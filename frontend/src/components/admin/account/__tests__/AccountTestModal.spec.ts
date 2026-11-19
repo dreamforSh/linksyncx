@@ -220,4 +220,57 @@ describe('AccountTestModal', () => {
       mode: 'compact'
     })
   })
+
+  it('Antigravity Gemini 4 优先展示且支持独立思考深度与思考内容拆分展示', async () => {
+    getAvailableModels.mockResolvedValue([
+      { id: 'gemini-3-flash', display_name: 'Gemini 3 Flash' },
+      { id: 'gemini-4-argon-high', display_name: 'Gemini 4 Argon (High)' },
+      { id: 'gemini-4-argon', display_name: 'Gemini 4 Argon' }
+    ])
+    global.fetch = vi.fn().mockResolvedValue(
+      createStreamResponse([
+        'data: {"type":"test_start","model":"gemini-4-argon"}\n',
+        'data: {"type":"thinking","text":"first think carefully"}\n',
+        'data: {"type":"content","text":"Final hello"}\n',
+        'data: {"type":"test_complete","success":true}\n'
+      ])
+    ) as any
+
+    const wrapper = mountModal({
+      id: 77,
+      name: 'Antigravity OAuth',
+      platform: 'antigravity',
+      type: 'oauth',
+      status: 'active'
+    })
+    await wrapper.setProps({ show: true })
+    await flushPromises()
+
+    const vm = wrapper.vm as any
+    expect(vm.availableModels.map((m: { id: string }) => m.id)).toEqual([
+      'gemini-4-argon',
+      'gemini-4-argon-high',
+      'gemini-3-flash'
+    ])
+    expect(vm.selectedModelId).toBe('gemini-4-argon')
+    expect(vm.supportsThinkingLevelSelect).toBe(true)
+
+    vm.selectedThinkingLevel = 'low'
+    await vm.startTest()
+    await flushPromises()
+
+    expect(global.fetch).toHaveBeenCalledTimes(1)
+    const [, request] = (global.fetch as any).mock.calls[0]
+    expect(JSON.parse(request.body)).toEqual({
+      model_id: 'gemini-4-argon',
+      prompt: '',
+      thinking_level: 'low'
+    })
+
+    const outputText = wrapper.text()
+    expect(outputText).toContain('admin.accounts.thinkingOutput')
+    expect(outputText).toContain('first think carefully')
+    expect(outputText).toContain('admin.accounts.response')
+    expect(outputText).toContain('Final hello')
+  })
 })

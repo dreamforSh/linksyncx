@@ -104,7 +104,7 @@ func recordAntigravityAvailableModelsFromQuota(account *Account, resp *antigravi
 	claudeModels := claudeModelsFromAvailable(resp)
 	if account.ID > 0 {
 		recordAntigravityObservedClaudeModels(account.ID, claudeModels)
-		antigravityRawModelsCache.set(antigravityRawModelsCacheKey(account), claudeModels, time.Now())
+		antigravityRawModelsCache.set(antigravityRawModelsCacheKey(account), account.ID, claudeModels, time.Now())
 	}
 }
 
@@ -286,18 +286,11 @@ func antigravityRuntimeMappingSignature(a *Account) uint64 {
 }
 
 func bareGeminiModelFromThinkingVariant(modelID string) (string, bool) {
-	if !strings.HasPrefix(modelID, "gemini-") {
+	variant, ok := antigravity.SplitGeminiThinkingVariant(modelID)
+	if !ok {
 		return "", false
 	}
-	for _, suffix := range geminiThinkingVariantSuffixes {
-		if strings.HasSuffix(modelID, suffix) {
-			bare := strings.TrimSuffix(modelID, suffix)
-			if bare != "gemini" && strings.HasPrefix(bare, "gemini-") {
-				return bare, true
-			}
-		}
-	}
-	return "", false
+	return variant.BaseModel, true
 }
 
 // mergeAntigravityObservedModelsIntoMapping overlays upstream-observed models onto
@@ -353,22 +346,22 @@ func mergeAntigravityObservedModelsIntoMapping(base map[string]string, a *Accoun
 	observedSet := make(map[string]struct{}, len(observed))
 	for _, id := range observed {
 		observedSet[id] = struct{}{}
-		if _, exists := merged[id]; !exists {
+		if _, exists := merged[id]; !exists && !mappingHasWildcardForModel(merged, id) {
 			merged[id] = id
 		}
 	}
-	// Register bare Gemini names (e.g. gemini-4-carbon) for newly observed thinking
-	// variants (e.g. gemini-4-carbon-high) so resolveGeminiThinkingVariantForLevel
+	// Register bare Gemini names (e.g. gemini-4-argon) for newly observed thinking
+	// variants (e.g. gemini-4-argon-high) so resolveGeminiThinkingVariantForLevel
 	// routes bare Gemini requests dynamically by thinking level.
 	for _, id := range observed {
 		if bare, ok := bareGeminiModelFromThinkingVariant(id); ok {
-			if _, exists := merged[bare]; !exists {
+			if _, exists := merged[bare]; !exists && !mappingHasWildcardForModel(merged, bare) {
 				merged[bare] = bare
 			}
 		}
 	}
 	for oldID, newID := range deprecated {
-		if _, exists := merged[oldID]; !exists {
+		if _, exists := merged[oldID]; !exists && !mappingHasWildcardForModel(merged, oldID) {
 			if _, ok := merged[newID]; ok {
 				merged[oldID] = newID
 			} else if _, ok := observedSet[newID]; ok {

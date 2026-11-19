@@ -19,6 +19,7 @@ import (
 	"time"
 
 	"github.com/Wei-Shaw/sub2api/internal/config"
+	"github.com/Wei-Shaw/sub2api/internal/pkg/antigravity"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/claude"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/logger"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/openai"
@@ -1330,16 +1331,18 @@ func normalizeModelNameForPricing(model string) string {
 	return normalizeGeminiThinkingTierAlias(model)
 }
 
-// normalizeGeminiThinkingTierAlias maps Antigravity's Gemini Flash
-// thinking-tier model IDs to the public base model. The tier controls reasoning
-// behavior, not the published token rate, so this keeps -high/-low/-medium and
-// -tiered requests on the corresponding base model's price card.
+// normalizeGeminiThinkingTierAlias maps Antigravity's Gemini thinking-tier model
+// IDs (e.g. gemini-3.8-flash-high, gemini-4-argon-high) to the public base model.
+// The tier controls reasoning behavior, not the published token rate, so this keeps
+// suffixed tier requests on the corresponding base model's price card.
 func normalizeGeminiThinkingTierAlias(model string) string {
-	for _, baseModel := range []string{"gemini-3.6-flash", "gemini-3.7-flash", "gemini-3.8-flash"} {
-		for _, tier := range []string{"-high", "-low", "-medium", "-tiered"} {
-			if model == baseModel+tier {
-				return baseModel
-			}
+	if variant, ok := antigravity.SplitGeminiThinkingVariant(model); ok {
+		if antigravity.IsGemini4Model(variant.BaseModel) {
+			return strings.ToLower(variant.BaseModel)
+		}
+		switch variant.BaseModel {
+		case "gemini-3.6-flash", "gemini-3.7-flash", "gemini-3.8-flash":
+			return variant.BaseModel
 		}
 	}
 	return model

@@ -83,10 +83,13 @@ func TestGatewayAntigravityModels_SyncsLiveUpstreamAndSupportsSingleModelRetriev
 	}
 	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &listResp))
 	require.Equal(t, "list", listResp.Object)
-	require.Len(t, listResp.Data, 2)
+	require.Len(t, listResp.Data, 3)
 	require.Equal(t, "claude-opus-5-6", listResp.Data[0].ID)
 	require.Equal(t, "Claude Opus 5.6", listResp.Data[0].DisplayName)
-	require.Equal(t, "gemini-4-carbon-high", listResp.Data[1].ID)
+	require.Equal(t, "gemini-4-carbon", listResp.Data[1].ID)
+	require.Equal(t, "Gemini 4 Carbon", listResp.Data[1].DisplayName)
+	require.Equal(t, "gemini-4-carbon-high", listResp.Data[2].ID)
+	require.Equal(t, "Gemini 4 Carbon (High)", listResp.Data[2].DisplayName)
 
 	// 2. /v1/models on an Antigravity group also uses live upstream discovery
 	recV1 := httptest.NewRecorder()
@@ -249,9 +252,9 @@ func TestGatewayAntigravityModels_PinnedAccountsAndErrors(t *testing.T) {
 	require.Contains(t, betaNames, "models/gemini-4-argon-high")
 	require.Contains(t, betaNames, "models/gemini-4-argon")
 
-	// 3. codexModelIDsForGroup uses live/pinned Antigravity discovery
+	// 3. codexModelIDsForGroup uses live/pinned Antigravity discovery and includes split bare Gemini 4 ID
 	codexIDs := h.codexModelIDsForGroup(context.Background(), pinnedGroup, "")
-	require.Equal(t, []string{"claude-opus-5-6", "gemini-4-argon-high"}, codexIDs)
+	require.Equal(t, []string{"claude-opus-5-6", "gemini-4-argon", "gemini-4-argon-high"}, codexIDs)
 
 	// 4. Pinned group with no usable accounts returns 503 instead of stale static list
 	noUsableGroup := &service.Group{
@@ -268,4 +271,97 @@ func TestGatewayAntigravityModels_PinnedAccountsAndErrors(t *testing.T) {
 	c503.Set(string(middleware.ContextKeyAPIKey), &service.APIKey{GroupID: &groupID, Group: noUsableGroup})
 	h.AntigravityModels(c503)
 	require.Equal(t, http.StatusServiceUnavailable, rec503.Code)
+}
+
+func TestGatewayModels_Gemini4ReasoningMetadataAndCompositeLiveDiscovery(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	groupID := int64(90)
+	repo := &gatewayModelsAccountRepoStub{
+		byGroup: map[int64][]service.Account{
+			groupID: {
+				{
+					ID:          701,
+					Platform:    service.PlatformAntigravity,
+					Type:        service.AccountTypeUpstream,
+					Status:      service.StatusActive,
+					Schedulable: true,
+					Extra:       map[string]any{"mixed_scheduling": true},
+					Credentials: map[string]any{
+						"base_url": "https://relay-g4.antigravity.example",
+						"api_key":  "key-g4",
+					},
+				},
+			},
+		},
+	}
+	upstream := &antigravityHandlerModelsUpstream{
+		body: `{"data":[{"id":"gemini-4-argon-high","display_name":"Gemini 4 Argon (High)"}]}`,
+	}
+	agSvc := service.NewAntigravityGatewayService(repo, nil, nil, nil, nil, upstream, nil, nil)
+	gwSvc := service.NewGatewayService(
+		repo, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil,
+		nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil,
+	)
+	h := &GatewayHandler{
+		gatewayService:            gwSvc,
+		antigravityGatewayService: agSvc,
+		maxAccountSwitches:        3,
+		maxAccountSwitchesGemini:  3,
+	}
+
+	// 1. Antigravity /v1/models advertises both gemini-4-argon and gemini-4-argon-high with reasoning metadata
+	rec := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(rec)
+	c.Request = httptest.NewRequest(http.MethodGet, "/v1/models", nil)
+	c.Set(string(middleware.ContextKeyAPIKey), &service.APIKey{
+		GroupID: &groupID,
+		Group:   &service.Group{ID: groupID, Platform: service.PlatformAntigravity},
+	})
+	h.Models(c)
+	require.Equal(t, http.StatusOK, rec.Code)
+
+	var agResp struct {
+		Data []struct {
+			ID                      string `json:"id"`
+			DisplayName             string `json:"display_name"`
+			SupportsReasoningEffort bool   `json:"supportsReasoningEffort"`
+			ReasoningEffort         string `json:"reasoningEffort"`
+		} `json:"data"`
+	}
+	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &agResp))
+	require.Len(t, agResp.Data, 2)
+	require.Equal(t, "gemini-4-argon", agResp.Data[0].ID)
+	require.Equal(t, "Gemini 4 Argon", agResp.Data[0].DisplayName)
+	require.True(t, agResp.Data[0].SupportsReasoningEffort)
+	require.Equal(t, "high", agResp.Data[0].ReasoningEffort)
+	require.Equal(t, "gemini-4-argon-high", agResp.Data[1].ID)
+	require.Equal(t, "Gemini 4 Argon (High)", agResp.Data[1].DisplayName)
+	require.True(t, agResp.Data[1].SupportsReasoningEffort)
+
+	// 2. Composite group /v1/models discovers live Antigravity Gemini 4 models
+	recComp := httptest.NewRecorder()
+	cComp, _ := gin.CreateTestContext(recComp)
+	cComp.Request = httptest.NewRequest(http.MethodGet, "/v1/models", nil)
+	cComp.Set(string(middleware.ContextKeyAPIKey), &service.APIKey{
+		GroupID: &groupID,
+		Group:   &service.Group{ID: groupID, Platform: service.PlatformComposite},
+	})
+	h.Models(cComp)
+	require.Equal(t, http.StatusOK, recComp.Code)
+	require.Contains(t, recComp.Body.String(), `"gemini-4-argon"`)
+	require.Contains(t, recComp.Body.String(), `"gemini-4-argon-high"`)
+
+	// 3. Gemini group /v1/models merges live mixed-scheduling Antigravity Gemini 4 models
+	recGem := httptest.NewRecorder()
+	cGem, _ := gin.CreateTestContext(recGem)
+	cGem.Request = httptest.NewRequest(http.MethodGet, "/v1/models", nil)
+	cGem.Set(string(middleware.ContextKeyAPIKey), &service.APIKey{
+		GroupID: &groupID,
+		Group:   &service.Group{ID: groupID, Platform: service.PlatformGemini},
+	})
+	h.Models(cGem)
+	require.Equal(t, http.StatusOK, recGem.Code)
+	require.Contains(t, recGem.Body.String(), `"gemini-4-argon"`)
+	require.Contains(t, recGem.Body.String(), `"gemini-4-argon-high"`)
 }

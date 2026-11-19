@@ -60,6 +60,20 @@
         </p>
       </div>
 
+      <div v-if="supportsThinkingLevelSelect" class="space-y-1.5">
+        <label class="text-sm font-medium text-gray-700 dark:text-gray-300">
+          {{ t('admin.accounts.thinkingLevel') }}
+        </label>
+        <Select
+          v-model="selectedThinkingLevel"
+          :options="thinkingLevelOptions"
+          :disabled="status === 'connecting'"
+        />
+        <p class="text-xs text-gray-500 dark:text-gray-400">
+          {{ t('admin.accounts.thinkingLevelHint') }}
+        </p>
+      </div>
+
       <div v-if="isOpenAIAccount" class="space-y-1.5">
         <label class="text-sm font-medium text-gray-700 dark:text-gray-300">
           {{ t('admin.accounts.openai.testMode') }}
@@ -103,8 +117,13 @@
             {{ line.text }}
           </div>
 
+          <!-- Streaming Thinking -->
+          <div v-if="streamingThinking" class="whitespace-pre-wrap text-amber-300/80">
+            {{ streamingThinking }}<span class="animate-pulse">_</span>
+          </div>
+
           <!-- Streaming Content -->
-          <div v-if="streamingContent" class="text-green-400">
+          <div v-if="streamingContent" class="whitespace-pre-wrap text-green-400">
             {{ streamingContent }}<span class="animate-pulse">_</span>
           </div>
 
@@ -289,10 +308,14 @@ const emit = defineEmits<{
 const terminalRef = ref<HTMLElement | null>(null)
 const status = ref<'idle' | 'connecting' | 'success' | 'warning' | 'error'>('idle')
 const outputLines = ref<OutputLine[]>([])
+const streamingThinking = ref('')
 const streamingContent = ref('')
+const hasThinkingSection = ref(false)
+const hasResponseHeader = ref(false)
 const errorMessage = ref('')
 const availableModels = ref<ClaudeModel[]>([])
 const selectedModelId = ref('')
+const selectedThinkingLevel = ref('')
 const testPrompt = ref('')
 const loadingModels = ref(false)
 const modelsLoadError = ref(false)
@@ -315,7 +338,34 @@ const openAITestModeOptions = computed(() => [
   { value: 'compact', label: t('admin.accounts.openai.testModeCompact') }
 ])
 const previewImageUrl = ref('')
-const prioritizedGeminiModels = ['gemini-3.1-flash-image', 'gemini-2.5-flash-image', 'gemini-3.5-flash', 'gemini-2.5-flash', 'gemini-2.5-pro', 'gemini-3-flash-preview', 'gemini-3-pro-preview', 'gemini-2.0-flash']
+const prioritizedGeminiModels = [
+  'gemini-4-argon',
+  'gemini-4-argon-high',
+  'gemini-4-argon-medium',
+  'gemini-4-argon-low',
+  'gemini-3.1-flash-image',
+  'gemini-2.5-flash-image',
+  'gemini-3.5-flash',
+  'gemini-2.5-flash',
+  'gemini-2.5-pro',
+  'gemini-3-flash-preview',
+  'gemini-3-pro-preview',
+  'gemini-2.0-flash'
+]
+const thinkingLevelOptions = computed(() => [
+  { value: '', label: t('admin.accounts.thinkingLevelDefault') },
+  { value: 'minimal', label: t('admin.accounts.thinkingLevelMinimal') },
+  { value: 'low', label: t('admin.accounts.thinkingLevelLow') },
+  { value: 'medium', label: t('admin.accounts.thinkingLevelMedium') },
+  { value: 'high', label: t('admin.accounts.thinkingLevelHigh') },
+  { value: 'none', label: t('admin.accounts.thinkingLevelNone') }
+])
+const supportsThinkingLevelSelect = computed(() => {
+  if (props.account?.platform !== 'antigravity') return false
+  const modelID = selectedModelId.value.toLowerCase()
+  if (!modelID.startsWith('gemini-') || modelID.includes('-image')) return false
+  return modelID.startsWith('gemini-4') || modelID.startsWith('gemini-3')
+})
 const supportsGeminiImageTest = computed(() => {
   const modelID = selectedModelId.value.toLowerCase()
   if (!modelID.startsWith('gemini-') || !modelID.includes('-image')) return false
@@ -333,10 +383,16 @@ const supportsImageTest = computed(() => supportsGeminiImageTest.value || suppor
 
 const sortTestModels = (models: ClaudeModel[]) => {
   const priorityMap = new Map(prioritizedGeminiModels.map((id, index) => [id, index]))
+  const getPriority = (id: string) => {
+    const exact = priorityMap.get(id)
+    if (exact !== undefined) return exact
+    if (id.toLowerCase().startsWith('gemini-4')) return prioritizedGeminiModels.length
+    return Number.MAX_SAFE_INTEGER
+  }
 
   return [...models].sort((a, b) => {
-    const aPriority = priorityMap.get(a.id) ?? Number.MAX_SAFE_INTEGER
-    const bPriority = priorityMap.get(b.id) ?? Number.MAX_SAFE_INTEGER
+    const aPriority = getPriority(a.id)
+    const bPriority = getPriority(b.id)
     if (aPriority !== bPriority) return aPriority - bPriority
     return 0
   })
@@ -350,6 +406,7 @@ watch(
       testPrompt.value = ''
       testMode.value = 'default'
       perplexityTestMode.value = 'default'
+      selectedThinkingLevel.value = ''
       resetState()
       await loadAvailableModels()
     } else {
@@ -403,7 +460,10 @@ const resetState = () => {
   perplexityProbe.value = null
   status.value = 'idle'
   outputLines.value = []
+  streamingThinking.value = ''
   streamingContent.value = ''
+  hasThinkingSection.value = false
+  hasResponseHeader.value = false
   errorMessage.value = ''
   generatedImages.value = []
   previewImageUrl.value = ''
@@ -462,7 +522,10 @@ const startTest = async () => {
       body: JSON.stringify({
         model_id: isPerplexityAccount.value && perplexityTestMode.value === 'default' ? '' : selectedModelId.value,
         prompt: supportsImageTest.value ? testPrompt.value.trim() : '',
-        mode: isPerplexityAccount.value ? perplexityTestMode.value : isOpenAIAccount.value ? testMode.value : 'default'
+        mode: isPerplexityAccount.value ? perplexityTestMode.value : isOpenAIAccount.value ? testMode.value : 'default',
+        ...(supportsThinkingLevelSelect.value && selectedThinkingLevel.value
+          ? { thinking_level: selectedThinkingLevel.value }
+          : {})
       }),
       signal: abortController.signal
     })
@@ -549,7 +612,6 @@ const handleEvent = (event: {
         'text-gray-400'
       )
       addLine('', 'text-gray-300')
-      addLine(t('admin.accounts.response'), 'text-yellow-400')
       break
 
     case 'perplexity_probe':
@@ -558,8 +620,28 @@ const handleEvent = (event: {
       }
       break
 
+    case 'thinking':
+      if (event.text) {
+        if (!hasThinkingSection.value) {
+          addLine(t('admin.accounts.thinkingOutput'), 'text-amber-400')
+          hasThinkingSection.value = true
+        }
+        streamingThinking.value += event.text
+        scrollToBottom()
+      }
+      break
+
     case 'content':
       if (event.text) {
+        if (streamingThinking.value) {
+          addLine(streamingThinking.value, 'whitespace-pre-wrap text-amber-300/80')
+          streamingThinking.value = ''
+          addLine('', 'text-gray-300')
+        }
+        if (!hasResponseHeader.value) {
+          addLine(t('admin.accounts.response'), 'text-yellow-400')
+          hasResponseHeader.value = true
+        }
         streamingContent.value += event.text
         scrollToBottom()
       }
@@ -582,9 +664,13 @@ const handleEvent = (event: {
       break
 
     case 'test_complete':
-      // Move streaming content to output lines
+      // Move streaming thinking and content to output lines
+      if (streamingThinking.value) {
+        addLine(streamingThinking.value, 'whitespace-pre-wrap text-amber-300/80')
+        streamingThinking.value = ''
+      }
       if (streamingContent.value) {
-        addLine(streamingContent.value, 'text-green-300')
+        addLine(streamingContent.value, 'whitespace-pre-wrap text-green-300')
         streamingContent.value = ''
       }
       if (event.success) {
@@ -598,8 +684,12 @@ const handleEvent = (event: {
     case 'error':
       status.value = 'error'
       errorMessage.value = event.error || 'Unknown error'
+      if (streamingThinking.value) {
+        addLine(streamingThinking.value, 'whitespace-pre-wrap text-amber-300/80')
+        streamingThinking.value = ''
+      }
       if (streamingContent.value) {
-        addLine(streamingContent.value, 'text-green-300')
+        addLine(streamingContent.value, 'whitespace-pre-wrap text-green-300')
         streamingContent.value = ''
       }
       break
